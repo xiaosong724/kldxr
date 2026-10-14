@@ -1,0 +1,858 @@
+// -*- coding: utf-8 -*-
+/* ============================================================================
+   platform/web.js —— 浏览器适配层（★ 全项目**唯一**允许碰 DOM 的文件）
+
+   为什么要有这一层（方案 §1.3）：
+     微信 / 抖音小游戏**没有浏览器 DOM**。将来上小程序时只要把这一层换成
+     platform/weapp.js（画布用 wx.createCanvas、网络用 wx.connectSocket、
+     存储用 wx.setStorageSync、帧循环用 canvas.requestAnimationFrame），
+     core/ 里一行都不用改。
+
+   这一层只做「平台能力」，不含游戏规则：
+     UI.*     画布 / 元素 / 文本 / 样式 / 离屏画布 / resize / 帧循环 / 存储
+     音频     loadSfx / sfx
+     网络     wsConnect / wsOnMessage（浏览器 WebSocket API）
+     界面     名牌 / 飘字 / 提示 / 血条 / 设置面板 / 死亡遮罩 / 登录浮层
+     输入     bindInput（键盘 / 触摸 / 摇杆）
+
+   验收闸门：python tools\check_core_dom.py
+   ============================================================================ */
+
+var UI = {
+  /* ---- 画布与窗口 ---- */
+  mainCanvas: function () { return document.getElementById('cv'); },
+  win: function () { return window; },
+  search: function () { return location.search; },
+  onResize: function (fn) { addEventListener('resize', fn); },
+  raf: function (fn) { return requestAnimationFrame(fn); },
+  offscreen: function (w, h) {
+    var c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    return c;
+  },
+
+  /* ---- 元素 ---- */
+  el: function (id) { return document.getElementById(id); },
+  text: function (id, s) {
+    var e = document.getElementById(id);
+    if (e) { e.textContent = s; }
+  },
+  html: function (id, s) {
+    var e = document.getElementById(id);
+    if (e) { e.innerHTML = s; }
+  },
+  style: function (id, prop, v) {
+    var e = document.getElementById(id);
+    if (e) { e.style[prop] = v; }
+  },
+  show: function (id, on) {
+    var e = document.getElementById(id);
+    if (e) { e.style.display = on ? '' : 'none'; }
+  },
+  /* ★ 刷新左上角的角色 HUD（名字/等级/经验）——第 35 轮加的
+     core 里"服务器说我的经验变了"要刷 HUD，但 core 不能碰 DOM ✗
+     所以走 UI.* ✓（原来的写法是 core 里读 window.showRole ✗ 分层闸门直接拦下来了）*/
+  role: function (r) { if (r) { showRole(r); } },
+  onError: function (fn) { window.onerror = function (msg) { fn(msg); return true; }; },
+  on: function (id, evt, fn) {
+    var e = document.getElementById(id);
+    if (e) { e.addEventListener(evt, fn); }
+  },
+
+  /* ---- 存储 ---- */
+  store: {
+    get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { } },
+    del: function (k) { try { localStorage.removeItem(k); } catch (e) { } }
+  }
+};
+
+
+/* ---- 名牌（头顶 UI）----
+   ★ core 只说"显示/移动/改血条/改名字"，不碰 style 属性名 ——
+     小游戏里这套要换成 canvas 自绘，只要改这里 ✓ */
+UI.plate = {
+  show: function (ui, on) { if (ui && ui.wrap) { ui.wrap.style.display = on ? 'block' : 'none'; } },
+  move: function (ui, sx, sy) {
+    if (ui && ui.wrap) {
+      ui.wrap.style.transform =
+        'translate(-50%,-100%) translate(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px)';
+    }
+  },
+  hpWidth: function (ui, pct) { if (ui && ui.bar) { ui.bar.style.width = pct; } },
+  hpColor: function (ui, color) { if (ui && ui.bar) { ui.bar.style.background = color; } },
+  name: function (ui, s) { if (ui && ui.name) { ui.name.textContent = s; } },
+  remove: function (ui) {
+    if (ui && ui.wrap && ui.wrap.parentNode) { ui.wrap.parentNode.removeChild(ui.wrap); }
+  }
+};
+
+/* 元素是否真的在屏幕上（小游戏里恒为 true，无所谓） */
+UI.visible = function (id) {
+  var e = document.getElementById(id);
+  return !!(e && e.offsetParent !== null);
+};
+
+/* ---------- setDetail ---------- */
+function setDetail() { return (SETCFG && SETCFG.detail) ? SETCFG.detail : SET_DEF.detail; }
+
+/* ---------- E ---------- */
+function E(m) { var e = document.getElementById('err'); if (e) { e.textContent = String(m); } }
+
+/* ---------- loadSfx ---------- */
+function loadSfx() {
+  /* ★ 优先 WAV（PCM 解码瞬时 ✓ 比 MP3 快得多 ✓）
+     失败回退 MP3 → OGG ✓ 三级保障 ✓ 加载完自动补播排队音效 ✓ */
+  for (var k in SFX_FILES_WAV) {
+    SFX_BANK[k] = [];
+    var list = SFX_FILES_WAV[k];
+    for (var i = 0; i < list.length; i++) {
+      SFX_TOTAL++;
+      tryOne(k, '/assets/sfx/' + list[i], 2);   // 2 = wav
+    }
+  }
+  // 每秒检查一次：全部加载完 → 补播排队 ✓
+  // ★ 第 32 轮：原来这里还会把"音效 x/31"写进 #diag，用户要求诊断里不要音效 → 删掉 ✓
+  var chk = setInterval(function () {
+    if (SFX_LOADED >= SFX_TOTAL && SFX_TOTAL > 0) {
+      clearInterval(chk);
+      flushQueue();
+    }
+  }, 500);
+}
+
+/* ---------- tryOne ---------- */
+function tryOne(key, url, attempt) {
+  var label = (attempt === 0) ? 'mp3' : ((attempt === 1) ? 'ogg' : 'wav');
+  fetch(url).then(function (r) {
+    if (!r.ok) { throw new Error('HTTP ' + r.status); }
+    return r.arrayBuffer();
+  }).then(function (buf) {
+    if (buf.byteLength < 40) { throw new Error('文件太小 ' + buf.byteLength); }
+    var mime = (label === 'mp3') ? 'audio/mpeg' : ((label === 'ogg') ? 'audio/ogg' : 'audio/wav');
+    var objUrl = URL.createObjectURL(new Blob([buf], { type: mime }));
+    var a = new Audio();
+    a.preload = 'auto';
+    a.volume = SFX_VOL;
+    a.addEventListener('canplaythrough', function () { SFX_LOADED++; }, { once: true });
+    a.addEventListener('error', function () {
+      SFX_ERR.push(key + ':' + label + ' 解码失败(' + (a.error ? a.error.code : '?') + ')');
+      nextTry(key, attempt);
+    }, { once: true });
+    a.src = objUrl;
+    a.load();
+    SFX_BANK[key].push(a);
+  }).catch(function (e) {
+    SFX_ERR.push(key + ':' + label + ' ' + e.message);
+    nextTry(key, attempt);
+  });
+}
+
+/* ---------- sfx ---------- */
+function sfx(name, volScale) {
+  if (!SFX_ON) { return; }
+  if (!_audioUnlocked) { unlockAudio(); }
+  var bank = SFX_BANK[name];
+  if (!bank || !bank.length) {
+    // ★ 还没加载好 → 排队（最多 8 条 ✓ 加载完补播 ✓）
+    if (SFX_QUEUE.length < 8) { SFX_QUEUE.push({ n: name, v: volScale, t: performance.now() }); }
+    return;
+  }
+  var now = performance.now();
+  if (_lastSfx[name] && now - _lastSfx[name] < 40) { return; }
+  _lastSfx[name] = now;
+  var a = bank[Math.floor(Math.random() * bank.length)];
+  if (!a || !a.src) { return; }
+  var vol = Math.max(0.05, Math.min(1, SFX_VOL * (volScale || 1)));
+  try {
+    var use;
+    if (!a.paused && !a.ended && a.currentTime > 0) {
+      use = new Audio(a.src);
+      use.volume = vol;
+    } else {
+      use = a;
+      try { use.currentTime = 0; } catch (e) { }
+      use.volume = vol;
+    }
+    var p = use.play();
+    if (p && p.catch) { p.catch(function (err) { SFX_ERR.push(name + ':' + (err && err.name ? err.name : '失败')); }); }
+  } catch (e) { SFX_ERR.push(name + ':异常'); }
+}
+
+/* ---------- mkMobUI ---------- */
+function mkMobUI(name, hpMax) {
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'position:absolute;transform:translate(-50%,-100%);pointer-events:none;text-align:center;will-change:transform';
+  var nm = document.createElement('div');
+  nm.textContent = name;
+  nm.style.cssText = 'font-size:10px;font-weight:700;color:#fff;text-shadow:0 1px 3px #000,0 0 6px #000;margin-bottom:1px;white-space:nowrap';
+  var barW = document.createElement('div');
+  barW.style.cssText = 'width:54px;height:6px;background:#000000cc;border:1px solid #ffffff55;border-radius:4px;overflow:hidden;margin:0 auto';
+  var bar = document.createElement('div');
+  bar.style.cssText = 'height:100%;width:100%;background:linear-gradient(180deg,#7ee08a,#3aa04a);border-radius:3px;transition:width .12s';
+  barW.appendChild(bar);
+  wrap.appendChild(nm); wrap.appendChild(barW);
+  var host = document.getElementById('mobui');
+  if (host) { host.appendChild(wrap); }
+  return { wrap: wrap, name: nm, bar: bar };
+}
+
+/* ---------- dmg ---------- */
+function dmg(txt, x, y, z, big) {
+  if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
+  var v = REUSE_V3.v.set(x, y, z).project(cam);
+  var el = document.createElement('div');
+  el.textContent = txt;
+  el.style.cssText = 'position:fixed;z-index:12;font-weight:800;pointer-events:none;text-shadow:0 2px 5px #000;' +
+    'font-size:' + (big ? 22 : 16) + 'px;color:' + (big ? '#ffd83d' : '#fff6e8') + ';' +
+    'left:' + ((v.x * 0.5 + 0.5) * innerWidth) + 'px;top:' + ((-v.y * 0.5 + 0.5) * innerHeight) + 'px;';
+  document.body.appendChild(el);
+  var t = 0;
+  (function up() {
+    t += 1;
+    el.style.top = (parseFloat(el.style.top) - 1.2) + 'px';
+    el.style.opacity = String(1 - t / 42);
+    if (t < 42) { requestAnimationFrame(up); } else { el.remove(); }
+  })();
+}
+
+/* ---------- 方位标记（屏幕边缘的队友箭头）----------
+   ★ 和名牌一样：core 只说"在哪个像素、朝哪个角度、写什么字"，不碰 style 属性名 ✓
+     （小游戏里这套换成 canvas 自绘，只要改这里 ✓） */
+function mkMark() {
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;display:none;' +
+    'transform:translate(-50%,-50%);text-align:center;will-change:transform';
+  var ar = document.createElement('div');
+  ar.textContent = '➤';   // 默认朝右（0°），core 给的屏幕角度直接转它 ✓
+  ar.style.cssText = 'font-size:17px;line-height:17px;color:#7ee08a;' +
+    'text-shadow:0 1px 4px #000,0 0 6px #000;will-change:transform';
+  var tx = document.createElement('div');
+  tx.style.cssText = 'font-size:9px;line-height:11px;color:#cfe8d4;margin-top:-1px;' +
+    'text-shadow:0 1px 3px #000,0 0 5px #000;white-space:nowrap';
+  wrap.appendChild(ar); wrap.appendChild(tx);
+  var host = document.getElementById('markui');
+  if (host) { host.appendChild(wrap); }
+  return { wrap: wrap, ar: ar, tx: tx };
+}
+UI.mark = {
+  make: function () { return mkMark(); },
+  show: function (m, on) { if (m && m.wrap) { m.wrap.style.display = on ? 'block' : 'none'; } },
+  /* sx/sy = 屏幕像素；deg = 屏幕角度（0 = 朝右，顺时针为正）；txt = 距离等文字 ✓ */
+  at: function (m, sx, sy, deg, txt, col) {
+    if (!m || !m.wrap) { return; }
+    m.wrap.style.transform = 'translate(-50%,-50%) translate(' + sx.toFixed(0) + 'px,' + sy.toFixed(0) + 'px)';
+    if (m.ar) {
+      m.ar.style.transform = 'rotate(' + deg.toFixed(1) + 'deg)';
+      if (col) { m.ar.style.color = col; }
+    }
+    if (m.tx && txt !== undefined && txt !== null) { m.tx.textContent = txt; }
+  },
+  remove: function (m) {
+    if (m && m.wrap && m.wrap.parentNode) { m.wrap.parentNode.removeChild(m.wrap); }
+  }
+};
+
+/* ---------- evKey / evTouches（事件字段的容错小工具）---------- */
+/* ★ 事件对象上的字段不能想当然（第 27 轮实测踩的坑）：
+     · e.key 有可能是 undefined —— 中文输入法 / 手机软键盘的 keydown 就会这样。
+       以前直接写 e.key.toLowerCase() → 未捕获 TypeError
+       → 全局错误处理把它显示成"出错：Cannot read properties of undefined (reading 'toLowerCase')"，
+       看着像整个游戏都坏了 ✗
+     · e.changedTouches 也可能整个不存在 → 既不能直接 [0]，也不能直接 .length ✗
+       （这两种写法各炸过一次，都是浏览器测试抓出来的）
+   统一走这几个小工具：取不到就当这次事件没发生（不影响操作 ✓）*/
+function evKey(e) {
+  var k = e && e.key;
+  return (typeof k === 'string' && k) ? k.toLowerCase() : '';
+}
+function evTouches(e) {
+  var t = e && e.changedTouches;
+  return (t && typeof t.length === 'number') ? t : [];
+}
+function evTouch(e, i) {
+  i = i || 0;
+  return evTouches(e)[i] || null;
+}
+
+/* ---------- bindInput ---------- */
+function bindInput() {
+  var cv = document.getElementById('cv'), atk = document.getElementById('atk');
+  // ★ 首次触摸解锁音频（浏览器要求 ✓）
+  function firstTouch() {
+    unlockAudio();
+    document.removeEventListener('touchstart', firstTouch);
+    document.removeEventListener('mousedown', firstTouch);
+  }
+  document.addEventListener('touchstart', firstTouch, { passive: true });
+  document.addEventListener('mousedown', firstTouch);
+  function atkDown(e) { if (e) { e.preventDefault(); } atkHeld = true; }
+  function atkUp(e) { if (e) { e.preventDefault(); } atkHeld = false; }
+  if (atk) {
+    atk.addEventListener('touchstart', atkDown, { passive: false });
+    atk.addEventListener('touchend', atkUp, { passive: false });
+    atk.addEventListener('touchcancel', atkUp, { passive: false });
+    atk.addEventListener('mousedown', atkDown);
+    addEventListener('mouseup', atkUp);
+  }
+  cv.addEventListener('touchstart', function (e) {
+    e.preventDefault();
+    var t = evTouch(e);
+    if (!t) { return; }
+    if (t.clientX < innerWidth * 0.5 && joyId === null) { joyId = t.identifier; jox = t.clientX; joy0 = t.clientY; }
+  }, { passive: false });
+  cv.addEventListener('touchmove', function (e) {
+    e.preventDefault();
+    var ts = evTouches(e);
+    for (var i = 0; i < ts.length; i++) {
+      var t = ts[i];
+      if (t.identifier !== joyId) { continue; }
+      var dx = t.clientX - jox, dy = t.clientY - joy0, len = Math.hypot(dx, dy), R = 42;
+      if (len > R) { dx = dx / len * R; dy = dy / len * R; }
+      var l2 = Math.hypot(dx, dy);
+      jx = (l2 < 10) ? 0 : dx / R;
+      jy = (l2 < 10) ? 0 : dy / R;
+    }
+  }, { passive: false });
+  cv.addEventListener('touchend', function (e) {
+    e.preventDefault();
+    var ts = evTouches(e);
+    for (var i = 0; i < ts.length; i++) {
+      if (ts[i].identifier === joyId) { joyId = null; jx = 0; jy = 0; }
+    }
+  }, { passive: false });
+  cv.addEventListener('touchcancel', function (e) { e.preventDefault(); joyId = null; jx = 0; jy = 0; }, { passive: false });
+  addEventListener('keydown', function (e) { var k = evKey(e); if (k) { keys[k] = true; } });
+  addEventListener('keyup', function (e) { var k = evKey(e); if (k) { keys[k] = false; } });
+}
+
+/* ---------- loadProfile ---------- */
+function loadProfile() {
+  var token = '';
+  try { token = localStorage.getItem('token') || ''; } catch (e) { }
+  var el = document.getElementById('uStat');
+  if (!token) { if (el) { el.textContent = '未登录'; } return; }
+  if (el) { el.textContent = '连接中…'; }
+}
+
+/* ---------- showRole ---------- */
+function showRole(r) {
+  if (!r) { return; }
+  NET.myName = r.name || '';
+  var e1 = document.getElementById('uName'); if (e1) { e1.textContent = r.name || '—'; }
+  var e2 = document.getElementById('uRealm'); if (e2) { e2.textContent = '炼气 ' + (r.level || 1) + ' 级'; }
+  var e3 = document.getElementById('uStat');
+  if (e3) { e3.textContent = '经验 ' + (r.exp || 0) + '　天赋点 ' + (r.talentFree || 0); }
+  updExp(r);   // ★ 经验条（第 38 轮，用户要求）跟着角色数据一起刷 ✓
+}
+
+/* ---------- 经验条（第 38 轮）----------
+   ★ "升级还需要多少经验"由【服务器】算（mobs.level_up_need）——
+     welcome 和 me 两条都会带 need ✓（客户端不要去猜服务器怎么算的 ✗）
+   ★ 万一没带（老服务端/单机）就按同一套公式本地兜一个：
+     need = (6 + 1.3L) × (10 + 4L + 0.12L²)   —— 方案 §9.1 ✓ */
+function expNeed(lv) {
+  var L = Math.max(1, Math.round(lv || 1));
+  return Math.round((6 + 1.3 * L) * (10 + 4 * L + 0.12 * L * L));
+}
+function updExp(r) {
+  r = r || (typeof WSC !== 'undefined' && WSC.role) || {};
+  var need = Math.round(r.need || expNeed(r.level || 1));
+  var cur = Math.max(0, Math.round(r.exp || 0));
+  var pct = (need > 0) ? Math.max(0, Math.min(100, cur / need * 100)) : 0;
+  var b = document.getElementById('exp');
+  if (b) { b.style.width = pct.toFixed(1) + '%'; }
+  var t = document.getElementById('expTxt');
+  if (t) { t.textContent = '经验 ' + cur + ' / ' + need; }
+}
+
+/* ---------- updHP ---------- */
+function updHP() {
+  var e = document.getElementById('hp');
+  if (e) { e.style.width = Math.max(0, HP / HPMAX * 100) + '%'; }
+  // ★ 血条上的数字（第 36 轮，用户要求）—— 和血条一起刷，不用管调用点 ✓
+  var t = document.getElementById('hpTxt');
+  if (t) { t.textContent = Math.max(0, Math.round(HP)) + ' / ' + Math.round(HPMAX); }
+}
+
+/* ---------- saveSet ---------- */
+function saveSet() { try { SETCFG.v = SETCFG_VER; localStorage.setItem('xx3d_set', JSON.stringify(SETCFG)); } catch (e) { } }
+
+/* ---------- applySet ---------- */
+function applySet() {
+  try {
+    var dpr = setDpr();
+    G.PROP_R = (DETAIL_RANGE && DETAIL_RANGE[setDetail()]) ? DETAIL_RANGE[setDetail()] : 28;
+    if (rd) { rd.setPixelRatio(Math.min(dpr, devicePixelRatio || 1)); }
+    if (cam) { cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); }
+    /* ★ 第 32 轮：帧数和诊断合成一块了（#topright）→ 这个开关直接管整块 ✓
+       （原来那块"物件/Mesh/地顶点"的 #stat 已经删掉了 ✓）*/
+    var show = (SETCFG && SETCFG.showFps !== false);
+    var tr = document.getElementById('topright');
+    if (tr) { tr.style.display = show ? 'block' : 'none'; }
+    /* ★ 攻击键大小（第 31 轮）：写进 CSS 变量 --atk，#atk 的宽高/字号都跟着它走 ✓
+       （用变量而不是直接改 style，是为了让"按下缩放"那类 CSS 动画还能正常工作 ✓）*/
+    try {
+      document.documentElement.style.setProperty('--atk', setAtkSize() + 'px');
+    } catch (e2) { }
+    refreshProps();
+  } catch (e) { }
+}
+
+/* ---------- mkOpts ---------- */
+function mkOpts(rowId, items, key, cur) {
+  var row = document.getElementById(rowId);
+  if (!row) { return; }
+  row.innerHTML = '';
+  for (var i = 0; i < items.length; i++) {
+    (function (it) {
+      var d = document.createElement('div');
+      d.className = 'opt' + (cur === it.v ? ' on' : '');
+      d.innerHTML = it.t + (it.s ? '<small>' + it.s + '</small>' : '');
+      var pick = function (e) { if (e) { e.preventDefault(); } SETCFG[key] = it.v; saveSet(); applySet(); openSet(); };
+      d.addEventListener('touchstart', pick, { passive: false });
+      d.addEventListener('click', pick);
+      row.appendChild(d);
+    })(items[i]);
+  }
+}
+
+/* ---------- UI.atkCool（攻击键的冷却表现，第 33 轮）---------- */
+/* core 每帧把"还剩多少冷却"（0~1）推过来，这里只负责贴到 DOM 上 ✓
+   做法：写进 --cd 变量 → CSS 里那层 conic-gradient 就转一圈 ✓
+   core 那边只在变化超过 4% 时才调，所以这里不用再做节流 ✓ */
+UI.atkCool = function (p) {
+  var el = document.getElementById('atk');
+  if (!el) { return; }
+  if (!(p > 0)) { p = 0; }
+  if (p > 1) { p = 1; }
+  el.style.setProperty('--cd', String(p));
+  el.className = (p > 0.001) ? 'cool' : 'ready';
+};
+
+/* ---------- setTab（设置面板的分类导航）---------- */
+/* ★ 第 31 轮加的：设置项变多了，堆一屏又长又难找 →
+   顶部分类（画面/操作/音效/调试/信息），点哪类显示哪页 ✓
+   停在哪个分类会记住（SETCFG.setTab）→ 下次打开还在原地 ✓ */
+function setTab(name) {
+  if (!name) { name = SET_DEF.setTab || 'view'; }
+  var tabs = document.querySelectorAll('#setTabs .tab');
+  for (var i = 0; i < tabs.length; i++) {
+    var on = (tabs[i].getAttribute('data-tab') === name);
+    tabs[i].className = 'tab' + (on ? ' on' : '');
+  }
+  var panes = document.querySelectorAll('#setPanel .tabpane');
+  var hit = false;
+  for (var j = 0; j < panes.length; j++) {
+    var on2 = (panes[j].getAttribute('data-pane') === name);
+    panes[j].className = 'tabpane' + (on2 ? ' on' : '');
+    if (on2) { hit = true; }
+  }
+  if (!hit) { return setTab('view'); }   // 存了个不存在的分类 → 退回第一页 ✓
+  SETCFG.setTab = name;
+  return name;
+}
+
+/* ---------- closeSet / doLogout（第 32 轮）---------- */
+function closeSet() {
+  var p = document.getElementById('setPanel');
+  if (p) { p.style.display = 'none'; }
+}
+
+/* ★ 登出（清 token → 通知服务器废掉 → 断开 → 弹登录）
+   原来界面上根本没有"登出/切换账号"的入口 —— 只有一个"← 回 2D 版"的外链，
+   那条链在这个独立版里是错的目标（回的是旧页面），已删 ✓ 现在入口在 设置 → 信息 ✓ */
+function doLogout() {
+  var tk = WSC.token;
+  if (tk) {
+    // 通知服务器把 token 作废（失败也无所谓，本地照样清 ✓）
+    try {
+      fetch('/api/logout', { method: 'POST', headers: { 'X-Token': tk } })
+        .catch(function () { });
+    } catch (e) { }
+  }
+  try { localStorage.removeItem('token'); } catch (e2) { }
+  WSC.token = ''; WSC.on = false; WSC.ready = false; WSC.role = null;
+  netGoOffline();                                    // ★ 收掉别人 / 停发包循环 ✓
+  try { if (WSC.sock) { WSC.sock.close(); } } catch (e3) { }
+  closeSet();
+  toast('已登出');
+  showLogin('');
+  if (typeof loadProfile === 'function') { loadProfile(); }
+}
+
+/* ---------- openSet ---------- */
+function openSet() {
+  var p = document.getElementById('setPanel');
+  if (!p) { return; }
+  p.style.display = 'block';
+  mkOpts('rowDpr', [{ v: 1.0, t: '1.0x', s: '省' }, { v: 1.5, t: '1.5x', s: '较快' },
+                    { v: 2.0, t: '2.0x', s: '清晰' }, { v: 2.5, t: '2.5x', s: '很清晰' },
+                    { v: 3.0, t: '3.0x', s: '最清晰' }], 'dpr', setDpr());
+  mkOpts('rowAA', [{ v: 'off', t: '关', s: '最快' }, { v: 'fxaa', t: 'FXAA', s: '低开销' },
+                   { v: 'msaa', t: 'MSAA', s: '最干净' }], 'aa', setAA());
+  mkOpts('rowDet', [{ v: 'low', t: '低', s: '±16 格' }, { v: 'mid', t: '中', s: '±28 格' },
+                    { v: 'high', t: '高', s: '±40 格' }], 'detail', setDetail());
+  /* ★ 操作分类：攻击键大小（第 31 轮）—— 改完立刻生效（applySet 写 --atk 变量 ✓）*/
+  mkOpts('rowAtk', [{ v: 64, t: '小', s: '64' }, { v: 84, t: '中', s: '84 · 默认' },
+                    { v: 108, t: '大', s: '108' }, { v: 132, t: '特大', s: '132' }],
+         'atkSize', setAtkSize());
+  // ★ 音效开关 + 音量 ✓
+  var srow = document.getElementById('rowSfx');
+  if (srow) {
+    srow.innerHTML = '';
+    var sd = document.createElement('div');
+    sd.className = 'opt' + (SFX_ON ? ' on' : '');
+    sd.innerHTML = '音效 ' + (SFX_ON ? '开' : '关');
+    var st = function (e) { if (e) { e.preventDefault(); } SFX_ON = !SFX_ON; SETCFG.sfx = SFX_ON; if (SFX_ON) { unlockAudio(); sfx('hit'); } saveSet(); openSet(); };
+    sd.addEventListener('touchstart', st, { passive: false }); sd.addEventListener('click', st);
+    srow.appendChild(sd);
+    /* ★ 音量：拖动进度条（0~100% ✓ 实时生效 ✓ 自动保存 ✓）*/
+    var vwrap = document.createElement('div');
+    vwrap.style.cssText = 'flex:1;display:flex;align-items:center;gap:8px;min-width:150px';
+    var vlab = document.createElement('span');
+    vlab.style.cssText = 'font-size:11px;color:#b9c2cf;min-width:34px';
+    vlab.textContent = Math.round(SFX_VOL * 100) + '%';
+    var vr = document.createElement('input');
+    vr.type = 'range'; vr.min = '0'; vr.max = '100'; vr.step = '5';
+    vr.value = String(Math.round(SFX_VOL * 100));
+    vr.style.cssText = 'flex:1;height:26px;accent-color:#ffd83d;cursor:pointer';
+    function setVol(pct) {
+      SFX_VOL = Math.max(0, Math.min(1, pct / 100));
+      SETCFG.vol = SFX_VOL;
+      vlab.textContent = Math.round(SFX_VOL * 100) + '%';
+      for (var kk in SFX_BANK) { for (var jj = 0; jj < SFX_BANK[kk].length; jj++) { SFX_BANK[kk][jj].volume = SFX_VOL; } }
+      saveSet();
+    }
+    vr.addEventListener('input', function (e) { setVol(parseFloat(vr.value)); });
+    vr.addEventListener('change', function (e) { setVol(parseFloat(vr.value)); sfx('hit', 0.8); });
+    vr.addEventListener('touchstart', function (e) { e.stopPropagation(); }, { passive: true });
+    vr.addEventListener('touchmove', function (e) { e.stopPropagation(); }, { passive: true });
+    vwrap.appendChild(vlab); vwrap.appendChild(vr);
+    srow.appendChild(vwrap);
+  }
+  /* ★ 调试与测试按钮 ✓ */
+  var drow = document.getElementById('rowDbg');
+  if (drow) {
+    drow.innerHTML = '';
+    function addBtn(label, fn, active) {
+      var b = document.createElement('div');
+      b.className = 'opt' + (active ? ' on' : '');
+      b.innerHTML = label;
+      var h2 = function (e) { if (e) { e.preventDefault(); } fn(); };
+      b.addEventListener('touchstart', h2, { passive: false });
+      b.addEventListener('click', h2);
+      drow.appendChild(b);
+      return b;
+    }
+    addBtn('生成 20 只', function () { spawnStress(20); openSet(); });
+    addBtn('生成 50 只', function () { spawnStress(50); openSet(); });
+    addBtn('补满到上限 ' + G.MOB_MAX, function () { spawnStress(G.MOB_MAX); openSet(); });
+    addBtn('持续生成（每秒+5）', function () { toggleGrow(); openSet(); }, _growTimer);
+    addBtn('清除多余僵尸', function () { clearMobs(); openSet(); });
+    addBtn('碰撞箱线框', function () { toggleBox(); openSet(); }, _boxOn);
+    addBtn('地面贴图调试', function () { cycleTex(); openSet(); });
+    /* ★★ 玩家互相伤害（PvP）开关 —— 全服统一 ✓ 关着的时候砍人只出动作不掉血 ✓ */
+    addBtn((NET.pvp ? '☑ ' : '☐ ') + '玩家互相伤害（PvP）' + (NET.on ? '' : ' · 需联机'),
+           function () { netSetPvp(!NET.pvp); openSet(); }, !!NET.pvp);
+    /* ★ 妖兽是否对玩家造成伤害（另一个开关 ✓ 和 PvP 互不影响 ✓ 测试/看风景用）*/
+    addBtn((mobDmgOn() ? '☑ ' : '☐ ') + '妖兽对玩家造成伤害',
+           function () { SETCFG.mobDmg = !mobDmgOn(); saveSet(); openSet(); }, mobDmgOn());
+  }
+
+  /* ★ 信息框（打开时刷新一次 ✓ 之后每帧自动更新 ✓）*/
+  var ib = document.getElementById('infoBox');
+  if (ib) { ib.textContent = infoText(); }
+
+  /* ★ 显示（画面分类）：FPS / 面板开关 ✓ */
+  var disp = document.getElementById('rowDisp');
+  if (disp) {
+    disp.innerHTML = '';
+    var d2 = document.createElement('div');
+    d2.className = 'opt' + ((SETCFG.showFps !== false) ? ' on' : '');
+    d2.innerHTML = '显示 FPS / 诊断';
+    var tg = function (e) { if (e) { e.preventDefault(); } SETCFG.showFps = !(SETCFG.showFps !== false); saveSet(); applySet(); openSet(); };
+    d2.addEventListener('touchstart', tg, { passive: false });
+    d2.addEventListener('click', tg);
+    disp.appendChild(d2);
+  }
+
+  /* ★ 账号（第 32 轮）：登录 / 登出 / 切换账号都挪到这儿了 ✓ */
+  var acct = document.getElementById('rowAcct');
+  if (acct) {
+    acct.innerHTML = '';
+    var who = document.createElement('div');
+    who.className = 'opt';
+    who.style.cssText = 'cursor:default;background:#1b2430';
+    who.innerHTML = (WSC.ready && WSC.role)
+      ? ('已登录：' + (WSC.role.name || '?') + '（炼气 ' + (WSC.role.level || 1) + ' 级）')
+      : (WSC.on ? '连接中…' : '未登录');
+    acct.appendChild(who);
+    var logged = !!(WSC.on || WSC.token);
+    var ab = document.createElement('div');
+    ab.className = 'opt';
+    ab.innerHTML = logged ? '登出 / 切换账号' : '登录 / 注册';
+    var ah = function (e) {
+      if (e) { e.preventDefault(); }
+      if (logged) { doLogout(); } else { closeSet(); showLogin(''); }
+    };
+    ab.addEventListener('touchstart', ah, { passive: false });
+    ab.addEventListener('click', ah);
+    acct.appendChild(ab);
+  }
+
+  /* ★ 信息分类：版本 + 实时信息 ✓ */
+  var av = document.getElementById('aboutVer');
+  if (av) {
+    av.innerHTML = '末日丧尸 × 组队修仙 · 独立版<br>' +
+      '协议 v' + PROTO_VER +
+      (WSC && WSC.on ? ' · 已联机' : ' · 单机/未联机') +
+      (WSC && WSC.role ? ' · 角色 ' + (WSC.role.name || '') : '') + '<br>' +
+      '攻击键 ' + setAtkSize() + 'px';
+  }
+
+  /* ★ 分类导航：按记住的那一页显示（第 31 轮）✓ */
+  setTab(SETCFG.setTab || 'view');
+}
+
+/* ---------- bindSet ---------- */
+function bindSet() {
+  var b = document.getElementById('setBtn');
+  if (b) { var op = function (e) { if (e) { e.preventDefault(); } openSet(); }; b.addEventListener('touchstart', op, { passive: false }); b.addEventListener('click', op); }
+  var c = document.getElementById('setClose');
+  if (c) { var cl = function (e) { if (e) { e.preventDefault(); } closeSet(); }; c.addEventListener('touchstart', cl, { passive: false }); c.addEventListener('click', cl); }
+  /* ★ 分类导航：点一下切一页（第 31 轮）✓ 顺便记住停在哪儿 ✓ */
+  var tabs = document.querySelectorAll('#setTabs .tab');
+  for (var ti = 0; ti < tabs.length; ti++) {
+    (function (tab) {
+      var go = function (e) {
+        if (e) { e.preventDefault(); }
+        setTab(tab.getAttribute('data-tab'));
+        saveSet();
+      };
+      tab.addEventListener('touchstart', go, { passive: false });
+      tab.addEventListener('click', go);
+    })(tabs[ti]);
+  }
+  var r = document.getElementById('setReset');
+  if (r) {
+    var rs = function (e) {
+      if (e) { e.preventDefault(); }
+      SETCFG = { v: SETCFG_VER, dpr: SET_DEF.dpr, aa: SET_DEF.aa, detail: SET_DEF.detail,
+                 showFps: true, mobDmg: true, atkSize: SET_DEF.atkSize, setTab: SET_DEF.setTab };
+      saveSet(); applySet(); openSet();
+    };
+    r.addEventListener('touchstart', rs, { passive: false }); r.addEventListener('click', rs);
+  }
+}
+
+/* ---------- toast ---------- */
+function toast(msg) {
+  if (!_toastEl) {
+    _toastEl = document.createElement('div');
+    _toastEl.style.cssText = 'position:fixed;left:50%;top:64px;transform:translateX(-50%);z-index:70;' +
+      'background:#000000cc;color:#ffd83d;font-size:13px;padding:8px 14px;border-radius:9px;' +
+      'border:1px solid #ffd83d55;pointer-events:none;opacity:0;transition:opacity .2s;white-space:nowrap';
+    document.body.appendChild(_toastEl);
+  }
+  _toastEl.textContent = msg;
+  _toastEl.style.opacity = '1';
+  if (_toastTimer) { clearTimeout(_toastTimer); }
+  _toastTimer = setTimeout(function () { _toastEl.style.opacity = '0'; }, 1600);
+}
+
+/* ---------- wsUrl ---------- */
+function wsUrl() {
+  var port = window.WS_PORT || 8900;
+  var proto = (location.protocol === 'https:') ? 'wss:' : 'ws:';
+  return proto + '//' + location.hostname + ':' + port + '/ws';
+}
+
+/* ---------- wsConnect ---------- */
+function wsConnect() {
+  var s0 = WSC.sock;
+  if (s0 && (s0.readyState === 0 || s0.readyState === 1)) { return; }
+  var s;
+  try { s = new WebSocket(wsUrl()); } catch (e) { return wsRetry('建连接失败'); }
+  WSC.sock = s;
+  s.onopen = function () {
+    WSC.retry = 0;
+    WSC.lastPing = performance.now() / 1000;
+    wsSend('hello', { token: WSC.token, ver: PROTO_VER });
+  };
+  s.onmessage = function (ev) { wsOnMessage(ev.data); };
+  s.onclose = function () {
+    var wasReady = WSC.ready;
+    WSC.ready = false;
+    if (WSC.on) { wsRetry(wasReady ? '连接断开' : '连不上服务器'); }
+  };
+  s.onerror = function () { };
+}
+
+/* ---------- wsOnMessage ---------- */
+function wsOnMessage(raw) {
+  var m;
+  try { m = JSON.parse(raw); } catch (e) { return; }
+  var t = m.t, d = m.d || {};
+  if (t === 'welcome') { wsWelcome(d); return; }
+  if (t === 'world') { wsApplyWorld(d); return; }
+  if (t === 'pong') { WSC.rtt = (performance.now() / 1000 - WSC.lastPing) * 1000; return; }
+  if (t === 'kick') {
+    WSC.on = false; WSC.ready = false;
+    try { localStorage.removeItem('token'); } catch (e2) { }
+    netGoOffline();
+    if (window.showLogin) { showLogin(d.msg || '请重新登录'); }
+    return;
+  }
+  if (t === 'error' || t === 'notice') { if (d.msg || d.text) { toast(d.msg || d.text); } return; }
+  if (t === 'chat') { toast('[' + (d['from'] || '?') + '] ' + (d.text || '')); return; }
+  if (t === 'snd') { if (d.name) { sfxAt(d.name, d.x || P.x, d.z || P.z, 1.0); } return; }
+  if (t === 'hurt') { netApplyHurt(d); return; }
+  if (t === 'dead') { playerDie(d.by); return; }
+  if (t === 'revived') { playerRevive(); return; }
+}
+
+/* ---------- wsWelcome ---------- */
+function wsWelcome(d) {
+  WSC.ready = true;
+  WSC.role = d.role || null;
+  if (d.cfg) { WSC.cfg = d.cfg; }
+  WSC.myId = (d.role && d.role.id) || 0;
+  NET.myUid = WSC.myId;
+  if (window.hideLogin) { hideLogin(); }
+  netGoOnline();        // ★ 清掉本地自己模拟的那几只 → 世界归服务器 ✓
+  var nm = (d.role && d.role.name) || '';
+  var lv = (d.role && d.role.level) || 1;
+  if (window.showRole) { showRole(d.role); }
+  toast('已进入世界：' + nm + '（炼气 ' + lv + ' 级）');
+}
+
+/* ---------- netInit ---------- */
+function netInit() {
+  var tk = '';
+  try { tk = localStorage.getItem('token') || ''; } catch (e) { }
+  if (!tk) { if (window.showLogin) { showLogin(''); } return; }
+  WSC.token = tk;
+  WSC.on = true;
+  wsConnect();
+}
+
+/* ---------- autoLogin ---------- */
+function autoLogin(name, pw) { doAuth('login', name, pw); }
+
+/* ---------- playerDie ---------- */
+function playerDie(byName) {
+  HP = 0; dead = true; updHP();
+  var d = document.getElementById('dead');
+  var t = document.getElementById('deadBy');
+  if (t) { t.textContent = byName ? ('你被 ' + byName + ' 击败') : '你被妖兽击败'; }
+  if (d) { d.className = 'on'; }
+  jx = 0; jy = 0; keys = {}; atkHeld = false;   // ★ 松开操作（不然倒下后还拖得动 ✗）
+  sfx('zdeath', 1.0);
+}
+
+/* ---------- playerRevive ---------- */
+function playerRevive() {
+  if (!dead) { return; }
+  dead = false; HP = HPMAX; updHP();
+  var d = document.getElementById('dead');
+  if (d) { d.className = ''; }
+  shake = 0;
+  dmg('复活', P.x, 3.2, P.z, true);
+  toast('已复活 ✓');
+}
+
+/* ---------- bindDead ---------- */
+function bindDead() {
+  var b = document.getElementById('reviveBtn');
+  if (!b) { return; }
+  var go = function (e) { if (e) { e.preventDefault(); } playerRevive(); };
+  b.addEventListener('touchstart', go, { passive: false });
+  b.addEventListener('click', go);
+}
+
+/* ===== 登录浮层 ===== */
+
+
+/* ============================================================
+   登录 / 注册（独立版：自建账号，不再跟 MC 客户端共用）
+   ============================================================ */
+function showLogin(msg) {
+  var el = document.getElementById('login');
+  if (!el) { return; }
+  el.classList.add('show');
+  if (msg) { document.getElementById('loginHint').textContent = msg; }
+  var n = document.getElementById('loginName');
+  if (n && !n.value) { setTimeout(function () { n.focus(); }, 60); }
+}
+function hideLogin() {
+  var el = document.getElementById('login');
+  if (el) { el.classList.remove('show'); }
+}
+function authBusy(on) {
+  var a = document.getElementById('btnLogin'), b = document.getElementById('btnReg');
+  if (a) { a.disabled = !!on; }
+  if (b) { b.disabled = !!on; }
+}
+function doAuth(kind, nameIn, pwIn) {
+  var name = nameIn || (document.getElementById('loginName') || {}).value || '';
+  var pw = pwIn || (document.getElementById('loginPass') || {}).value || '';
+  name = (name + '').trim();
+  if (!name || !pw) {
+    document.getElementById('loginHint').textContent = '游戏名和密码都要填';
+    return;
+  }
+  authBusy(true);
+  document.getElementById('loginHint').textContent = kind === 'reg' ? '注册中…' : '登录中…';
+  fetch('/api/' + (kind === 'reg' ? 'register' : 'login'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name, password: pw })
+  }).then(function (r) { return r.json().then(function (j) { return { s: r.status, j: j }; }); })
+    .then(function (o) {
+      authBusy(false);
+      var j = o.j || {};
+      if (!j.ok || !j.token) {
+        document.getElementById('loginHint').textContent = j.error || ('失败（HTTP ' + o.s + '）');
+        return;
+      }
+      try { localStorage.setItem('token', j.token); } catch (e) { }
+      WSC.token = j.token;
+      WSC.on = true;
+      document.getElementById('loginHint').textContent = '';
+      wsConnect();
+    })
+    .catch(function (e) {
+      authBusy(false);
+      document.getElementById('loginHint').textContent = '连不上服务器：' + e;
+    });
+}
+function bindLogin() {
+  var ln = document.getElementById('loginName'), lp = document.getElementById('loginPass');
+  var bl = document.getElementById('btnLogin'), br = document.getElementById('btnReg');
+  if (bl) { bl.onclick = function () { doAuth('login'); }; }
+  if (br) { br.onclick = function () { doAuth('reg'); }; }
+  var onKey = function (ev) { if (ev.key === 'Enter') { doAuth('login'); } };
+  if (ln) { ln.onkeydown = onKey; }
+  if (lp) { lp.onkeydown = onKey; }
+}
+
+/* ============================================================
+   PWA：注册 Service Worker（离线缓存 / "添加到主屏幕" / 打 APK 必需）
+   ★ 放在【平台层】—— 这是全项目唯一允许碰浏览器 API 的文件 ✓ core 一行都不用改
+   ★ 第 28 轮之前这里根本没注册过：sw.js 写了但没人装 → 文档里"离线可开"是假的 ✗
+   ★ 浏览器规定只有 https / localhost / 127.0.0.1 能用 SW（http + 局域网 IP 不行）——
+     所以手机上通过 http://192.168.x.x 打开时【注册会失败】，这很正常，直接跳过就行，
+     不影响游戏本身 ✓ 想要 PWA 就用 https（或走 APK 壳）✓
+   ============================================================ */
+(function bootServiceWorker() {
+  try {
+    if (!navigator.serviceWorker) { return; }
+    var h = location.hostname;
+    var okHost = (location.protocol === 'https:') || h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
+    if (!okHost) { return; }
+    navigator.serviceWorker.register('/sw.js').catch(function () { /* 装不上也照玩 ✓ */ });
+  } catch (e) { /* 老浏览器没有 SW —— 无所谓 ✓ */ }
+})();
+
+

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>音效测试</title>
+<style>
+ body{margin:0;background:#151a22;color:#e8eef6;font-family:ui-monospace,Consolas,monospace;padding:16px}
+ h1{font-size:18px;color:#ffd83d}
+ .row{margin:8px 0;padding:10px;background:#1e2630;border-radius:9px;border:1px solid #ffffff1e}
+ button{padding:10px 16px;margin:4px;border-radius:9px;border:1px solid #ffffff30;background:#2a3550;color:#fff;font-size:14px;cursor:pointer}
+ button:active{transform:scale(.96)}
+ #log{margin-top:14px;padding:10px;background:#0e1218;border-radius:9px;font-size:12px;line-height:1.7;white-space:pre-wrap;max-height:50vh;overflow:auto}
+ .ok{color:#8ee08a}.err{color:#ff8a8a}.warn{color:#ffd83d}
+</style></head><body>
+<h1>音效自检（逐步执行）</h1>
+<div class="row">
+ <b>第 1 步：检查文件能否加载</b><br>
+ <button onclick="step1()">① 测试加载 swing1.ogg</button>
+ <button onclick="step2()">② 检查所有音频文件</button>
+</div>
+<div class="row">
+ <b>第 2 步：测试播放</b><br>
+ <button onclick="step3()">③ 播放（普通 Audio 方式）</button>
+ <button onclick="step4()">④ 播放（Blob 方式）</button>
+ <button onclick="step5()">⑤ 播放（AudioBuffer 方式）</button>
+</div>
+<div class="row">
+ <b>第 3 步：浏览器信息</b><br>
+ <button onclick="step6()">⑥ 显示环境信息</button>
+</div>
+<div id="log">点按钮开始 ↓</div>
+<script>
+var L = document.getElementById('log');
+function log(s, cls) { L.innerHTML += '\n<span class="' + (cls || '') + '">' + s + '</span>'; }
+function clearLog() { L.innerHTML = ''; }
+
+function step1() {
+  clearLog();
+  log('=== 测试加载 /assets/sfx/swing1.ogg ===');
+  fetch('/assets/sfx/swing1.ogg').then(function (r) {
+    log('HTTP ' + r.status + ' ' + r.statusText);
+    log('Content-Type: ' + r.headers.get('Content-Type'));
+    log('Content-Length: ' + r.headers.get('Content-Length'));
+    return r.arrayBuffer();
+  }).then(function (buf) {
+    log('收到 ' + buf.byteLength + ' 字节 ✓', 'ok');
+    var head = new Uint8Array(buf.slice(0, 4));
+    var magic = String.fromCharCode(head[0], head[1], head[2], head[3]);
+    log('文件头: ' + magic + (magic === 'OggS' ? ' ✓ 是合法的 OGG 文件' : ' ✗ 不是 OGG！'), magic === 'OggS' ? 'ok' : 'err');
+    var blob = new Blob([buf], { type: 'audio/ogg' });
+    var url = URL.createObjectURL(blob);
+    var a = new Audio(url);
+    a.addEventListener('canplaythrough', function () { log('✅ 解码成功（可以播放 ✓）时长 ' + a.duration.toFixed(2) + ' 秒', 'ok'); });
+    a.addEventListener('error', function () { log('❌ 解码失败：' + (a.error ? a.error.code + ' ' + a.error.message : '未知'), 'err'); });
+    a.load();
+  }).catch(function (e) { log('❌ fetch 失败：' + e.message, 'err'); });
+}
+
+function step2() {
+  clearLog();
+  var list = ['swing1.ogg','strong1.ogg','crit1.ogg','hit1.ogg','groan1.ogg','bite1.ogg','zhurt1.ogg','zdeath1.ogg','step1.ogg'];
+  log('=== 逐个检查 ' + list.length + ' 个文件 ===');
+  list.forEach(function (f) {
+    fetch('/assets/sfx/' + f, { method: 'HEAD' }).then(function (r) {
+      if (r.ok) { log('✅ ' + f + '  HTTP ' + r.status + '  ' + r.headers.get('Content-Length') + ' 字节  ' + r.headers.get('Content-Type'), 'ok'); }
+      else { log('❌ ' + f + '  HTTP ' + r.status, 'err'); }
+    }).catch(function (e) { log('❌ ' + f + '  ' + e.message, 'err'); });
+  });
+}
+
+function step3() {
+  clearLog();
+  log('=== 普通 Audio 方式 ===');
+  var a = new Audio('/assets/sfx/swing1.ogg');
+  a.volume = 1.0;
+  a.addEventListener('canplaythrough', function () { log('canplaythrough ✓ 时长 ' + a.duration.toFixed(2), 'ok'); });
+  a.addEventListener('error', function () { log('error: code=' + (a.error && a.error.code) + ' msg=' + (a.error && a.error.message), 'err'); });
+  var p = a.play();
+  if (p && p.then) { p.then(function () { log('✅ play() 成功 ✓（应该能听到声音了）', 'ok'); }).catch(function (e) { log('❌ play() 被拒绝：' + e.name + ' ' + e.message, 'err'); log('（浏览器要求先有用户交互 ✓ 你现在点了按钮 ✓ 应该没问题 ✓）', 'warn'); }); }
+}
+
+function step4() {
+  clearLog();
+  log('=== Blob 方式 ===');
+  fetch('/assets/sfx/groan1.ogg').then(function (r) { return r.arrayBuffer(); }).then(function (buf) {
+    var url = URL.createObjectURL(new Blob([buf], { type: 'audio/ogg' }));
+    var a = new Audio(url);
+    a.volume = 1.0;
+    var p = a.play();
+    if (p && p.then) { p.then(function () { log('✅ Blob play() 成功 ✓', 'ok'); }).catch(function (e) { log('❌ Blob play() 失败：' + e.name, 'err'); }); }
+  });
+}
+
+function step5() {
+  clearLog();
+  log('=== AudioBuffer 方式（Web Audio ✓）===');
+  var Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) { log('❌ 浏览器不支持 AudioContext', 'err'); return; }
+  var ac = new Ctx();
+  log('AudioContext 状态: ' + ac.state);
+  fetch('/assets/sfx/zdeath1.ogg').then(function (r) { return r.arrayBuffer(); }).then(function (buf) {
+    log('下载 ' + buf.byteLength + ' 字节 ✓');
+    return ac.decodeAudioData(buf);
+  }).then(function (ab) {
+    log('✅ 解码成功 时长 ' + ab.duration.toFixed(2) + ' 秒 采样率 ' + ab.sampleRate, 'ok');
+    var src = ac.createBufferSource();
+    src.buffer = ab;
+    src.connect(ac.destination);
+    src.start();
+    log('✅ 已播放（Web Audio 方式）', 'ok');
+  }).catch(function (e) { log('❌ 失败：' + e.message, 'err'); });
+}
+
+function step6() {
+  clearLog();
+  log('=== 环境信息 ===');
+  log('UA: ' + navigator.userAgent);
+  log('AudioContext 支持: ' + !!(window.AudioContext || window.webkitAudioContext));
+  log('协议: ' + location.protocol + '  主机: ' + location.host);
+  log('Audio.canPlayType(audio/ogg): "' + (new Audio().canPlayType('audio/ogg; codecs=vorbis') || '(空)') + '"');
+  log('Audio.canPlayType(audio/mpeg): "' + (new Audio().canPlayType('audio/mpeg') || '(空)') + '"');
+  log('音量: ' + (new Audio().volume));
+}
+</script></body></html>

@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>修仙 3D</title>
+<!-- ★ 内联图标：省掉一次 /favicon.ico 请求（浏览器默认会去要，控制台一直报 404 很烦 ✓）-->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231b2430'/%3E%3Ctext x='16' y='24' font-size='21' text-anchor='middle' fill='%23ffd83d'%3E%E4%BB%99%3C/text%3E%3C/svg%3E">
+<style>
+ html,body{margin:0;height:100%;background:#1a1208;overflow:hidden;color:#f2e8d8;
+   font-family:ui-monospace,Consolas,monospace;-webkit-user-select:none;user-select:none}
+ #cv{position:fixed;inset:0;touch-action:none}
+ .pane{position:fixed;background:linear-gradient(180deg,#2a1f14e0,#1a1208e0);border:1px solid #ffd9a855;
+   border-radius:10px;backdrop-filter:blur(8px);z-index:9}
+ #top{left:8px;top:6px;padding:6px 11px;font-size:12px;line-height:1.5;max-width:58vw}
+ #top .nm{color:#ffd83d;font-weight:800;font-size:13px}
+ #top .realm{color:#e0b0ff}
+ #hpw{position:relative;margin-top:5px;width:150px;height:9px;background:#000000a8;border-radius:5px;overflow:hidden}
+ #hp{height:100%;width:100%;background:linear-gradient(180deg,#7ee08a,#3aa04a);border-radius:5px;transition:width .12s}
+ /* ★ 血条上的数字（第 36 轮，用户要求"玩家自己的血条上要显示数字"）——
+    绝对定位压在血条正中间，不占额外高度 ✓ */
+ #hpTxt{position:absolute;left:0;right:0;top:0;height:9px;line-height:9px;text-align:center;
+   font-size:8.5px;font-weight:700;color:#fff;text-shadow:0 1px 2px #000,0 0 3px #000;pointer-events:none}
+ /* ★ 经验条（蓝色，第 38 轮，用户要求"升级所需经验用蓝色进度条显示"）
+    和血条同一套做法：外层黑底 + 内层渐变 + 绝对定位的数字 ✓ */
+ #expw{position:relative;margin-top:3px;width:150px;height:7px;background:#000000a8;border-radius:4px;overflow:hidden}
+ #exp{height:100%;width:0%;background:linear-gradient(180deg,#8ed2ff,#2f7fe0);border-radius:4px;transition:width .15s}
+ #expTxt{position:absolute;left:0;right:0;top:0;height:7px;line-height:7px;text-align:center;
+   font-size:7.5px;font-weight:700;color:#eaf4ff;text-shadow:0 1px 2px #000,0 0 3px #000;pointer-events:none}
+ /* ★ 死亡遮罩（只把画面压暗 ✓ 不染红 ✓ 血空 → 必须点复活才起来 ✓）*/
+ #dead{position:fixed;inset:0;z-index:55;display:none;align-items:center;justify-content:center;
+   background:rgba(6,8,12,.6);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+ #dead.on{display:flex}
+ #deadCard{text-align:center;padding:0 20px}
+ #deadBy{color:#eef3fa;font-size:24px;font-weight:800;letter-spacing:3px;margin-bottom:8px;
+   text-shadow:0 2px 14px #000}
+ #deadTip{color:#93a0b0;font-size:12px;letter-spacing:1px;margin-bottom:28px}
+ #reviveBtn{display:inline-block;padding:15px 56px;border-radius:999px;
+   background:linear-gradient(180deg,#ffeeb4,#f2bf46 48%,#cc9018);
+   color:#3a2400;font-size:19px;font-weight:900;letter-spacing:5px;text-indent:5px;
+   border:1px solid #fff6d099;
+   box-shadow:0 10px 26px #000b,0 0 0 5px #ffffff10,inset 0 1px 0 #fffc;
+   cursor:pointer;user-select:none;transition:transform .08s,filter .08s}
+ #reviveBtn:active{transform:translateY(1px) scale(.985);filter:brightness(.95)}
+ /* ★ 右上角：帧数 + 诊断（第 32 轮合成一块两行）
+    原来是 #diag 在左上、#fps / #stat 在右上三块散着 ——
+    现在去掉没用的"物件/Mesh/地顶点"，把诊断挪上来跟帧数并成一块 ✓ */
+ #topright{right:8px;top:52px;padding:5px 10px;text-align:right;line-height:1.5;max-width:54vw}
+ #fps{font-size:11px;color:#8ee08a}
+ #diag{font-size:10px;color:#ffd83d;white-space:normal;margin-top:1px}
+ #hud{left:8px;bottom:8px;padding:4px 9px;font-size:10px;color:#d8c8b0}
+ #setBtn{right:8px;top:8px;padding:6px 12px;font-size:12px;cursor:pointer;user-select:none}
+ #setBtn:active{transform:scale(.95)}
+ /* ★ 攻击键（第 33 轮：用户从 5 个候选里选了「① 锈铁圆扣」，并要求半透明）
+    设计要点：
+      · 【纯图标、不放文字】—— 中间就一把剑（内联 SVG，不加图片素材 ✓）
+      · 【半透明】—— 底色用 rgba（不是给整个元素降 opacity ✗ 那样图标也会一起糊掉）
+      · 色系取自游戏里已有的锈铁褐，不抢眼、跟场景融为一体 ✓
+      · 大小仍由 --atk 驱动 → 设置里那档还照常生效 ✓
+      · 冷却表现：.cd 这层用 conic-gradient 转一圈（--cd = 剩余比例，由 core 推过来）*/
+ #atk{position:fixed;right:18px;bottom:56px;width:var(--atk,84px);height:var(--atk,84px);
+   box-sizing:border-box;border-radius:50%;display:flex;align-items:center;justify-content:center;
+   overflow:hidden;
+   background:radial-gradient(circle at 36% 30%,
+     #7d685963 0%,#5b483f57 38%,#3a2c2547 76%,#241b1638 100%);
+   border:2px solid #8e7a6899;
+   box-shadow:0 4px 12px #00000055,inset 0 1px 0 #ffffff22,inset 0 -9px 18px #0000002e;
+   backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
+   user-select:none;cursor:pointer;z-index:30;
+   transition:transform .07s ease,box-shadow .15s ease}
+ #atk .ic{position:relative;z-index:2;width:54%;height:54%;color:#eadcc6;opacity:.95;
+   filter:drop-shadow(0 2px 3px #000000cc);transition:opacity .12s ease}
+ /* ★ 冷却那一圈：原来是半透明【黑】，用户嫌闷 → 改成半透明【白】（第 33 轮）
+    白圈读起来像"刚挥完刀的一道亮扫过去"，和半透明按钮也更搭 ✓
+    几何没变：还是 conic-gradient 盖住"还剩多少冷却"那块扇形 ✓ */
+ #atk .cd{position:absolute;inset:0;border-radius:50%;z-index:1;pointer-events:none;
+   background:conic-gradient(from -90deg,#ffffff5c calc(var(--cd,0) * 360deg),#ffffff00 0)}
+ /* 冷却中：白圈提亮 + 图标稍压暗；能打的时候描一圈淡金边提示"可以了" ✓
+    （原来图标压到 .42，改成 .55 —— 白圈本身也在提亮，压太狠会糊成一团 ✗）*/
+ #atk.cool .ic{opacity:.55}
+ #atk.ready{box-shadow:0 4px 12px #00000055,0 0 0 2px #c9a86a3d,
+   inset 0 1px 0 #ffffff22,inset 0 -9px 18px #0000002e}
+ #atk:active{transform:scale(.91)}
+ #atk:active .ic{opacity:1}
+ /* ★ 设置面板：顶部分类导航 + 分页内容（第 31 轮）*/
+ #setTabs{display:flex;gap:6px;margin:12px 0 14px;padding-bottom:9px;border-bottom:1px solid #ffffff1a;
+   overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
+ #setTabs .tab{flex:0 0 auto;padding:7px 13px;border-radius:9px;font-size:12.5px;color:#9aa4b2;
+   background:#ffffff10;border:1px solid #ffffff14;cursor:pointer;user-select:none;
+   transition:background .12s,color .12s}
+ #setTabs .tab.on{color:#2a1c00;font-weight:800;border-color:#fff6d055;
+   background:linear-gradient(180deg,#ffeeb4,#f2bf46 48%,#cc9018)}
+ .tabpane{display:none}
+ .tabpane.on{display:block}
+ .setLabel{font-size:12px;color:#b9c2cf;margin:14px 0 6px}
+ .tabpane > .setLabel:first-child{margin-top:0}
+ #err{position:fixed;left:8px;right:8px;top:42%;text-align:center;font-size:12px;color:#ff9a9a;z-index:40;white-space:pre-wrap}
+ .opt{padding:8px 12px;border-radius:9px;background:#26303c;border:1px solid #ffffff22;font-size:13px;
+   cursor:pointer;color:#cfd8e3;min-width:56px;text-align:center;user-select:none}
+ .opt small{display:block;font-size:9px;color:#93a0af;font-weight:400;margin-top:2px}
+ .opt.on{background:#3a5a8a;border-color:#8fc4ff;color:#fff;font-weight:700}
+ .opt.on small{color:#cfe4ff}
+ #rowDpr,#rowAA,#rowDet,#rowDisp{display:flex;flex-wrap:wrap;gap:7px}
+</style>
+<style>
+/* ---- 登录浮层（独立版新加：自建账号，不再跟 MC 客户端共用登录）---- */
+#login{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;
+  background:radial-gradient(circle at 50% 35%,#1b2430,#080a0e 70%);font-family:system-ui,"Microsoft YaHei",sans-serif}
+#login.show{display:flex}
+#loginCard{width:min(92vw,360px);padding:30px 26px;border-radius:18px;text-align:center;
+  background:rgba(18,22,28,.92);border:1px solid rgba(160,190,220,.14);
+  box-shadow:0 20px 60px rgba(0,0,0,.6)}
+#loginCard h1{margin:0 0 6px;font-size:21px;letter-spacing:2px;color:#e8eef5;font-weight:600}
+#loginCard .sub{font-size:12.5px;color:#8fa3b8;margin-bottom:20px;line-height:1.6}
+#loginCard input{width:100%;box-sizing:border-box;margin-bottom:10px;padding:13px 14px;
+  border-radius:11px;border:1px solid rgba(160,190,220,.2);background:rgba(0,0,0,.32);
+  color:#e8eef5;font-size:15px;outline:none}
+#loginCard input:focus{border-color:#f2bf46}
+#loginCard .row{display:flex;gap:10px;margin-top:6px}
+#loginCard button{flex:1;padding:13px 0;border:0;border-radius:11px;font-size:15px;
+  letter-spacing:3px;cursor:pointer;font-weight:600}
+#btnLogin{background:linear-gradient(180deg,#ffeeb4,#f2bf46 48%,#cc9018);color:#3a2a06}
+#btnReg{background:rgba(160,190,220,.14);color:#cfe0f0}
+#loginCard button:disabled{opacity:.5;cursor:default}
+#loginHint{margin-top:14px;font-size:12.5px;color:#e0776a;min-height:17px;line-height:1.5}
+#loginCard .tip{margin-top:12px;font-size:11.5px;color:#63768a}
+</style>
+</head><body>
+<canvas id="cv"></canvas>
+<div id="top" class="pane"><span class="nm" id="uName">—</span> <span class="realm" id="uRealm"></span><br>
+ <span id="uStat">载入中…</span>
+ <div id="hpw"><div id="hp"></div><span id="hpTxt">— / —</span></div>
+ <div id="expw"><div id="exp"></div><span id="expTxt">经验 — / —</span></div></div>
+<!-- ★ 右上角：帧数 + 诊断合成一块【两行】（第 32 轮）
+     原来这是散在左上/右上三块（#diag 在左上、#fps 和 #stat 在右上），
+     用户要：去掉"物件/Mesh/地顶点"那块（没用）、诊断往上挪跟帧数放一起 ✓ -->
+<div id="topright" class="pane">
+ <div id="fps">-- FPS</div>
+ <div id="diag">诊断…</div>
+</div>
+<div id="hud" class="pane">左半屏拖动 = 走 · 右下 = 攻击</div>
+<div id="setBtn" class="pane">⚙ 设置</div>
+<div id="atk"><div class="cd"></div><svg class="ic" viewBox="0 0 24 24" fill="none"
+  stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+  <polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5"/>
+  <line x1="13" y1="19" x2="19" y2="13"/>
+  <line x1="16" y1="16" x2="20" y2="20"/>
+  <line x1="19" y1="21" x2="21" y2="19"/>
+</svg></div>
+<div id="dead"><div id="deadCard">
+ <div id="deadBy">你已陨落</div>
+ <div id="deadTip">点击复活 · 原地满血起身</div>
+ <div id="reviveBtn">复 活</div>
+</div></div>
+<div id="mobui" style="position:fixed;inset:0;pointer-events:none;z-index:8"></div>
+<!-- ★ 附近队友的方位箭头层（50 米内、人不在画面里时贴在屏幕边缘 ✓） -->
+<div id="markui" style="position:fixed;inset:0;pointer-events:none;z-index:7"></div>
+<div id="err"></div>
+<div id="setPanel" style="position:fixed;inset:0;z-index:60;display:none;background:#000000cc;backdrop-filter:blur(6px)">
+ <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(440px,93vw);max-height:88vh;overflow:auto;
+   background:linear-gradient(180deg,#1e2630f5,#141a22f5);border:1px solid #ffffff28;border-radius:14px;padding:16px 18px;color:#e8eef6">
+  <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+   <div style="font-size:17px;font-weight:800;color:#ffd83d">设置</div>
+   <div style="font-size:11px;color:#9aa4b2">改完立即生效 ✓ 自动保存 <span id="setFps" style="color:#8ee08a">FPS --</span></div>
+  </div>
+
+  <!-- ★ 分类导航：点不同分类切不同面板（第 31 轮）-->
+  <div id="setTabs">
+   <div class="tab on" data-tab="view">画面</div>
+   <div class="tab" data-tab="ctrl">操作</div>
+   <div class="tab" data-tab="audio">音效</div>
+   <div class="tab" data-tab="dbg">调试</div>
+   <div class="tab" data-tab="about">信息</div>
+  </div>
+
+  <div class="tabpane on" data-pane="view">
+   <div class="setLabel">分辨率倍率（越高越清晰越吃性能）</div>
+   <div id="rowDpr"></div>
+   <div class="setLabel">抗锯齿</div>
+   <div id="rowAA"></div>
+   <div class="setLabel">场景细节（可见范围）</div>
+   <div id="rowDet"></div>
+   <div class="setLabel">显示</div>
+   <div id="rowDisp"></div>
+  </div>
+
+  <div class="tabpane" data-pane="ctrl">
+   <div class="setLabel">攻击键大小</div>
+   <div id="rowAtk"></div>
+   <div style="font-size:11px;color:#7b8794;margin-top:14px;line-height:1.9">
+    左半屏拖动 = 走 · 右下角 = 攻击<br>
+    WASD = 走 · 空格 / 鼠标左键 = 攻击
+   </div>
+  </div>
+
+  <div class="tabpane" data-pane="audio">
+   <div class="setLabel">音效</div>
+   <div id="rowSfx"></div>
+  </div>
+
+  <div class="tabpane" data-pane="dbg">
+   <div class="setLabel">调试与测试</div>
+   <div id="rowDbg"></div>
+  </div>
+
+  <div class="tabpane" data-pane="about">
+   <div class="setLabel">账号</div>
+   <div id="rowAcct"></div>
+   <div class="setLabel">信息（实时）</div>
+   <div id="infoBox" style="font-size:11px;color:#8ee08a;background:#0e1218;border-radius:8px;padding:8px 10px;line-height:1.7">—</div>
+   <div class="setLabel">版本</div>
+   <div id="aboutVer" style="font-size:11px;color:#8fa3b8;line-height:1.9">—</div>
+   <div style="display:flex;gap:8px;margin-top:18px">
+    <div id="setReset" class="opt" style="flex:1;padding:10px">恢复默认</div>
+    <div id="setClose" class="opt" style="flex:1;padding:10px;background:#2a3550">关闭</div>
+   </div>
+  </div>
+ </div>
+</div>
+<div id="login">
+  <div id="loginCard">
+    <h1>末日丧尸 · 组队修仙</h1>
+    <div class="sub" id="loginMsg">输入游戏名，进入这个正在死掉的世界</div>
+    <input id="loginName" placeholder="游戏名（2~16 字）" maxlength="16" autocomplete="username">
+    <input id="loginPass" type="password" placeholder="密码（至少 6 位）" maxlength="64"
+           autocomplete="current-password">
+    <div class="row">
+      <button id="btnLogin">登 录</button>
+      <button id="btnReg">注 册</button>
+    </div>
+    <div id="loginHint"></div>
+    <div class="tip">游戏名唯一 · 密码加密存储 · 忘了就没了</div>
+  </div>
+</div>
+
+<!-- ★★ 4 个 script 必须在【所有带 id 的页面结构之后】★★
+     它们是同步执行的：core/game.js 末尾直接调 init()，而 init() 要 bindLogin()
+     去拿 #login / #btnLogin 这些元素。原来登录浮层的 div 排在 script 后面 →
+     那时 DOM 还没解析到它 → getElementById 全是 null →（有 null 保护）静默失败
+     → 页面能跑，但登录浮层永远不出现，谁都进不去 ✗（第 26 轮发现）-->
+<script src="/ws-config.js"></script>
+<script src="/lib/three.min.js"></script>
+<script src="/platform/web.js"></script>
+<script src="/core/game.js"></script>
+
+
+</body></html>

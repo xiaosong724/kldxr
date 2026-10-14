@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>僵尸职业皮肤 · 示意图</title>
+<style>
+  html,body{margin:0;background:#4e4536;font-family:system-ui,"Microsoft YaHei",sans-serif}
+  #head{padding:16px 18px 4px;text-align:center}
+  #head h2{margin:0 0 4px;color:#f3ead8;font-size:16px;letter-spacing:1px;text-shadow:0 1px 4px #000}
+  #head .sub{color:#ddd2ba;font-size:11.5px;text-shadow:0 1px 3px #000}
+  /* 3D 一排 + 下面一排等宽说明（间距一致 → 能对上 ✓） */
+  #row{display:flex;width:100%}
+  #row .cap{flex:1;text-align:center;color:#f2e8d4;font-size:12px;line-height:1.6;
+    text-shadow:0 1px 4px #000;padding-bottom:12px}
+  #row .cap b{display:block;font-size:13px;color:#ffd83d}
+  #row .cap i{font-style:normal;color:#cfc3aa;font-size:10.5px}
+  canvas{display:block;width:100%}
+</style>
+</head>
+<body>
+  <div id="head">
+    <h2>僵尸职业皮肤 · 示意图（按游戏里同样的方块尺寸画的）</h2>
+    <div class="sub">全部是「配色 + 挂件」，不加任何贴图素材 —— 和现有僵尸同一套做法，换职业不用重做模型</div>
+  </div>
+  <canvas id="cv"></canvas>
+  <div id="row"></div>
+
+<script src="../web/lib/three.min.js"></script>
+<script>
+/* ★ 这就是示意图：方块尺寸、光照、配色全部照 web/core/game.js 里的 mob() 来 ✓
+   真做的时候是把下面这套 CLASSES 表塞进 mob()，一行数据一个职业 ✓
+
+   ★ 第 2 版（按用户反馈改的）：
+     · 外卖 = 美团配色（亮黄外套 + 黑袖 + 黑盖餐箱 + 黄头盔黑帽檐）
+     · 白领 = 真正的领带：白衬衫前襟 + 领结 + 窄领带（上一版就是胸口一个红方块，不像 ✗）
+     · 其余全部按各自职业的真实着装补了细节（鞋 / 帽檐 / 肩章 / 围裙 / 连帽衫的帽子…）*/
+
+var CLASSES = [
+  /* 白领：西装 + 白衬衫前襟 + 领结 + 窄领带 + 皮鞋 + 公文包 */
+  { name:'白领', desc:'西装 + 白衬衫领带 + 公文包',
+    head:0x6f9a5a, body:0x2a2f3a, limb:0x2a2f3a, leg:0x232833, belt:0x14181f,
+    add:[ {w:0.46,h:0.76,d:0.10,c:0xededed,x:0,    y:1.26,z:0.30},   // 白衬衫前襟
+          {w:0.16,h:0.13,d:0.11,c:0x8a1f1f,x:0,    y:1.58,z:0.34},   // 领结
+          {w:0.11,h:0.46,d:0.09,c:0x8a1f1f,x:0,    y:1.28,z:0.35},   // 窄领带
+          {w:0.22,h:0.10,d:0.12,c:0xf2f2f2,x:-0.17,y:1.63,z:0.32},   // 衬衫领 L
+          {w:0.22,h:0.10,d:0.12,c:0xf2f2f2,x:0.17, y:1.63,z:0.32},   // 衬衫领 R
+          {w:0.34,h:0.14,d:0.46,c:0x14161c,x:-0.25,y:0.08,z:0.06},   // 皮鞋 L
+          {w:0.34,h:0.14,d:0.46,c:0x14161c,x:0.25, y:0.08,z:0.06},   // 皮鞋 R
+          {w:0.46,h:0.36,d:0.16,c:0x3a2c22,x:0.72, y:0.66,z:0.10} ] },// 公文包
+  /* 医生：白大褂（长及膝盖）+ 口罩 + 白帽 + 听诊器 + 胸牌 */
+  { name:'医生', desc:'白大褂 + 口罩 + 听诊器',
+    head:0x6f9a5a, body:0xececeb, limb:0xe6e6e4, leg:0x2f3a44, belt:0xdcdcd8,
+    add:[ {w:1.06,h:0.44,d:0.66,c:0xe6e6e4,x:0,    y:0.58,z:0},      // 大褂下摆
+          {w:0.80,h:0.24,d:0.14,c:0xcfe6f0,x:0,    y:1.98,z:0.54},   // 口罩
+          {w:1.06,h:0.20,d:0.92,c:0xeef2f4,x:0,    y:2.90,z:0},      // 白帽
+          {w:0.30,h:0.34,d:0.06,c:0x9aa4ad,x:-0.18,y:1.42,z:0.31},   // 大褂襟 L
+          {w:0.30,h:0.34,d:0.06,c:0x9aa4ad,x:0.18, y:1.42,z:0.31},   // 大褂襟 R
+          {w:0.10,h:0.40,d:0.10,c:0x2a2a2e,x:0.16, y:1.28,z:0.34},   // 听诊器管
+          {w:0.28,h:0.10,d:0.10,c:0x2a2a2e,x:0.16, y:1.46,z:0.34},   // 听诊器环
+          {w:0.20,h:0.22,d:0.06,c:0xf2f2f2,x:-0.26,y:1.30,z:0.33},   // 胸牌
+          {w:0.34,h:0.14,d:0.46,c:0xe4e4e0,x:-0.25,y:0.08,z:0.06},
+          {w:0.34,h:0.14,d:0.46,c:0xe4e4e0,x:0.25, y:0.08,z:0.06} ] },
+  /* 工人：黄色安全帽（带帽檐）+ 橙色反光背心（两道横反光条）+ 工装靴 */
+  { name:'工人', desc:'安全帽 + 反光背心 + 工装靴',
+    head:0x6f9a5a, body:0x4a5058, limb:0x4a5058, leg:0x3a4048, belt:0x2a2f36,
+    add:[ {w:1.00,h:0.30,d:0.94,c:0xf0c81c,x:0,    y:2.92,z:0},      // 安全帽
+          {w:1.04,h:0.09,d:0.34,c:0xd8b010,x:0,    y:2.78,z:0.50},   // 帽檐
+          {w:1.10,h:0.66,d:0.66,c:0xe8781c,x:0,    y:1.24,z:0},      // 反光背心
+          {w:1.12,h:0.10,d:0.67,c:0xe8f0b0,x:0,    y:1.10,z:0},      // 反光条 1
+          {w:1.12,h:0.10,d:0.67,c:0xe8f0b0,x:0,    y:1.40,z:0},      // 反光条 2
+          {w:0.38,h:0.18,d:0.48,c:0x2a2622,x:-0.25,y:0.09,z:0.07},   // 工装靴 L
+          {w:0.38,h:0.18,d:0.48,c:0x2a2622,x:0.25, y:0.09,z:0.07} ] },// 工装靴 R
+  /* 学生：校服 + 白领 + 红领巾 + 书包带（正面看得见）+ 略小 */
+  { name:'学生', desc:'校服 + 红领巾 + 书包带 · 略小',
+    head:0x74a05e, body:0x2f3f72, limb:0x2f3f72, leg:0x26325c, belt:0x1c2444, scale:0.9,
+    add:[ {w:0.30,h:0.20,d:0.12,c:0xc02020,x:0,    y:1.58,z:0.33},   // 红领巾
+          {w:0.20,h:0.10,d:0.11,c:0xf0f0f0,x:-0.15,y:1.66,z:0.31},   // 衬衫领 L
+          {w:0.20,h:0.10,d:0.11,c:0xf0f0f0,x:0.15, y:1.66,z:0.31},   // 衬衫领 R
+          {w:0.11,h:0.62,d:0.10,c:0x6a4e2a,x:-0.27,y:1.30,z:0.32},   // 书包带 L
+          {w:0.11,h:0.62,d:0.10,c:0x6a4e2a,x:0.27, y:1.30,z:0.32},   // 书包带 R
+          {w:0.66,h:0.58,d:0.30,c:0x7a5a30,x:0,    y:1.30,z:-0.44},  // 书包
+          {w:0.30,h:0.13,d:0.42,c:0x1a1a1a,x:-0.23,y:0.07,z:0.05},
+          {w:0.30,h:0.13,d:0.42,c:0x1a1a1a,x:0.23, y:0.07,z:0.05} ] },
+  /* 外卖骑手：★ 美团配色 —— 亮黄外套 + 黑袖 + 黑黄餐箱 + 黄头盔黑帽檐 */
+  { name:'外卖骑手', desc:'★ 美团配色：亮黄外套 + 黑袖 + 餐箱',
+    head:0x6f9a5a, body:0xffd100, limb:0x1a1a1a, leg:0x1f1f24, belt:0x141414,
+    add:[ {w:0.98,h:0.32,d:0.92,c:0xffd100,x:0,    y:2.90,z:0},      // 黄头盔
+          {w:0.94,h:0.10,d:0.38,c:0x1a1a1a,x:0,    y:2.76,z:0.50},   // 黑帽檐
+          {w:0.52,h:0.54,d:0.13,c:0x1a1a1a,x:0,    y:1.18,z:0.31},   // 黑前襟拉链
+          {w:0.30,h:0.12,d:0.13,c:0x1a1a1a,x:0,    y:1.62,z:0.31},   // 立领扣
+          {w:0.96,h:0.12,d:0.68,c:0x1a1a1a,x:0,    y:1.86,z:-0.50},  // 餐箱黑盖
+          {w:0.94,h:0.78,d:0.64,c:0xffd100,x:0,    y:1.40,z:-0.50},  // 餐箱（黄）
+          {w:0.96,h:0.16,d:0.66,c:0x1a1a1a,x:0,    y:1.06,z:-0.50},  // 餐箱底黑边
+          {w:0.34,h:0.14,d:0.46,c:0x1a1a1a,x:-0.25,y:0.08,z:0.06},
+          {w:0.34,h:0.14,d:0.46,c:0x1a1a1a,x:0.25, y:0.08,z:0.06} ] },
+  /* 保安：藏青制服 + 白衬衫黑领带 + 大檐帽（带帽檐）+ 金肩章 + 对讲机 */
+  { name:'保安', desc:'藏青制服 + 大檐帽 + 金肩章 + 对讲机',
+    head:0x6f9a5a, body:0x1e2a44, limb:0x1a2338, leg:0x161d2e, belt:0x0e1420,
+    add:[ {w:1.10,h:0.24,d:0.90,c:0x16203a,x:0,    y:2.86,z:0},      // 大檐帽
+          {w:1.06,h:0.09,d:0.34,c:0x0c1220,x:0,    y:2.72,z:0.50},   // 帽檐
+          {w:1.12,h:0.08,d:0.92,c:0x0c1220,x:0,    y:2.99,z:0},      // 帽顶沿
+          {w:0.30,h:0.36,d:0.10,c:0xe8e8e8,x:0,    y:1.46,z:0.30},   // 白衬衫
+          {w:0.10,h:0.34,d:0.08,c:0x101820,x:0,    y:1.34,z:0.34},   // 黑领带
+          {w:0.42,h:0.11,d:0.17,c:0xd8b840,x:-0.42,y:1.65,z:0.10},   // 肩章 L
+          {w:0.42,h:0.11,d:0.17,c:0xd8b840,x:0.42, y:1.65,z:0.10},   // 肩章 R
+          {w:0.18,h:0.12,d:0.09,c:0xd8b840,x:0,    y:0.76,z:0.33},   // 皮带扣
+          {w:0.14,h:0.30,d:0.13,c:0x1a1a1a,x:0.34, y:1.32,z:0.33},   // 对讲机
+          {w:0.36,h:0.15,d:0.46,c:0x0a0f18,x:-0.25,y:0.08,z:0.06},
+          {w:0.36,h:0.15,d:0.46,c:0x0a0f18,x:0.25, y:0.08,z:0.06} ] },
+  /* 程序员：灰连帽衫（背后有帽子）+ 眼镜 + 工牌带 + 笔记本 */
+  { name:'程序员', desc:'连帽衫（有帽子）+ 眼镜 + 笔记本',
+    head:0x6f9a5a, body:0x565666, limb:0x4e4e5e, leg:0x3a4256, belt:0x33333c,
+    add:[ {w:0.94,h:0.46,d:0.42,c:0x4e4e5e,x:0,    y:2.18,z:-0.62},  // 背后的帽子 ✓
+          {w:0.32,h:0.13,d:0.09,c:0x14161c,x:-0.25,y:2.30,z:0.58},   // 眼镜 L
+          {w:0.32,h:0.13,d:0.09,c:0x14161c,x:0.25, y:2.30,z:0.58},   // 眼镜 R
+          {w:0.14,h:0.05,d:0.07,c:0x14161c,x:0,    y:2.30,z:0.58},   // 镜梁
+          {w:0.10,h:0.34,d:0.06,c:0x2a2a30,x:-0.03,y:1.34,z:0.32},   // 工牌带
+          {w:0.20,h:0.26,d:0.06,c:0xe8e8e8,x:-0.03,y:1.06,z:0.33},   // 工牌
+          {w:0.56,h:0.11,d:0.44,c:0x2e2e34,x:0.72, y:0.92,z:0.28},   // 笔记本
+          {w:0.34,h:0.14,d:0.46,c:0x2a2a30,x:-0.25,y:0.08,z:0.06},
+          {w:0.34,h:0.14,d:0.46,c:0x2a2a30,x:0.25, y:0.08,z:0.06} ] },
+  /* 健身教练：★ 关键改法 —— 身体本身就是【背心】，手臂裸露 = 无袖 ✓
+     （上一版是"绿身子上贴一块红方块"当背心，根本读不出来 ✗）
+     毛巾从脖子挪到腰上（脖子上那条看着像浮着的方块 ✗），胸前换成哨子 + 挂绳 */
+  { name:'健身教练', desc:'大块头 · 无袖背心（露臂）+ 哨子 + 发带',
+    head:0x6f9a5a, body:0xd8482c, limb:0x6f9a5a, leg:0x2a2a30, belt:0xe8e8e0,
+    scale:1.14, thick:1.6,
+    add:[ {w:1.05,h:0.22,d:0.66,c:0x6f9a5a,x:0,    y:1.72,z:0},      // 加宽的肩（斜方肌）
+          {w:0.98,h:0.16,d:0.66,c:0xc03a20,x:0,    y:0.66,z:0},      // 背心下摆压边
+          {w:1.16,h:0.12,d:1.16,c:0x1a1a1a,x:0,    y:2.66,z:0},      // 发带
+          {w:0.09,h:0.34,d:0.07,c:0x2a2a2e,x:-0.14,y:1.44,z:0.32},   // 挂绳 L
+          {w:0.09,h:0.34,d:0.07,c:0x2a2a2e,x:0.14, y:1.44,z:0.32},   // 挂绳 R
+          {w:0.16,h:0.12,d:0.10,c:0xd8d8d0,x:0,    y:1.24,z:0.34},   // 哨子
+          {w:0.62,h:0.14,d:0.50,c:0xe8e8e0,x:0,    y:0.80,z:0.34},   // 腰上搭的毛巾
+          {w:0.22,h:0.40,d:0.22,c:0x3aa0e0,x:0.76, y:0.98,z:0.14},   // 水壶
+          {w:0.42,h:0.18,d:0.54,c:0xe8e8e4,x:-0.30,y:0.09,z:0.07},   // 运动鞋 L
+          {w:0.42,h:0.18,d:0.54,c:0xe8e8e4,x:0.30, y:0.09,z:0.07} ] }// 运动鞋 R
+];
+
+var scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9c917c);
+scene.fog = new THREE.Fog(0x9c917c, 40, 120);
+var cam = new THREE.PerspectiveCamera(22, 1, 0.1, 300);
+var rd = new THREE.WebGLRenderer({ canvas: document.getElementById('cv'), antialias: true });
+rd.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+rd.shadowMap.enabled = true;
+
+/* 光照照抄游戏（第 30 轮的末日调子）✓ */
+scene.add(new THREE.HemisphereLight(0xb8b0a0, 0x33302b, 0.55));
+var sun = new THREE.DirectionalLight(0xf5c98a, 0.72);
+sun.position.set(10, 22, 14); sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.left = -20; sun.shadow.camera.right = 20;
+sun.shadow.camera.top = 20; sun.shadow.camera.bottom = -20;
+scene.add(sun);
+
+/* 地面（就是游戏里的干土色）*/
+var gnd = new THREE.Mesh(new THREE.PlaneGeometry(80, 40),
+  new THREE.MeshBasicMaterial({ color: 0x8a7a5e }));
+gnd.rotation.x = -Math.PI / 2; gnd.receiveShadow = true;
+scene.add(gnd);
+
+/* ---- 造一只僵尸：方块尺寸全部照 game.js 的 mob() ---- */
+function mkZombie(C) {
+  var g = new THREE.Group();
+  function mat(c) { return new THREE.MeshLambertMaterial({ color: c }); }
+  function put(w, h2, d, c, x, y, z) {
+    var b = new THREE.Mesh(new THREE.BoxGeometry(w, h2, d), mat(c));
+    b.position.set(x, y, z); b.castShadow = true; g.add(b); return b;
+  }
+  var th = C.thick || 1;
+  put(1.10, 1.10, 1.10, C.head, 0, 2.25, 0);                 // 头
+  put(0.22, 0.22, 0.06, 0x142014, -0.24, 2.30, 0.56);        // 眼
+  put(0.22, 0.22, 0.06, 0x142014, 0.24, 2.30, 0.56);
+  put(0.34, 0.07, 0.06, 0x233018, -0.24, 2.50, 0.56);        // 眉
+  put(0.34, 0.07, 0.06, 0x233018, 0.24, 2.50, 0.56);
+  put(0.42, 0.07, 0.06, 0x142014, 0, 2.02, 0.56);            // 嘴
+  put(1.00, 1.14, 0.60, C.body, 0, 1.14, 0);                 // 身
+  put(1.02, 0.16, 0.62, C.belt || 0x2a2620, 0, 0.76, 0);     // 腰带（职业可以换色 ✓）
+  function limb(c, x, isArm) {
+    var p = new THREE.Group(); p.position.set(x, isArm ? 1.60 : 0.60, 0);
+    if (isArm) { p.rotation.x = -1.35; }
+    var b = new THREE.Mesh(new THREE.BoxGeometry(
+      (isArm ? 0.28 : 0.32) * th, isArm ? 0.96 : 1.06, (isArm ? 0.28 : 0.32) * th), mat(c));
+    b.position.y = isArm ? -0.48 : -0.53; b.castShadow = true; p.add(b); g.add(p); return p;
+  }
+  limb(C.leg, -0.25 * th, 0); limb(C.leg, 0.25 * th, 0);
+  limb(C.limb, -0.64 * th, 1); limb(C.limb, 0.64 * th, 1);
+  // 职业挂件
+  for (var i = 0; i < (C.add || []).length; i++) {
+    var a = C.add[i];
+    put(a.w, a.h, a.d, a.c, a.x, a.y, a.z);
+  }
+  // 影子
+  var sh = new THREE.Mesh(new THREE.CircleGeometry(0.75, 18),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22, depthWrite: false }));
+  sh.rotation.x = -Math.PI / 2; sh.position.y = 0.01; g.add(sh);
+  g.scale.setScalar(C.scale || 1);
+  return g;
+}
+
+/* ---- 摆一排 ---- */
+var SP = 2.15, N = CLASSES.length;
+for (var i = 0; i < N; i++) {
+  var z = mkZombie(CLASSES[i]);
+  z.position.set((i - (N - 1) / 2) * SP, 0, 0);
+  z.rotation.y = -0.22;                 // 稍微侧一点，好看见背后的挂件（餐箱/书包）
+  scene.add(z);
+}
+/* 说明行 */
+var row = document.getElementById('row');
+for (var j = 0; j < N; j++) {
+  var d = document.createElement('div');
+  d.className = 'cap';
+  d.innerHTML = '<b>' + CLASSES[j].name + '</b><i>' + CLASSES[j].desc + '</i>';
+  row.appendChild(d);
+}
+
+/* ---- 缩放 + 渲染 ---- */
+function fit() {
+  var w = document.getElementById('cv').clientWidth || 1000;
+  var h = 430;
+  rd.setSize(w, h, false);          // false = 别动 CSS，CSS 高度下面自己定 ✓
+  cam.aspect = w / h;
+  cam.position.set(0, 2.6, 22.5);
+  cam.lookAt(0, 1.5, 0);
+  cam.updateProjectionMatrix();
+  rd.render(scene, cam);
+}
+window.addEventListener('resize', fit);
+document.getElementById('cv').style.height = '430px';
+fit();
+</script>
+</body>
+</html>

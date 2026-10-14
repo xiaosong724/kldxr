@@ -1,0 +1,34 @@
+# ============================================================
+#  .gitattributes —— 锁死换行符（★ 这个项目对换行有硬要求）
+# ============================================================
+# 项目规范（见 docs\交接.md）：
+#   .py / .md / .json / .js / .html  → LF
+#   .bat                             → CRLF
+#   ★ 编码一律 UTF-8 无 BOM
+#
+# 不加这个文件的话，Git for Windows 默认的 core.autocrlf=true 会把仓库里的
+# LF 在检出时换成 CRLF ✗ —— 那就违反规范了（而且 .bat 反过来被改成 LF 会执行不了 ✗）
+#
+# 写法：全部按 LF 存，只给 .bat 单独指定 CRLF ✓
+
+* text=auto eol=lf
+
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# 二进制：别做任何换行/编码转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.mp3   binary
+*.ogg   binary
+*.wav   binary
+*.apk   binary
+*.zip   binary
+*.db    binary
+
+# 这些在 diff 里显示成"二进制"，免得刷屏
+*.min.js  -diff
+*.min.css -diff
