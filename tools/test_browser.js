@@ -610,15 +610,26 @@ async function register(name, pw) {
     /* ★★ 第 39 轮：职业外观（方案 §3.3.1）★★
        ① 8 个职业每个都要真的挂上配件（不做的话和默认绿僵尸一样 ✗）
        ② 服务器的职业名，客户端这张表里必须都有（对不上就白做了 ✗）—— 拿真实僵尸验 */
+    /* ★★ 第 44 轮：僵尸模型改成【合并】了 ——
+       静态件（头/五官/身/腰带 + 全部职业挂件）合成 1 个几何体、颜色走顶点色，
+       四条要摆动的肢体各自 1 个 → 一只僵尸 5 个网格 / 5 次 draw call（原来 21 次 ✗）
+       所以"挂件多不多"不能再数子节点 ✗ 要数【顶点数】（每个方块 36 个顶点 ✓）
+       ★ 同时钉住"合并没退化"：子节点必须正好是 5 ✓ */
     const clsQ = JSON.parse(await A.eval(
       'var names = Object.keys(MOB_CLASSES);' +
-      'var base = mob(null).g.children.length;' +
+      'var baseG = mob(null).g;' +
+      'var base = baseG.children.length;' +
+      'var baseV = baseG.children[0].geometry.attributes.position.count;' +
       'var bad = [], extra = {};' +
-      'var mk = mob(null); if (mk.g.parent) { scene.remove(mk.g); }' +
       'for (var i = 0; i < names.length; i++) {' +
-      '  var g = mob(MOB_CLASSES[names[i]]).g;' +
-      '  extra[names[i]] = g.children.length - base;' +
-      '  if (g.children.length <= base) { bad.push(names[i]); } }' +
+      '  var gg = mob(names[i]).g;' +
+      '  var v = gg.children[0].geometry.attributes.position.count;' +
+      '  extra[names[i]] = v - baseV;' +
+      '  if (v <= baseV) { bad.push(names[i]); } }' +
+      'var merged = [];' +
+      'for (var j = 0; j < names.length; j++) {' +
+      '  var g2 = mob(names[j]).g;' +
+      '  if (g2.children.length !== 5) { merged.push(names[j] + ":" + g2.children.length); } }' +
       'var miss = [];' +
       'for (var j = 0; j < MOB_KINDS.length; j++) {' +
       '  if (!MOB_CLASSES[MOB_KINDS[j]]) { miss.push(MOB_KINDS[j]); } }' +
@@ -629,13 +640,16 @@ async function register(name, pw) {
       '  if (kk && live.indexOf(kk) < 0) { live.push(kk); }' +
       '  if (kk && !MOB_CLASSES[kk]) { unknown.push(kk); } }' +
       'return JSON.stringify({ n: names.length, base: base, bad: bad, extra: extra,' +
-      ' miss: miss, live: live, unknown: unknown });'
+      ' miss: miss, live: live, unknown: unknown, base: base, baseV: baseV, merged: merged });'
     ) || '{}');
-    console.log('        [职业外观] ' + clsQ.n + ' 个职业，配件数=' + JSON.stringify(clsQ.extra));
+    console.log('        [职业外观] ' + clsQ.n + ' 个职业，挂件带来的顶点数=' + JSON.stringify(clsQ.extra) +
+      ' · 每只僵尸网格数=' + clsQ.base + '（合并前 21）');
     console.log('        [职业外观] 场上僵尸的职业=' + JSON.stringify(clsQ.live) +
       '，客户端不认识的=' + JSON.stringify(clsQ.unknown));
     ok(clsQ.n === 8, '★ 8 个职业的外观表都在（' + clsQ.n + ' 个）');
-    ok(clsQ.bad.length === 0, '★★ 每个职业都真的多挂了配件（没挂上的：' + JSON.stringify(clsQ.bad) + '）');
+    ok(clsQ.bad.length === 0, '★★ 每个职业的挂件都还在（顶点数更多；没挂上的：' + JSON.stringify(clsQ.bad) + '）');
+    ok(clsQ.base === 5, '★★★ 一只僵尸只有 5 个网格（合并生效：1 个合并的身体 + 4 条肢体 ✓ 原来 21 个 ✗）');
+    ok(clsQ.merged.length === 0, '★★ 所有职业的网格数都是 5（异常的：' + JSON.stringify(clsQ.merged) + '）');
     ok(clsQ.miss.length === 0, '★★ 客户端职业名列表在表里都能查到（缺：' + JSON.stringify(clsQ.miss) + '）');
     ok(clsQ.unknown.length === 0,
       '★★ 服务器发下来的职业客户端都认识（不认识的：' + JSON.stringify(clsQ.unknown) + '）');

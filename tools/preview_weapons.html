@@ -190,14 +190,14 @@ var TIER_ADD = [
             [0.09, 0.22, 0.13, 0x8ee6ff, 0, 0.62, 0], [0.15, 0.12, 0.15, 0x3a3a44, 0, 0.04, 0],
             [0.46, 0.13, 0.20, 0xc8d4e0, 0, 0.14, 0], [0.12, 0.30, 0.12, 0x6a7a8a, 0, -0.06, 0],
             [0.09, 0.24, 0.06, 0xc04030, 0.15, 0.02, 0]],
-    body: 0xc0d4e4, guard: 0xd0d0e0, grip: 0x4a4a58, glow: 0.4, name:'阶 7-9 灵器', note:'11 块 · 雕饰/双色 · 微光+淡光晕' },
+    body: 0xc0d4e4, guard: 0xd0d0e0, grip: 0x4a4a58, glow: 0.4, name:'阶 7-9 灵器', note:'11 块 · 雕饰/双色 · 自发光 + 轮廓光' },
   /* 阶 10-11 神品：+ 宝石 + 纹路 + 加宽护手，强光 + 光晕 */
   { extra: [[0.08, 0.14, 0.08, 0xffffff, 0, 1.52, 0], [0.14, 0.09, 0.14, 0xffe9a8, 0, -0.24, 0],
             [0.09, 0.24, 0.13, 0xffe9a8, 0, 0.72, 0], [0.09, 0.24, 0.13, 0xffe9a8, 0, 0.44, 0],
             [0.15, 0.12, 0.15, 0x8a6a42, 0, 0.04, 0], [0.52, 0.16, 0.24, 0xe0bc60, 0, 0.14, 0],
             [0.13, 0.32, 0.13, 0x8a6a42, 0, -0.06, 0], [0.10, 0.26, 0.06, 0xc04030, 0.18, 0.02, 0],
             [0.14, 0.14, 0.14, 0x8ee6ff, 0, 0.20, 0.14], [0.12, 0.12, 0.12, 0xffe9a8, 0, 1.34, 0]],
-    body: 0xf0e0a8, guard: 0xe0bc60, grip: 0x8a6a42, glow: 0.75, name:'阶 10-11 神品', note:'14 块 · 宝石/纹路 · 强光+光晕' }
+    body: 0xf0e0a8, guard: 0xe0bc60, grip: 0x8a6a42, glow: 0.75, name:'阶 10-11 神品', note:'14 块 · 宝石/纹路 · 自发光 + 轮廓光 + 照亮地面' }
 ];
 /* 把基础件按档改色 + 追加件拼起来 */
 var TIERS = [];
@@ -245,14 +245,35 @@ function mkWeapon(parts, lean, glow) {
     /* ★ 品阶光效：emissive 自发光（越好的武器越亮 ✓）+ 高阶加一个半透明光晕壳 ✓ */
     if (glow > 0) {
       m.material.emissive = new THREE.Color(p[3]);
-      m.material.emissiveIntensity = glow * 0.55;
+      m.material.emissiveIntensity = glow * 0.75;
     }
   }
-  if (glow >= 0.7) {                 // 神品：整把罩一层淡光晕 ✓
-    var halo = new THREE.Mesh(new THREE.BoxGeometry(0.62, 1.9, 0.62),
-      new THREE.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0.16,
-                                    depthWrite: false }));
-    halo.position.y = 0.8; g.add(halo);
+  /* ★★ 发光（重做）★★
+     上一版是一个【半透明大方块】罩在外面 ✗ 那必然看起来像玻璃块，不像发光 ✗
+     发光要满足两条：① 光【贴着武器自己的轮廓】② 光【照亮周围】
+     做法：
+       ① 加法混合(AdditiveBlending)的"轮廓壳"——把每一块复制一份、放大一圈、
+          只渲染背面(BackSide) → 光就沿着武器形状溢出来 ✓（和描边一个原理）
+       ② 一盏点光源 → 地面会真的被照亮一圈 ✓ 这是"在发光"最有力的信号 ✓
+       ③ 材质本身的 emissive（自发光）继续保持 ✓ */
+  if (glow > 0) {
+    var shell = new THREE.Group();
+    for (var si = 0; si < g.children.length; si++) {
+      var src = g.children[si];
+      if (!src.isMesh) { continue; }
+      var sm = new THREE.Mesh(src.geometry, new THREE.MeshBasicMaterial({
+        color: 0xfff0c0, transparent: true, opacity: 0.22 * glow,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide
+      }));
+      sm.position.copy(src.position);
+      sm.rotation.copy(src.rotation);
+      sm.scale.copy(src.scale).multiplyScalar(1.0 + 0.10 * glow);   // 沿形状往外溢一圈 ✓
+      shell.add(sm);
+    }
+    g.add(shell);
+    var pl = new THREE.PointLight(0xffe9a8, 2.6 * glow, 5.2);       // ★ 照亮脚下的地 ✓
+    pl.position.set(0, 0.9, 0);
+    g.add(pl);
   }
   g.rotation.z = lean || -0.26;
   g.rotation.y = -0.5;
@@ -260,7 +281,7 @@ function mkWeapon(parts, lean, glow) {
 }
 function ground(parent, w, d) {
   var p = new THREE.Mesh(new THREE.PlaneGeometry(w, d),
-    new THREE.MeshBasicMaterial({ color: 0x8a7a5e }));
+    new THREE.MeshLambertMaterial({ color: 0x8a7a5e }));
   p.rotation.x = -Math.PI / 2; p.receiveShadow = true; parent.add(p);
 }
 function shadow(sc, x, z, r) {
@@ -282,7 +303,7 @@ for (var i = 0; i < N1; i++) {
 /* ---- 场景 2：4 个品阶 ---- */
 var s2 = mkScene(20);
 ground(s2, 40, 24);
-var SP2 = 2.5, N2 = TIERS.length;
+var SP2 = 3.2, N2 = TIERS.length;
 for (var j = 0; j < N2; j++) {
   var g2 = mkWeapon(TIERS[j].parts, -0.22, TIERS[j].glow);
   g2.position.set((j - (N2 - 1) / 2) * SP2, 0.05, 0);
@@ -324,7 +345,7 @@ function bind(canvasId, sc, h, camZ, lookY) {
   draw();
 }
 bind('cv1', s1, 430, 17, 1.20);
-bind('cv2', s2, 400, 15.5, 1.10);
+bind('cv2', s2, 400, 19, 1.10);
 </script>
 </body>
 </html>

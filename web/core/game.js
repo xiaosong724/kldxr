@@ -360,7 +360,7 @@ function init() {
   H.shadow.rotation.x = -Math.PI / 2; scene.add(H.shadow);
 
   for (var i = 0; i < G.MOB_COUNT; i++) {
-    var m = mob();
+    var m = mob(null);
     var ang = i / G.MOB_COUNT * Math.PI * 2;
     m.g.position.set(Math.cos(ang) * 10, 0, Math.sin(ang) * 10);
     m.g.scale.set(G.MOB_SCALE, G.MOB_SCALE, G.MOB_SCALE);
@@ -382,7 +382,7 @@ function init() {
     stressGrow = QS.indexOf('grow=1') >= 0;
     for (var si = 0; si < stressN; si++) {
       if (mobs.length >= G.MOB_MAX) { break; }                   // ★ 到上限就停 ✓
-      var sm = mob(randomMobClass());
+      var sm = mob(randomMobKind());
       var sang = Math.random() * Math.PI * 2;
       var sr = 6 + Math.random() * 22;
       sm.g.position.set(Math.cos(sang) * sr, 0, Math.sin(sang) * sr);
@@ -423,7 +423,7 @@ function init() {
     setInterval(function () {
       for (var gi = 0; gi < 5; gi++) {
         if (mobs.length >= G.MOB_MAX) { return; }               // ★ 到上限就不再生成 ✓
-        var gm2 = mob();
+        var gm2 = mob(null);
         var gang = Math.random() * Math.PI * 2, gr = 8 + Math.random() * 26;
         gm2.g.position.set(Math.cos(gang) * gr, 0, Math.sin(gang) * gr);
         gm2.g.scale.set(G.MOB_SCALE, G.MOB_SCALE, G.MOB_SCALE);
@@ -920,7 +920,7 @@ function flushQueue() {
 /* ============ 人物（小头 + 举剑 ✓）============ */
 function hero() {
   var g = new THREE.Group();
-  function mat(c) { return new THREE.MeshLambertMaterial({ color: c }); }
+  function mat(c) { return matOf(c); }   // ★ 第 44 轮：材质按颜色缓存复用（全场景几十个，不是几百个 ✓）
   function put(w, h2, d, c, x, y, z) {
     var b = new THREE.Mesh(new THREE.BoxGeometry(w, h2, d), mat(c));
     b.position.set(x, y, z); b.castShadow = true; g.add(b); return b;
@@ -1041,56 +1041,124 @@ var MOB_SWING = 0.85;
 /* 职业名列表（单机刷怪随机挑一个用 ✓ 联机时职业由服务器发下来 ✓）
    ★ 顺序和 server/mobs.py 的 KINDS 保持一致 —— 不一致也不崩（查不到就用默认外观 ✓）*/
 var MOB_KINDS = ['白领', '医生', '工人', '学生', '外卖', '保安', '程序员', '健身教练'];
-function randomMobClass() {
-  return MOB_CLASSES[MOB_KINDS[Math.floor(Math.random() * MOB_KINDS.length)]] || null;
+function randomMobKind() {
+  return MOB_KINDS[Math.floor(Math.random() * MOB_KINDS.length)] || null;
 }
 
-/* ============ 妖兽（默认外观 = 绿僵尸；带职业就套 MOB_CLASSES）============ */
-function mob(cls) {
-  cls = cls || {};
-  var g = new THREE.Group();
-  var thick = cls.thick || 1;
-  function mat(c) { return new THREE.MeshLambertMaterial({ color: c }); }
-  function put(w, h2, d, c, x, y, z) {
-    var b = new THREE.Mesh(new THREE.BoxGeometry(w, h2, d), mat(c));
-    b.position.set(x, y, z); b.castShadow = true; g.add(b); return b;
+/* ============ ★ 几何体 / 材质缓存（第 44 轮性能优化）============
+   为什么要做（实测：40 只僵尸 = 940 次 draw call，占全部 89% ✗）：
+     ① 原来【每个方块都 new 一个材质】✗ → 一只僵尸 20 个材质、40 只 800 个 ✗
+        （内存 + GC 压力：一刷新就卡一下）
+     ② 每个方块一个材质 = 【一次 draw call】✗ → 一只僵尸 21 次、40 只 840 次 ✗
+   现在：
+     ① 材质按颜色查表复用 → 全场景几十个 ✓
+     ② 僵尸【不动的部件】合并成一个几何体、颜色写进【顶点色】→ 1 次 draw call ✓
+     ③ 四条肢体（要摆动）各自合并 → 一只僵尸 5 次而不是 21 次 ✓
+   ★ 画质完全不变：同样的方块、同样的颜色、同样的光照与阴影 ✓ */
+
+var _matCache = {};
+function matOf(c) {
+  var k = c | 0;
+  var m = _matCache[k];
+  if (!m) { m = new THREE.MeshLambertMaterial({ color: k }); _matCache[k] = m; }
+  return m;
+}
+
+var _vcMat = null;
+function vcMat() {                      // ★ 顶点色材质：全场共用这一个 ✓
+  if (!_vcMat) { _vcMat = new THREE.MeshLambertMaterial({ vertexColors: true }); }
+  return _vcMat;
+}
+
+/* 把一堆方块合并成一个几何体（颜色 → 顶点色 ✓）
+   parts: [[宽,高,深,颜色, x,y,z, 绕Z旋转(可选)] ...]
+   ★ three.min.js 里没有 mergeGeometries（那在 examples 里 ✗）→ 自己拼 ✓ */
+function mergeBoxes(parts) {
+  var pos = [], nor = [], col = [];
+  var c = new THREE.Color();
+  var v = new THREE.Vector3(), q = new THREE.Quaternion(), mm = new THREE.Matrix4();
+  var one = new THREE.Vector3(1, 1, 1), ZAX = new THREE.Vector3(0, 0, 1);
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i];
+    var bg = new THREE.BoxGeometry(p[0], p[1], p[2]).toNonIndexed();   // ★ 去索引才好直接拼 ✓
+    if (p[7]) { q.setFromAxisAngle(ZAX, p[7]); } else { q.set(0, 0, 0, 1); }
+    v.set(p[4] || 0, p[5] || 0, p[6] || 0);
+    mm.compose(v, q, one);
+    bg.applyMatrix4(mm);
+    var pa = bg.attributes.position.array, na = bg.attributes.normal.array;
+    var n = pa.length;
+    for (var k = 0; k < n; k++) { pos.push(pa[k]); nor.push(na[k]); }
+    c.setHex(p[3] | 0);
+    for (var t = 0; t < n / 3; t++) { col.push(c.r, c.g, c.b); }
+    bg.dispose();
   }
-  put(1.10, 1.10, 1.10, cls.head || 0x5a8a48, 0, 2.25, 0);
-  put(0.22, 0.22, 0.06, 0x142014, -0.24, 2.30, 0.56);
-  put(0.22, 0.22, 0.06, 0x142014, 0.24, 2.30, 0.56);
-  put(0.34, 0.07, 0.06, 0x233018, -0.24, 2.50, 0.56);
-  put(0.34, 0.07, 0.06, 0x233018, 0.24, 2.50, 0.56);
-  put(0.42, 0.07, 0.06, 0x142014, 0, 2.02, 0.56);
-  put(1.00, 1.14, 0.60, cls.body || 0x0e8c8c, 0, 1.14, 0);
-  put(1.02, 0.16, 0.62, cls.belt || 0x0a6a6a, 0, 0.76, 0);
-  function limb(c, x, isArm) {
-    var p = new THREE.Group(); p.position.set(x, isArm ? 1.60 : 0.60, 0);
-    if (isArm) { p.rotation.x = -1.35; }
-    var b = new THREE.Mesh(new THREE.BoxGeometry(
-      (isArm ? 0.28 : 0.32) * thick, isArm ? 0.96 : 1.06, (isArm ? 0.28 : 0.32) * thick), mat(c));
-    b.position.y = isArm ? -0.48 : -0.53; b.castShadow = true; p.add(b); g.add(p); return p;
-  }
-  /* ★ 职业挂件（第 39 轮）：[宽,高,深,颜色, x,y,z] —— 全是小方块拼的，不加素材 ✓ */
-  var adds = cls.add || [];
+  var geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  return geo;
+}
+
+var MOB_GEO = {};          // 职业名 → 静态件合并后的几何体（建一次用一辈子 ✓）
+var LIMB_GEO = {};         // 肢体几何体（按 手臂/腿 × 粗细 × 颜色 缓存 ✓）
+
+function mobGeoOf(kind) {
+  var key = kind || 'default';
+  var hit = MOB_GEO[key];
+  if (hit) { return hit; }
+  var cls = mobClassOf(kind) || {};
+  var parts = [
+    [1.10, 1.10, 1.10, cls.head || 0x5a8a48, 0, 2.25, 0],       // 头
+    [0.22, 0.22, 0.06, 0x142014, -0.24, 2.30, 0.56],            // 眼
+    [0.22, 0.22, 0.06, 0x142014, 0.24, 2.30, 0.56],
+    [0.34, 0.07, 0.06, 0x233018, -0.24, 2.50, 0.56],            // 眉
+    [0.34, 0.07, 0.06, 0x233018, 0.24, 2.50, 0.56],
+    [0.42, 0.07, 0.06, 0x142014, 0, 2.02, 0.56],                // 嘴
+    [1.00, 1.14, 0.60, cls.body || 0x0e8c8c, 0, 1.14, 0],       // 身
+    [1.02, 0.16, 0.62, cls.belt || 0x0a6a6a, 0, 0.76, 0]        // 腰带
+  ];
+  var adds = cls.add || [];                                     // 职业挂件一起合并 ✓
   for (var ai = 0; ai < adds.length; ai++) {
     var a = adds[ai];
-    put(a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+    parts.push([a[0], a[1], a[2], a[3], a[4], a[5], a[6]]);
+  }
+  var geo = mergeBoxes(parts);
+  geo.translate(0, MOB_FEET, 0);        // ★ 抬到脚踩地面（第 40 轮那个 0.46 ✓）
+  MOB_GEO[key] = geo;
+  return geo;
+}
+
+function limbGeoOf(isArm, thick, col) {
+  var key = (isArm ? 'a' : 'l') + '_' + thick + '_' + (col | 0);
+  var hit = LIMB_GEO[key];
+  if (hit) { return hit; }
+  var w = (isArm ? 0.28 : 0.32) * thick, h = isArm ? 0.96 : 1.06;
+  var geo = mergeBoxes([[w, h, w, col, 0, isArm ? -0.48 : -0.53, 0]]);
+  LIMB_GEO[key] = geo;
+  return geo;
+}
+
+/* ============ 妖兽（默认外观 = 绿僵尸；带职业就套 MOB_CLASSES）============
+   ★ 第 44 轮：改成 1 个合并的静态件 + 4 条肢体 = 5 次 draw call（原来 21 次 ✗）*/
+function mob(kind) {
+  var cls = mobClassOf(kind) || {};
+  var thick = cls.thick || 1;
+  var g = new THREE.Group();
+  var bodyMesh = new THREE.Mesh(mobGeoOf(kind), vcMat());
+  bodyMesh.castShadow = true; g.add(bodyMesh);
+  function limb(c, x, isArm) {
+    var p = new THREE.Group(); p.position.set(x, (isArm ? 1.60 : 0.60) + MOB_FEET, 0);
+    if (isArm) { p.rotation.x = -1.35; }
+    var b = new THREE.Mesh(limbGeoOf(isArm, thick, c), vcMat());
+    b.castShadow = true; p.add(b); g.add(p); return p;
   }
   var armC = cls.limb || 0x5a8a48;
   var legC = cls.leg || 0x3e3ea0;
-  /* ★ 四条肢体要先建出来（它们同样是 g 的子节点）—— 顺序错了就抬不到它们 ✗（第 40 轮踩过：
-     抬高那段写在 return 里那四个 limb() 调用【之前】，结果 maxY 上去了、minY 还是 -0.46 ✗）*/
   var legL = limb(legC, -0.25 * thick, 0), legR = limb(legC, 0.25 * thick, 0);
   var armL = limb(armC, -0.64 * thick, 1), armR = limb(armC, 0.64 * thick, 1);
-  /* ★★ 把整个模型抬高，让【脚踩在地面上】（第 40 轮量出来的 bug）★★
-     原来模型底部在 y = -0.46，也就是腿有 46% 埋在土里 ✗
-     → 露在外面的腿只剩 0.25 米高，摆动再大也看不出在走路 ✗（用户反馈"下肢没有走路动作"）
-     实测（THREE.Box3 量的）：模型 y ∈ [-0.46, 2.80]，地面在 y = 0 → 抬完是 [0, 3.26] ✓ */
-  for (var ci = 0; ci < g.children.length; ci++) { g.children[ci].position.y += MOB_FEET; }
   return { g: g, mid: NET.pid + ':' + (++NET.mobSeq),   // ★ 全局唯一 id（多人同步用 ✓）
            legL: legL, legR: legR, armL: armL, armR: armR };
 }
-
 /* ============ 伤害数字 ============ */
 var REUSE_V3 = { v: null };
 
@@ -1181,7 +1249,7 @@ function rollMobLevel() {
 
 function spawnMobAt(x, z) {
   if (mobs.length >= G.MOB_MAX) { return null; }    // ★ 硬上限（所有生成路径的最后一道闸 ✓）
-  var sm = mob(randomMobClass());
+  var sm = mob(randomMobKind());
   sm.g.position.set(x, 0, z);
   sm.lv = rollMobLevel();
   sm.hpMax = mobHpAt(sm.lv);
@@ -1731,7 +1799,7 @@ function addWorldMob(arr, t) {
   var rm = NET.rmobs[mid];
   if (!rm) {
     var mcls = mobClassOf(mkind);                    // ★ 职业外观（第 39 轮，方案 §3.3.1）
-    var m = mob(mcls);
+    var m = mob(mkind);                              // ★ 传职业名（几何体按名缓存 ✓ 第 44 轮）
     // ★ 体型 = 等级带来的（第 37 轮）× 职业自己的比例（学生矮、健身教练壮）
     m.g.scale.setScalar(mobScaleAt(mlv) * ((mcls && mcls.scale) || 1));
     m.g.position.set(x, 0, z);
@@ -1809,7 +1877,7 @@ function removeWorldLoot(lid) {
   if (e.g) {
     scene.remove(e.g);
     if (e.g.geometry) { e.g.geometry.dispose(); }
-    if (e.g.material) { e.g.material.dispose(); }
+    if (e.g.material) { e.g.material.dispose(); }   // ★ 注意：这里能 dispose 是因为它有 emissive、不是 matOf 的共享材质 ✗
   }
   delete NET.rloot[lid];
 }
@@ -2123,6 +2191,8 @@ function netUpdate(dt) {
       }
     } else if (rm.dying === -2) {
       rm.dead += dt;
+      /* ★ 第 44 轮：材质是全场共享的，要淡出必须先给这一只克隆一份 ✗（不然全场一起淡）*/
+      if (!rm.faded) { rm.faded = 1; rm.g.traverse(function (o) { if (o.isMesh && o.material) { o.material = o.material.clone(); } }); }
       var fk2 = Math.min(1, (rm.dead - 1.00) / 0.5);
       rm.g.traverse(function (o) { if (o.isMesh && o.material) { o.material.transparent = true; o.material.opacity = 1 - fk2; } });
       if (rm.shadow) { rm.shadow.material.opacity = 0.10 * (1 - fk2); }
@@ -2457,7 +2527,9 @@ function frame(ts) {
       } else if (m2.dying === -2) {
         m2.dead += dt;
         var fk = Math.min(1, (m2.dead - 1.00) / 0.5);   // ★ 淡出 0.5 秒（起点同步 1.00 ✓）
-        m2.g.traverse(function (o) { if (o.isMesh && o.material) { o.material.transparent = true; o.material.opacity = 1 - fk; } });
+        /* ★ 第 44 轮：材质全场共享 → 淡出前必须先克隆这一只的 ✗（不然全场一起淡）*/
+      if (!m2.faded) { m2.faded = 1; m2.g.traverse(function (o) { if (o.isMesh && o.material) { o.material = o.material.clone(); } }); }
+      m2.g.traverse(function (o) { if (o.isMesh && o.material) { o.material.transparent = true; o.material.opacity = 1 - fk; } });
         if (m2.shadow) { m2.shadow.material.opacity = 0.10 * (1 - fk); }
         if (fk >= 1) {                                          // 完全消失 → 移除 + 重生
           m2.dying = -3;
@@ -2469,7 +2541,7 @@ function frame(ts) {
           (function () {
             setTimeout(function () {
               if (mobs.length >= G.MOB_MAX) { return; }   // ★ 到上限就不再补 ✓
-              var nm = mob(randomMobClass());
+              var nm = mob(randomMobKind());
               nm.g.position.set(P.x + (Math.random() * 10 - 5), 0, P.z + (Math.random() * 10 - 5));
               nm.lv = rollMobLevel();
               nm.hpMax = mobHpAt(nm.lv);
