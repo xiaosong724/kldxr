@@ -114,9 +114,16 @@ CLASS_STATS = {
 }
 # 医生：定期给周围僵尸回血（方案 §3.3"给周围僵尸回血"）
 HEAL_R = 12.0             # 治疗半径
-HEAL_PERIOD = 2.0         # 每 2 秒回一次
-HEAL_PCT = 0.12           # 每次回 12% 上限血
-HEAL_MAX_TARGETS = 3      # 一次最多奶几只（别一口气把全场奶满 ✗）
+# ★★ 第 46 轮改过（用户反馈"医生一多就打不动僵尸"）★★
+#   原来：每个医生各自每 2 秒奶 3 只 × 12% 上限血
+#     → 一只僵尸每秒被回 18% 血 ✗ 医生一多就是【线性叠加】✗ 直接变成不死 ✗
+#   现在：一只僵尸【同一个周期内只会被治疗一次】（Mob.healCd ✓）——
+#     医生多只意味着"能同时救更多不同的僵尸"，而不是"同一只被奶更多次" ✓
+#   数值也收了一档：3.5 秒回 10% ≈ 每秒 2.9%（约等于给僵尸减伤 25% ✓ 有压力但打得动 ✓）
+HEAL_PERIOD = 3.5         # 每 3.5 秒回一次（同一只僵尸的"被治疗"冷却也是它 ✓）
+HEAL_PCT = 0.10           # 每次回 10% 上限血
+HEAL_MAX_TARGETS = 2      # 一个医生一次最多奶 2 只
+HEAL_MAX_HP = 0.85        # 血超过上限 85% 的就不奶了（别浪费 + 让玩家看得出"它在回血" ✓）
 # 外卖骑手：残血就逃（方案 §3.3"移速最快，会逃跑"）
 FLEE_HP = 0.30            # 掉到 30% 以下开始逃
 FLEE_TIME = 2.5           # 逃这么久（秒）
@@ -190,7 +197,7 @@ class Mob(object):
 
     __slots__ = ('mid', 'kind', 'lv', 'x', 'z', 'yaw', 'hp', 'mhp', 'atk', 'exp',
                  'spd', 'atkT', 'atkAnim', 'windT', 'tgt', 'awayT', 'deadT', 'wx', 'wz', 'wT',
-                 'healT', 'fleeT')
+                 'healT', 'healCd', 'fleeT')
 
     def __init__(self, mid, lv, x, z, kind=None):
         self.mid = str(mid)
@@ -213,6 +220,7 @@ class Mob(object):
         self.awayT = 0.0         # 离所有玩家都超过 AWAY_DIST 的累计时长（消失用）
         self.deadT = 0.0         # 死了多久（留一会儿让客户端播完动画）
         self.healT = 0.0         # 医生：下次回血的倒计时
+        self.healCd = 0.0        # ★ 被治疗冷却（第 46 轮）：>0 时任何医生都不能再奶它 ✓
         self.fleeT = 0.0         # 外卖：还要逃多久
         # ★ 漫游方向（没目标时用）：wx/wz 是单位方向，wT 是"还有多久换方向" ✓
         self.wT = 0.0

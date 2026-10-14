@@ -1460,6 +1460,16 @@ function wsApplyWorld(d) {
   }
   for (var lid2 in NET.rloot) { if (!seenLoot[lid2]) { removeWorldLoot(lid2); } }
 
+  /* ---- ★ 僵尸医生给谁回了多少血（第 46 轮）----
+     服务器发的是 [医生x, 医生z, 目标x, 目标z, 回了多少] ✓
+     客户端只负责表现：拉一条绿线 + 弹一个绿字 ✓（不然玩家完全看不出关联 ✗）*/
+  var hl = d.heals || [];
+  for (var hi2 = 0; hi2 < hl.length; hi2++) {
+    var he2 = hl[hi2];
+    addHealBeam(+he2[0], +he2[1], +he2[2], +he2[3]);
+    healNum('+' + Math.round(+he2[4] || 0), +he2[2], 2.95, +he2[3]);
+  }
+
   // ---- 打在我身上的伤害 ----
   var hs = d.hurts || [];
   for (var h = 0; h < hs.length; h++) { netApplyHurt(hs[h]); }
@@ -1536,6 +1546,7 @@ function netGoOffline() {
   netStopLoop();
   for (var mid in NET.rmobs) { removeWorldMob(mid); }
   clearWorldLoot();
+  clearHealFx();                        // ★ 治疗连线也跟着清（第 46 轮）
   for (var uid in NET.others) { removeOther(uid); }
   if (!mobs.length) {
     for (var i = 0; i < G.MOB_COUNT; i++) {
@@ -1856,6 +1867,52 @@ var LOOT_COL = [0xbfa88a, 0x8fd28a, 0x8fc4ff, 0xc08fff, 0xffd83d, 0xff9a5c,
                 0xff6a5c, 0xff5cf0, 0x5cf0ff, 0xffffff, 0xffe08a, 0xff4a4a];
 var LOOT_PICK_R = 2.0;      // ★ 必须和服务器 drops.PICK_RANGE 一致 ✓
 var _lootT = 0;
+
+/* ============ 治疗连线（第 46 轮）============
+   用户反馈："僵尸医生的治疗效果看起来没有关联性，要让玩家明显看出来它给谁治疗了多少血"
+   → 两件事一起做才看得懂：
+       ① 从医生到被治僵尸拉一条【绿色连线】→ 一眼看出【谁治了谁】✓
+       ② 被治僵尸头顶弹一个【绿色 +N】   → 一眼看出【回了多少血】✓
+   ★ 连线就是一根细长方块（和游戏里别的东西一套做法 ✓ 不加素材）
+   ★ 淡出【不能改材质透明度】✗ —— 材质是共享的，改了会全场一起淡 ✗（第 44 轮踩过）
+     → 改成把【粗细缩到 0】✓ 纯几何变换，不碰材质 ✓ */
+var HEAL_FX_T = 0.5;
+var _beamGeo = null, _beamMat = null, _healBeams = [];
+function beamGeo() {
+  if (!_beamGeo) { _beamGeo = new THREE.BoxGeometry(0.07, 0.07, 1); }
+  return _beamGeo;
+}
+function beamMat() {
+  if (!_beamMat) {
+    _beamMat = new THREE.MeshBasicMaterial({ color: 0x7ee08a, transparent: true, opacity: 0.75,
+      blending: THREE.AdditiveBlending, depthWrite: false });
+  }
+  return _beamMat;
+}
+function addHealBeam(x1, z1, x2, z2) {
+  var dx = x2 - x1, dz = z2 - z1;
+  var len = Math.sqrt(dx * dx + dz * dz);
+  if (len < 0.02 || _healBeams.length > 24) { return; }   // 上限：别一次刷太多 ✓
+  var g = new THREE.Mesh(beamGeo(), beamMat());
+  g.position.set((x1 + x2) / 2, 1.55, (z1 + z2) / 2);
+  g.rotation.y = Math.atan2(dx, dz);      // 和游戏的朝向约定一致（0 = +z ✓）
+  g.scale.z = len;
+  scene.add(g);
+  _healBeams.push({ g: g, t: HEAL_FX_T });
+}
+function updateHealFx(dt) {
+  for (var i = _healBeams.length - 1; i >= 0; i--) {
+    var b = _healBeams[i];
+    b.t -= dt;
+    if (b.t <= 0) { scene.remove(b.g); _healBeams.splice(i, 1); continue; }
+    var k = b.t / HEAL_FX_T;                       // 1 → 0
+    b.g.scale.x = b.g.scale.y = 0.25 + k * 0.75;   // ★ 粗细缩到 0（不碰材质 ✓）
+  }
+}
+function clearHealFx() {
+  for (var i = 0; i < _healBeams.length; i++) { scene.remove(_healBeams[i].g); }
+  _healBeams.length = 0;
+}
 
 /* ============ ★ 发光（第 45 轮，方案 §7.10「方案 A」）============
    一个半透明外壳会看着像玻璃块 ✗ —— 要"在发光"得三条一起：
@@ -2600,6 +2657,7 @@ function frame(ts) {
   updateMarks();   // ★ 附近队友的屏幕方位箭头 ✓
   updateLoot(dt);  // ★ 地上掉的：转一下 + 走过去自动捡（第 38 轮）✓
   updateGlowLights();   // ★ 发光：把固定 2 盏灯派给最近的发光物（第 45 轮）✓
+  updateHealFx(dt);     // ★ 治疗连线：缩粗细 + 到期回收（第 46 轮）✓
   /* ★ 建筑分块：只有走出当前块才重算（一块 32 格 ≈ 20 米，所以几秒才走一次 ✓）
      _propPending = 上一帧的建块预算用完、还有块欠着 → 接着建 ✓
      平时每帧就两次取整 + 比较，开销可以忽略 ✓ */

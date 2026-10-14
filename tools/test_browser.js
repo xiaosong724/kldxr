@@ -950,6 +950,45 @@ async function register(name, pw) {
     ok(glowQ.lowShell === 0, '★ 低阶（0-3 品）不发光，没有壳（子节点 0 ✓）');
     ok(glowQ.lit >= 1 && glowQ.maxI > 0, '★ 2 盏灯会派给最近的发光物（点亮 ' + glowQ.lit + ' 盏）');
 
+    /* ★★ 第 46 轮：治疗要看得出来（用户反馈"看不出关联"）★★
+       ① 医生 → 僵尸 要有【连线】
+       ② 僵尸头顶要弹【绿色 +N】
+       ③ ★ 淡出只能缩粗细，【绝不能改共享材质的 opacity】✗（第 44 轮踩过：改了全场一起淡）*/
+    const healQ = JSON.parse(await A.eval(
+      'var out = {};' +
+      'beamMat();' +                                        // ★ 先建出来：材质是懒加载的，null 时取不到值 ✗（踩过）' +
+      'var o0 = _beamMat.opacity;' +
+      'addHealBeam(P.x + 3, P.z, P.x, P.z, 0);' +           // 参数多的那个是 4 参版，这里故意多传看会不会崩
+      'addHealBeam(P.x + 3, P.z, P.x + 1, P.z + 1);' +
+      'out.beams = _healBeams.length;' +
+      'out.inScene = 0;' +
+      'for (var i = 0; i < _healBeams.length; i++) {' +
+      '  if (scene.children.indexOf(_healBeams[i].g) >= 0) { out.inScene++; } }' +
+      'healNum("+25", P.x, 2.9, P.z);' +
+      'var green = 0, before = document.getElementsByTagName("div").length;' +
+      'var all = document.getElementsByTagName("div");' +
+      'for (var k = 0; k < all.length; k++) {' +
+      '  var st = all[k].style;' +
+      '  if (st && st.color && st.color.indexOf("126, 224, 138") >= 0) { green++; } }' +
+      'out.greenNum = green; out.domBefore = before;' +
+      'var thick0 = _healBeams[0].g.scale.x;' +
+      'updateHealFx(HEAL_FX_T * 0.5);' +                    // 过半寿命
+      'out.thickShrunk = _healBeams.length ? (_healBeams[0].g.scale.x < thick0) : false;' +
+      'out.matOpacityUnchanged = (_beamMat.opacity === o0);' +
+      'updateHealFx(HEAL_FX_T);' +                          // 寿终
+      'out.beamsAfter = _healBeams.length;' +
+      'return JSON.stringify(out);'
+    ) || '{}');
+    console.log('        [治疗] 连线=' + healQ.beams + ' 条（在场景里 ' + healQ.inScene +
+      '）· 绿字=' + healQ.greenNum + ' 个 · 变细=' + healQ.thickShrunk +
+      ' · 共享材质没被动=' + healQ.matOpacityUnchanged + ' · 到期后剩=' + healQ.beamsAfter);
+    ok(healQ.beams >= 1 && healQ.inScene === healQ.beams, '★★ 医生到僵尸的连线真的画出来了');
+    ok(healQ.greenNum >= 1, '★★ 被治的僵尸头顶弹了绿色 +N（玩家看得出回了多少）');
+    ok(healQ.thickShrunk === true, '★ 淡出靠缩粗细 ✓');
+    ok(healQ.matOpacityUnchanged === true,
+      '★★★ 淡出【没有改共享材质的 opacity】✓（改了会全场一起淡 ✗ —— 第 44 轮的教训）');
+    ok(healQ.beamsAfter === 0, '★ 到期后连线回收干净 ✓');
+
     // 顺手截一张设置面板（SHOT2）—— 第三参数可指定截哪一页（默认 about ✓）
     if (process.env.SHOT2) {
       await A.eval('openSet(); setTab(' + JSON.stringify(process.env.SHOT_TAB || 'about') + '); return 1;');

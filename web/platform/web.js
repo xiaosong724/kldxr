@@ -216,6 +216,27 @@ function dmg(txt, x, y, z, big) {
   })();
 }
 
+/* ---------- healNum（治疗数字：绿色 + 号 ✓ 第 46 轮）----------
+   ★ 用户反馈"医生的治疗效果看不出关联" —— 所以被治的僵尸头顶要弹一个绿字 ✓
+     和 dmg 一套做法（core 只说"在哪个像素、写什么字"，不碰 style ✓） */
+function healNum(txt, x, y, z) {
+  if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
+  var v = REUSE_V3.v.set(x, y, z).project(cam);
+  var el = document.createElement('div');
+  el.textContent = txt;
+  el.style.cssText = 'position:fixed;z-index:12;font-weight:800;pointer-events:none;text-shadow:0 2px 5px #000;' +
+    'font-size:17px;color:#7ee08a;' +
+    'left:' + ((v.x * 0.5 + 0.5) * innerWidth) + 'px;top:' + ((-v.y * 0.5 + 0.5) * innerHeight) + 'px;';
+  document.body.appendChild(el);
+  var t = 0;
+  (function up() {
+    t += 1;
+    el.style.top = (parseFloat(el.style.top) - 1.0) + 'px';
+    el.style.opacity = String(1 - t / 46);
+    if (t < 46) { requestAnimationFrame(up); } else { el.remove(); }
+  })();
+}
+
 /* ---------- 方位标记（屏幕边缘的队友箭头）----------
    ★ 和名牌一样：core 只说"在哪个像素、朝哪个角度、写什么字"，不碰 style 属性名 ✓
      （小游戏里这套换成 canvas 自绘，只要改这里 ✓） */

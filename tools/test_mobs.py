@@ -318,7 +318,7 @@ ok(mobs.player_atk(50) < mobs.player_atk(100), '等级越高攻击力越高 ✓'
 
 w, p = mk_world(0.0, 0.0)
 w.mobs.clear()
-mm = mobs.Mob(800, 1, 0.0, 1.0)          # 正前方 1 米（扇形里 ✓）
+mm = mobs.Mob(800, 1, 0.0, 1.0, kind='白领')   # ★ 必须指定职业：随机到"保安"它会格挡，伤害就变成 5 ✗（踩过）
 mm.hp = 999999
 w.mobs[mm.mid] = mm
 hp0 = mm.hp
@@ -535,6 +535,83 @@ ok(white_inside == 0,
    '★★ 白领【一帧都没进过】建筑（它绕开/贴着墙走 ✓ 实测 %d 帧）' % white_inside, white_inside)
 ok(worker_inside > 0,
    '★ 工人穿过去了（用户要求"建筑工除外" ✓ 实测有 %d 帧在建筑里）' % worker_inside, worker_inside)
+
+print('')
+print('== ⑱ 僵尸医生的治疗（第 46 轮：不能叠加 + 玩家要看得见）==')
+# ① ★★ 一只僵尸同一个周期内【只会被治一次】★★ —— 医生多也不能叠加
+w, p = mk_world(0.0, 0.0)
+w.mobs.clear()
+w.heals = []
+for _i in range(3):
+    _d = mobs.Mob(1000 + _i, 5, _i * 1.0 - 1.0, 1.0, kind='医生')
+    _d.healT = 0.0                       # 三个都"刚好到点"，同一帧一起动手 ✓
+    w.mobs[_d.mid] = _d
+pat = mobs.Mob(1010, 5, 0.0, 1.5, kind='白领')
+pat.hp = int(pat.mhp * 0.30)
+pat.healCd = 0.0
+w.mobs[pat.mid] = pat
+_one = max(1, int(round(pat.mhp * mobs.HEAL_PCT)))
+_hp0 = pat.hp
+w._mob_heal(1.0 / 30.0)
+_got = pat.hp - _hp0
+ok(_got <= _one,
+   '★★★ 3 个医生同一帧都想治它 → 实际只回了 %d 点（一次治疗就是 %d）✓ 不会叠加 ✓'
+   % (_got, _one), _got)
+ok(_got > 0, '确实治了（不是没触发 ✓）', _got)
+ok(len(w.heals) == 1,
+   '治一次记一条事件（服务器要告诉客户端"谁治了谁、回了多少" ✓ 实测 %d 条）' % len(w.heals),
+   w.heals)
+if w.heals:
+    _ev = w.heals[0]
+    ok(len(_ev) == 5 and _ev[4] == _one and abs(_ev[0] - 0.0) < 40 and abs(_ev[2]) < 40,
+       '事件格式 [医生x, 医生z, 目标x, 目标z, 回了多少]（%r）' % (_ev,), _ev)
+
+# ② 医生多 ≠ 回得快：3 个医生跑 10 秒，总治疗量应该还是"一只僵尸每周期一次"
+w2, p2 = mk_world(0.0, 0.0)
+w2.mobs.clear()
+for _i in range(3):
+    _d = mobs.Mob(1100 + _i, 5, _i * 1.0 - 1.0, 1.0, kind='医生')
+    w2.mobs[_d.mid] = _d
+tank = mobs.Mob(1110, 5, 0.0, 1.5, kind='白领')
+tank.mhp = 100000
+tank.hp = 20000                          # 20%：远低于 85% 的门槛，全程都能被治 ✓
+tank.healCd = 0.0
+w2.mobs[tank.mid] = tank
+saved_i8 = mobs.SPAWN_INTERVAL
+mobs.SPAWN_INTERVAL = 1e9
+try:
+    for _ in range(300):                 # 10 秒
+        w2._mob_tick(1.0 / 30.0)
+finally:
+    mobs.SPAWN_INTERVAL = saved_i8
+_per = 10000.0                            # 每次回 10% = 10000 点
+_times = (tank.hp - 20000) / _per
+_theory = 10.0 / mobs.HEAL_PERIOD
+ok(_times <= _theory + 1.6,
+   '★★ 3 个医生跑了 10 秒，总共只回了 %.1f 次血（理论 %.1f 次）—— 医生多≠同一只回得快 ✓'
+   % (_times, _theory), _times)
+ok(_times >= 1.0, '但确实一直在回（%.1f 次）✓' % _times, _times)
+
+# ③ 血够足的不治（别浪费，也让玩家看得出"它在回血"是有条件的 ✓）
+w3, p3 = mk_world(0.0, 0.0)
+w3.mobs.clear()
+doc3 = mobs.Mob(1200, 5, 0.0, 1.0, kind='医生')
+doc3.healT = 0.0
+w3.mobs[doc3.mid] = doc3
+full = mobs.Mob(1210, 5, 1.0, 1.0, kind='白领')
+full.hp = int(full.mhp * mobs.HEAL_MAX_HP) + 5    # 刚过 85% 线
+w3.mobs[full.mid] = full
+_hp3 = full.hp
+w3._mob_heal(1.0 / 30.0)
+ok(full.hp == _hp3, '血超过 %.0f%% 的不治（实测没变 ✓）' % (mobs.HEAL_MAX_HP * 100))
+w3.heals = []
+doc3.healT = 0.0                          # ★ 上一次调用把它的冷却点起来了 ✗ 这里要重置
+almost = mobs.Mob(1211, 5, -1.0, 1.0, kind='白领')
+almost.hp = int(almost.mhp * mobs.HEAL_MAX_HP) - 5
+w3.mobs[almost.mid] = almost
+_hp4 = almost.hp
+w3._mob_heal(1.0 / 30.0)
+ok(almost.hp > _hp4, '（对照）刚好低于线就会治 ✓', almost.hp - _hp4)
 
 print('')
 if fails:

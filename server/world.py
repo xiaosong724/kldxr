@@ -86,6 +86,9 @@ class World(object):
         self._spawn_acc = 0.0           # 刷怪节流
         self.pvp = False                # ★ PvP 总开关（服务器权威；客户端只是请求开/关 ✓）
         self._pend = {}                 # cid -> {'hurts': [...], 'mhits': [...], 'me': {...}}
+        # ★ 本 tick 的治疗事件（第 46 轮）：[[医生x, 医生z, 目标x, 目标z, 回了多少], ...]
+        #   医生一多，玩家必须能看出【谁给谁回了多少】✗ → 所以发事件、客户端画连线+数字 ✓
+        self.heals = []
         self.srv_conns = {}             # ★ 由 net.Net 填：连接表（只在 asyncio 循环里访问）
         self.tick_count = 0
         self.tick_ms = 0.0              # 上一帧耗时
@@ -204,9 +207,19 @@ class World(object):
                         d['mhits'] = pend['mhits']
                 if pend and pend.get('me'):
                     d['me'] = pend['me']          # 升级/涨经验了才带 ✓
+                # ★ 治疗事件（第 46 轮）：只发这个玩家看得见的（别把全图的都塞给他 ✗）
+                if self.heals:
+                    hv = []
+                    v2 = mobs.MOB_VIEW * mobs.MOB_VIEW
+                    for he in self.heals:
+                        if (he[2] - p.x) ** 2 + (he[3] - p.z) ** 2 <= v2:
+                            hv.append(he)
+                    if hv:
+                        d['heals'] = hv
                 batch.append((p.cid, P.pack_str('world', d)))
             self._to_net(self._fanout, batch)
         self._pend = {}
+        self.heals = []                       # ★ 治疗事件每 tick 清空（第 46 轮）
 
         # ⑤ 重置每 tick 的计数
         for p in self.players.values():
@@ -312,6 +325,8 @@ class World(object):
                 m.atkAnim -= dt
                 if m.atkAnim < 0:
                     m.atkAnim = -1.0
+            if m.healCd > 0:                 # ★ 被治疗冷却（第 46 轮）—— 衰减到 0 才能再被治 ✓
+                m.healCd -= dt
             if near is not None and nd2 <= agg2:
                 # ---- 有目标：追 / 咬（外卖残血时改成逃，见下）----
                 m.tgt = near.cid
@@ -361,7 +376,13 @@ class World(object):
     def _mob_heal(self, dt):
         """医生：定期把周围僵尸的血拉回来（方案 §3.3"给周围僵尸回血"）
 
-        ★ 只在 tick 线程跑 ✓ 60 只 × 医生数量，量很小可以忽略 ✓
+        ★ 第 46 轮重写（用户反馈"治疗效果看不出关联 + 医生一多就打不动僵尸"）：
+          ① 一只僵尸【同一个周期内只会被治疗一次】（m.healCd ✓）——
+             所以医生多只是"能同时救更多不同的僵尸"，不是"同一只被奶更多次" ✓
+             （原来是每个医生各自结算 → 线性叠加 ✗ 几个医生就能把僵尸奶成不死 ✗）
+          ② 每次治疗都记一条事件发下去 → 客户端能画出"医生 → 僵尸"的连线和数字 ✓
+             原来只在服务器内部改血量 ✗ 玩家完全看不出来谁给谁回了多少 ✗
+        ★ 只在 tick 线程跑 ✓ 量很小 ✓
         """
         medics = [m for m in self.mobs.values() if m.hp > 0 and m.kind == '医生']
         if not medics:
@@ -374,8 +395,12 @@ class World(object):
             doc.healT = mobs.HEAL_PERIOD * (0.85 + random.random() * 0.3)   # 别整齐划一 ✓
             hurt = []
             for m in self.mobs.values():
-                if m.hp <= 0 or m is doc or m.hp >= m.mhp:
+                if m.hp <= 0 or m is doc:
                     continue
+                if m.hp >= m.mhp * mobs.HEAL_MAX_HP:
+                    continue                    # 血还很足的不奶（别浪费 ✓）
+                if m.healCd > 0:
+                    continue                    # ★★ 关键：这只刚被治过，别的医生也插不上 ✓★
                 if (m.x - doc.x) ** 2 + (m.z - doc.z) ** 2 > r2:
                     continue
                 hurt.append(m)
@@ -384,7 +409,15 @@ class World(object):
             hurt.sort(key=lambda m: m.hp / float(m.mhp or 1))   # 先奶最惨的 ✓
             for m in hurt[:mobs.HEAL_MAX_TARGETS]:
                 add = max(1, int(round(m.mhp * mobs.HEAL_PCT)))
+                before = m.hp
                 m.hp = min(m.mhp, m.hp + add)
+                real = m.hp - before
+                if real <= 0:
+                    continue
+                m.healCd = mobs.HEAL_PERIOD     # ★ 这一只下个周期前不再被任何人治 ✓
+                # ★ 治疗事件：[医生x, 医生z, 目标x, 目标z, 回了多少] → 客户端画连线+数字 ✓
+                self.heals.append([round(doc.x, 2), round(doc.z, 2),
+                                   round(m.x, 2), round(m.z, 2), real])
 
     def _move_mob(self, m, dx, dz):
         """僵尸移动 —— ★ 会被建筑挡住（第 41 轮，用户要求"僵尸不应该穿墙"）
