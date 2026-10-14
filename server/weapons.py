@@ -113,7 +113,25 @@ def roll_coeff(look, rng=None):
     return c
 
 
-def player_atk_with(inherent, look, coeff, tier, item_lv=1):
+# ---------------------------------------------------------------- 等级发挥度（第 53 轮）
+MASTERY_FLOOR = 0.35        # 等级差很多时也至少发挥这么多（别让神器变废铁 ✗）
+
+
+def mastery_of(w, level):
+    """这件武器在这个等级手里能发挥多少（0.35 ~ 1.0）
+
+    ★ 不是"不能装"—— 能装、能看、能拿来打，只是打不出它的上限 ✓
+      （方案 §7.8 原来写的是"不能装"✗，按用户要求改成"发挥度" ✓）
+    """
+    req = int((w or {}).get('reqLevel') or 1)
+    lv = int(level or 1)
+    if req <= 1 or lv >= req:
+        return 1.0
+    v = MASTERY_FLOOR + (1.0 - MASTERY_FLOOR) * (float(lv) / float(req))
+    return max(MASTERY_FLOOR, min(1.0, v))
+
+
+def player_atk_with(inherent, look, coeff, tier, item_lv=1, mastery=1.0):
     """玩家攻击力 = 固有攻击 × 武器系数 + 武器平伤（§7.5 —— 一个字不差）
 
     ★★ 踩过的坑（第 47 轮）：这里一开始写成了 `固有 + (固有×系数 + 平伤)` ✗
@@ -125,11 +143,20 @@ def player_atk_with(inherent, look, coeff, tier, item_lv=1):
       不封的话，一把高系数高阶武器能把"固有那部分"压成零头，
       练级和换装备两条成长线就塌掉一条 ✗（所有刷装备游戏最常见的崩盘点）
     """
-    atk = float(inherent) * float(coeff) + flat_of(tier, item_lv)
+    base = float(inherent) * float(coeff) + flat_of(tier, item_lv)
+    # ★ 第 53 轮：等级不够 → 武器那一份打折（§7.5 的封顶照样在后面生效 ✓）
+    atk = base * max(0.0, min(1.0, float(mastery)))
     cap = float(inherent) * 2.5
     if atk > cap:
         atk = cap
     return atk
+
+
+def full_atk(inherent, w):
+    """这件武器在这个固有攻击下【满发挥】能到多少（不打折、不封顶 ✓）
+       给 UI 用："你现在只能发挥出它的 X%" ✓"""
+    b = (w or {}).get('base') or {}
+    return float(inherent) * float(b.get('coeff') or 1.0) + flat_full(w)
 
 
 WEAPON_REF = 100.0     # 系数折算基准：纯比较用，和玩家等级无关 ✓

@@ -1086,7 +1086,9 @@ async function register(name, pw) {
       'var bx = document.getElementById("bagTipBox");' +
       'out.tipShow = bx ? bx.style.display : "none";' +
       'out.tipTxt = bx ? (bx.textContent || "").slice(0, 40) : "";' +
-      'if (w0) { w0.click(); }' +
+      'if (w0) { w0.click(); }' +          // 第 54 轮：点格子只是【选中】✓
+      'if (w0) { var ub = document.getElementById("bagUse");' +
+      '  if (ub && !ub.disabled) { ub.click(); } }' +   // 再按【使用】才真的穿上 ✓
       'return JSON.stringify(out);'
     ) || '{}');
     console.log('        [背包] 格子 ' + bagQ.slots + ' 个（空 ' + bagQ.empty + ' · 有图标 ' +
@@ -1117,7 +1119,8 @@ async function register(name, pw) {
       'var inh = 10 + 3 * lv + 0.08 * lv * lv;' +
       'var it = { slot: "weapon", tier: 4, itemLv: 3, reqLevel: 25,' +
       '  base: { coeff: 1.40, atkSpeed: 0.75, reach: 3.0, arc: 1.55 } };' +
-      'var want = Math.min(inh * 1.40 + wFlat(it), inh * 2.5);' +
+      // ★ 第 54 轮：还要算【等级发挥度】——假武器给 reqLevel:1 就是满发挥 ✓
+      'var want = Math.min((inh * 1.40 + wFlat(it)) * wMastery(it), inh * 2.5);' +
       'out.real = Math.round(wRealHit(it) * 100) / 100;' +
       'out.want = Math.round(want * 100) / 100;' +
       'out.strength = Math.round(wStrength(it));' +
@@ -1143,7 +1146,7 @@ async function register(name, pw) {
        已知值（server 侧 tools/test_weapons.py ⑦ 钉的是同一个数）：
          5 阶双手斧 / 物品 8 级 → 武器伤害 196 · 暴击 294 · 间隔 0.827 秒 */
     const crossQ = JSON.parse(await A.eval(
-      'var it = { slot: "weapon", look: "axe", tier: 5, itemLv: 8,' +
+      'var it = { slot: "weapon", look: "axe", tier: 5, itemLv: 8, reqLevel: 1,' +
       '  base: { coeff: 1.45, atkSpeed: 0.75, reach: 3.0, arc: 1.55 } };' +
       'return JSON.stringify({ dmg: Math.round(wDamage(it)), crit: Math.round(wCrit(it)),' +
       ' dps: Math.round(wDps(it)), interval: Math.round(wInterval(it) * 1000) / 1000 });'
@@ -1153,7 +1156,7 @@ async function register(name, pw) {
     ok(crossQ.dmg === 196 && crossQ.crit === 294 && crossQ.interval === 0.827,
       '★★★ 客户端算的和服务器完全一致（196 / 294 / 0.827 ✓ 不一致就是"显示的和打出去的"不符 ✗）');
     const lvQ = JSON.parse(await A.eval(
-      'var it = { slot: "weapon", tier: 5, itemLv: 8,' +
+      'var it = { slot: "weapon", tier: 5, itemLv: 8, reqLevel: 1,' +
       '  base: { coeff: 1.45, atkSpeed: 0.75, reach: 3.0, arc: 1.55 } };' +
       'var real = WSC.role.level;' +
       'WSC.role.level = 1; var a2 = wDamage(it);' +
@@ -1177,13 +1180,23 @@ async function register(name, pw) {
       ' eqTxt: (document.getElementById("bagEqSlot").textContent || "").slice(0, 20),' +
       ' eqW: document.getElementById("bagEqSlot").getAttribute("data-w"),' +
       // ★ 第 49 轮：手上那把要按【当前武器】重建（零件数/发光数跟着类型和品阶变 ✓）
-      ' heldParts: (H && H.sw) ? H.sw.children.length : -1,' +
+      /* ★ 第 54 轮：手上那把外面包了一层 Group（用来转 90° 让刀刃朝前 ✓）
+         → 零件要数它【里面】的，不再是 sw 的直接子节点 ✗ */
+      ' heldParts: (function () {' +
+      '   if (!H || !H.sw) { return -1; }' +
+      '   var g0 = H.sw.children[0];' +
+      '   return g0 ? g0.children.length : H.sw.children.length; })(),' +
       ' heldGlow: (function () { var n = 0;' +
       '   if (!H || !H.sw) { return -1; }' +
-      '   for (var i = 0; i < H.sw.children.length; i++) {' +
-      '     var m = H.sw.children[i].material;' +
+      '   var g0 = H.sw.children[0];' +
+      '   var arr = g0 ? g0.children : H.sw.children;' +
+      '   for (var i = 0; i < arr.length; i++) {' +
+      '     var m = arr[i].material;' +
       '     if (m && m.emissiveIntensity > 0) { n++; } }' +
-      '   return n; })() });'
+      '   return n; })(),' +
+      ' heldRotY: (function () {' +                    // 顺便把朝向也钉住 ✓
+      '   if (!H || !H.sw || !H.sw.children[0]) { return null; }' +
+      '   return Math.round(H.sw.children[0].rotation.y * 180 / Math.PI); })() });'
     ) || '{}');
     console.log('        [背包] 穿后：' + eqQ.wp + '  cd=' + eqQ.cd + ' reach=' + eqQ.reach + ' arc=' + eqQ.arc);
     ok(eqQ.wp !== '(默认剑)', '★★ 点一下格子就穿上了（现在是 ' + eqQ.wp + ' ✓）');
@@ -1210,10 +1223,14 @@ async function register(name, pw) {
       '  var idx = +sl[i].getAttribute("data-i");' +
       '  var it = (BAG.items[idx] || {}).item;' +
       '  if (it && it.slot === "weapon" && it.look === "spear") { sl[i].click(); break; } }' +
+      // ★ 第 54 轮：点格子只是选中 → 还要按【使用】才真的换 ✓
+      'var ub2 = document.getElementById("bagUse");' +
+      'if (ub2 && !ub2.disabled) { ub2.click(); }' +
       'return 1;');
     await sleep(1700);
     const spQ = JSON.parse(await A.eval(
-      'var n = (H && H.sw) ? H.sw.children.length : -1;' +
+      'var g0 = (H && H.sw && H.sw.children[0]);' +
+      'var n = g0 ? g0.children.length : ((H && H.sw) ? H.sw.children.length : -1);' +
       'var ic = weaponIconSvg("spear", 5);' +
       'return JSON.stringify({ n: n, wp: (MY_WEAPON || {}).name || "?",' +
       ' shapes: (ic.match(/<rect|<circle/g) || []).length, reach: G.ATK_RANGE });'
@@ -1224,6 +1241,13 @@ async function register(name, pw) {
       '★★★ 换武器会重建手上的模型（零件 ' + nBefore + ' → ' + spQ.n + ' ✓ 不是一直那一把）');
     ok(spQ.shapes >= 5, '★★ 不同武器的图标也不同（长枪 ' + spQ.shapes + ' 个形状 + 射程 ' +
       spQ.reach + ' 米 ✓ 图标和数值都对得上）');
+    /* ★★ 第 54 轮：刀刃朝向（用户报的"拿着斧头时刀刃不是朝下"）★★
+       挥砍是绕 X 轴往下劈 → 刀刃必须朝 ±Z（正前/正后）
+       零件数据是"宽在X"（正面看刀的平面 ✓ 示意图就是这样）
+       → 所以手上那把要绕 Y 转 -90°，把刃口从 ±X 转到 ±Z ✓ */
+    ok(eqQ.heldRotY === -90,
+      '★★★ 手上武器绕 Y 转了 -90°（' + eqQ.heldRotY + '° ✓ —— 这样劈下去才是【刃】先着，' +
+      '不是拿刀面拍人 ✗ 八种武器一起修好 ✓）');
     ok(eqQ.cd > bagQ.cd0 + 0.05,
       '★★★ 换武器之后本地冷却跟着变（' + bagQ.cd0 + ' → ' + eqQ.cd + ' 秒，双手斧更慢 ✓）');
     ok(eqQ.reach > bagQ.reach0 - 0.01 && eqQ.arc > bagQ.arc0 + 0.05,

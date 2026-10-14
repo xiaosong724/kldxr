@@ -1177,7 +1177,17 @@ function fillHeldWeapon(sw) {
   }
   var w = MY_WEAPON;
   var g = buildWeaponMesh(w ? w.look : 'sword', w ? (w.tier || 0) : 0);
-  for (var k = g.children.length - 1; k >= 0; k--) { sw.add(g.children[k]); }
+  /* ★★ 第 54 轮：刀刃朝向修正（用户报的"拿着斧头时刀刃不是朝下"）★★
+     病根：零件数据是"宽在 X、薄在 Z"——
+           也就是【正面看是刀的平面】（示意图就是这么画的 ✓ 所以图标也好看 ✓）
+           但挥砍动画是绕 X 轴往下劈 ✗
+           不转的话，砸下去的是刀【面】而不是刀【刃】✗（等于拿刀背拍人）
+     修法：整把武器绕自身 Y 轴转 -90° → 原来朝 ±X 的刃口变成朝 ±Z（正前/正后）✓
+           往下劈时刃先着 ✓
+     ★ 八种武器一起修好（不是只修斧头）—— 因为它们共用同一套"宽在X"的数据 ✓
+     ★ 图标不受影响：图标是"沿 -Z 看的平面投影"，正是示意图那个角度 ✓ */
+  g.rotation.y = -Math.PI / 2;
+  sw.add(g);
   return sw;
 }
 

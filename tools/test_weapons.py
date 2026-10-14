@@ -13,6 +13,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server'))
 import weapons as W          # noqa: E402
+import mobs                  # noqa: E402
 
 fails = []
 
@@ -165,6 +166,40 @@ _d2 = W.player_atk_with(360.0, 'axe', 1.45, 5, _w['itemLv'])
 ok(abs(W.weapon_damage(_w) - W.weapon_damage(_w)) < 1e-9 and _d1 != _d2,
    '★ 武器伤害不受玩家等级影响（%.0f），而真正结算的总攻击会（Lv.1 %.1f / Lv.50 %.1f ✓）'
    % (W.weapon_damage(_w), _d1, _d2))
+print('')
+print('== ⑧ ★ 等级发挥度（第 53 轮：能装、但发挥不出最大伤害）==')
+# ★ 用户明确要求：不限制穿戴，只限制伤害 ✓
+_w4 = W.make_weapon('axe', 4, 1.40, 3)          # 需要 25 级
+ok(_w4['reqLevel'] == 25, '4 阶武器建议 25 级（reqLevel=%s ✓）' % _w4['reqLevel'])
+ok(abs(W.mastery_of(_w4, 25) - 1.0) < 1e-9, '★ 到等级了 → 发挥 100% ✓')
+ok(abs(W.mastery_of(_w4, 30) - 1.0) < 1e-9, '★ 超了也还是 100%（不会超过 ✓）')
+_m1 = W.mastery_of(_w4, 1)
+ok(0.35 <= _m1 < 0.5, '★★ Lv.1 → 发挥 %.0f%%（打不满 ✓ 但也不是 0，别让神器变废铁 ✗）' % (_m1 * 100))
+ok(W.mastery_of(_w4, 10) > _m1 and W.mastery_of(_w4, 20) > W.mastery_of(_w4, 10),
+   '★ 等级越高发挥越多（1级 %.0f%% < 10级 %.0f%% < 20级 %.0f%% ✓）'
+   % (W.mastery_of(_w4, 1) * 100, W.mastery_of(_w4, 10) * 100, W.mastery_of(_w4, 20) * 100))
+# 实际伤害：低级拿它反而不如顺手武器，高级才吃满
+_in1, _in30 = mobs.player_atk(1), mobs.player_atk(30)
+_low = W.player_atk_with(_in1, 'axe', 1.40, 4, 3, W.mastery_of(_w4, 1))
+_full30 = W.player_atk_with(_in30, 'axe', 1.40, 4, 3, W.mastery_of(_w4, 30))
+_std1 = W.player_atk_with(_in1, 'sword', 1.0, 0, 1, 1.0)
+ok(_low < _std1 * 1.15,
+   '★★ Lv.1 拿 4 阶斧（%.1f）跟顺手武器（%.1f）差不多 —— 拿不动就是拿不动 ✓' % (_low, _std1))
+ok(_full30 > _low * 5,
+   '★★ 同一把武器：Lv.1 %.1f → Lv.30 %.1f（差 %.1f 倍 ✓ 练级这条线还在 ✓）'
+   % (_low, _full30, _full30 / max(0.1, _low)))
+# ★ 而且穿戴【不被拦】（服务端只做发挥度，不做 reqLevel 拦截 ✓）
+import auth
+_src = open('server/auth.py', encoding='utf-8').read()
+# ★ 别去查"等级不够"四个字 —— 我的注释里就写着这句 ✗（上次就是这么假红的）
+#   要查的是【代码】：有没有 return False, '等级不够…'
+# ★ 别去查「等级不够」四个字 —— 我的注释里就写着这句 ✗（上次就是这么假红的）
+#   要查的是【代码】：还有没有 return False, '等级不够…'
+_body_src = _src.split('def equip_weapon')[1].split(chr(10) + 'def ')[0]
+_bad = [ln.strip() for ln in _body_src.split(chr(10))
+        if 'return False' in ln and '等级不够' in ln]
+ok(not _bad,
+   '★★★ 服务端 equip_weapon 里已经没有【代码级】的等级拦截了 ✓（能装 ✓ 只是发挥度打折 ✓）', _bad)
 print('')
 if fails:
     print('FAILED: %d 条 ✗' % len(fails))

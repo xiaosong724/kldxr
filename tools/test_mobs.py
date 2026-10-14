@@ -672,6 +672,51 @@ ok(len(w.mobs) > _before,
    len(w.mobs))
 
 print('')
+print('== ⑳ ★ 材料堆叠 / 武器不堆叠（第 54 轮）==')
+import sqlite3
+import json as _json
+_db = sqlite3.connect(':memory:')
+_db.execute('CREATE TABLE items(id INTEGER PRIMARY KEY AUTOINCREMENT, role_id INT,'
+            ' in_storage INT, slot_index INT, stack INT, item_json TEXT, created_at INT)')
+_w = W.World(None)
+
+
+def _n_rows():
+    return _db.execute('SELECT COUNT(*) FROM items').fetchone()[0]
+
+
+def _stack_of(name):
+    r = _db.execute("SELECT stack FROM items WHERE json_extract(item_json,'$.name')=?",
+                    (name,)).fetchone()
+    return r[0] if r else 0
+
+
+_mat = _json.dumps({'name': '破布', 'tier': 0, 'kind': 'material'}, ensure_ascii=False)
+_w._save_pick(_db, (1, _mat, 0))
+ok(_n_rows() == 1 and _stack_of('破布') == 1, '第一个材料 → 新建一行（stack=1 ✓）', _n_rows())
+_w._save_pick(_db, (1, _mat, 0))
+_w._save_pick(_db, (1, _mat, 0))
+ok(_n_rows() == 1 and _stack_of('破布') == 3,
+   '★★ 再捡两个同类 → 还是【一行】，stack=3（没堆出三行 ✗）',
+   (_n_rows(), _stack_of('破布')))
+# 同名不同阶 → 必须分开（不能混 ✓）
+_mat2 = _json.dumps({'name': '破布', 'tier': 1, 'kind': 'material'}, ensure_ascii=False)
+_w._save_pick(_db, (1, _mat2, 0))
+ok(_n_rows() == 2, '★★ 同名但【不同阶】→ 分开一行（不会把 0 阶和 1 阶混在一起 ✓）', _n_rows())
+# 不同角色 → 不能互相堆 ✓
+_w._save_pick(_db, (2, _mat, 0))
+ok(_n_rows() == 3 and _stack_of('破布') == 3,
+   '★★ 别人捡的不会堆到我这儿（按 role_id 分开 ✓）', _n_rows())
+# 武器：同名同阶也【不许】堆 ✓
+_wep = _json.dumps({'name': '玄铁双手斧', 'slot': 'weapon', 'tier': 4, 'itemLv': 3,
+                    'base': {'coeff': 1.4}, 'look': 'axe', 'reqLevel': 25}, ensure_ascii=False)
+_w._save_pick(_db, (1, _wep, 0))
+_w._save_pick(_db, (1, _wep, 0))
+ok(_n_rows() == 5,
+   '★★★ 武器永远是【一件一行】（捡两把同款 → 两行 ✓ 不堆叠 ✓）', _n_rows())
+ok(_stack_of('玄铁双手斧') == 1, '★★ 而且武器的 stack 一直是 1 ✓', _stack_of('玄铁双手斧'))
+
+print('')
 if fails:
     print('FAILED: %d 条 ✗' % len(fails))
     for f in fails:

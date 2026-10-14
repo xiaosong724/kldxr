@@ -695,6 +695,14 @@ function iconOfItem(it) {
   if (it.slot === 'weapon') { return weaponIconSvg(it.look, it.tier); }
   return ITEM_ICON[MAT_ICON_BY_NAME[it.name] || 'box'];
 }
+/* 品阶色 → 带透明度的 rgba（做图标【底色】用 ✓ 第 54 轮用户要求）*/
+function tierRgba(tier, a) {
+  var h = tierHex(tier);
+  var r = parseInt(h.substr(1, 2), 16), g = parseInt(h.substr(3, 2), 16),
+      b = parseInt(h.substr(5, 2), 16);
+  return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+}
+
 /* 品阶色 —— 和 core 里地上掉落物同一套 LOOT_COL ✓ */
 function tierHex(tier) {
   var n = Math.max(0, Math.min(11, tier | 0));
@@ -704,7 +712,7 @@ function tierHex(tier) {
   return '#' + s;
 }
 
-var BAG = { items: [], weapon: null, weaponItemId: null, busy: false, msg: '' };
+var BAG = { items: [], weapon: null, weaponItemId: null, busy: false, msg: '', sel: null };
 
 function bagToken() {
   try { return localStorage.getItem('token') || ''; } catch (e) { return ''; }
@@ -807,12 +815,28 @@ function wInherent() {
   var lv = (WSC.role && WSC.role.level) || 1;
   return 10 + 3 * lv + 0.08 * lv * lv;
 }
+/* ★★ 第 53/54 轮：等级不够【不是不能穿】，而是"发挥度打折" ★★
+   （方案 §7.8 原来写"不能装"✗ → 用户改成"能装、只是发挥不出最大伤害" ✓）
+   算法和 server/weapons.py 的 mastery_of 逐位一致 ✓（不一致就是显示和实际不符 ✗）*/
+function wMastery(it) {
+  var req = +((it && it.reqLevel) || 1);
+  var lv = (WSC.role && WSC.role.level) || 1;
+  if (req <= 1 || lv >= req) { return 1; }
+  var v = 0.35 + 0.65 * (lv / req);
+  return Math.max(0.35, Math.min(1, v));
+}
+/* 满发挥（不打折、不封顶）—— 用来告诉玩家"你只发挥了它的多少" ✓ */
+function wFull(it) {
+  var b = wBase(it);
+  if (!b) { return 0; }
+  return wInherent() * (+b.coeff || 1) + wFlat(it);
+}
 function wRealHit(it) {
   var b = wBase(it);
   if (!b) { return 0; }
   var inh = wInherent();
-  var v = inh * (+b.coeff || 1) + wFlat(it);
-  return Math.min(v, inh * 2.5);          // §7.5 封顶：装备最多贡献 60% ✓
+  var v = wFull(it) * wMastery(it);       // ★ 先按等级发挥度打折
+  return Math.min(v, inh * 2.5);          // 再按 §7.5 封顶：装备最多贡献 60% ✓
 }
 function wRealDps(it) {
   return wRealHit(it) * 1.1 / Math.max(0.05, wInterval(it));
@@ -827,21 +851,24 @@ function wNeedLevel(it) {
 /* 面板用的一整块文字（实际每击 / 武器强度 / 范围 / 打击面 / 攻速 ✓）*/
 function wStatHtml(it, dim) {
   var s = wStatsOf(it);
-  var need = wNeedLevel(it);
+  var m = wMastery(it);
+  var req = +((it && it.reqLevel) || 1);
   var lv = (WSC.role && WSC.role.level) || 1;
   var head = '';
-  if (need) {
-    head = '<span style="color:#ff8a7a">✗ 穿不上：需要 <s style="color:#ff8a7a">' + need +
-      ' 级</s>，你现在 ' + lv + ' 级</span><br>';
+  if (m < 1) {
+    // ★ 不拦穿戴 ✓ 只提示"你现在发挥不出它的全部"（用户要的就是这个 ✓）
+    head = '<span style="color:#ffd83d">⚠ 建议 ' + req + ' 级（你现在 ' + lv +
+      ' 级）· 只能发挥 <s style="color:#ffd83d">' + Math.round(m * 100) + '%</s></span><br>';
   } else if (dim) {
     head = '<span style="opacity:.65">空手 · 按默认单手剑算</span><br>';
   }
   var real = wRealHit(it);
-  var line1 = need
-    ? '<span style="opacity:.5">穿上后每击 ≈ <s>' + real.toFixed(0) + '</s>（等级够了才能穿）</span>'
-    : '<span>实际每击 <s>' + real.toFixed(0) + '</s>（暴击 <s>' +
-      (real * 1.5).toFixed(0) + '</s> · 20% 概率）</span>';
-  return head + line1 +
+  var fullCapped = Math.min(wFull(it), wInherent() * 2.5);
+  return head +
+    '<span>实际每击 <s>' + real.toFixed(0) + '</s>（暴击 <s>' +
+      (real * 1.5).toFixed(0) + '</s> · 20% 概率）' +
+      (m < 1 ? ' <i style="opacity:.7;font-style:normal">← 满发挥 ' +
+        fullCapped.toFixed(0) + '</i>' : '') + '</span>' +
     '<span>每秒伤害 <s>' + wRealDps(it).toFixed(0) + '</s>（含暴击期望 ✓）</span>' +
     '<span>武器强度 <s>' + wStrength(it).toFixed(0) +
       '</s> <i style="opacity:.7;font-style:normal">← 只比武器、不含你的等级</i></span>' +
@@ -851,6 +878,14 @@ function wStatHtml(it, dim) {
     '<span>攻速 <s>×' + s.spd.toFixed(2) + '</s>（' + wInterval(it).toFixed(2) + ' 秒一刀）</span>';
 }
 
+/* ============================================================
+   bagRender —— 画背包（第 54 轮：格子/品阶底色/阶数/数量/选中/使用按钮）
+   ★ 这一版把用户这一轮提的全部要求都写进去了：
+       · 品阶 → 图标【底色】
+       · 阶数 → 武器【左上角】
+       · 数量 → 材料【右下角】（武器永不堆叠 ✓）
+       · 点格子 = 选中；面板显示【选中那件】的数值；下面出现【使用】/【脱下】
+   ============================================================ */
 function bagRender() {
   var grid = document.getElementById('bagGrid');
   var eqs = document.getElementById('bagEqSlot');
@@ -859,22 +894,27 @@ function bagRender() {
   var cnt = document.getElementById('bagCount');
   if (!grid || !eqs || !st) { return; }
 
-  /* ---- 背包格子（像 MC：8 列，空位也画出来 → 才像格子而不是列表 ✓）---- */
+  /* ---- 背包格子（8 列，空位也画出来 → 才像格子而不是列表 ✓）---- */
   var html = '';
   for (var i = 0; i < BAG.items.length; i++) {
     var e = BAG.items[i];
     var it = e.item || {};
     var isW = (it.slot === 'weapon');
     var col = tierHex(it.tier || 0);
-    var cur = (BAG.weaponItemId && e.id === BAG.weaponItemId) ? ' cur' : '';
-    // ★ 第 52 轮：等级不够的武器在格子上就打锁（一眼能看出"这不是我不想穿"✓）
-    var need = isW ? wNeedLevel(it) : 0;
-    var lock = need ? ' locked' : '';
-    html += '<div class="slot' + cur + lock + '" data-id="' + e.id + '" data-w="' + (isW ? 1 : 0) +
-      '" data-i="' + i + '"' + (need ? (' title="需要 ' + need + ' 级"') : '') + '>' +
+    var cur = (BAG.weaponItemId && String(e.id) === String(BAG.weaponItemId)) ? ' cur' : '';
+    var sel = (BAG.sel && String(BAG.sel) === String(e.id)) ? ' sel' : '';
+    var lowm = isW ? (wMastery(it) < 1) : false;      // 发挥不满 → 黄标（不是锁 ✓）
+    var n = (e.stack || 1);
+    var bg = 'background:linear-gradient(180deg,' + tierRgba(it.tier || 0, 0.40) + ','
+             + tierRgba(it.tier || 0, 0.18) + ')';
+    html += '<div class="slot' + cur + sel + (lowm ? ' lowmastery' : '') + '" style="' + bg + '"' +
+      ' data-id="' + e.id + '" data-w="' + (isW ? 1 : 0) + '" data-i="' + i + '"' +
+      (lowm ? (' title="建议 ' + (it.reqLevel || 1) + ' 级（发挥 ' +
+        Math.round(wMastery(it) * 100) + '%）"') : '') + '>' +
       '<span style="color:' + col + '">' + iconOfItem(it) + '</span>' +
       '<span class="tg">' + (it.tier || 0) + '</span>' +
-      (need ? '<span class="lvl">' + need + '级</span>' : '') + '</div>';
+      (!isW && n > 1 ? '<span class="cnt">' + n + '</span>' : '') +
+      (lowm ? '<span class="lvl">' + Math.round(wMastery(it) * 100) + '%</span>' : '') + '</div>';
   }
   var total = Math.max(16, Math.ceil((BAG.items.length + 1) / 8) * 8);
   for (var p = BAG.items.length; p < total; p++) { html += '<div class="slot empty"></div>'; }
@@ -894,9 +934,45 @@ function bagRender() {
     eqs.setAttribute('data-w', '1');
   }
 
-  /* ---- 数值：只算【武器自己】的（用户要求，不掺玩家等级 ✓）---- */
-  st.innerHTML = wStatHtml(shownWeapon(), !w);   // ★ 空手 → 按默认单手剑算，不显示 0 ✓
+  /* ---- 数值：显示【当前选中】的那件（默认 = 已装备 ✓）---- */
+  var selItem = null, selIsEquipped = false;
+  for (var q = 0; q < BAG.items.length; q++) {
+    if (BAG.sel && String(BAG.items[q].id) === String(BAG.sel)) {
+      selItem = BAG.items[q].item;
+      selIsEquipped = !!(BAG.weaponItemId &&
+                         String(BAG.weaponItemId) === String(BAG.items[q].id));
+      break;
+    }
+  }
+  if (!selItem) { selItem = shownWeapon(); selIsEquipped = !!w; }
+  st.innerHTML = wStatHtml(selItem, !selItem);
 
+  /* ---- 使用 / 脱下（用户要求：点武器出现"使用"，穿上后变"脱下"）---- */
+  var useBtn = document.getElementById('bagUse');
+  if (useBtn) {
+    if (selIsEquipped) {
+      useBtn.textContent = '脱 下';
+      useBtn.className = 'bagB off';
+      useBtn.disabled = false;
+      useBtn.setAttribute('data-act', 'off');
+    } else if (selItem && selItem.slot === 'weapon' && selItem !== DEFAULT_W) {
+      useBtn.textContent = '使 用';
+      useBtn.className = 'bagB';
+      useBtn.disabled = false;
+      useBtn.setAttribute('data-act', 'use');
+    } else {
+      useBtn.textContent = '使 用';
+      useBtn.className = 'bagB';
+      useBtn.disabled = true;
+      useBtn.setAttribute('data-act', '');
+    }
+  }
+  var selTip = document.getElementById('bagSelTip');
+  if (selTip) {
+    selTip.textContent = (selItem && selItem.slot === 'weapon')
+      ? (selIsEquipped ? '这件正拿在手上' : '点「使用」穿上它')
+      : '点上面的格子选中一件武器';
+  }
   if (mg) {
     mg.textContent = BAG.msg || (BAG.items.length ? '' :
       '背包是空的 —— 打僵尸有机会掉武器（走过去自动捡 ✓）');
@@ -913,10 +989,11 @@ function bagTipAt(e, el) {
   var s = wStatsOf(it);
   var extra = '';
   if (it.slot === 'weapon') {
-    var needT = wNeedLevel(it);
-    if (needT) {
-      extra += '<b style="color:#ff8a7a">✗ 需要 ' + needT + ' 级（你现在 ' +
-        ((WSC.role && WSC.role.level) || 1) + ' 级）</b><br>';
+    var mT = wMastery(it);
+    if (mT < 1) {
+      extra += '<b style="color:#ffd83d">⚠ 建议 ' + (it.reqLevel || 1) + ' 级（你现在 ' +
+        ((WSC.role && WSC.role.level) || 1) + ' 级）· 只能发挥 ' +
+        Math.round(mT * 100) + '%</b><br>';
     }
     extra += '实际每击 <b>' + wRealHit(it).toFixed(0) + '</b> · 每秒 <b>' +
       wRealDps(it).toFixed(0) + '</b><br>' +
@@ -972,23 +1049,12 @@ function bindBag() {
       var el = e.target;
       while (el && el !== grid && !(el.getAttribute && el.getAttribute('data-id'))) { el = el.parentNode; }
       if (!el || el === grid || !el.getAttribute) { return; }
-      if (el.getAttribute('data-w') !== '1') { return; }   // 材料不能穿 ✓
-      // ★ 先本地判一次等级：不够就把话说清楚、而且【留在面板里】✓
-      //   （原来只靠服务器回一条 toast 一闪而过 ✗ —— 用户就是这么被误导的 ✗）
-      var idx0 = +el.getAttribute('data-i');
-      var it0 = (BAG.items[idx0] || {}).item || {};
-      var need0 = wNeedLevel(it0);
-      if (need0) {
-        var myLv = (WSC.role && WSC.role.level) || 1;
-        // ★ 光说"穿不上"不够 —— 还要说清【它本来能给你多少】，玩家才知道值不值得留 ✓
-        var cur = BAG.weapon ? wRealHit(BAG.weapon) : wRealHit(DEFAULT_W);
-        BAG.msg = '✗ 穿不上【' + (it0.name || '') + '】：需要 ' + need0 + ' 级，你现在 ' + myLv +
-                  ' 级 · 它每击 ≈ ' + wRealHit(it0).toFixed(0) + '（你现在 ' + cur.toFixed(0) +
-                  '）· 先打怪升级，或穿低阶的 ✓';
-        bagRender();
-        return;
-      }
-      bagEquip(el.getAttribute('data-id'));
+      /* ★ 第 54 轮（用户要求）：点武器 = 【选中】它（面板显示它的数值 ✓）
+         真正穿上要再按【使用】按钮 ✓ —— 免得手一滑就换了装备 ✗
+         ★ 材料只选中看一眼，不参与穿 ✓ */
+      BAG.sel = el.getAttribute('data-id');
+      BAG.msg = '';
+      bagRender();
     };
     grid.onmousemove = function (e) {
       var el = e.target;
@@ -997,6 +1063,16 @@ function bindBag() {
       bagTipAt(e, el);
     };
     grid.onmouseleave = bagTipHide;
+  }
+  /* ★ 使用 / 脱下 按钮（第 54 轮 用户要求：点武器出现"使用"，穿上后变"脱下"）*/
+  var useBtn = document.getElementById('bagUse');
+  if (useBtn) {
+    useBtn.onclick = function (e) {
+      if (e) { e.preventDefault(); }
+      var act = useBtn.getAttribute('data-act');
+      if (act === 'use' && BAG.sel) { bagEquip(BAG.sel); }
+      else if (act === 'off') { bagUnequip(); }
+    };
   }
   // 点装备槽 = 脱下（MC 那种"点一下就摘"✓）
   var eqs = document.getElementById('bagEqSlot');

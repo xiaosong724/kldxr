@@ -728,8 +728,10 @@ class World(object):
         base = w.get('base') or {}
         coeff = float(base.get('coeff') or 1.0)
         # ★ 第 51 轮：用【物品自己的等级】算平伤加成 ✓（原来错用了玩家等级 ✗）
+        # ★ 第 53 轮：等级不够不是"不能装"，而是【发挥度打折】✓
         return weapons.player_atk_with(inherent, w.get('look'), coeff,
-                                       w.get('tier') or 0, int(w.get('itemLv') or 1))
+                                       w.get('tier') or 0, int(w.get('itemLv') or 1),
+                                       weapons.mastery_of(w, lv))
 
     def _intent_atk(self, p, d):
         """玩家挥了一刀 —— ★★ 服务器算伤害（客户端只报"我挥了"，不报打中谁）★★
@@ -871,10 +873,12 @@ class World(object):
         self.loot_seq += 1
         import json
         import db as dbmod
-        self.post_save(
-            'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
-            ' VALUES(?,0,-1,1,?,?)',
-            (p.role_id, json.dumps(it, ensure_ascii=False), dbmod.now_ms()))
+        # ★★ 第 54 轮：不再直接 INSERT ★★
+        #   材料要堆叠（同名同阶合到一行 ✓），武器不堆叠 ✓
+        #   但"查一下有没有同类的"要读库 ✗ → tick 线程不许碰磁盘 ✗
+        #   → 把整件事交给存档线程（它收到 'PICK' 自己决定 +1 还是新建 ✓）
+        self.post_save('PICK', (p.role_id, json.dumps(it, ensure_ascii=False),
+                                dbmod.now_ms()))
         self._send_cid(p.cid, P.pack('notice', text='拾取：%s（%d 阶）' % (it['name'], it['tier'])))
 
     def _add_pend(self, cid, key, item):
@@ -1002,9 +1006,44 @@ class World(object):
             try:
                 with dbmod.db(self.cfg) as db:
                     for sql, params in batch:
+                        if sql == 'PICK':
+                            # ★★ 材料堆叠（第 54 轮）★★
+                            #   武器/装备：永远新建一行（不堆叠 ✓）
+                            #   材料：同名同阶就 +1（只在【背包里】合并 ✓ 仓库不混 ✗）
+                            self._save_pick(db, params)
+                            continue
                         db.execute(sql, params)
             except Exception as e:
                 print('  [save] 落盘失败：%r' % e)
+
+    def _save_pick(self, db, params):
+        """把捡到的一件东西落库：材料堆叠、装备单开（★ 只有存档线程会进来 ✓）"""
+        role_id, js, now = params[0], params[1], params[2]
+        import json
+        try:
+            it = json.loads(js)
+        except Exception:
+            return
+        is_equip = bool(it.get('slot'))          # 武器/防具 → 不堆叠 ✓
+        if not is_equip:
+            # 同名同阶的材料（且必须是【材料】：slot 为空 ✓）→ stack + 1
+            cur = db.execute(
+                "UPDATE items SET stack = stack + 1"
+                " WHERE role_id=? AND in_storage=0"
+                "   AND json_extract(item_json,'$.name')=?"
+                "   AND json_extract(item_json,'$.tier')=?"
+                "   AND json_extract(item_json,'$.slot') IS NULL",
+                (role_id, it.get('name'), it.get('tier') or 0))
+            try:
+                n = cur.rowcount
+            except Exception:
+                n = 0
+            if n:
+                return
+        db.execute(
+            'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
+            ' VALUES(?,0,-1,1,?,?)',
+            (role_id, js, now))
 
     # ============================================================ 状态（自检用）
 

@@ -253,17 +253,18 @@ def bag_of(cfg, role_id, cap=60):
     try:
         with dbmod.db(cfg) as c:
             rows = c.execute(
-                'SELECT id, item_json FROM items WHERE role_id=? AND in_storage=0'
+                'SELECT id, item_json, stack FROM items WHERE role_id=? AND in_storage=0'
                 ' ORDER BY id DESC LIMIT ?', (role_id, int(cap))).fetchall()
     except Exception:
         return out
-    for rid, js in rows:
+    for rid, js, stack in rows:
         try:
             it = json.loads(js)
         except Exception:
             continue
         if isinstance(it, dict):
-            out.append({'id': rid, 'item': it})
+            # ★ 第 54 轮：把数量带上（材料会堆叠 ✓ 武器永远是 1 ✓）
+            out.append({'id': rid, 'item': it, 'stack': int(stack or 1)})
     return out
 
 
@@ -321,9 +322,9 @@ def equip_weapon(cfg, role_id, item_id, role_level):
                 return False, '这件东西坏了'
             if not isinstance(w, dict) or w.get('slot') != 'weapon':
                 return False, '这不是武器'
-            req = int(w.get('reqLevel') or 1)
-            if int(role_level or 1) < req:
-                return False, '等级不够（需要 %d 级）' % req
+            # ★★ 第 53 轮：不再拦"等级不够" ★★
+            #   用户要求：能装、能看、能打，只是发挥不出最大伤害 ✓
+            #   限制伤害那条在 weapons.mastery_of + §7.5 封顶里做 ✓（不在穿的时候拦 ✗）
             now = dbmod.now_ms()
             c.execute('INSERT OR REPLACE INTO equipment(role_id, slot, item_id) VALUES(?,?,?)',
                       (role_id, 'weapon', iid))
