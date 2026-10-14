@@ -132,6 +132,45 @@ def player_atk_with(inherent, look, coeff, tier, item_lv=1):
     return atk
 
 
+WEAPON_REF = 100.0     # 系数折算基准：纯比较用，和玩家等级无关 ✓
+
+
+def flat_full(w):
+    """这件武器【自己】的平伤（含它自己的物品等级加成 ✓ 和玩家等级无关 ✓）"""
+    w = w or {}
+    return flat_of(w.get('tier') or 0, int(w.get('itemLv') or 1))
+
+
+def weapon_damage(w):
+    """★★ 武器伤害（第 51 轮，用户要求）★★
+       = 平伤 + 系数 × 100
+
+    ★ 为什么不掺玩家等级：用户说"加上等级不直观"✗
+      掺进去之后，同一把武器在 1 级和 50 级显示完全不同 → 没法横向比哪把好 ✗
+    ★ 所以这是个【纯武器分数】—— 两把武器谁高谁低，一眼就能看出 ✓
+      （真正代入伤害时还是"固有 × 系数 + 平伤"，服务器算 ✓ 见 player_atk_with ✓）
+    """
+    b = (w or {}).get('base') or {}
+    return flat_full(w) + float(b.get('coeff') or 1.0) * WEAPON_REF
+
+
+def crit_damage(w):
+    """暴击时的武器伤害（暴击 ×1.5，见 mobs.CRIT_MUL ✓）"""
+    return weapon_damage(w) * 1.5
+
+
+def dps_of(w):
+    """每秒伤害（比较用）—— 把"暴击期望"和"攻速"都算进去 ✓
+       ★ 只看单次伤害会误判：匕首单次低但快得多 ✓ 所以比较要看这个 ✓
+       暴击期望 = 1 + 暴击率 20% × (1.5 - 1) = 1.1 ✓
+    """
+    w = w or {}
+    b = w.get('base') or {}
+    spd = max(S_MIN, min(S_MAX, float(b.get('atkSpeed') or speed_of(w.get('look')))))
+    interval = BASE_INTERVAL / spd
+    return weapon_damage(w) * 1.1 / max(0.05, interval)
+
+
 def make_weapon(look, tier, coeff, item_lv=1, rng=None):
     """造一件武器（字段照方案 §7.1 的接口，base 里放 §7.4/§7.5 要用的东西 ✓）
 
@@ -145,6 +184,11 @@ def make_weapon(look, tier, coeff, item_lv=1, rng=None):
         'name': name_of(look, t),
         'slot': 'weapon',
         'tier': t,
+        # ★★ 第 51 轮：物品等级要【落在物品上】★★
+        #   原来 §7.5 的平伤加成用的是【玩家等级//4】✗ —— 那是错的：
+        #   同一把武器在 1 级和 50 级手里数值不一样 → 玩家根本没法比较两把武器 ✗
+        #   现在存成物品自己的等级（掉落时由出它的怪决定 ✓）→ 显示和结算都只看这把武器 ✓
+        'itemLv': max(1, int(item_lv)),
         'base': {
             'coeff': round(float(coeff), 3),
             'atkSpeed': round(speed_of(look), 2),

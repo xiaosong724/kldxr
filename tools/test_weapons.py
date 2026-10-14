@@ -149,6 +149,23 @@ ok(bad == 0, '★ 低级怪掉不出高阶武器（400 次里 0 次越界 ✓ �
 ok(all(W.roll_weapon(999, 1, rng)['look'] in W.TYPES for _ in range(50)), '掉出来的 look 都是合法类型 ✓')
 
 print('')
+print('== ⑦ ★ 武器伤害（第 51 轮：显示用的，不掺玩家等级）==')
+# ★ 这条和 tools/test_browser.js 里那条【必须一致】——
+#   两边各写一遍是有意的：客户端和服务器算的不一样时，两边测试总有一个会红 ✓
+_w = W.make_weapon('axe', 5, 1.45, 8)
+ok(abs(W.weapon_damage(_w) - 196) < 0.5,
+   '★ 5 阶双手斧/物品 8 级 → 武器伤害 %.0f（客户端那边钉的是同一个数 ✓）' % W.weapon_damage(_w),
+   W.weapon_damage(_w))
+ok(abs(W.crit_damage(_w) - 294) < 1.0, '★ 暴击 = 武器伤害 × 1.5（%.0f ✓）' % W.crit_damage(_w))
+ok(abs(W.BASE_INTERVAL / W.speed_of('axe') - 0.827) < 0.001, '★ 间隔 0.827 秒 ✓')
+ok(_w.get('itemLv') == 8, '★★ 物品等级【落在物品上】（itemLv=%s ✓ 不是玩家等级）' % _w.get('itemLv'))
+# 同一把武器在不同玩家等级下算出来必须一样（这就是"方便比武器" ✓）
+_d1 = W.player_atk_with(13.08, 'axe', 1.45, 5, _w['itemLv'])
+_d2 = W.player_atk_with(360.0, 'axe', 1.45, 5, _w['itemLv'])
+ok(abs(W.weapon_damage(_w) - W.weapon_damage(_w)) < 1e-9 and _d1 != _d2,
+   '★ 武器伤害不受玩家等级影响（%.0f），而真正结算的总攻击会（Lv.1 %.1f / Lv.50 %.1f ✓）'
+   % (W.weapon_damage(_w), _d1, _d2))
+print('')
 if fails:
     print('FAILED: %d 条 ✗' % len(fails))
     for f in fails:

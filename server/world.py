@@ -727,8 +727,9 @@ class World(object):
         w = p.weapon or {}
         base = w.get('base') or {}
         coeff = float(base.get('coeff') or 1.0)
+        # ★ 第 51 轮：用【物品自己的等级】算平伤加成 ✓（原来错用了玩家等级 ✗）
         return weapons.player_atk_with(inherent, w.get('look'), coeff,
-                                       w.get('tier') or 0, max(1, lv // 4))
+                                       w.get('tier') or 0, int(w.get('itemLv') or 1))
 
     def _intent_atk(self, p, d):
         """玩家挥了一刀 —— ★★ 服务器算伤害（客户端只报"我挥了"，不报打中谁）★★

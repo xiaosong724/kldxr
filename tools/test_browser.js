@@ -1075,7 +1075,7 @@ async function register(name, pw) {
       'out.iconRects = s0 ? s0.querySelectorAll("rect,circle").length : 0;' +
       'out.iconIsStroke = s0 ? s0.classList.contains("micon") : true;' +
       'out.cd0 = G.ATK_CD; out.reach0 = G.ATK_RANGE; out.arc0 = G.ATK_ARC;' +
-      'out.stat0 = (document.getElementById("bagStat").textContent || "").slice(0, 40);' +
+      'out.stat0 = (document.getElementById("bagStat").textContent || "").slice(0, 300);' +
       // 悬停第一件武器 → 提示框要出来（MC 那种 ✓）
       'var w0 = null;' +
       'for (var m = 0; m < sl.length; m++) {' +
@@ -1100,7 +1100,44 @@ async function register(name, pw) {
       '★★★ 每件武器都有【图标】（' + bagQ.withIcon + '/' + bagQ.weapons + ' 个槽画出了 SVG ✓）');
     ok(bagQ.tipShow === 'block' && bagQ.tipTxt.length > 2,
       '★★ 悬停显示详情（" + bagQ.tipTxt + " ✓ 像 MC 的提示框）');
-    ok(/攻击力|射程|攻速/.test(bagQ.stat0), '★★ 属性栏把武器的真实数值算给玩家看 ✓');
+    ok(/武器伤害/.test(bagQ.stat0) && /每秒伤害/.test(bagQ.stat0) && /范围/.test(bagQ.stat0),
+      '★★ 属性栏显示的是【武器自己的伤害】（武器伤害/每秒伤害/范围 ✓ 用户要求不掺玩家等级）');
+    ok(!/攻击力/.test(bagQ.stat0),
+      '★★ 面板上不再显示"攻击力"（那个数掺了玩家等级、没法横向比武器 ✗ 用户要求去掉）');
+    ok(/贴身|短|中|长|超远/.test(bagQ.stat0), '★ 范围有文字描述（贴身/短/中/长/超远 ✓）');
+    ok(/打击面/.test(bagQ.stat0) && /(窄|中|宽|横扫)/.test(bagQ.stat0),
+      '★★ 弧改成了文字描述（"打击面 宽 · 一片"这种 ✓ 用户要求）');
+    /* ★★ 和服务器对账：同一件武器两边算的必须一模一样 ★★
+       已知值（server 侧 tools/test_weapons.py ⑦ 钉的是同一个数）：
+         5 阶双手斧 / 物品 8 级 → 武器伤害 196 · 暴击 294 · 间隔 0.827 秒 */
+    const crossQ = JSON.parse(await A.eval(
+      'var it = { slot: "weapon", look: "axe", tier: 5, itemLv: 8,' +
+      '  base: { coeff: 1.45, atkSpeed: 0.75, reach: 3.0, arc: 1.55 } };' +
+      'return JSON.stringify({ dmg: Math.round(wDamage(it)), crit: Math.round(wCrit(it)),' +
+      ' dps: Math.round(wDps(it)), interval: Math.round(wInterval(it) * 1000) / 1000 });'
+    ) || '{}');
+    console.log('        [对账] 5阶双手斧/物品8级 → 武器伤害 ' + crossQ.dmg + ' 暴击 ' +
+      crossQ.crit + ' 每秒 ' + crossQ.dps + ' 间隔 ' + crossQ.interval + ' 秒');
+    ok(crossQ.dmg === 196 && crossQ.crit === 294 && crossQ.interval === 0.827,
+      '★★★ 客户端算的和服务器完全一致（196 / 294 / 0.827 ✓ 不一致就是"显示的和打出去的"不符 ✗）');
+    const lvQ = JSON.parse(await A.eval(
+      'var it = { slot: "weapon", tier: 5, itemLv: 8,' +
+      '  base: { coeff: 1.45, atkSpeed: 0.75, reach: 3.0, arc: 1.55 } };' +
+      'var real = WSC.role.level;' +
+      'WSC.role.level = 1; var a2 = wDamage(it);' +
+      'WSC.role.level = 99; var a3 = wDamage(it); WSC.role.level = real;' +
+      'return JSON.stringify({ a2: a2, a3: a3 });'
+    ) || '{}');
+    ok(lvQ.a2 === lvQ.a3,
+      '★★★ 玩家 1 级 / 99 级看同一把武器，显示的武器伤害完全一样（' + lvQ.a2 +
+      ' ✓ 不受等级影响，才能横向比哪把好 ✓）');
+    /* ★ 空手时不能显示 0（服务器是按默认单手剑兜底的 ✓）*/
+    const emptyQ = JSON.parse(await A.eval(
+      'return JSON.stringify({ d: Math.round(wDamage(DEFAULT_W)),' +
+      ' reach: DEFAULT_W.base.reach, spd: DEFAULT_W.base.atkSpeed });'
+    ) || '{}');
+    ok(emptyQ.d > 0 && emptyQ.reach === 2.4 && emptyQ.spd === 1.15,
+      '★★ 空手时按默认单手剑显示（武器伤害 ' + emptyQ.d + ' · 范围 2.4 米 ✓ 不显示 0 ✗）');
     await sleep(1700);
     const eqQ = JSON.parse(await A.eval(
       'return JSON.stringify({ wp: (MY_WEAPON || {}).name || "(默认剑)",' +

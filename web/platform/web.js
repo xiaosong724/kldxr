@@ -734,17 +734,81 @@ function bagFetch(cb) {
     .catch(function () { BAG.msg = '读背包失败（网络）'; if (cb) { cb(); } });
 }
 
-/* 攻击力那一栏：把服务器的公式在本地【照算一遍】给玩家看 ✓（服务器才是权威 ✓）
-   攻击力 = 固有攻击 × 武器系数 + 武器平伤（方案 §7.5）
-   固有攻击 = 10 + 3L + 0.08L²（方案 §4.5）*/
-function bagAtkPreview(w) {
-  var lv = (WSC.role && WSC.role.level) || 1;
-  var inherent = 10 + 3 * lv + 0.08 * lv * lv;
-  if (!w || !w.base) { return inherent; }
-  var flat = [3, 6, 10, 16, 24, 36, 52, 74, 104, 146, 205, 290][Math.max(0, Math.min(11, w.tier || 0))];
-  var atk = inherent * (+w.base.coeff || 1) + flat;
-  var cap = inherent * 2.5;              // ★ 装备贡献封顶 60%（§7.5）
-  return Math.min(atk, cap);
+/* ============================================================
+   ★ 第 51 轮：显示改成【武器自己的伤害】（用户要求）
+   为什么不掺玩家等级：同一把武器在 1 级和 50 级显示的数完全不同 → 没法横向比 ✗
+     现在显示的是"这件武器本身的分数" → 两把一比就知道哪把好 ✓
+   ★ 真正代入伤害时还是"固有 × 系数 + 平伤"（服务器算 ✓ 见 weapons.player_atk_with）
+     面板里不再显示那个数（用户说加上等级不直观 ✗）
+   ★ 这里的算法和 server/weapons.py 的 weapon_damage/crit_damage/dps_of 是同一个 ✓
+     （两边一旦不一致，就是显示和实际不符 —— 所以这里必须逐条对齐 ✓）
+   ============================================================ */
+var W_TIER_FLAT = [3, 6, 10, 16, 24, 36, 52, 74, 104, 146, 205, 290];
+var W_REF = 100;                 // 系数折算基准（纯比较用 ✓）
+
+function wBase(it) { return (it && it.base) || null; }
+function wFlat(it) {
+  var b = wBase(it);
+  if (!b) { return 0; }
+  var ti = Math.max(0, Math.min(11, it.tier || 0));
+  var lv = Math.max(1, it.itemLv || 1);
+  return W_TIER_FLAT[ti] * (1 + 0.06 * (lv - 1));
+}
+function wDamage(it) {          // 武器伤害 = 平伤 + 系数 × 100
+  var b = wBase(it);
+  if (!b) { return 0; }
+  return wFlat(it) + (+b.coeff || 1) * W_REF;
+}
+function wCrit(it) { return wDamage(it) * 1.5; }
+function wInterval(it) {
+  var b = wBase(it);
+  var spd = b ? (+b.atkSpeed || 1.15) : 1.15;
+  return 0.62 / Math.max(0.6, Math.min(2.2, spd));
+}
+function wDps(it) {             // 每秒伤害（含 20% 暴击期望 ×1.1 ✓）
+  return wDamage(it) * 1.1 / Math.max(0.05, wInterval(it));
+}
+/* 射程 → 文字（用户要求"射程改成范围"✓）*/
+function rangeWord(m) {
+  if (m <= 2.0) { return '贴身'; }
+  if (m <= 2.6) { return '短'; }
+  if (m <= 3.2) { return '中'; }
+  if (m <= 5.0) { return '长'; }
+  return '超远';
+}
+/* 弧 → 文字（用户要求"弧改成文字描述"✓）*/
+function arcWord(arc) {
+  if (arc <= 0.80) { return '窄 · 近乎直线突刺'; }
+  if (arc <= 1.05) { return '中 · 常规挥砍'; }
+  if (arc <= 1.30) { return '宽 · 一片'; }
+  return '横扫 · 一大片';
+}
+function wStatsOf(it) {
+  var b = wBase(it);
+  var spd = b ? (+b.atkSpeed || 1.15) : 1.15;
+  var reach = b ? (+b.reach || 2.4) : 2.4;
+  var arc = b ? (+b.arc || 1.05) : 1.05;
+  return { reach: reach, arc: arc, spd: spd };
+}
+/* ★ 空手时按【默认单手剑】算（服务器就是这么兜底的 ✓ 见 world.py 的 Player）
+   踩过：不兜底的话面板显示"武器伤害 0"✗ —— 玩家会以为坏了 ✗ */
+var DEFAULT_W = { slot: 'weapon', look: 'sword', tier: 0, itemLv: 1,
+                  base: { coeff: 1.0, atkSpeed: 1.15, reach: 2.4, arc: 1.05 } };
+function shownWeapon() { return (BAG.weapon && BAG.weapon.base) ? BAG.weapon : DEFAULT_W; }
+
+/* 面板用的一整块文字（武器伤害 / 暴击 / 每秒 / 范围 / 打击面 / 攻速 ✓）*/
+function wStatHtml(it, dim) {
+  var s = wStatsOf(it);
+  var d = wDamage(it);
+  var head = dim ? '<span style="opacity:.6">空手 · 按默认单手剑算</span><br>' : '';
+  return head +
+    '<span>武器伤害 <s>' + d.toFixed(0) + '</s>' +
+      '（暴击 <s>' + wCrit(it).toFixed(0) + '</s> · 20% 概率）</span>' +
+    '<span>每秒伤害 <s>' + wDps(it).toFixed(0) + '</s>（已含暴击期望 ✓）</span>' +
+    '<span>范围 <s>' + s.reach.toFixed(1) + '</s> 米 · ' + rangeWord(s.reach) + '</span>' +
+    '<span>打击面 ' + arcWord(s.arc) + '（正前方 ' +
+      Math.round(s.arc * 2 * 180 / Math.PI) + '°）</span>' +
+    '<span>攻速 <s>×' + s.spd.toFixed(2) + '</s>（' + wInterval(it).toFixed(2) + ' 秒一刀）</span>';
 }
 
 function bagRender() {
@@ -785,20 +849,9 @@ function bagRender() {
     eqs.setAttribute('data-w', '1');
   }
 
-  /* ---- 数值（服务器才是权威；这里只是把公式照算一遍给玩家看 ✓）---- */
-  var atk = bagAtkPreview(w);
-  var spd = (w && w.base && w.base.atkSpeed) || 1.15;
-  var reach = (w && w.base && w.base.reach) || 2.4;
-  var arc = (w && w.base && w.base.arc) || 1.05;
-  var lv = (WSC.role && WSC.role.level) || 1;
-  var inherent = 10 + 3 * lv + 0.08 * lv * lv;
-  st.innerHTML =
-    '<span>攻击力 <s>' + atk.toFixed(1) + '</s>（武器占 ' +
-      (atk > 0 ? ((atk - inherent) / atk * 100).toFixed(0) : 0) + '%，上限 60%）</span>' +
-    '<span>每秒 <s>' + (atk / (0.62 / spd)).toFixed(1) + '</s></span>' +
-    '<span>攻速 <s>×' + (+spd).toFixed(2) + '</s>（' + (0.62 / spd).toFixed(2) + ' 秒一刀）</span>' +
-    '<span>射程 <s>' + (+reach).toFixed(1) + '</s> 米</span>' +
-    '<span>弧 <s>' + (+arc).toFixed(2) + '</s>（正前方 ' + Math.round(arc * 2 * 180 / Math.PI) + '°）</span>';
+  /* ---- 数值：只算【武器自己】的（用户要求，不掺玩家等级 ✓）---- */
+  st.innerHTML = wStatHtml(shownWeapon(), !w);   // ★ 空手 → 按默认单手剑算，不显示 0 ✓
+
   if (mg) {
     mg.textContent = BAG.msg || (BAG.items.length ? '' :
       '背包是空的 —— 打僵尸有机会掉武器（走过去自动捡 ✓）');
@@ -812,19 +865,28 @@ function bagTipAt(e, el) {
   var idx = +el.getAttribute('data-i');
   var it = (BAG.items[idx] || {}).item;
   if (!it) { return; }
+  var s = wStatsOf(it);
   var extra = '';
-  if (it.slot === 'weapon' && it.base) {
-    var spd = +it.base.atkSpeed || 1, rc = +it.base.reach || 0, ac = +it.base.arc || 0;
-    extra = '<i>攻速 ×' + spd.toFixed(2) + '（' + (0.62 / spd).toFixed(2) + ' 秒一刀）<br>' +
-      '射程 ' + rc.toFixed(1) + ' 米 · 弧 ' + ac.toFixed(2) + '</i><br>' +
-      '<i>攻击力 ≈ ' + bagAtkPreview(it).toFixed(1) + '</i><br>';
+  if (it.slot === 'weapon') {
+    extra = '武器伤害 <b>' + wDamage(it).toFixed(0) + '</b>（暴击 ' + wCrit(it).toFixed(0) + '）<br>' +
+      '每秒 <b>' + wDps(it).toFixed(0) + '</b> · 范围 ' + s.reach.toFixed(1) + ' 米（' +
+      rangeWord(s.reach) + '）<br>' +
+      '打击面：' + arcWord(s.arc) + '<br>' +
+      '攻速 ×' + s.spd.toFixed(2) + '（' + wInterval(it).toFixed(2) + ' 秒一刀）<br>';
+    // ★ 真正打出去还受玩家等级影响（固有攻击那部分）—— 放最后一行，不干扰"比武器" ✓
+    var lv = (WSC.role && WSC.role.level) || 1;
+    var inh = 10 + 3 * lv + 0.08 * lv * lv;
+    var tot = Math.min(inh + wDamage(it), inh * 2.5);
+    extra += '<i style="opacity:.75">穿上后总攻击 ≈ ' + tot.toFixed(0) +
+      '（含你 Lv.' + lv + ' 的固有攻击 ' + inh.toFixed(0) + '）</i><br>';
   }
   box.innerHTML = '<b style="color:' + tierHex(it.tier || 0) + '">' + (it.name || '?') + '</b>' +
-    '<i> · ' + (it.tier || 0) + ' 阶</i><br>' + extra +
+    '<i> · ' + (it.tier || 0) + ' 阶' + (it.itemLv ? (' · 物品 ' + it.itemLv + ' 级') : '') +
+    '</i><br>' + extra +
     '<i>' + (it.slot === 'weapon' ? '点一下穿上' : '材料（以后做合成用）') + '</i>';
   box.style.display = 'block';
-  box.style.left = Math.min(window.innerWidth - 240, e.clientX + 14) + 'px';
-  box.style.top = Math.min(window.innerHeight - 90, e.clientY + 12) + 'px';
+  box.style.left = Math.min(window.innerWidth - 260, e.clientX + 14) + 'px';
+  box.style.top = Math.min(window.innerHeight - 120, e.clientY + 12) + 'px';
 }
 function bagTipHide() {
   var box = document.getElementById('bagTipBox');
@@ -852,6 +914,13 @@ function bagUnequip() {
 }
 
 function bindBag() {
+  /* ★★ 第 51 轮踩的坑：提示框一定要挂到 <body> 下 ★★
+     设置面板上有 backdrop-filter: blur() —— 按 CSS 规范，它会给 position:fixed 的
+     子元素【另建一个包含块】✗ 于是我在 JS 里按"视口坐标"算的 left/top 全错位，
+     提示框被挤到面板外面、还被裁掉 ✗
+     → 把它 appendChild 到 body 下，fixed 才真的是相对视口 ✓ */
+  var tip = document.getElementById('bagTipBox');
+  if (tip && tip.parentNode !== document.body) { document.body.appendChild(tip); }
   var grid = document.getElementById('bagGrid');
   if (grid) {
     grid.onclick = function (e) {
@@ -882,7 +951,8 @@ function bindBag() {
       var w = BAG.weapon;
       if (!box || !w) { bagTipHide(); return; }
       box.innerHTML = '<b style="color:' + tierHex(w.tier || 0) + '">' + (w.name || '?') + '</b>' +
-        '<i> · ' + (w.tier || 0) + ' 阶 · 已装备</i><br><i>点一下脱下</i>';
+        '<i> · ' + (w.tier || 0) + ' 阶 · 已装备</i><br>武器伤害 <b>' +
+        wDamage(w).toFixed(0) + '</b> · 每秒 <b>' + wDps(w).toFixed(0) + '</b><br><i>点一下脱下</i>';
       box.style.display = 'block';
       box.style.left = Math.min(window.innerWidth - 240, e.clientX + 14) + 'px';
       box.style.top = Math.min(window.innerHeight - 70, e.clientY + 12) + 'px';
