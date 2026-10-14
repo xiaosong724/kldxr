@@ -913,6 +913,42 @@ async function register(name, pw) {
     ok(lootQ.col === '#c08fff', '★ 颜色按品阶分（3 阶 → ' + lootQ.col + '）');
     ok(lootQ.asked > 0, '★★ 走到跟前会自动发拾取请求（本地先判距离）✓');
     ok(lootQ.after === lootQ.before - 1, '捡走后从场景里清掉 ✓');
+    /* ★★ 第 45 轮：发光（方案 A）★★
+       一个半透明外壳会像玻璃块 ✗ —— 必须是"自发光 + 沿形状的轮廓壳 + 点光源"三条 ✓
+       ★ 而且点光源【必须固定盏数】（实测 40 盏 = 4 倍开销 ✗），
+         并且必须在【启动时】就建好（后加灯会让 three.js 重编译所有受光材质 ✗）*/
+    const glowQ = JSON.parse(await A.eval(
+      'var out = {};' +
+      'out.poolN = GLOW_LIGHTS.length;' +
+      'out.shellTiers = [], out.lowShell = null;' +
+      // 高档掉落物：应该有轮廓壳
+      'addWorldLoot(["g1", P.x + 0.8, P.z, "灵气结晶", 9]);' +
+      'var e1 = NET.rloot["g1"];' +
+      'out.hiShell = e1 && e1.g ? e1.g.children.length : -1;' +
+      // 低档：不该有壳
+      'addWorldLoot(["g2", P.x - 0.8, P.z, "破布", 1]);' +
+      'var e2 = NET.rloot["g2"];' +
+      'out.lowShell = e2 && e2.g ? e2.g.children.length : -1;' +
+      // 灯要跟着最近的发光物
+      'updateGlowLights();' +
+      'var lit = 0, maxI = 0;' +
+      'for (var i = 0; i < GLOW_LIGHTS.length; i++) {' +
+      '  if (GLOW_LIGHTS[i].intensity > 0) { lit++; }' +
+      '  if (GLOW_LIGHTS[i].intensity > maxI) { maxI = GLOW_LIGHTS[i].intensity; } }' +
+      'out.lit = lit; out.maxI = Math.round(maxI * 100) / 100;' +
+      'out.sceneLights = 0;' +
+      'scene.traverse(function (o) { if (o.isPointLight) { out.sceneLights++; } });' +
+      'removeWorldLoot("g1"); removeWorldLoot("g2");' +
+      'return JSON.stringify(out);'
+    ) || '{}');
+    console.log('        [发光] 灯池=' + glowQ.poolN + ' 盏 · 高/低阶掉落物的子网格=' +
+      glowQ.hiShell + '/' + glowQ.lowShell + ' · 点亮=' + glowQ.lit +
+      ' · 强度=' + glowQ.maxI + ' · 场景里点光源=' + glowQ.sceneLights);
+    ok(glowQ.poolN === 2, '★★ 点光源【固定 2 盏】（实测 40 盏 = 4 倍开销 ✗，所以必须封顶）');
+    ok(glowQ.sceneLights === 2, '★★ 启动时就把 2 盏灯建好了（后加灯会触发着色器重编译 ✗）');
+    ok(glowQ.hiShell === 1, '★ 高阶掉落物有【轮廓壳】（本体是 mesh 本身，所以子节点 1 = 那个壳 ✓）');
+    ok(glowQ.lowShell === 0, '★ 低阶（0-3 品）不发光，没有壳（子节点 0 ✓）');
+    ok(glowQ.lit >= 1 && glowQ.maxI > 0, '★ 2 盏灯会派给最近的发光物（点亮 ' + glowQ.lit + ' 盏）');
 
     // 顺手截一张设置面板（SHOT2）—— 第三参数可指定截哪一页（默认 about ✓）
     if (process.env.SHOT2) {

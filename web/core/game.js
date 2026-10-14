@@ -294,6 +294,7 @@ function init() {
    实测阴影占渲染的 25% ✓ 这条直接省掉一半 ✓
    画质：这么大的方块影子，更新率从 60Hz 变 30Hz，肉眼分不出来 ✓ */
 rd.shadowMap.autoUpdate = false;
+initGlowLights();          // ★ 第 45 轮：2 盏发光灯在启动时就建好（后加会触发着色器重编译 ✗）
   scene.add(new THREE.HemisphereLight(0xb8b0a0, 0x33302b, 0.55));   // 天光发灰 · 地面反光压暗
   sun = new THREE.DirectionalLight(0xf5c98a, 0.72);                 // 低垂的脏太阳（暖橙但发闷）
   sun.position.set(38, 70, 26);
@@ -1856,6 +1857,105 @@ var LOOT_COL = [0xbfa88a, 0x8fd28a, 0x8fc4ff, 0xc08fff, 0xffd83d, 0xff9a5c,
 var LOOT_PICK_R = 2.0;      // ★ 必须和服务器 drops.PICK_RANGE 一致 ✓
 var _lootT = 0;
 
+/* ============ ★ 发光（第 45 轮，方案 §7.10「方案 A」）============
+   一个半透明外壳会看着像玻璃块 ✗ —— 要"在发光"得三条一起：
+     ① 材质自己 emissive（自发光）
+     ② 沿【模型形状】溢出的轮廓壳：加法混合 + 只渲染背面 + 放大一圈 ✓
+     ③ 一盏点光源 → 脚下地面真的被照亮 ✓
+   ★ 成本（第 44 轮实测）：
+       自发光    几乎免费（+2%）
+       轮廓壳    每件 +1 次 draw call（要合并成一块 ✓ 别一个方块一个壳 ✗）
+       点光源    40 盏 = 4 倍开销 ✗ / 2 盏 = 1.2 倍 ✓ → 【固定 2 盏，封顶】
+   ★ 灯必须在【启动时】建好 —— 后加灯会让 three.js 重编译所有受光材质的着色器 → 卡一下 ✗
+     所以下面这 2 盏灯一直存在，只改位置和强度（强度 0 = 不亮 ✓）*/
+var GLOW_LIGHTS = [];
+var GLOW_LIGHT_N = 2;
+function initGlowLights() {
+  for (var i = 0; i < GLOW_LIGHT_N; i++) {
+    var pl = new THREE.PointLight(0xffffff, 0, 7.0);
+    pl.position.set(0, -100, 0);        // 先藏到地下 ✓
+    scene.add(pl);
+    GLOW_LIGHTS.push(pl);
+  }
+}
+
+/* 品阶 → 光色/强度（方案 §7.10：0-3 不发光、4-6 微光、7-9 微光+轮廓、10-11 强光 ✓）*/
+var GLOW_TIER = [
+  null, null, null, null,                                  // 0-3：不发光
+  { c: 0x9fd8ff, i: 0.30, o: 0.20, shell: true },          // 4-6 玄铁
+  { c: 0x9fd8ff, i: 0.30, o: 0.20, shell: true },
+  { c: 0x9fd8ff, i: 0.30, o: 0.20, shell: true },
+  { c: 0xbfe8ff, i: 0.50, o: 0.30, shell: true },          // 7-9 灵器
+  { c: 0xbfe8ff, i: 0.50, o: 0.30, shell: true },
+  { c: 0xbfe8ff, i: 0.50, o: 0.30, shell: true },
+  { c: 0xffe9a8, i: 1.00, o: 0.45, shell: true },          // 10-11 神品
+  { c: 0xffe9a8, i: 1.00, o: 0.45, shell: true }
+];
+
+var _glowShellMat = {};                 // 轮廓壳材质按品阶缓存（就 3 种 ✓）
+function glowShellMat(tier) {
+  var hit = _glowShellMat[tier];
+  if (!hit) {
+    var g = GLOW_TIER[tier];
+    hit = new THREE.MeshBasicMaterial({
+      color: g.c, transparent: true, opacity: g.o,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide
+    });
+    _glowShellMat[tier] = hit;
+  }
+  return hit;
+}
+
+var _lootMat = {};                      // 掉落物材质按品阶缓存（共享 ✓ 不再每件 new ✗）
+function lootMat(tier) {
+  var hit = _lootMat[tier];
+  if (!hit) {
+    var col = LOOT_COL[tier] || 0xffffff;
+    var g = GLOW_TIER[tier];
+    hit = new THREE.MeshLambertMaterial({ color: col, emissive: col,
+      emissiveIntensity: g ? 0.85 : 0.5 });
+    _lootMat[tier] = hit;
+  }
+  return hit;
+}
+
+var _lootGeo = null, _lootShellGeo = null;
+function lootGeo() {
+  if (!_lootGeo) { _lootGeo = new THREE.BoxGeometry(0.30, 0.30, 0.30); }
+  return _lootGeo;
+}
+function lootShellGeo() {
+  /* ★ 轮廓壳 = 同一个形状放大一圈 ✓ 合并成【一个】网格 → 只多 1 次 draw call ✓ */
+  if (!_lootShellGeo) { _lootShellGeo = mergeBoxes([[0.37, 0.37, 0.37, 0xffffff, 0, 0, 0]]); }
+  return _lootShellGeo;
+}
+
+/* 每帧把固定的 2 盏灯派给【最近的发光物】（现在只有掉落物；以后武器接进来就多一处 ✓）*/
+var _glowCand = [];
+function updateGlowLights() {
+  _glowCand.length = 0;
+  for (var lid in NET.rloot) {
+    var e = NET.rloot[lid];
+    if (!GLOW_TIER[e.tier]) { continue; }
+    var dx = e.x - P.x, dz = e.z - P.z;
+    _glowCand.push([dx * dx + dz * dz, e]);
+  }
+  if (_glowCand.length > 1) { _glowCand.sort(function (a, b) { return a[0] - b[0]; }); }
+  for (var i = 0; i < GLOW_LIGHTS.length; i++) {
+    var pl = GLOW_LIGHTS[i];
+    var c = _glowCand[i];
+    if (!c || c[0] > 24 * 24) {           // 24 米外就不点了（省着色器开销 ✓）
+      pl.intensity = 0;
+      pl.position.set(0, -100, 0);
+      continue;
+    }
+    var g = GLOW_TIER[c[1].tier];
+    pl.color.setHex(g.c);
+    pl.intensity = g.i * 2.4;
+    pl.position.set(c[1].x, 0.6, c[1].z);
+  }
+}
+
 function addWorldLoot(arr) {
   if (!arr || arr.length < 3) { return null; }
   var lid = String(arr[0]);
@@ -1864,11 +1964,13 @@ function addWorldLoot(arr) {
   var tier = Math.max(0, Math.min(11, Math.round(+arr[4] || 0)));
   var e = NET.rloot[lid];
   if (!e) {
-    var col = LOOT_COL[tier] || 0xffffff;
-    var g = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3),
-      new THREE.MeshLambertMaterial({ color: col, emissive: col, emissiveIntensity: 0.5 }));
+    var g = new THREE.Mesh(lootGeo(), lootMat(tier));   // ★ 几何体/材质共享（第 45 轮）
     g.position.set(x, 0.5, z);
     g.castShadow = true;
+    var gt = GLOW_TIER[tier];
+    if (gt && gt.shell) {                               // ★ 高阶才有轮廓光（只多 1 次 draw call ✓）
+      g.add(new THREE.Mesh(lootShellGeo(), glowShellMat(tier)));
+    }
     scene.add(g);
     e = NET.rloot[lid] = { g: g, x: x, z: z, name: name, tier: tier, asked: 0 };
   }
@@ -1882,8 +1984,8 @@ function removeWorldLoot(lid) {
   if (!e) { return; }
   if (e.g) {
     scene.remove(e.g);
-    if (e.g.geometry) { e.g.geometry.dispose(); }
-    if (e.g.material) { e.g.material.dispose(); }   // ★ 注意：这里能 dispose 是因为它有 emissive、不是 matOf 的共享材质 ✗
+    /* ★ 第 45 轮：几何体/材质现在都是【全品阶共享】的 ✗ 绝对不能 dispose
+       （dispose 一次，后面所有同类掉落物就都画不出来了 ✗）*/
   }
   delete NET.rloot[lid];
 }
@@ -2497,6 +2599,7 @@ function frame(ts) {
   netSeparate(dt); // ★ 和别人重叠时慢慢推开（碰撞箱不叠在一起 ✓ 也不会互相卡住 ✓）
   updateMarks();   // ★ 附近队友的屏幕方位箭头 ✓
   updateLoot(dt);  // ★ 地上掉的：转一下 + 走过去自动捡（第 38 轮）✓
+  updateGlowLights();   // ★ 发光：把固定 2 盏灯派给最近的发光物（第 45 轮）✓
   /* ★ 建筑分块：只有走出当前块才重算（一块 32 格 ≈ 20 米，所以几秒才走一次 ✓）
      _propPending = 上一帧的建块预算用完、还有块欠着 → 接着建 ✓
      平时每帧就两次取整 + 比较，开销可以忽略 ✓ */
