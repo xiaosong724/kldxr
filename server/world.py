@@ -26,6 +26,7 @@ import time
 
 import drops
 import mobs
+import weapons
 import worldgen
 import protocol as P
 
@@ -44,7 +45,8 @@ def now_s():
 class Player(object):
     """一个已进入世界的玩家。★ 只有 tick 线程碰"""
     __slots__ = ('cid', 'role', 'x', 'z', 'yaw', 'ct', 'hp', 'qi', 'atk',
-                 'intents', 'joined', 'name', 'role_id', 'warned', 'atkT', 'lastMe')
+                 'intents', 'joined', 'name', 'role_id', 'warned', 'atkT', 'lastMe',
+                 'weapon', 'weaponItemId')   # ★ 手上那把武器（第 47 轮）
 
     def __init__(self, cid, role):
         self.cid = cid
@@ -63,6 +65,12 @@ class Player(object):
         self.intents = 0
         self.joined = now_s()
         self.warned = set()      # 已经提示过"还没实现"的消息类型（别刷屏）
+        # ★★ 手上那把武器（第 47 轮）★★
+        #   由 net.py 在登录时查出来放进 role['weapon'] ✓
+        #   查不到就发一把【默认单手剑】—— 数值正好等于以前写死的 2.4/1.05/0.62，
+        #   所以"还没有武器"的老角色手感一点没变 ✓ 不会让人觉得改坏了 ✓
+        self.weapon = role.get('weapon') or weapons.make_weapon('sword', 0, 1.0, 1)
+        self.weaponItemId = role.get('weaponItemId')     # 背包里的那件（默认武器是 None ✓）
 
 
 class World(object):
@@ -256,6 +264,19 @@ class World(object):
             self._debug_spawn(p, int(_f(d.get('n'), 5)), bool(d.get('clear')),
                               d.get('kind') or None,          # ★ 可指定职业（第 46 轮）
                               d.get('lv'))                    # ★ 可指定等级（第 46 轮）
+        elif t == 'equipset':
+            # ★ 第 47 轮：网络线程已经查库 + 校验完了，这里只换内存里的引用 ✓
+            #   （tick 线程不许碰磁盘 ✗ 所以查库那步在 net.py 做）
+            w = d.get('weapon')
+            p.weapon = w or weapons.make_weapon(weapons.DEFAULT_TYPE, 0, 1.0, 1)
+            p.weaponItemId = d.get('itemId')
+            bb = (w or {}).get('base') or {}
+            self._send_cid(p.cid, P.pack('notice', text=(
+                '装上：%s（%d 阶）攻速 ×%.2f 射程 %.1f 米'
+                % (w.get('name'), w.get('tier') or 0, bb.get('atkSpeed') or 1.0,
+                   bb.get('reach') or 2.4)) if w else '卸下武器（换回默认单手剑）'))
+            # ★ 把新的武器告诉客户端 —— 客户端的挥刀冷却/射程预测要跟着换 ✓
+            self._send_cid(p.cid, P.pack('weapon', w=w or None))
         elif t == 'pvp':
             self.pvp = bool(d.get('on')) if 'on' in d else self.pvp
             self._broadcast(P.pack('notice', text='PvP 已%s' % ('开' if self.pvp else '关')))
@@ -581,12 +602,19 @@ class World(object):
                                         'by': m.kind, 'kind': 'mob', 'crit': bool(crit)})
 
     def _atk_of(self, p):
-        """玩家的攻击力 —— ★ 服务器按【角色等级】自己算，不看客户端报什么（第 39 轮）
+        """玩家的攻击力 —— ★★ 服务器算，不看客户端报什么（第 39 轮 + 第 47 轮接武器）★★
 
         方案 §4.5 固有属性：攻击 = 10 + 3L + 0.08L²
-        装备/天赋的加成等 P3 接 §4/§7 时再往这里加 ✓（接口就这一个函数，好加）
+        方案 §7.5 接武器：攻击 = 固有 + (固有 × 武器系数 + 武器平伤)，装备贡献封顶 60% ✓
+        ★ 客户端只在切换武器时【上报意图】，具体是哪把、系数多少 —— 一律服务器说了算 ✓
         """
-        return mobs.player_atk(int(p.role.get('level') or 1))
+        lv = int(p.role.get('level') or 1)
+        inherent = mobs.player_atk(lv)
+        w = p.weapon or {}
+        base = w.get('base') or {}
+        coeff = float(base.get('coeff') or 1.0)
+        return weapons.player_atk_with(inherent, w.get('look'), coeff,
+                                       w.get('tier') or 0, max(1, lv // 4))
 
     def _intent_atk(self, p, d):
         """玩家挥了一刀 —— ★★ 服务器算伤害（客户端只报"我挥了"，不报打中谁）★★
@@ -600,12 +628,17 @@ class World(object):
         """
         if p.atkT > 0:
             return
-        p.atkT = mobs.ATK_CD
+        # ★★ 第 47 轮：冷却 / 射程 / 攻击弧 全部按【手上那把武器】算（方案 §5.1 / §7.4）★★
+        #   以前这三个是写死的常量（= 单手剑）—— 现在匕首就快而短、长枪就慢而长 ✓
+        wlook = (p.weapon or {}).get('look') or weapons.DEFAULT_TYPE
+        p.atkT = weapons.interval_of(wlook)
+        reach = weapons.reach_of(wlook)
+        arc = weapons.arc_of(wlook)
         # ① 僵尸：扇形里的全打（一刀扫一片 ✓）
         for m in list(self.mobs.values()):
             if m.hp <= 0:
                 continue
-            if not mobs.in_front(p.x, p.z, p.yaw, m.x, m.z):
+            if not mobs.in_front(p.x, p.z, p.yaw, m.x, m.z, reach, arc):
                 continue
             dv, crit = mobs.roll_damage(self._atk_of(p))
             # ★ 保安会格挡（方案 §3.3"高防、会格挡"）—— 防御属性已被砍（§4.5），
@@ -626,7 +659,7 @@ class World(object):
             for q in self.players.values():
                 if q is p:
                     continue
-                if not mobs.in_front(p.x, p.z, p.yaw, q.x, q.z):
+                if not mobs.in_front(p.x, p.z, p.yaw, q.x, q.z, reach, arc):
                     continue
                 dv, _ = mobs.roll_damage(self._atk_of(p))
                 self._add_pend(q.cid, 'hurts', {'dmg': dv, 'x': round(p.x, 2),

@@ -61,6 +61,25 @@ class Net(object):
         if err:
             return conn.push_text(P.pack('error', msg=err))
         # ★ 高频消息一律入队，交给 tick 线程 —— 这里绝不碰世界状态
+        # ★★ 第 47 轮：装备是【罕见操作 + 要查库】→ 在网络线程做，tick 线程不碰磁盘 ✓
+        #   服务器自己查这件是不是他的、是不是武器、等级够不够（见 auth.equip_weapon ✓）
+        if t in ('equip', 'unequip'):
+            import auth as authmod3
+            role = self.authed.get(conn.cid) or {}
+            if t == 'equip':
+                _ok, _r = authmod3.equip_weapon(self.cfg, role.get('id'),
+                                                (d or {}).get('itemId'), role.get('level'))
+            else:
+                _ok, _r = authmod3.unequip_weapon(self.cfg, role.get('id'))
+            if not _ok:
+                conn.push_text(P.pack('notice', text=str(_r)))
+                return
+            if t == 'equip':
+                self.world.post_intent(conn.cid, 'equipset',
+                                       {'weapon': _r, 'itemId': int((d or {}).get('itemId') or 0)})
+            else:
+                self.world.post_intent(conn.cid, 'equipset', {'weapon': None, 'itemId': None})
+            return
         self.world.post_intent(conn.cid, t, d)
 
     # ======================================================== 认证
@@ -103,6 +122,19 @@ class Net(object):
         try:
             import mobs as mobsmod
             role['need'] = mobsmod.level_up_need(role.get('level') or 1)
+        except Exception:
+            pass
+
+        # ★★ 第 47 轮：顺手把【已装备的武器】读出来一起下发 ★★
+        #   读库放在这里（网络线程），不放进 tick 线程 —— tick 线程不许碰磁盘 ✗
+        #   读不到就【不下发】，World 那边会用一把默认单手剑兜底 ✓
+        #   （默认剑的数值 = 以前写死的 2.4/1.05/0.62，所以老角色手感不变 ✓）
+        try:
+            import auth as authmod2
+            _w, _wid = authmod2.weapon_of(self.cfg, role.get('id'))
+            if _w:
+                role['weapon'] = _w
+                role['weaponItemId'] = _wid
         except Exception:
             pass
 

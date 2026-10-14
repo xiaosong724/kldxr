@@ -240,6 +240,83 @@ def logout(cfg, token):
     return True, {'ok': True}
 
 
+# ---------------------------------------------------------------- 装备（第 47 轮）
+
+def weapon_of(cfg, role_id):
+    """读出这个角色【已装备的武器】→ (weapon 字典 或 None, item_id 或 None)
+
+    ★ 为什么放在这里（而不是 tick 线程）：tick 线程【不许碰磁盘】✗
+      装备是罕见操作，在网络线程（asyncio）里查库 ✓ 再把结果丢给 tick 线程 ✓
+    ★ 查不到就返回 None —— World 那边会用一把【默认单手剑】兜底 ✓
+      （数值 = 以前写死的 2.4/1.05/0.62，所以老角色手感不变 ✓）
+    """
+    import json
+    try:
+        with dbmod.db(cfg) as c:
+            row = c.execute(
+                'SELECT i.id, i.item_json FROM equipment e JOIN items i ON i.id = e.item_id'
+                ' WHERE e.role_id=? AND e.slot=?', (role_id, 'weapon')).fetchone()
+    except Exception:
+        return None, None
+    if not row:
+        return None, None
+    try:
+        w = json.loads(row[1])
+    except Exception:
+        return None, None
+    if not isinstance(w, dict) or w.get('slot') != 'weapon':
+        return None, None
+    return w, row[0]
+
+
+def equip_weapon(cfg, role_id, item_id, role_level):
+    """装上一件武器 → (True, weapon 字典) / (False, 原因)
+
+    ★★ 服务器权威 ★★
+       客户端只是说"我要装背包里 id=N 的那件" ✗
+       是不是他的、是不是武器、等级够不够、真实数值是多少 —— 一律这里查库判定 ✓
+       不然改个包就能宣布"我手里是系数 99 的神器"✗（和伤害、掉率一个道理 ✓）
+    """
+    import json
+    try:
+        iid = int(item_id)
+    except Exception:
+        return False, '参数不对'
+    try:
+        with dbmod.db(cfg) as c:
+            row = c.execute('SELECT item_json FROM items WHERE id=? AND role_id=? AND in_storage=0',
+                            (iid, role_id)).fetchone()
+            if not row:
+                return False, '背包里没有这件东西'
+            try:
+                w = json.loads(row[0])
+            except Exception:
+                return False, '这件东西坏了'
+            if not isinstance(w, dict) or w.get('slot') != 'weapon':
+                return False, '这不是武器'
+            req = int(w.get('reqLevel') or 1)
+            if int(role_level or 1) < req:
+                return False, '等级不够（需要 %d 级）' % req
+            now = dbmod.now_ms()
+            c.execute('INSERT OR REPLACE INTO equipment(role_id, slot, item_id) VALUES(?,?,?)',
+                      (role_id, 'weapon', iid))
+            c.execute('UPDATE roles SET updated_at=? WHERE id=?', (now, role_id))
+        return True, w
+    except Exception as e:
+        return False, '穿上失败：%s' % e
+
+
+def unequip_weapon(cfg, role_id):
+    """脱下武器 → (True, None) / (False, 原因)"""
+    try:
+        with dbmod.db(cfg) as c:
+            c.execute('DELETE FROM equipment WHERE role_id=? AND slot=?', (role_id, 'weapon'))
+            c.execute('UPDATE roles SET updated_at=? WHERE id=?', (dbmod.now_ms(), role_id))
+        return True, None
+    except Exception as e:
+        return False, '脱下失败：%s' % e
+
+
 def kick_account(cfg, account_id):
     """把某个账号的 token 全清掉（改密码 / 封号 / 强制下线用）"""
     with dbmod.db(cfg) as c:

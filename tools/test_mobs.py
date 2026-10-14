@@ -16,7 +16,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server'))
 
-import mobs                      # noqa: E402
+import mobs
+import weapons                      # noqa: E402
 import world as W                # noqa: E402
 
 fails = []
@@ -114,13 +115,26 @@ w.mobs[mm.mid] = mm
 x0, z0 = mm.x, mm.z
 saved_int3 = mobs.SPAWN_INTERVAL
 mobs.SPAWN_INTERVAL = 1e9
+path = 0.0
+_lx, _lz = mm.x, mm.z
 try:
-    for _ in range(90):                  # 3 秒
+    for _ in range(180):                 # 6 秒（原来 3 秒，实测偶尔只走 0.39 米 ✗）
         w._mob_tick(1.0 / 30.0)
+        path += math.hypot(mm.x - _lx, mm.z - _lz)     # ★ 累计路程（来回也累加 ✓）
+        _lx, _lz = mm.x, mm.z
 finally:
     mobs.SPAWN_INTERVAL = saved_int3
 moved = math.hypot(mm.x - x0, mm.z - z0)
-ok(moved > 0.5, '★ 没目标的僵尸自己走动了 %.2f 米（以前是杵着不动 ✗）' % moved, moved)
+# ★ 阈值故意放得低：这条要验的是"【不是杵着不动】"✓（漫游方向随机，快慢差很多）
+#   真坏掉的话累计路程会是【恰好 0】✗ —— 所以 0.2 米这个松阈值照样抓得住 ✓
+ok(path > 0.2, '★ 没目标的僵尸确实在挪（6 秒累计路程 %.2f 米，直线位移 %.2f 米 —— 方向随机，所以看累计 ✓）'
+   % (path, moved), (path, moved))
+# ★ 这条以前偶发红（实测 0.21 / 0.36 / 0.49 米，阈值是 0.5）——
+#   病根：漫游方向是【随机】的，3 秒里刚好来回走一小段是正常的 ✗
+#   要验的行为是"它没杵着不动"，不是"它走了多远" ✓
+#   → 改成累计路程（每一帧的位移之和），来回走也会累加 ✓ 这才是"在动"的正确判据
+#     （顺带把位移的绝对值也留着，用来看"有没有跑偏"）
+ok(moved > 0.05, '★ 没目标的僵尸自己走动了 %.2f 米（以前是杵着不动 ✗）' % moved, moved)
 ok(moved < 8.0, '走得很慢（漫游速度 ≈ 自身移速 × %.2f）' % mobs.WANDER_SPEED, moved)
 
 print('')
@@ -266,7 +280,13 @@ ok(all(m[1] <= drops.max_tier(9999) for m in drops.MATERIALS), '材料表的品�
 
 # 世界侧：掉在地上 → 走过去捡 → 进背包（DB）
 saved_chance = drops.BASE_CHANCE
-drops.BASE_CHANCE = 1.0                       # ★ 临时改成必掉，测试才是确定性的 ✓
+saved_cap = drops.CHANCE_CAP
+# ★★ 两个都要改！只改 BASE_CHANCE 是不够的 ✗
+#   drop_chance() 最后有一句 min(CHANCE_CAP, c) —— 而 CHANCE_CAP 是 0.95，
+#   所以哪怕基础掉率设成 1.0，它还是永远留 5% 不掉 ✗
+#   （这就是这条断言"跑 6 次红 1 次"的原因 —— 5% 而已，单跑很容易看着是绿的 ✓）
+drops.BASE_CHANCE = 1.0
+drops.CHANCE_CAP = 1.0
 try:
     w, p = mk_world(0.0, 0.0)
     w.mobs.clear()
@@ -277,6 +297,16 @@ try:
     w.mobs[mm.mid] = mm
     w._intent_atk(p, {})                      # 玩家一刀把它打死
     drops.BASE_CHANCE = saved_chance
+    drops.CHANCE_CAP = saved_cap
+    if not w.loot:
+        # ★ 这条以前偶发红（同一份代码单跑过、全套跑红）——
+        #   加诊断，红的时候能一眼看出是"没打中"还是"掉了但没落地" ✓
+        print('        [诊断] 怪: kind=%s hp=%s/%s | 玩家 atk=%.2f atkT=%.2f | 扇形内=%s | 尸体=%s'
+              % (mm.kind, mm.hp, mm.mhp, w._atk_of(p), p.atkT,
+                 mobs.in_front(p.x, p.z, p.yaw, mm.x, mm.z,
+                               weapons.reach_of((p.weapon or {}).get('look') or 'sword'),
+                               weapons.arc_of((p.weapon or {}).get('look') or 'sword')),
+                 mm.mid in w.mobs))
     ok(len(w.loot) == 1, '★ 打死僵尸 → 地上掉了一件（loot=%d）' % len(w.loot), list(w.loot))
     lid = list(w.loot.keys())[0]
     lx, lz = w.loot[lid]['x'], w.loot[lid]['z']
@@ -308,6 +338,7 @@ try:
        '快照格式 [id,x,z,name,tier]（%r）' % (arr[0] if arr else None), arr)
 finally:
     drops.BASE_CHANCE = saved_chance
+    drops.CHANCE_CAP = saved_cap
 
 print('')
 print('== ⑬ ★ 攻击力由服务器算，客户端谎报无效（第 39 轮）==')
@@ -327,9 +358,12 @@ w._intent_atk(p, {})
 dv = hp0 - mm.hp
 ok(dv < 100, '★★ 谎报 atk=999999 → 实际只掉 %d 点（服务器按 Lv.1 的 %.2f 算）✗ 没被骗 ✓'
    % (dv, mobs.player_atk(1)), dv)
-ok(dv == int(round(mobs.player_atk(1))) or dv == int(round(mobs.player_atk(1) * 1.5)),
+# ★ 第 47 轮起，攻击力还要算上【手上的武器】——
+#   所以这里和 w._atk_of(p) 比（服务器自己算的那份），不再写死 13 ✓
+_a = w._atk_of(p)
+ok(dv == int(round(_a)) or dv == int(round(_a * 1.5)),
    '伤害就是服务器算出来的那个值（%d，非暴击 %d / 暴击 %d）'
-   % (dv, int(round(mobs.player_atk(1))), int(round(mobs.player_atk(1) * 1.5))), dv)
+   % (dv, int(round(_a)), int(round(_a * 1.5))), dv)
 
 # 等级高的玩家伤害就该高 ✓
 p.role['level'] = 30
@@ -403,8 +437,8 @@ try:
     dmg_blocked = hp0 - gd.hp
 finally:
     mobs.BLOCK_CHANCE = saved_block
-ok(dmg_blocked < mobs.player_atk(1),
-   '★ 保安格挡后只吃 %.0f 点伤害（没格挡是 %.0f）✓' % (dmg_blocked, mobs.player_atk(1)), dmg_blocked)
+ok(dmg_blocked < w._atk_of(p),
+   '★ 保安格挡后只吃 %.0f 点伤害（没格挡是 %.0f）✓' % (dmg_blocked, w._atk_of(p)), dmg_blocked)
 
 # ⑤ 普通僵尸不格挡（反例）
 w, p = mk_world(0.0, 0.0)
@@ -415,7 +449,8 @@ w.mobs[pl.mid] = pl
 hp0 = pl.hp
 w._intent_atk(p, {})
 dmg_plain = hp0 - pl.hp
-ok(dmg_plain == int(round(mobs.player_atk(1))) or dmg_plain == int(round(mobs.player_atk(1) * 1.5)),
+_ap = w._atk_of(p)
+ok(dmg_plain == int(round(_ap)) or dmg_plain == int(round(_ap * 1.5)),
    '白领不格挡，吃满伤害 %d ✓（保安只吃 %d）' % (dmg_plain, dmg_blocked), (dmg_plain, dmg_blocked))
 
 print('')
