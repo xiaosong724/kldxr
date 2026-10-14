@@ -38,6 +38,9 @@ MAX_INTENT_PER_TICK = 90        # 单连接每 tick 的意图上限（30Hz 正�
 SPAWN_SAFE = 20.0               # 出生点/安全区半径：这里不刷怪（方案 §2.1 末日堡垒）
 
 
+REVIVE_INVULN = 1.5        # ★ 复活无敌时长（秒）—— 用户指定 ✓
+
+
 def now_s():
     return time.time()
 
@@ -46,7 +49,8 @@ class Player(object):
     """一个已进入世界的玩家。★ 只有 tick 线程碰"""
     __slots__ = ('cid', 'role', 'x', 'z', 'yaw', 'ct', 'hp', 'qi', 'atk',
                  'intents', 'joined', 'name', 'role_id', 'warned', 'atkT', 'lastMe',
-                 'weapon', 'weaponItemId')   # ★ 手上那把武器（第 47 轮）
+                 'weapon', 'weaponItemId',
+                 'invulnT')   # ★ 复活无敌剩余时间（第 56 轮）
 
     def __init__(self, cid, role):
         self.cid = cid
@@ -71,6 +75,8 @@ class Player(object):
         #   所以"还没有武器"的老角色手感一点没变 ✓ 不会让人觉得改坏了 ✓
         self.weapon = role.get('weapon') or weapons.make_weapon('sword', 0, 1.0, 1)
         self.weaponItemId = role.get('weaponItemId')     # 背包里的那件（默认武器是 None ✓）
+        # ★ 第 56 轮：复活无敌（秒）—— 无敌期间僵尸咬不动 ✓ 客户端也会穿怪 ✓
+        self.invulnT = 0.0
 
 
 class World(object):
@@ -196,6 +202,11 @@ class World(object):
             except queue.Empty:
                 break
             self.players[conn.cid] = Player(conn.cid, role)
+
+        # ①·5 无敌时间递减（第 56 轮）
+        for _q in self.players.values():
+            if _q.invulnT > 0:
+                _q.invulnT = max(0.0, _q.invulnT - (1.0 / max(1, TICK_HZ)))
 
         # ② 处理意图（有上限，防一条连接把 tick 打饿）
         n = 0
@@ -329,7 +340,7 @@ class World(object):
             import db as dbmod
             lv = max(1, int(p.role.get('level') or 1))
             w = weapons.roll_weapon(lv + 6, lv)
-            w['reqLevel'] = 1                     # 调试给的就不卡等级了 ✓
+            # ★ 第 56 轮：不再强制 reqLevel=1（保留真实建议等级 ✓ 反正不拦穿戴）
             self.post_save(
                 'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
                 ' VALUES(?,0,-1,1,?,?)',
@@ -352,7 +363,20 @@ class World(object):
         elif t == 'pvp':
             self.pvp = bool(d.get('on')) if 'on' in d else self.pvp
             self._broadcast(P.pack('notice', text='PvP 已%s' % ('开' if self.pvp else '关')))
-        elif t in ('skill', 'team', 'revive', 'dead', 'respawn'):
+        elif t == 'revive':
+            # ★★ 第 56 轮：复活真正实装 ★★
+            #   以前这是纯客户端行为 ✗ —— 服务器不知道 → 也就给不了无敌 ✓
+            #   现在：补满血 + 1.5 秒无敌（§用户要求）✓
+            # ★ 血量上限：和管理页"治疗"用同一口径（role.hpMax，兜底 200 ✓）
+            #   P1 阶段玩家血量还没有按等级成长（§4.5 的成长曲线是 P3 的事 ✓）
+            hpmax = int(p.role.get('hpMax') or 200)
+            p.hp = hpmax
+            p.invulnT = REVIVE_INVULN
+            p.role['hp'] = p.hp
+            self._send_cid(p.cid, P.pack('revived', invuln=REVIVE_INVULN, hp=p.hp, hpMax=hpmax))
+            self._send_cid(p.cid, P.pack('notice',
+                                         text='复活成功 —— %.1f 秒无敌，快跑！' % REVIVE_INVULN))
+        elif t in ('skill', 'team', 'dead', 'respawn'):
             # 这些要等 P3/P4 的世界规则。
             # ★ 只提示一次（不然每挥一刀都弹一句，把玩家烦死）
             if t not in p.warned:
@@ -710,6 +734,9 @@ class World(object):
         ★ 挥爪动画【不在这里】点 —— 已经在"开始蓄力"那一刻点了（第 41 轮）✓
           那样才有前摇可看：抬手 → 咬 → 收招 ✓ 在这里再点一次会把动画重置，看着像抖一下 ✗
         """
+        # ★ 第 56 轮：复活无敌期间【咬不动】✓（不然复活的瞬间又被围死 ✗）
+        if getattr(p, 'invulnT', 0) > 0:
+            return
         dv, crit = mobs.roll_damage(m.atk)
         p.hp = max(0, int(p.hp) - dv)
         self._add_pend(p.cid, 'hurts', {'dmg': dv, 'x': round(m.x, 2), 'z': round(m.z, 2),
@@ -802,7 +829,8 @@ class World(object):
         if e is None:
             e = self._pend[p.cid] = {}
         e['me'] = {'lv': level, 'exp': int(role.get('exp') or 0),
-                   'need': mobs.level_up_need(level)}
+                   'need': mobs.level_up_need(level),
+                   'inv': round(p.invulnT, 2)}      # ★ 无敌剩余（第 56 轮）
         if ups:
             self._send_cid(p.cid, P.pack('notice', text='升到 %d 级！' % level, level=level))
         self._save_role(p)

@@ -350,7 +350,9 @@ class Api(BaseHTTPRequestHandler):
             look = 'sword'
         tier = max(0, min(11, int(d.get('tier') or 0)))
         w = weapons.make_weapon(look, tier, weapons.roll_coeff(look), max(1, lvl // 4 + 1))
-        w['reqLevel'] = 1                     # 管理员发的就不卡等级 ✓
+        # ★ 第 56 轮：不再强制 reqLevel=1 ✗ —— 那会让背包显示「建议 1 级」
+        #   看着像 bug ✗（用户就是被这个误导的 ✓）
+        #   现在保留真实建议等级 ✓ 反正现在也不拦穿戴 ✓
         try:
             with dbmod.db(self.cfg) as c:
                 c.execute('INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'

@@ -114,7 +114,18 @@ def roll_coeff(look, rng=None):
 
 
 # ---------------------------------------------------------------- 等级发挥度（第 53 轮）
-MASTERY_FLOOR = 0.35        # 等级差很多时也至少发挥这么多（别让神器变废铁 ✗）
+MASTERY_FLOOR = 0.40        # 等级差很多时也至少发挥这么多（别让神器变废铁 ✗）
+
+
+def req_level_of(tier):
+    """建议等级（第 56 轮：改成平缓曲线）
+
+    ★ 原来是 (阶+1)×6-5 → 4 阶要 25 级、11 阶要 65 级 ✗
+      用户反馈"25 级才能发挥全部也不太合理" ✓ —— 那确实太陡
+      现在 阶×3+1 → 4 阶只要 13 级、11 阶 34 级 ✓
+    ★ 曲线是设计值 —— 以后要调，只改这一行 ✓ 调用点一处都不用动 ✓
+    """
+    return max(1, int(tier) * 3 + 1)
 
 
 def mastery_of(w, level):
@@ -226,7 +237,7 @@ def make_weapon(look, tier, coeff, item_lv=1, rng=None):
         'affixes': [],
         'effect': None,
         'look': look,
-        'reqLevel': max(1, (t + 1) * 6 - 5),      # 每 6 级一档门槛（§7.8）✓
+        'reqLevel': req_level_of(t),               # ★ 第 56 轮：改成平缓曲线（见 req_level_of）
         'ext': {},
     }
 

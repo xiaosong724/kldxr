@@ -477,6 +477,7 @@ function setTab(name) {
 
 /* ---------- closeSet / doLogout（第 32 轮）---------- */
 function closeSet() {
+  bagTipHide();
   var p = document.getElementById('setPanel');
   if (p) { p.style.display = 'none'; }
 }
@@ -822,8 +823,8 @@ function wMastery(it) {
   var req = +((it && it.reqLevel) || 1);
   var lv = (WSC.role && WSC.role.level) || 1;
   if (req <= 1 || lv >= req) { return 1; }
-  var v = 0.35 + 0.65 * (lv / req);
-  return Math.max(0.35, Math.min(1, v));
+  var v = 0.40 + 0.60 * (lv / req);
+  return Math.max(0.40, Math.min(1, v));
 }
 /* 满发挥（不打折、不封顶）—— 用来告诉玩家"你只发挥了它的多少" ✓ */
 function wFull(it) {
@@ -967,19 +968,26 @@ function bagRender() {
       useBtn.setAttribute('data-act', '');
     }
   }
+  /* ★ 第 56 轮（用户第 5 条）：名字和数值挂在【选中的武器】标题下 ✓
+     不再写进"装备"那一段（那样点别的武器时，看着像已装备的数值变了 ✗）*/
+  var selNameEl = document.getElementById('bagSelName');
+  var isW8 = !!(selItem && selItem.slot === 'weapon' && selItem !== DEFAULT_W);
+  if (selNameEl) {
+    if (isW8) {
+      var m8 = wMastery(selItem);
+      var rq8 = +((selItem.reqLevel) || 1);
+      var lv8 = (WSC.role && WSC.role.level) || 1;
+      selNameEl.textContent = (selItem.name || '武器') + ' · ' + (selItem.tier || 0) + ' 阶 · 建议 ' +
+        rq8 + ' 级（你 ' + lv8 + ' 级）· 发挥 ' + Math.round(m8 * 100) + '%';
+    } else {
+      selNameEl.textContent = '选中的武器（没选时 = 手上这把 / 默认剑）';
+    }
+  }
   var selTip = document.getElementById('bagSelTip');
   if (selTip) {
-    if (selItem && selItem.slot === 'weapon') {
-      var m7 = wMastery(selItem);
-      var rq7 = +((selItem.reqLevel) || 1);
-      var lv7 = (WSC.role && WSC.role.level) || 1;
-      /* ★ 第 55 轮：这句也把"建议等级 + 发挥度"写清楚（用户要求进文案 ✓）*/
-      selTip.textContent = (selItem.name || '武器') + ' · ' + (selItem.tier || 0) + ' 阶 · 建议 ' +
-        rq7 + ' 级（你 ' + lv7 + ' 级）· 发挥 ' + Math.round(m7 * 100) + '%' +
-        (selIsEquipped ? ' · 正拿在手上' : '');
-    } else {
-      selTip.textContent = '点上面的格子选中一件武器';
-    }
+    selTip.textContent = isW8
+      ? (selIsEquipped ? '这件正拿在手上 ✓' : '点左边的「使用」穿上它')
+      : '点上面的格子选中一件武器';
   }
   if (mg) {
     mg.textContent = BAG.msg || (BAG.items.length ? '' :
@@ -1063,6 +1071,24 @@ function bindBag() {
      → 把它 appendChild 到 body 下，fixed 才真的是相对视口 ✓ */
   var tip = document.getElementById('bagTipBox');
   if (tip && tip.parentNode !== document.body) { document.body.appendChild(tip); }
+  /* ★ 第 56 轮（用户第 6 条）：点别的地方要自动关掉介绍框 ✓
+     用捕获阶段监听 document —— 点格子之外任何地方（包括面板外）都收起来 ✓
+     ★ 点格子本身不关（mousemove 会重新弹出来 ✓）*/
+  if (!window.__bagTipDoc) {
+    window.__bagTipDoc = true;
+    document.addEventListener('mousedown', function (e) {
+      var el = e.target;
+      while (el) {
+        if (el.id === 'bagTipBox') { return; }        // 点在介绍框里 → 不管 ✓
+        if (el.className && String(el.className).indexOf('slot') >= 0) { return; }  // 点在格子上 → 由格子逻辑管 ✓
+        el = el.parentNode;
+      }
+      bagTipHide();
+    }, true);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { bagTipHide(); }
+    });
+  }
   var grid = document.getElementById('bagGrid');
   if (grid) {
     grid.onclick = function (e) {
@@ -1133,6 +1159,16 @@ function bindBag() {
 
 /* ---------- bindSet ---------- */
 function bindSet() {
+  /* ★ 第 56 轮（用户第 2 条）：右上角统一的 X（不再只有"信息"页里有关闭 ✗）*/
+  var xbtn = document.getElementById('setX');
+  if (xbtn) { xbtn.onclick = function (e) { if (e) { e.preventDefault(); } closeSet(); }; }
+  // Esc 也能关（顺便收掉介绍框 ✓）
+  window.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') { return; }
+    bagTipHide();
+    var panel = document.getElementById('setPanel');
+    if (panel && panel.style.display === 'block') { closeSet(); }
+  });
   var b = document.getElementById('setBtn');
   if (b) { var op = function (e) { if (e) { e.preventDefault(); } openSet(); }; b.addEventListener('touchstart', op, { passive: false }); b.addEventListener('click', op); }
   var c = document.getElementById('setClose');
@@ -1246,7 +1282,12 @@ function wsOnMessage(raw) {
   if (t === 'snd') { if (d.name) { sfxAt(d.name, d.x || P.x, d.z || P.z, 1.0); } return; }
   if (t === 'hurt') { netApplyHurt(d); return; }
   if (t === 'dead') { playerDie(d.by); return; }
-  if (t === 'revived') { playerRevive(); return; }
+  if (t === 'revived') {
+    playerRevive();
+    // ★ 以服务器给的时长为准（它才是权威 ✓）
+    if (typeof INVULN_T !== 'undefined' && d.invuln) { INVULN_T = +d.invuln; }
+    return;
+  }
 }
 
 /* ---------- wsWelcome ---------- */
@@ -1293,6 +1334,12 @@ function playerDie(byName) {
 function playerRevive() {
   if (!dead) { return; }
   dead = false; HP = HPMAX; updHP();
+  /* ★★ 第 56 轮：复活要【告诉服务器】★★
+     以前复活是纯本地的 ✗ → 服务器不知道 → 也就给不了无敌 ✗
+     现在发 revive 意图：服务器补满血 + 1.5 秒无敌 ✓
+     ★ 本地也先给自己 1.5 秒（乐观）—— 就算包慢，也不会在无敌生效前先挨一口 ✓ */
+  if (typeof INVULN_T !== 'undefined') { INVULN_T = 1.5; }
+  if (NET.on && WSC.ready) { wsSend('revive', {}); }
   var d = document.getElementById('dead');
   if (d) { d.className = ''; }
   shake = 0;

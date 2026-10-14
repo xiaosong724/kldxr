@@ -136,7 +136,7 @@ ok('coeff' in w['base'] and 'atkSpeed' in w['base'] and 'reach' in w['base'] and
    'base 里带着系数/攻速/射程/弧（客户端和服务器都要用 ✓）', w['base'])
 ok(isinstance(w['affixes'], list) and not w['affixes'],
    '词条这一期是【空数组】（§7.11 定义了 22 条，但"掉出来带词条"是下一刀 ✓）')
-ok(w['reqLevel'] == 37, '等级门槛 reqLevel = (阶+1)×6-5（6 阶 → 37 级 ✓）', w['reqLevel'])
+ok(w['reqLevel'] == W.req_level_of(6), '建议等级 = 阶×3+1（6 阶 → %d 级 ✓ 第 56 轮改缓的）' % W.req_level_of(6), w['reqLevel'])
 ok(w['name'] == W.TIER_NAME[6] + '双手斧', '名字 = 品阶名 + 类型名（%s ✓）' % w['name'])
 
 # roll_weapon 的品阶不能超过怪等级给的台阶（§8.1 ③ 同一套）
@@ -170,11 +170,11 @@ print('')
 print('== ⑧ ★ 等级发挥度（第 53 轮：能装、但发挥不出最大伤害）==')
 # ★ 用户明确要求：不限制穿戴，只限制伤害 ✓
 _w4 = W.make_weapon('axe', 4, 1.40, 3)          # 需要 25 级
-ok(_w4['reqLevel'] == 25, '4 阶武器建议 25 级（reqLevel=%s ✓）' % _w4['reqLevel'])
+ok(_w4['reqLevel'] == W.req_level_of(4), '4 阶武器建议 %d 级（第 56 轮从 25 改缓 ✓）' % _w4['reqLevel'])
 ok(abs(W.mastery_of(_w4, 25) - 1.0) < 1e-9, '★ 到等级了 → 发挥 100% ✓')
 ok(abs(W.mastery_of(_w4, 30) - 1.0) < 1e-9, '★ 超了也还是 100%（不会超过 ✓）')
 _m1 = W.mastery_of(_w4, 1)
-ok(0.35 <= _m1 < 0.5, '★★ Lv.1 → 发挥 %.0f%%（打不满 ✓ 但也不是 0，别让神器变废铁 ✗）' % (_m1 * 100))
+ok(0.40 <= _m1 < 0.55, '★★ Lv.1 → 发挥 %.0f%%（打不满 ✓ 但也不是 0，别让神器变废铁 ✗）' % (_m1 * 100))
 ok(W.mastery_of(_w4, 10) > _m1 and W.mastery_of(_w4, 20) > W.mastery_of(_w4, 10),
    '★ 等级越高发挥越多（1级 %.0f%% < 10级 %.0f%% < 20级 %.0f%% ✓）'
    % (W.mastery_of(_w4, 1) * 100, W.mastery_of(_w4, 10) * 100, W.mastery_of(_w4, 20) * 100))
@@ -183,8 +183,13 @@ _in1, _in30 = mobs.player_atk(1), mobs.player_atk(30)
 _low = W.player_atk_with(_in1, 'axe', 1.40, 4, 3, W.mastery_of(_w4, 1))
 _full30 = W.player_atk_with(_in30, 'axe', 1.40, 4, 3, W.mastery_of(_w4, 30))
 _std1 = W.player_atk_with(_in1, 'sword', 1.0, 0, 1, 1.0)
-ok(_low < _std1 * 1.15,
-   '★★ Lv.1 拿 4 阶斧（%.1f）跟顺手武器（%.1f）差不多 —— 拿不动就是拿不动 ✓' % (_low, _std1))
+# ★ 第 56 轮把曲线改缓了（4 阶建议 13 级而不是 25 ✓）
+#   → Lv.1 的发挥度从 38% 涨到 45%，4 阶斧比顺手武器高约 25% ✓
+#   阈值从 1.15 放宽到 1.5：要验的是"低级拿高阶发挥不出上限"（≤2 倍 ✓），
+#   不是"完全没提升"✗（一点提升都没有反而说明系统在耍人 ✓）
+ok(_low < _std1 * 1.5,
+   '★★ Lv.1 拿 4 阶斧（%.1f）比顺手武器（%.1f）只好一点（+%.0f%%）—— 发挥不出上限 ✓'
+   % (_low, _std1, (_low / _std1 - 1) * 100))
 ok(_full30 > _low * 5,
    '★★ 同一把武器：Lv.1 %.1f → Lv.30 %.1f（差 %.1f 倍 ✓ 练级这条线还在 ✓）'
    % (_low, _full30, _full30 / max(0.1, _low)))

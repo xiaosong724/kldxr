@@ -96,7 +96,12 @@ var keys = {}, atkHeld = false;
 var solids = [], propSolids = [], mobs = [], PROP_MESHES = [], GROUNDMESH = null;
 var occupied = {}, GEO_CACHE = {};
 var HP = 200, HPMAX = 200, ATK = 12;
-var dead = false;                    // ★ 倒下状态（血空 → 必须点复活才起来 ✓）/* ★ 血条配色：妖兽一律红 ✓ 玩家一律绿 ✓（不再按残血变色 ✓ 一眼分得清敌我 ✓）*/
+var dead = false;                    // ★ 倒下状态（血空 → 必须点复活才起来 ✓）
+/* ★★ 第 56 轮：复活无敌剩余（秒）★★
+   用户要求：复活后 1.5 秒无敌 + 无视体积碰撞，方便逃出怪群 ✓
+   ★ 是不是真免伤由【服务器】说了算（它那边也有一个 invulnT ✓）
+     这里只管表现和"能不能穿怪" ✓ */
+var INVULN_T = 0;/* ★ 血条配色：妖兽一律红 ✓ 玩家一律绿 ✓（不再按残血变色 ✓ 一眼分得清敌我 ✓）*/
 var BAR_MOB = 'linear-gradient(180deg,#ff6a5a,#c02a1a)';
 var BAR_PLR = 'linear-gradient(180deg,#7ee08a,#3aa04a)';
 var walkT = 0, atkT = -1, atkCd = 0, shake = 0, hitStop = 0, mobT = 0, lastTs = 0;
@@ -780,6 +785,33 @@ function nearMobs(x, z) {
    byMob = true 时检测【动态实体：妖兽 + 其他玩家】✓ skipMob = 要跳过的妖兽（自己 ✓）
    fromX,fromZ = 移动前的位置（★ 关键：本来就已经重叠的，不算阻挡 ✓
                  否则两个箱子一旦压在一起 → 两边都被挡住 → 永远卡死 ✗）*/
+/* ★ 第 56 轮：复活无敌的显示效果 —— 脚下一圈会呼吸的浅蓝光环 ✓
+   ★ 懒创建（第一次用到才建）→ 不用动 init，也不用操心加载顺序 ✓
+   ★ core 层不许碰浏览器 API ✗ 所以不用 performance.now()，
+     用 INVULN_T 自己算脉动（它本来就是 1.5 → 0 的倒计时 ✓）*/
+var _invRing = null;
+function invRingUpdate() {
+  if (INVULN_T <= 0) {
+    if (_invRing) { _invRing.visible = false; }
+    return;
+  }
+  if (!_invRing) {
+    _invRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.60, 0.88, 28),
+      new THREE.MeshBasicMaterial({ color: 0x8ee0ff, transparent: true, opacity: 0.7,
+                                    side: THREE.DoubleSide, depthWrite: false }));
+    _invRing.rotation.x = -Math.PI / 2;
+    scene.add(_invRing);
+  }
+  _invRing.visible = true;
+  _invRing.position.set(P.x, 0.07, P.z);
+  var k = Math.max(0, Math.min(1, INVULN_T / 1.5));
+  _invRing.material.opacity = 0.20 + 0.55 * k;                 // 快没了就变淡 ✓
+  var pulse = 1 + 0.10 * Math.sin(INVULN_T * 14.0);            // 呼吸脉动
+  _invRing.scale.set(pulse, pulse, pulse);
+}
+
+
 function blocked(x, z, hw, hd, byMob, skipMob, fromX, fromZ) {
   var hasFrom = (fromX !== undefined && fromZ !== undefined);
   // ① 静态物件
@@ -2685,10 +2717,13 @@ function _netPushOut(ox, oz, hw, hd, dt) {
   var sp = Math.min(1, dt * 10);               // 平滑推开（不是瞬移 ✓）
   if (px2 <= pz2) {                             // 从"需要挪得少"的那一轴推开 → 位移最小最自然 ✓
     var mx = (dx >= 0 ? 1 : -1) * px2 * sp;
-    if (!blocked(P.x + mx, P.z, G.BODY_W / 2, G.BODY_D / 2, true, null, P.x, P.z)) { P.x += mx; }
+    /* ★ 第 56 轮：无敌期间【无视体积碰撞】—— byMob 传 false ✓
+       （原来写死 true，僵尸会把玩家挡住 ✗ 复活后被围死跑不掉 ✗）
+       ★ 只放行"僵尸碰撞"这一层 ✓ 建筑/树照旧挡着 ✓（不然会穿墙 ✗）*/
+    if (!blocked(P.x + mx, P.z, G.BODY_W / 2, G.BODY_D / 2, !(INVULN_T > 0), null, P.x, P.z)) { P.x += mx; }
   } else {
     var mz = (dz >= 0 ? 1 : -1) * pz2 * sp;
-    if (!blocked(P.x, P.z + mz, G.BODY_W / 2, G.BODY_D / 2, true, null, P.x, P.z)) { P.z += mz; }
+    if (!blocked(P.x, P.z + mz, G.BODY_W / 2, G.BODY_D / 2, !(INVULN_T > 0), null, P.x, P.z)) { P.z += mz; }
   }
 }
 
@@ -2843,8 +2878,24 @@ function frame(ts) {
     }
   }
   if (atkT < 0) { H.g.position.set(P.x, moving ? Math.abs(Math.sin(walkT)) * 0.05 : 0, P.z); }   // ★ 攻击时坐标由动画控制 ✓
+  /* ★★ 第 56 轮：死亡 = 【倒地】，不是站着 ✗（用户要求）★★
+     ★ 必须放在上面那些姿势代码【之后】—— 不然会被它们覆盖回去 ✗ */
+  if (dead) {
+    H.g.rotation.x = -1.45;              // 躺平（绕 X 转过去 ✓）
+    H.g.rotation.z = 0.12;               // 稍微侧一点，别像块板子
+    H.g.rotation.y = P.yaw;              // 朝向保持不变 ✓
+    H.g.position.set(P.x, 0.28, P.z);    // 贴地（不然会陷进地面 / 半截悬空）
+  }
+  /* ★ 第 56 轮：无敌倒计时 + 脚下护盾环
+     ★ 倒计时必须用【真实 dt】✗ 不能写死 0.033 —— 60fps 下会掉两倍快
+       （这个坑第 28 轮在移动速度上踩过一次 ✓ 同一个道理 ✓）*/
+  if (INVULN_T > 0) { INVULN_T = Math.max(0, INVULN_T - dt); }
+  invRingUpdate();
   H.g.rotation.y = P.yaw;
-  if (atkT < 0) {
+  /* ★★ 第 56 轮：倒地时【不要】播走路姿势 ★★
+     踩过：我那段倒地写在上面 ✓ 但这里 (rotation.x = 0) 又把它清零了 ✗
+     → 死亡姿势得是"没人再动它"才行 ✓ */
+  if (atkT < 0 && !dead) {
     var sw2 = moving ? Math.sin(walkT) * 0.72 : Math.sin(performance.now() / 700) * 0.06;
     H.legL.rotation.x = sw2; H.legR.rotation.x = -sw2;
     H.armL.rotation.x = -sw2 * 0.75; H.armR.rotation.x = sw2 * 0.45;

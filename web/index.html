@@ -143,24 +143,39 @@
 /* ★ 武器图标 = 平面微缩版（矩形拼的）→ 只控大小，颜色/填充由 SVG 自己带 ✓
    注意：千万不能给它写 fill:none —— CSS 会压过 SVG 的 fill 属性，整把武器就变透明了 ✗ */
 .slot svg:not(.micon){width:30px;height:30px}
-/* ★ 第 54 轮：阶数 → 【左上角】；数量 → 【右下角】（MC 惯例 ✓）*/
+/* ★ 第 56 轮（用户第 1 条）：按钮改用和设置面板 .opt 同一套样子 ✓
+   以前是"深棕 + 亮边"，和面板的蓝灰风格不搭 ✗ */
+.bagB{padding:8px 14px;border-radius:9px;background:#26303c;border:1px solid #ffffff22;
+  font-size:13px;color:#e8eef6;cursor:pointer;font-family:inherit}
+.bagB:hover{background:#2f3b49;border-color:#ffffff3a}
+.bagB.off{background:#3a2630;border-color:#a05a4a66}
+.bagB:disabled{opacity:.4;cursor:default}
+#setX{width:26px;height:26px;border-radius:8px;background:#26303c;border:1px solid #ffffff22;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;color:#cfd8e3}
+#setX:hover{background:#3a2630;border-color:#a05a4a66;color:#ffb4a0}
+/* 固定高度之后：内容区自己滚，切标签不再整块跳 ✓ */
+#setBox .tabpane{flex:1;min-height:0;overflow:auto;padding-right:2px}
+#setTabs,#setBox>div:first-child{flex:0 0 auto}
+/* ★ 第 56 轮：阶数 → 【左上角】；数量 → 【右下角】（MC 惯例 ✓）*/
 .slot .tg{position:absolute;left:2px;top:-1px;font-size:10px;color:#ffd83d;font-weight:700;
   text-shadow:0 1px 2px #000,0 0 3px #000}
 /* ★ 第 55 轮：数量用【灰色】细字（用户要求）—— 白字太抢眼，会压住品阶底色 ✗ */
 .slot .cnt{position:absolute;right:2px;bottom:-1px;font-size:11px;color:#cfc9bf;font-weight:600;
   text-shadow:0 1px 2px #000,0 0 3px #000}
-.slot.sel{outline:2px solid #8ee08a;outline-offset:-2px}
+/* ★ 第 56 轮（用户第 4 条）：高品阶用【底色】区分就够了 —— 不再画任何边框 ✓
+   选中：提亮底色；已装备：右上角一个小绿点（不用框）*/
+.slot.sel{background-image:linear-gradient(180deg,rgba(255,255,255,.22),rgba(255,255,255,.05))}
+.slot.cur::after{content:'';position:absolute;right:3px;top:3px;width:6px;height:6px;
+  border-radius:50%;background:#8ee08a;box-shadow:0 0 4px #8ee08a}
 .slot .lvl{left:auto;right:1px;top:-1px}
 .bagBtns{display:flex;align-items:center;gap:10px;margin-top:8px}
 .bagB.off{border-color:#a05a4a}
 .bagB:disabled{opacity:.45;cursor:default}
-.slot.cur{outline:2px solid #ffd83d;outline-offset:-2px}
+.slot.cur{box-shadow:inset 2px 2px 0 rgba(0,0,0,.4), inset -1px -1px 0 rgba(255,255,255,.18)}
 /* ★ 等级不够：压暗 + 左下角标"需要 N 级"（一眼看出不是我不想穿 ✓）*/
-.slot.locked{background:rgba(0,0,0,.62);cursor:not-allowed}
-.slot.locked svg{opacity:.35}
-.slot.locked .lvl{position:absolute;left:1px;bottom:0;font-size:9px;color:#ff8a7a;
+/* ★ 第 53/56 轮：等级不够【不禁止穿】—— 只用右上角一个百分比小字提示 ✓ 不画框 ✗ */
+.slot.lowmastery .lvl{position:absolute;right:2px;top:-1px;font-size:9px;color:#ffd83d;
   text-shadow:0 1px 2px #000,0 0 3px #000}
-.slot.locked:hover{border-color:#ff8a7a88}
 .slot.eqslot{width:48px;height:48px}
 .slot.eqslot svg{width:32px;height:32px}
 .bagEquipRow{display:flex;gap:12px;align-items:flex-start}
@@ -207,11 +222,18 @@
 <div id="markui" style="position:fixed;inset:0;pointer-events:none;z-index:7"></div>
 <div id="err"></div>
 <div id="setPanel" style="position:fixed;inset:0;z-index:60;display:none;background:#000000cc;backdrop-filter:blur(6px)">
- <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(440px,93vw);max-height:88vh;overflow:auto;
+ <!-- ★ 第 56 轮：固定高度 —— 以前每页内容多少不同，切标签时整个面板会跳 ✗
+      现在面板高度定死（min(78vh,560px)），只有内容区滚动 ✓ -->
+ <div id="setBox" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(440px,93vw);
+   height:min(78vh,560px);display:flex;flex-direction:column;
    background:linear-gradient(180deg,#1e2630f5,#141a22f5);border:1px solid #ffffff28;border-radius:14px;padding:16px 18px;color:#e8eef6">
-  <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
    <div style="font-size:17px;font-weight:800;color:#ffd83d">菜单</div>
-   <div style="font-size:11px;color:#9aa4b2">改完立即生效 ✓ 自动保存 <span id="setFps" style="color:#8ee08a">FPS --</span></div>
+   <div style="display:flex;align-items:center;gap:10px">
+     <div style="font-size:11px;color:#9aa4b2">改完立即生效 ✓ 自动保存 <span id="setFps" style="color:#8ee08a">FPS --</span></div>
+     <!-- ★ 第 56 轮：右上角统一一个 X（不再只有"信息"页里有关闭 ✓ 用户要求）-->
+     <div id="setX" title="关闭（Esc）">✕</div>
+   </div>
   </div>
 
   <!-- ★ 分类导航：点不同分类切不同面板（第 31 轮）-->
@@ -232,18 +254,26 @@
      <span class="bagTip" id="bagCount"></span>
    </div>
    <div id="bagGrid" class="bagGrid"></div>
+   <!-- ★ 第 54 轮：点武器选中 → 这里出现【使用】；穿上之后变成【脱下】-->
+   <div class="bagBtns"><button id="bagUse" class="bagB" disabled>使 用</button>
+     <span class="bagTip" id="bagSelTip">点上面的格子选中一件武器</span></div>
+
+   <!-- ★★ 第 56 轮（用户第 5 条）：以前这几行挂在"装备"标题下面 ✗
+        点别的武器时它就跟着变 → 看着像"已装备的数值变了"✗ 多余
+        现在改成挂在【选中的武器】名下 ✓ 标题就是那件装备的名字 ✓ -->
+   <div class="bagHead" style="margin-top:12px">
+     <span class="setLabel" style="margin:0" id="bagSelName">选中的武器</span>
+     <span class="bagTip">数值跟着上面选中走 ✓</span>
+   </div>
+   <div class="bagStat" id="bagStat"></div>
 
    <div class="bagHead" style="margin-top:12px">
-     <span class="setLabel" style="margin:0">装备</span>
+     <span class="setLabel" style="margin:0">已装备</span>
      <span class="bagTip">点装备槽 = 脱下</span>
    </div>
    <div class="bagEquipRow">
      <div id="bagEqSlot" class="slot eqslot"></div>
-     <div class="bagStat" id="bagStat"></div>
    </div>
-   <!-- ★ 第 54 轮：点武器选中 → 这里出现【使用】；穿上之后变成【脱下】（用户要求）-->
-   <div class="bagBtns"><button id="bagUse" class="bagB" disabled>使 用</button>
-     <span class="bagTip" id="bagSelTip">点上面的格子选中一件武器</span></div>
    <div class="bagEmpty" id="bagMsg"></div>
    <div id="bagTipBox" class="bagTipBox"></div>
   </div>
@@ -287,7 +317,9 @@
    <div id="aboutVer" style="font-size:11px;color:#8fa3b8;line-height:1.9">—</div>
    <div style="display:flex;gap:8px;margin-top:18px">
     <div id="setReset" class="opt" style="flex:1;padding:10px">恢复默认</div>
-    <div id="setClose" class="opt" style="flex:1;padding:10px;background:#2a3550">关闭</div>
+    <!-- ★ 第 56 轮：这里原来有个"关闭"按钮 —— 现在统一用右上角的 X 了 ✓
+         （JS 里 setClose 可能还在找它 → 保留一个隐藏的占位，免得报错 ✗）-->
+    <div id="setClose" style="display:none"></div>
    </div>
   </div>
  </div>
