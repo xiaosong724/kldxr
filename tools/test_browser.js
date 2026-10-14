@@ -1070,6 +1070,10 @@ async function register(name, pw) {
       '  if (sl[k].querySelector("svg")) { out.withIcon++; }' +
       '  if (sl[k].getAttribute("data-w") === "1") { out.weapons++; } }' +
       'out.items = BAG.items.length;' +
+      // ★ 第 49 轮：图标要是"武器的平面微缩版"（矩形拼出来的），不是抽象线条
+      'var s0 = document.querySelector("#bagGrid .slot:not(.empty) svg");' +
+      'out.iconRects = s0 ? s0.querySelectorAll("rect,circle").length : 0;' +
+      'out.iconIsStroke = s0 ? s0.classList.contains("micon") : true;' +
       'out.cd0 = G.ATK_CD; out.reach0 = G.ATK_RANGE; out.arc0 = G.ATK_ARC;' +
       'out.stat0 = (document.getElementById("bagStat").textContent || "").slice(0, 40);' +
       // 悬停第一件武器 → 提示框要出来（MC 那种 ✓）
@@ -1102,11 +1106,55 @@ async function register(name, pw) {
       'return JSON.stringify({ wp: (MY_WEAPON || {}).name || "(默认剑)",' +
       ' cd: Math.round(G.ATK_CD * 1000) / 1000, reach: G.ATK_RANGE, arc: G.ATK_ARC,' +
       ' eqTxt: (document.getElementById("bagEqSlot").textContent || "").slice(0, 20),' +
-      ' eqW: document.getElementById("bagEqSlot").getAttribute("data-w") });'
+      ' eqW: document.getElementById("bagEqSlot").getAttribute("data-w"),' +
+      // ★ 第 49 轮：手上那把要按【当前武器】重建（零件数/发光数跟着类型和品阶变 ✓）
+      ' heldParts: (H && H.sw) ? H.sw.children.length : -1,' +
+      ' heldGlow: (function () { var n = 0;' +
+      '   if (!H || !H.sw) { return -1; }' +
+      '   for (var i = 0; i < H.sw.children.length; i++) {' +
+      '     var m = H.sw.children[i].material;' +
+      '     if (m && m.emissiveIntensity > 0) { n++; } }' +
+      '   return n; })() });'
     ) || '{}');
     console.log('        [背包] 穿后：' + eqQ.wp + '  cd=' + eqQ.cd + ' reach=' + eqQ.reach + ' arc=' + eqQ.arc);
     ok(eqQ.wp !== '(默认剑)', '★★ 点一下格子就穿上了（现在是 ' + eqQ.wp + ' ✓）');
     ok(eqQ.eqW === '1', '★ 装备槽里显示出了手上这把（图标 + 品阶角标 ✓）');
+    /* ★★ 第 49 轮：手上武器外观 + 平面微缩图标 ★★ */
+    console.log('        [武器] 手上零件=' + eqQ.heldParts + ' 其中发光=' + eqQ.heldGlow +
+      ' · 图标矩形=' + bagQ.iconRects);
+    ok(bagQ.iconRects >= 4 && bagQ.iconIsStroke === false,
+      '★★★ 背包图标是武器的【平面微缩版】（' + bagQ.iconRects +
+      ' 个零件投影成矩形 ✓ 不是抽象线条 ✓ 用户要的就是这个）');
+    ok(eqQ.heldParts >= 12,
+      '★★★ 手上那把是按【当前武器】生成的（双手斧 ' + eqQ.heldParts + ' 个零件 ✓ 不再是写死的一把剑）');
+    ok(eqQ.heldGlow >= 12,
+      '★★ 高阶武器会发光（' + eqQ.heldGlow + ' 个零件带自发光 —— 5 阶玄铁就有 ✓ 方案 §7.10）');
+    // 换一把别的类型 → 零件数要跟着变（证明真的重建了 ✓）
+    // ★ 先确认背包里【真有】长枪（测试账号是持久的，但不一定有枪 ✗）
+    await ADMIN_ACT('give', { kind: 'spear', tier: 5 });
+    await A.eval('bagFetch(bagRender); return 1;');
+    await sleep(900);
+    const nBefore = eqQ.heldParts;
+    await A.eval(
+      'var sl = document.querySelectorAll("#bagGrid .slot");' +
+      'for (var i = 0; i < sl.length; i++) {' +
+      '  var idx = +sl[i].getAttribute("data-i");' +
+      '  var it = (BAG.items[idx] || {}).item;' +
+      '  if (it && it.slot === "weapon" && it.look === "spear") { sl[i].click(); break; } }' +
+      'return 1;');
+    await sleep(1700);
+    const spQ = JSON.parse(await A.eval(
+      'var n = (H && H.sw) ? H.sw.children.length : -1;' +
+      'var ic = weaponIconSvg("spear", 5);' +
+      'return JSON.stringify({ n: n, wp: (MY_WEAPON || {}).name || "?",' +
+      ' shapes: (ic.match(/<rect|<circle/g) || []).length, reach: G.ATK_RANGE });'
+    ) || '{}');
+    console.log('        [武器] 换成 ' + spQ.wp + ' → 零件 ' + nBefore + ' → ' + spQ.n +
+      ' · 长枪图标 ' + spQ.shapes + ' 个形状 · 射程 ' + spQ.reach);
+    ok(spQ.n !== nBefore && spQ.n > 0,
+      '★★★ 换武器会重建手上的模型（零件 ' + nBefore + ' → ' + spQ.n + ' ✓ 不是一直那一把）');
+    ok(spQ.shapes >= 5, '★★ 不同武器的图标也不同（长枪 ' + spQ.shapes + ' 个形状 + 射程 ' +
+      spQ.reach + ' 米 ✓ 图标和数值都对得上）');
     ok(eqQ.cd > bagQ.cd0 + 0.05,
       '★★★ 换武器之后本地冷却跟着变（' + bagQ.cd0 + ' → ' + eqQ.cd + ' 秒，双手斧更慢 ✓）');
     ok(eqQ.reach > bagQ.reach0 - 0.01 && eqQ.arc > bagQ.arc0 + 0.05,

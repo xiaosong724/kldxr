@@ -139,7 +139,10 @@
 .slot:hover{background:rgba(255,255,255,.14);border-color:#ffd83d88}
 .slot.empty{cursor:default}
 .slot.empty:hover{background:rgba(0,0,0,.42);border-color:rgba(255,255,255,.07)}
-.slot svg{width:26px;height:26px;stroke-width:1.7;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.slot svg.micon{width:26px;height:26px;stroke-width:1.7;fill:none;stroke-linecap:round;stroke-linejoin:round}
+/* ★ 武器图标 = 平面微缩版（矩形拼的）→ 只控大小，颜色/填充由 SVG 自己带 ✓
+   注意：千万不能给它写 fill:none —— CSS 会压过 SVG 的 fill 属性，整把武器就变透明了 ✗ */
+.slot svg:not(.micon){width:30px;height:30px}
 .slot .tg{position:absolute;right:2px;bottom:0;font-size:10px;color:#ffd83d;
   text-shadow:0 1px 2px #000,0 0 3px #000}
 .slot.cur{outline:2px solid #ffd83d;outline-offset:-2px}

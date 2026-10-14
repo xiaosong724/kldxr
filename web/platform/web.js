@@ -660,7 +660,8 @@ function openSet(wantTab) {
 /* ★★ 图标：全部【程序画】的 SVG 描边 ★★
    为什么不放图片素材：和武器模型一个思路 —— 不加素材 ✓ 也就不用担心版权/加载 ✓
    颜色走 currentColor → 由【品阶色】着色（和地上掉落物用的是同一套 LOOT_COL ✓ 玩家能对上）*/
-var ICON_SVG = function (d) { return '<svg viewBox="0 0 24 24" stroke="currentColor">' + d + '</svg>'; };
+/* ★ 材料图标：描边风（class=micon 才吃到 CSS 的 stroke 样式 ✓）*/
+var ICON_SVG = function (d) { return '<svg class="micon" viewBox="0 0 24 24" stroke="currentColor">' + d + '</svg>'; };
 var ITEM_ICON = {
   sword:  ICON_SVG('<path d="M12 2v13"/><path d="M8.5 15h7"/><path d="M12 15v6"/>'),
   dagger: ICON_SVG('<path d="M12 5v9"/><path d="M9.5 14h5"/><path d="M12 14v5"/>'),
@@ -688,7 +689,10 @@ var MAT_ICON_BY_NAME = {
 };
 function iconOfItem(it) {
   if (!it) { return ITEM_ICON.box; }
-  if (it.slot === 'weapon') { return ITEM_ICON[it.look] || ITEM_ICON.sword; }
+  /* ★★ 武器图标 = 那把武器的【平面微缩版】★★（用户要求）
+     它不是画出来的线条，而是把同一份零件数据投影成 SVG 矩形 ——
+     所以它永远长得就像手上那把 ✓ 而且换武器/改模型图标自动跟着变 ✓ */
+  if (it.slot === 'weapon') { return weaponIconSvg(it.look, it.tier); }
   return ITEM_ICON[MAT_ICON_BY_NAME[it.name] || 'box'];
 }
 /* 品阶色 —— 和 core 里地上掉落物同一套 LOOT_COL ✓ */
@@ -772,7 +776,7 @@ function bagRender() {
   var w = BAG.weapon;
   if (!w) {
     eqs.className = 'slot eqslot empty';
-    eqs.innerHTML = '<span style="color:#4a4a52">' + ITEM_ICON.sword + '</span>';
+    eqs.innerHTML = '<span style="opacity:.35">' + weaponIconSvg('sword', 0) + '</span>';
     eqs.setAttribute('data-w', '0');
   } else {
     eqs.className = 'slot eqslot';
