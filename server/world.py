@@ -41,6 +41,17 @@ SPAWN_SAFE = 20.0               # 出生点/安全区半径：这里不刷怪（
 REVIVE_INVULN = 1.5        # ★ 复活无敌时长（秒）—— 用户指定 ✓
 
 
+def tier_no(t):
+    """★ 第 57 轮：品阶【显示】用 1~12（内部数据仍是 0~11 ✓ 用户要求）
+
+    ★ 为什么不在数据层就改成 1~12：
+      数组下标、LOOT_COL、TIER_BASE、TIER_NAME 全是按 0 起的 ✓
+      动了数据层要改的地方一大片，还容易越界 ✗
+      → 只在【显示】时 +1 ✓ 数据层一律不动 ✓
+    """
+    return int(t or 0) + 1
+
+
 def now_s():
     return time.time()
 
@@ -295,10 +306,15 @@ class World(object):
             p.z = _f(d.get('z'), p.z)
             p.yaw = _f(d.get('yaw'), p.yaw)
             p.ct = _f(d.get('t'), p.ct)
-            if 'hp' in d:
-                p.hp = int(_f(d.get('hp'), p.hp))
-            if 'qi' in d:
-                p.qi = int(_f(d.get('qi'), p.qi))
+            # ★★ 第 57 轮：客户端上报的 hp / qi 【不再采信】★★
+            #   和上面 atk 那条一个道理 —— 改个包就能报 hp=999999 变成不死身 ✗
+            #   （方案 §5：伤害/死亡/血量归服务器权威，客户端只有【位置】是权威的 ✓）
+            #
+            #   踩到的真 bug：管理页把某个玩家治好（hp=200）✓
+            #   但那个玩家的客户端本地 hp 还是 0 → 每个移动包又把 0 覆盖回来 ✗
+            #   → 管理员治疗/复活【永远不生效】✗
+            #
+            #   ★ 客户端照旧发这两个字段，服务器只是不理它 ✓（省得改协议 ✗）
             # ★★ 第 39 轮：客户端上报的 atk 【不再采信】★★
             #    攻击力由服务器按角色等级自己算（mobs.player_atk，方案 §4.5）——
             #    以前直接存客户端的值，改个包就能一刀秒天秒地 ✗
@@ -356,7 +372,7 @@ class World(object):
             bb = (w or {}).get('base') or {}
             self._send_cid(p.cid, P.pack('notice', text=(
                 '装上：%s（%d 阶）攻速 ×%.2f 射程 %.1f 米'
-                % (w.get('name'), w.get('tier') or 0, bb.get('atkSpeed') or 1.0,
+                % (w.get('name'), tier_no(w.get('tier')), bb.get('atkSpeed') or 1.0,
                    bb.get('reach') or 2.4)) if w else '卸下武器（换回默认单手剑）'))
             # ★ 把新的武器告诉客户端 —— 客户端的挥刀冷却/射程预测要跟着换 ✓
             self._send_cid(p.cid, P.pack('weapon', w=w or None))
@@ -697,6 +713,12 @@ class World(object):
         #   见 app.py 的 _admin_give()
         elif act == 'kick':
             self._send_cid(q.cid, P.pack('kick', code='admin', msg='管理员把你请下线了'))
+        elif act == 'kill':
+            # ★ 第 57 轮：管理页把某个玩家打倒（测试死亡/复活/同步用 ✓）
+            q.hp = 0
+            self._add_pend(q.cid, 'hurts', {'dmg': 0, 'x': round(q.x, 2), 'z': round(q.z, 2),
+                                            'by': '管理员', 'kind': 'admin'})
+            self._send_cid(q.cid, P.pack('dead', by='管理员'))
         elif act == 'heal':
             q.hp = int(q.role.get('hpMax') or 200)     # 满血（管理页的"救一下"✓）
             self._send_cid(q.cid, P.pack('notice', text='管理员把你治好了'))
@@ -859,7 +881,7 @@ class World(object):
         ox = 0.0 if it.get('slot') != 'weapon' else 0.7
         self.loot[lid] = {'x': m.x + ox, 'z': m.z, 'item': it, 'ttl': drops.DROP_TTL}
         self._send_cid(p.cid, P.pack('notice', text='掉落：%s（%d 阶）走过去自动捡 ✓'
-                                     % (it['name'], it['tier'])))
+                                     % (it['name'], tier_no(it.get('tier')))))
 
     def _loot_tick(self, dt):
         """地上物：倒计时 + 过期收掉（不清理的话服务器越积越多 ✗）"""
@@ -907,7 +929,8 @@ class World(object):
         #   → 把整件事交给存档线程（它收到 'PICK' 自己决定 +1 还是新建 ✓）
         self.post_save('PICK', (p.role_id, json.dumps(it, ensure_ascii=False),
                                 dbmod.now_ms()))
-        self._send_cid(p.cid, P.pack('notice', text='拾取：%s（%d 阶）' % (it['name'], it['tier'])))
+        self._send_cid(p.cid, P.pack('notice',
+                                     text='拾取：%s（%d 阶）' % (it['name'], tier_no(it.get('tier')))))
 
     def _add_pend(self, cid, key, item):
         """攒本 tick 要给某个玩家的反馈（hurts / mhits / me）"""
@@ -1002,6 +1025,10 @@ class World(object):
                 'hp': o.hp,
                 'lv': (o.role or {}).get('level', 1),
                 'atk': o.atk,
+                # ★★ 第 57 轮：他倒下了没有 ★★
+                #   以前只同步 hp，客户端没法知道"该不该躺下" ✗
+                #   → 别人看被围死的队友，永远是站着的 ✗（用户报的）
+                'd': 1 if int(o.hp) <= 0 else 0,
             })
         return out
 

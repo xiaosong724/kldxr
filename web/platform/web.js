@@ -913,7 +913,7 @@ function bagRender() {
       (lowm ? (' title="建议 ' + (it.reqLevel || 1) + ' 级（发挥 ' +
         Math.round(wMastery(it) * 100) + '%）"') : '') + '>' +
       '<span style="color:' + col + '">' + iconOfItem(it) + '</span>' +
-      '<span class="tg">' + (it.tier || 0) + '</span>' +
+      '<span class="tg">' + ((it.tier || 0) + 1) + '</span>' +      // ★ 显示 1~12 ✓
       (!isW && n > 1 ? '<span class="cnt">' + n + '</span>' : '') +
       (lowm ? '<span class="lvl">' + Math.round(wMastery(it) * 100) + '%</span>' : '') + '</div>';
   }
@@ -931,7 +931,7 @@ function bagRender() {
   } else {
     eqs.className = 'slot eqslot';
     eqs.innerHTML = '<span style="color:' + tierHex(w.tier || 0) + '">' + iconOfItem(w) + '</span>' +
-      '<span class="tg">' + (w.tier || 0) + '</span>';
+      '<span class="tg">' + ((w.tier || 0) + 1) + '</span>';       // ★ 显示 1~12 ✓
     eqs.setAttribute('data-w', '1');
   }
 
@@ -977,7 +977,7 @@ function bagRender() {
       var m8 = wMastery(selItem);
       var rq8 = +((selItem.reqLevel) || 1);
       var lv8 = (WSC.role && WSC.role.level) || 1;
-      selNameEl.textContent = (selItem.name || '武器') + ' · ' + (selItem.tier || 0) + ' 阶 · 建议 ' +
+      selNameEl.textContent = (selItem.name || '武器') + ' · ' + ((selItem.tier || 0) + 1) + ' 阶 · 建议 ' +
         rq8 + ' 级（你 ' + lv8 + ' 级）· 发挥 ' + Math.round(m8 * 100) + '%';
     } else {
       selNameEl.textContent = '选中的武器（没选时 = 手上这把 / 默认剑）';
@@ -1031,7 +1031,7 @@ function bagTipAt(e, el) {
       : '<i> · 建议 ' + req5 + ' 级（已达标 · 发挥 100%）</i>';
   }
   box.innerHTML = '<b style="color:' + tierHex(it.tier || 0) + '">' + (it.name || '?') + '</b>' +
-    '<i> · ' + (it.tier || 0) + ' 阶' + (it.itemLv ? (' · 物品 ' + it.itemLv + ' 级') : '') +
+    '<i> · ' + ((it.tier || 0) + 1) + ' 阶' + (it.itemLv ? (' · 物品 ' + it.itemLv + ' 级') : '') +
     '</i>' + lvlTxt + '<br>' + extra +
     '<i>' + (it.slot === 'weapon' ? '选中后点「使用」穿上' : '材料（以后做合成用）') + '</i>';
   box.style.display = 'block';
@@ -1135,7 +1135,7 @@ function bindBag() {
       var m6 = wMastery(w);
       var lv6 = (WSC.role && WSC.role.level) || 1;
       box.innerHTML = '<b style="color:' + tierHex(w.tier || 0) + '">' + (w.name || '?') + '</b>' +
-        '<i> · ' + (w.tier || 0) + ' 阶 · 已装备</i>' +
+        '<i> · ' + ((w.tier || 0) + 1) + ' 阶 · 已装备</i>' +
         (m6 < 1 ? ('<i> · 建议 ' + (w.reqLevel || 1) + ' 级（你 ' + lv6 + ' 级）· 发挥 ' +
                    Math.round(m6 * 100) + '%</i>') : '') + '<br>实际每击 <b>' +
         wRealHit(w).toFixed(0) + '</b> · 每秒 <b>' + wRealDps(w).toFixed(0) + '</b><br>' +

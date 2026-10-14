@@ -314,7 +314,7 @@ class Api(BaseHTTPRequestHandler):
         if not self._admin_ok():
             return self._send(401, {'ok': False, 'error': '没登录或登录过期了'})
         act = (body.get('act') or '').strip()
-        if act not in ('spawn', 'give', 'kick', 'heal', 'say'):
+        if act not in ('spawn', 'give', 'kick', 'heal', 'say', 'kill'):
             return self._send(400, {'ok': False, 'error': '不认识的动作'})
         if self.world is None:
             return self._send(503, {'ok': False, 'error': '世界没起来'})

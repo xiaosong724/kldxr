@@ -186,6 +186,7 @@ function refresh() {
         '<button data-a="spawn" data-n="' + nm + '">刷 5 只</button>' +
         '<button data-a="give" data-n="' + nm + '">给武器</button>' +
         '<button data-a="heal" data-n="' + nm + '">治疗</button>' +
+        '<button class="warn" data-a="kill" data-n="' + nm + '">打倒</button>' +
         '<button class="warn" data-a="kick" data-n="' + nm + '">踢下线</button>' +
         '</td></tr>';
     }).join('') || '<tr><td colspan="6" class="tip">还没有角色</td></tr>';
@@ -210,6 +211,7 @@ $('rows').onclick = function (e) {
   if (a === 'give') { act('give', { name: n, kind: 'axe', tier: 4 }); }
   else if (a === 'spawn') { act('spawn', { name: n, n: 5 }); }
   else if (a === 'heal') { act('heal', { name: n }); }
+  else if (a === 'kill') { if (confirm('把 ' + n + ' 打倒？')) { act('kill', { name: n }); } }
   else if (a === 'kick') { if (confirm('把 ' + n + ' 踢下线？')) { act('kick', { name: n }); } }
 };
 

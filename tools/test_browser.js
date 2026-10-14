@@ -288,6 +288,44 @@ async function register(name, pw) {
     ok(seen, '★ 两人互相看得见（甲看到 ' + JSON.stringify(sa && sa.others) +
       '，乙看到 ' + JSON.stringify(sb && sb.others) + '）');
 
+    /* ★ 用【管理页打倒乙】走真链路 ✓（造个假 NET.others 没用 ✗
+         每个快照都会把不在列表里的清掉 ✓ 所以必须让服务器真的把他标成死亡 ✓）*/
+    await ADMIN_ACT('kill', { name: '浏览器乙' });
+    await sleep(900);
+    const poseQ = JSON.parse(await A.eval(
+      // ★ 必须按【名字】找乙 ✗ 不能拿 NET.others 的第一个
+      //   （视野里可能还有别的测试号 ✓ 拿错了就会误判 ✗）
+      'var o = null;' +
+      'for (var uid in NET.others) {' +
+      '  if (NET.others[uid].name === "浏览器乙") { o = NET.others[uid]; break; } }' +
+      'if (!o) { return JSON.stringify({ found: false }); }' +
+      'if (!o) { return JSON.stringify({ found: false }); }' +
+      'return JSON.stringify({ found: true, dead: !!o.dead, hp: o.hp, lv: o.lv,' +
+      '  rx: Math.round(o.hh.g.rotation.x * 100) / 100,' +
+      '  y: Math.round(o.hh.g.position.y * 100) / 100 });'
+    ) || '{}');
+    console.log('        [倒地] 甲看乙：found=' + poseQ.found + ' dead=' + poseQ.dead +
+      ' hp=' + poseQ.hp + ' rx=' + poseQ.rx + ' y=' + poseQ.y);
+    ok(poseQ.found === true && poseQ.dead === true,
+      '★★ 服务器把乙标成【死亡】了（甲收到的快照里 dead=true ✓ hp=' + poseQ.hp + '）');
+    ok(poseQ.rx < -1.0 && Math.abs(poseQ.y - 0.28) < 0.06,
+      '★★★ 甲看乙是【躺在地上】的（rx=' + poseQ.rx + ' y=' + poseQ.y +
+      ' ✓ 不再是站着的 ✗ 用户报的那条）');
+    // 复活之后要恢复站立
+    const healResp = await ADMIN_ACT('heal', { name: '浏览器乙' });
+    console.log('        [倒地] heal 返回：' + JSON.stringify(healResp));
+    await sleep(900);
+    const upQ = JSON.parse(await A.eval(
+      'var o = null;' +
+      'for (var uid in NET.others) {' +
+      '  if (NET.others[uid].name === "浏览器乙") { o = NET.others[uid]; break; } }' +
+      'return JSON.stringify({ found: !!o,' +
+      '  rx: o ? Math.round(o.hh.g.rotation.x * 100) / 100 : null,' +
+      '  dead: o ? !!o.dead : null, hp: o ? o.hp : null });'
+    ) || '{}');
+    ok(upQ.dead === false && Math.abs(upQ.rx) < 0.5,
+      '★★ 复活之后甲看乙又站直了（dead=' + upQ.dead + ' rx=' + upQ.rx + ' ✓）');
+
     /* ③b ★ 玩家【移动】同步：甲按住 w 走一会儿，乙那边看到的位置必须跟着变
        （用户反馈过的真 bug：能看到人，但人钉在原地不动 ✗
          根因是 core 里的 `NET.on` 从来没被赋成 true —— netUpdate() 第一行就是
@@ -1254,6 +1292,11 @@ async function register(name, pw) {
       '★★★ 射程/攻击弧也跟着换了（' + bagQ.reach0 + '→' + eqQ.reach + ' 米 · ' +
       bagQ.arc0 + '→' + eqQ.arc + ' 弧度 ✓）');
     await A.eval('closeSet(); return 1;');
+
+    /* ★★ 第 57 轮：其它玩家的倒地姿态 ★★
+       用户报："死亡的动画没有做服务器同步，别的玩家看不到，别人看你死亡依旧是站立的"
+       → 服务器快照加了 'd'（hp<=0 就是 1）✓ 客户端按 o.dead 摆成躺地 ✓
+       ★ 这里造一个"假队友"直接验渲染那条路径（不用真等别人死一遍 ✓）*/
 
     // 顺手截一张设置面板（SHOT2）—— 第三参数可指定截哪一页（默认 about ✓）
     if (process.env.SHOT2) {

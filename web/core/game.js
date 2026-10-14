@@ -1741,7 +1741,8 @@ function wsApplyWorld(d) {
     addOther({
       uid: w.id, name: w.n, realm: '', lv: w.lv,
       x: w.x, z: w.z, yaw: w.y, hp: w.hp, hpm: 0,
-      ct: w.t, atk: w.atk
+      ct: w.t, atk: w.atk,
+      dead: !!w.d            // ★ 第 57 轮：他倒下了没有（服务器同步给我的 ✓）
     }, t);
   }
   for (var uid in NET.others) { if (!seen[uid]) { removeOther(uid); } }
@@ -2057,7 +2058,8 @@ function addOther(w, t) {
       walkT: 0, last: { x: w.x, z: w.z },
       atkT: -1, atkSeq: -1, clk: undefined,
       hp: (typeof w.hp === 'number') ? w.hp : 100,
-      hpMax: (typeof w.hpm === 'number' && w.hpm > 0) ? w.hpm : 100
+      hpMax: (typeof w.hpm === 'number' && w.hpm > 0) ? w.hpm : 100,
+      dead: !!w.dead                          // ★ 第 57 轮：他倒下了没有
     };
     o.clk = netClkUpdate(o.clk, t, w.ct);          // ★ 对齐他的钟 + 量他的抖动
     netPush(o.buf, w.x, w.z, w.yaw || 0, w.ct || (t - (o.clk.off || 0)));
@@ -2068,6 +2070,10 @@ function addOther(w, t) {
   // ★ 他的血量（他自己报上来 ✓ 用来画头顶绿血条 ✓）
   if (typeof w.hp === 'number') { o.hp = w.hp; }
   if (typeof w.hpm === 'number' && w.hpm > 0) { o.hpMax = w.hpm; }
+  /* ★ 第 57 轮踩的坑：这个字段只在【创建时】带了 ✗
+     已经存在的小人走的是下面这条更新分支 → dead 永远停在 false ✗
+     所以两处都要写 ✓（不然"别人看你死亡还是站着"永远修不好 ✗）*/
+  o.dead = !!w.dead;
   // ★ 他的挥剑序号变了 → 我这边从头播一遍挥剑动画 ✓（动作和你自己看到的一致 ✓）
   var wk = (typeof w.atk === 'number') ? w.atk : 0;
   if (wk !== o.atkSeq) {
@@ -2554,6 +2560,7 @@ function netUpdate(dt) {
     var px = o.cur.x, pz = o.cur.z;
     o.hh.g.position.set(px, 0, pz);
     o.hh.g.rotation.y = o.cur.yaw;
+    o.hh.g.rotation.z = 0;
     // ★ 走路动画按"这一帧真的走了多远"算 ✓（原来按到目标点的距离 ✗ 会一抽一抽）
     var spd = Math.hypot(px - o.last.x, pz - o.last.z) / Math.max(dt, 0.0001);
     o.last.x = px; o.last.z = pz;
@@ -2566,6 +2573,21 @@ function netUpdate(dt) {
       o.hh.legL.rotation.x *= 0.9; o.hh.legR.rotation.x *= 0.9;
       o.hh.armL.rotation.x *= 0.9; o.hh.armR.rotation.x *= 0.9;
     }
+    /* ★★ 第 57 轮：他倒下了 → 也给他摆成躺地 ✓（用户报的：别人看死亡的人还站着 ✗）
+       ★ 放在所有动画【之后】—— 不然会被走路/挥剑覆盖回去 ✗
+         （本地死亡姿势踩过同一个坑 ✓）*/
+    if (o.dead) {
+      o.hh.g.rotation.x = -1.45;
+      o.hh.g.rotation.z = 0.12;
+      o.hh.g.rotation.y = o.cur.yaw;
+      o.hh.g.position.set(px, 0.28, pz);
+      continue;                       // 倒了就别再播挥剑了 ✓
+    }
+    /* ★ 第 57 轮踩的坑：站起来时要把【躺地的角度】复位 ✗
+       我一开始只复位了 rotation.z，漏了 rotation.x
+       → 复活之后人还是斜着的 ✗（走路动画只管四肢，不动身体角度 ✓）*/
+    o.hh.g.rotation.x = 0;
+    o.hh.g.rotation.z = 0;
     // ★ 他的挥剑动画（抬剑 → 下砍 ✓ 和本地共用 heroAtkPose → 动作一模一样 ✓）
     if (o.atkT >= 0) {
       o.atkT += dt;
