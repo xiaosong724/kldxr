@@ -182,7 +182,7 @@ ok(W.mastery_of(_w4, 10) > _m1 and W.mastery_of(_w4, 20) > W.mastery_of(_w4, 10)
 _in1, _in30 = mobs.player_atk(1), mobs.player_atk(30)
 _low = W.player_atk_with(_in1, 'axe', 1.40, 4, 3, W.mastery_of(_w4, 1))
 _full30 = W.player_atk_with(_in30, 'axe', 1.40, 4, 3, W.mastery_of(_w4, 30))
-_std1 = W.player_atk_with(_in1, 'sword', 1.0, 0, 1, 1.0)
+_std1 = W.player_atk_with(_in1, 'sword', 1.0, 0, 1, 1.0)   # 0 阶剑（不是空手 ✓）
 # ★ 第 56 轮把曲线改缓了（4 阶建议 13 级而不是 25 ✓）
 #   → Lv.1 的发挥度从 38% 涨到 45%，4 阶斧比顺手武器高约 25% ✓
 #   阈值从 1.15 放宽到 1.5：要验的是"低级拿高阶发挥不出上限"（≤2 倍 ✓），

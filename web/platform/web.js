@@ -759,6 +759,7 @@ function wBase(it) { return (it && it.base) || null; }
 function wFlat(it) {
   var b = wBase(it);
   if (!b) { return 0; }
+  if (it && it.flat0) { return 0; }        // ★ 空手没有平伤（第 58 轮 ✓）
   var ti = Math.max(0, Math.min(11, it.tier || 0));
   var lv = Math.max(1, it.itemLv || 1);
   return W_TIER_FLAT[ti] * (1 + 0.06 * (lv - 1));
@@ -801,8 +802,11 @@ function wStatsOf(it) {
 }
 /* ★ 空手时按【默认单手剑】算（服务器就是这么兜底的 ✓ 见 world.py 的 Player）
    踩过：不兜底的话面板显示"武器伤害 0"✗ —— 玩家会以为坏了 ✗ */
-var DEFAULT_W = { slot: 'weapon', look: 'sword', tier: 0, itemLv: 1,
-                  base: { coeff: 1.0, atkSpeed: 1.15, reach: 2.4, arc: 1.05 } };
+/* ★ 第 58 轮：空手改成弱基线（系数 0.75、没有平伤 ✓）
+   ★ 必须和 server/weapons.py 的 FIST 完全一致 ✓（不一致就是"显示的和实际不符"✗）*/
+var DEFAULT_W = { slot: 'weapon', look: 'sword', tier: 0, itemLv: 1, flat0: true,
+                  name: '空手',
+                  base: { coeff: 0.75, atkSpeed: 1.15, reach: 2.4, arc: 1.05 } };
 function shownWeapon() { return (BAG.weapon && BAG.weapon.base) ? BAG.weapon : DEFAULT_W; }
 
 /* ★★ 第 52 轮：分清两件事 ★★

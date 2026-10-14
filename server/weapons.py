@@ -142,7 +142,7 @@ def mastery_of(w, level):
     return max(MASTERY_FLOOR, min(1.0, v))
 
 
-def player_atk_with(inherent, look, coeff, tier, item_lv=1, mastery=1.0):
+def player_atk_with(inherent, look, coeff, tier, item_lv=1, mastery=1.0, flat=None):
     """玩家攻击力 = 固有攻击 × 武器系数 + 武器平伤（§7.5 —— 一个字不差）
 
     ★★ 踩过的坑（第 47 轮）：这里一开始写成了 `固有 + (固有×系数 + 平伤)` ✗
@@ -154,7 +154,10 @@ def player_atk_with(inherent, look, coeff, tier, item_lv=1, mastery=1.0):
       不封的话，一把高系数高阶武器能把"固有那部分"压成零头，
       练级和换装备两条成长线就塌掉一条 ✗（所有刷装备游戏最常见的崩盘点）
     """
-    base = float(inherent) * float(coeff) + flat_of(tier, item_lv)
+    # ★ 第 58 轮：flat 可以显式传（空手要传 0 ✓）
+    #   以前这里写死 flat_of(tier, item_lv) → 空手的 flat0 标记会被绕过 ✗
+    _flat = flat_of(tier, item_lv) if flat is None else float(flat)
+    base = float(inherent) * float(coeff) + _flat
     # ★ 第 53 轮：等级不够 → 武器那一份打折（§7.5 的封顶照样在后面生效 ✓）
     atk = base * max(0.0, min(1.0, float(mastery)))
     cap = float(inherent) * 2.5
@@ -173,9 +176,31 @@ def full_atk(inherent, w):
 WEAPON_REF = 100.0     # 系数折算基准：纯比较用，和玩家等级无关 ✓
 
 
+"""★ 第 58 轮：【空手】—— 脱下武器之后的兜底
+
+   以前兜底用的是【0 阶单手剑】（系数 1.00 + 平伤 3）✗
+   而系数 1.00 正好是全部武器系数的中值（0.66~1.73）
+   → 结果"一半以上的武器，装上不如不装"✗
+     实测 Lv.1000 时，默认剑比神品匕首强 22% ✗
+
+   现在改成真正的手无寸铁：系数 0.75、平伤 0
+   → 拿上【任何】武器都是提升 ✓（捡到东西才有意义 ✓）
+   ★ 射程/攻击弧/攻速【保持不变】✓ —— 免得老玩家觉得"手感变了"✗
+"""
+FIST = {
+    'id': 'fist', 'name': '空手', 'slot': 'weapon', 'tier': 0, 'itemLv': 1,
+    'base': {'coeff': 0.75, 'atkSpeed': 1.15, 'reach': 2.4, 'arc': 1.05, 'critPt': 0},
+    'affixes': [], 'effect': None, 'look': 'sword', 'reqLevel': 1,
+    'flat0': True,          # ★ 标记：这件东西【没有】平伤那一份（只有空手有 ✓）
+    'ext': {},
+}
+
+
 def flat_full(w):
     """这件武器【自己】的平伤（含它自己的物品等级加成 ✓ 和玩家等级无关 ✓）"""
     w = w or {}
+    if w.get('flat0'):
+        return 0.0                       # ★ 空手没有平伤（第 58 轮 ✓）
     return flat_of(w.get('tier') or 0, int(w.get('itemLv') or 1))
 
 

@@ -84,7 +84,8 @@ class Player(object):
         #   由 net.py 在登录时查出来放进 role['weapon'] ✓
         #   查不到就发一把【默认单手剑】—— 数值正好等于以前写死的 2.4/1.05/0.62，
         #   所以"还没有武器"的老角色手感一点没变 ✓ 不会让人觉得改坏了 ✓
-        self.weapon = role.get('weapon') or weapons.make_weapon('sword', 0, 1.0, 1)
+        # ★ 第 58 轮：兜底从"0 阶单手剑"改成【空手】（弱基线 ✓ 见 weapons.FIST）
+        self.weapon = role.get('weapon') or dict(weapons.FIST)
         self.weaponItemId = role.get('weaponItemId')     # 背包里的那件（默认武器是 None ✓）
         # ★ 第 56 轮：复活无敌（秒）—— 无敌期间僵尸咬不动 ✓ 客户端也会穿怪 ✓
         self.invulnT = 0.0
@@ -367,7 +368,7 @@ class World(object):
             # ★ 第 47 轮：网络线程已经查库 + 校验完了，这里只换内存里的引用 ✓
             #   （tick 线程不许碰磁盘 ✗ 所以查库那步在 net.py 做）
             w = d.get('weapon')
-            p.weapon = w or weapons.make_weapon(weapons.DEFAULT_TYPE, 0, 1.0, 1)
+            p.weapon = w or dict(weapons.FIST)   # ★ 第 58 轮：空手 ✓
             p.weaponItemId = d.get('itemId')
             bb = (w or {}).get('base') or {}
             self._send_cid(p.cid, P.pack('notice', text=(
@@ -780,7 +781,8 @@ class World(object):
         # ★ 第 53 轮：等级不够不是"不能装"，而是【发挥度打折】✓
         return weapons.player_atk_with(inherent, w.get('look'), coeff,
                                        w.get('tier') or 0, int(w.get('itemLv') or 1),
-                                       weapons.mastery_of(w, lv))
+                                       weapons.mastery_of(w, lv),
+                                       flat=weapons.flat_full(w))   # ★ 空手 flat=0 ✓
 
     def _intent_atk(self, p, d):
         """玩家挥了一刀 —— ★★ 服务器算伤害（客户端只报"我挥了"，不报打中谁）★★
