@@ -151,6 +151,23 @@ def wait_loot(c, timeout=3.5):
     return None
 
 
+def wait_heals(c, timeout=8.0):
+    """等到一条带 heals（僵尸医生的治疗事件）的世界快照 → 返回那个数组
+
+    ★ 为什么要这条：第 46 轮踩了个坑 —— 离线测试（自己进程里的 World）和
+      浏览器测试（直接注入特效）【两层都过】，但线上服务器跑的还是两小时前的旧代码 ✗
+      所以"按职业的行为"必须有一条【打真服务器】的验证 ✓
+    """
+    end = time.time() + timeout
+    while time.time() < end:
+        o = c.take(max(0.05, end - time.time()))
+        if o and o.get('t') == 'world':
+            hv = o['d'].get('heals')
+            if hv:
+                return hv
+    return None
+
+
 def wait_me(c, timeout=5.0):
     """等 '我的经验/等级变了' 那条（服务器只在变了才带 ✓）"""
     end = time.time() + timeout
@@ -686,6 +703,82 @@ try:
                     n = -1
                     print('  [调试] 查库失败：%r' % (e,))
                 ok(n >= 1, '★★ 物品真的进了数据库的背包表（%d 件）' % n, n)
+
+            # ==================================================== 僵尸医生的治疗
+            print('  -- 僵尸医生的治疗（第 46 轮）--')
+            # ★ 用【指定职业】刷怪：随机刷可能半天刷不出医生 ✗ 测试不该靠运气 ✓
+            # ★ 等级要指定成 Lv.10（361 血）：测试号是 Lv.30，伤害 172 ——
+            #   放在 Lv.30 的怪（1293 血）身上一刀只掉 13%，卡在 85% 门槛之上 → 医生判定"不用治" ✗
+            #   放在 Lv.10（361 血）身上一刀掉到 48% ✓ 而且打得死不了 ✓ 正好是"残血待治" ✓
+            ma.send_json('spawn', n=1, clear=True, kind='医生')
+            time.sleep(0.8)
+            ma.send_json('spawn', n=3, kind='医生', lv=10)       # 多刷几个：打起来容易误伤死 ✗
+            time.sleep(0.4)
+            ma.send_json('spawn', n=3, kind='白领', lv=10)      # 治疗目标（Lv.10 ≈ 357 血 ✓）
+            time.sleep(0.8)
+            # ★ 两个坑（都踩过）：
+            #   ① 一刀只把怪打到 86.7%（172/1293），【刚好在 85% 门槛之上】→ 医生判定"血还够"不治 ✗
+            #      所以要多砍几刀，让它真的低于 85% ✓
+            #   ② 攻击之间的 collect_mhits 会把带治疗事件的快照【吃掉丢掉】✗
+            #      → 改成"打一下、就看一眼有没有治疗事件"（边打边收 ✓）
+            def heal_atk(seq):
+                """打一下"当前最近的活僵尸"，顺便把读到的治疗事件带回来
+
+                ★ 为什么不能复用上面的 atk_at：它闭包捕获的是【P2 那一段的 mid】✗
+                  那只早被打死了 → find_mob 返回 None → 一个包都没发出去 ✗
+                  结果就是"医生测试里一次伤害都没造成"（踩过，红了好久 ✓）
+                """
+                snap = ma.take(0.4)
+                found = []
+                for _t in range(14):
+                    if snap and snap.get('t') == 'world':
+                        if snap['d'].get('heals'):
+                            found.extend(snap['d']['heals'])
+                        if snap['d'].get('mobs'):
+                            break
+                    snap = ma.take(0.3)
+                ms = (snap or {}).get('d', {}).get('mobs') or []
+                alive = [m for m in ms if len(m) > 6 and int(m[6]) == 1]
+                # ★ 别打医生：Lv.10 医生只有 339 血，两刀就死 ✗ → 死了就没人治了（踩过）
+                pref = [m for m in alive if (m[9] if len(m) > 9 else '') != '医生'] or alive
+                if pref:
+                    mm = pref[0]
+                    ang = 0.7
+                    ma.send_json('move', x=float(mm[1]) - math.sin(ang) * 1.2,
+                                 z=float(mm[2]) - math.cos(ang) * 1.2, yaw=ang, t=4.0, atk=999)
+                    ma.send_json('atk', seq=seq)
+                return found
+
+            hev = None
+            for _k in range(20):
+                hv = heal_atk(40 + _k)
+                if hv:
+                    hev = hv
+                    break
+                hv = wait_heals(ma, 0.5)
+                if hv:
+                    hev = hv
+                    break
+            if hev is None:
+                hev = wait_heals(ma, timeout=5.0)
+            if hev is None:
+                # ★ 失败时把场上情况打出来 —— 不然只知道"没收到"，不知道是没医生还是没残血 ✓
+                _snap = ma.take(0.4)
+                while _snap is not None and _snap.get('t') != 'world':
+                    _snap = ma.take(0.2)
+                if _snap:
+                    _ms = _snap['d'].get('mobs') or []
+                    print('        [诊断] 场上 %d 只: %r'
+                          % (len(_ms), [[m[0], m[9] if len(m) > 9 else '?', m[4], m[5]] for m in _ms[:8]]))
+            ok(hev is not None,
+               '★★ 收到治疗事件（服务器发给客户端，玩家才画得出连线 ✓）', hev)
+            if hev:
+                _he = hev[0]
+                ok(len(_he) == 5 and float(_he[4]) > 0,
+                   '治疗事件是 [医生x, 医生z, 目标x, 目标z, 回了多少]（%r）' % (_he,), _he)
+                ok(abs(float(_he[0]) - float(_he[2])) <= 12.5,
+                   '★ 医生和被治的僵尸确实在 12 米治疗范围内（相距 %.2f 米）'
+                   % abs(float(_he[0]) - float(_he[2])), _he)
 
     ma.close()
     mb.close()

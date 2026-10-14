@@ -253,7 +253,9 @@ class World(object):
             self._intent_pick(p, d)           # ★ 捡东西（第 38 轮）
         elif t == 'spawn':
             # 调试用：让【服务器】在我附近刷 n 只（客户端那个"生成 20 只"按钮联机时走这里 ✓）
-            self._debug_spawn(p, int(_f(d.get('n'), 5)), bool(d.get('clear')))
+            self._debug_spawn(p, int(_f(d.get('n'), 5)), bool(d.get('clear')),
+                              d.get('kind') or None,          # ★ 可指定职业（第 46 轮）
+                              d.get('lv'))                    # ★ 可指定等级（第 46 轮）
         elif t == 'pvp':
             self.pvp = bool(d.get('on')) if 'on' in d else self.pvp
             self._broadcast(P.pack('notice', text='PvP 已%s' % ('开' if self.pvp else '关')))
@@ -540,8 +542,13 @@ class World(object):
         self.mob_seq += 1
         self.mobs[str(self.mob_seq)] = mobs.Mob(self.mob_seq, mobs.roll_level(base), x, z)
 
-    def _debug_spawn(self, p, n, clear):
-        """调试：在我附近直接刷 n 只 / 清空（不做安全区判断 —— 就是要能立刻试 ✓）"""
+    def _debug_spawn(self, p, n, clear, kind=None, lv=None):
+        """调试：在我附近直接刷 n 只 / 清空（不做安全区判断 —— 就是要能立刻试 ✓）
+
+        ★ 第 46 轮加了 kind：可以指定职业（不指定就随机 ✓）
+          为什么需要：验证"医生的治疗"这类【按职业】的行为时，
+          随机刷可能刷半天刷不出医生 ✗ 测试和调试都不该靠运气 ✓
+        """
         if clear:
             self.mobs.clear()
             return
@@ -554,9 +561,13 @@ class World(object):
             ang = random.random() * math.pi * 2
             dist = 3.0 + random.random() * 6.0
             self.mob_seq += 1
-            lv = mobs.roll_level(p.role.get('level', 1) or 1)
+            # ★ 第 46 轮加了 lv：可以指定等级（不指定就按玩家等级随机 ✓）
+            #   为什么需要：验证"打残 → 医生回血"时，怪的血量必须落在
+            #   【一刀打不死、但能打到 85% 以下】那个区间里 —— 随机刷做不到 ✓
+            _lv = int(lv) if lv else mobs.roll_level(p.role.get('level', 1) or 1)
             self.mobs[str(self.mob_seq)] = mobs.Mob(
-                self.mob_seq, lv, p.x + math.sin(ang) * dist, p.z + math.cos(ang) * dist)
+                self.mob_seq, _lv, p.x + math.sin(ang) * dist, p.z + math.cos(ang) * dist,
+                kind=kind)
 
     def _mob_bite(self, m, p):
         """僵尸咬玩家 —— 伤害由服务器算（§5：僵尸和人走同一套公式）
