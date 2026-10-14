@@ -796,15 +796,55 @@ var DEFAULT_W = { slot: 'weapon', look: 'sword', tier: 0, itemLv: 1,
                   base: { coeff: 1.0, atkSpeed: 1.15, reach: 2.4, arc: 1.05 } };
 function shownWeapon() { return (BAG.weapon && BAG.weapon.base) ? BAG.weapon : DEFAULT_W; }
 
-/* 面板用的一整块文字（武器伤害 / 暴击 / 每秒 / 范围 / 打击面 / 攻速 ✓）*/
+/* ★★ 第 52 轮：分清两件事 ★★
+   wStrength = 纯武器分数（平伤 + 系数×100）→ 用来【比较哪把好】（不含你的等级 ✓）
+   wRealHit  = 你穿上之后【真正每击多少】 → 服务器口径：固有 × 系数 + 平伤，再封顶 ✓
+   ★ 为什么两个都要：只给"强度"会被当成伤害（用户就是被这个误导的 ✗）；
+     只给"实际"又会被自己的等级干扰、不好横向比武器 ✗ */
+function wStrength(it) { return wDamage(it); }
+
+function wInherent() {
+  var lv = (WSC.role && WSC.role.level) || 1;
+  return 10 + 3 * lv + 0.08 * lv * lv;
+}
+function wRealHit(it) {
+  var b = wBase(it);
+  if (!b) { return 0; }
+  var inh = wInherent();
+  var v = inh * (+b.coeff || 1) + wFlat(it);
+  return Math.min(v, inh * 2.5);          // §7.5 封顶：装备最多贡献 60% ✓
+}
+function wRealDps(it) {
+  return wRealHit(it) * 1.1 / Math.max(0.05, wInterval(it));
+}
+/* 等级不够 → 返回需要的等级；够 → 0 */
+function wNeedLevel(it) {
+  var need = +((it && it.reqLevel) || 1);
+  var lv = (WSC.role && WSC.role.level) || 1;
+  return need > lv ? need : 0;
+}
+
+/* 面板用的一整块文字（实际每击 / 武器强度 / 范围 / 打击面 / 攻速 ✓）*/
 function wStatHtml(it, dim) {
   var s = wStatsOf(it);
-  var d = wDamage(it);
-  var head = dim ? '<span style="opacity:.6">空手 · 按默认单手剑算</span><br>' : '';
-  return head +
-    '<span>武器伤害 <s>' + d.toFixed(0) + '</s>' +
-      '（暴击 <s>' + wCrit(it).toFixed(0) + '</s> · 20% 概率）</span>' +
-    '<span>每秒伤害 <s>' + wDps(it).toFixed(0) + '</s>（已含暴击期望 ✓）</span>' +
+  var need = wNeedLevel(it);
+  var lv = (WSC.role && WSC.role.level) || 1;
+  var head = '';
+  if (need) {
+    head = '<span style="color:#ff8a7a">✗ 穿不上：需要 <s style="color:#ff8a7a">' + need +
+      ' 级</s>，你现在 ' + lv + ' 级</span><br>';
+  } else if (dim) {
+    head = '<span style="opacity:.65">空手 · 按默认单手剑算</span><br>';
+  }
+  var real = wRealHit(it);
+  var line1 = need
+    ? '<span style="opacity:.5">穿上后每击 ≈ <s>' + real.toFixed(0) + '</s>（等级够了才能穿）</span>'
+    : '<span>实际每击 <s>' + real.toFixed(0) + '</s>（暴击 <s>' +
+      (real * 1.5).toFixed(0) + '</s> · 20% 概率）</span>';
+  return head + line1 +
+    '<span>每秒伤害 <s>' + wRealDps(it).toFixed(0) + '</s>（含暴击期望 ✓）</span>' +
+    '<span>武器强度 <s>' + wStrength(it).toFixed(0) +
+      '</s> <i style="opacity:.7;font-style:normal">← 只比武器、不含你的等级</i></span>' +
     '<span>范围 <s>' + s.reach.toFixed(1) + '</s> 米 · ' + rangeWord(s.reach) + '</span>' +
     '<span>打击面 ' + arcWord(s.arc) + '（正前方 ' +
       Math.round(s.arc * 2 * 180 / Math.PI) + '°）</span>' +
@@ -827,9 +867,14 @@ function bagRender() {
     var isW = (it.slot === 'weapon');
     var col = tierHex(it.tier || 0);
     var cur = (BAG.weaponItemId && e.id === BAG.weaponItemId) ? ' cur' : '';
-    html += '<div class="slot' + cur + '" data-id="' + e.id + '" data-w="' + (isW ? 1 : 0) +
-      '" data-i="' + i + '"><span style="color:' + col + '">' + iconOfItem(it) + '</span>' +
-      '<span class="tg">' + (it.tier || 0) + '</span></div>';
+    // ★ 第 52 轮：等级不够的武器在格子上就打锁（一眼能看出"这不是我不想穿"✓）
+    var need = isW ? wNeedLevel(it) : 0;
+    var lock = need ? ' locked' : '';
+    html += '<div class="slot' + cur + lock + '" data-id="' + e.id + '" data-w="' + (isW ? 1 : 0) +
+      '" data-i="' + i + '"' + (need ? (' title="需要 ' + need + ' 级"') : '') + '>' +
+      '<span style="color:' + col + '">' + iconOfItem(it) + '</span>' +
+      '<span class="tg">' + (it.tier || 0) + '</span>' +
+      (need ? '<span class="lvl">' + need + '级</span>' : '') + '</div>';
   }
   var total = Math.max(16, Math.ceil((BAG.items.length + 1) / 8) * 8);
   for (var p = BAG.items.length; p < total; p++) { html += '<div class="slot empty"></div>'; }
@@ -868,17 +913,17 @@ function bagTipAt(e, el) {
   var s = wStatsOf(it);
   var extra = '';
   if (it.slot === 'weapon') {
-    extra = '武器伤害 <b>' + wDamage(it).toFixed(0) + '</b>（暴击 ' + wCrit(it).toFixed(0) + '）<br>' +
-      '每秒 <b>' + wDps(it).toFixed(0) + '</b> · 范围 ' + s.reach.toFixed(1) + ' 米（' +
-      rangeWord(s.reach) + '）<br>' +
+    var needT = wNeedLevel(it);
+    if (needT) {
+      extra += '<b style="color:#ff8a7a">✗ 需要 ' + needT + ' 级（你现在 ' +
+        ((WSC.role && WSC.role.level) || 1) + ' 级）</b><br>';
+    }
+    extra += '实际每击 <b>' + wRealHit(it).toFixed(0) + '</b> · 每秒 <b>' +
+      wRealDps(it).toFixed(0) + '</b><br>' +
+      '武器强度 <b>' + wStrength(it).toFixed(0) + '</b>（纯比较用、不含你的等级）<br>' +
+      '范围 <b>' + s.reach.toFixed(1) + '</b> 米（' + rangeWord(s.reach) + '）<br>' +
       '打击面：' + arcWord(s.arc) + '<br>' +
       '攻速 ×' + s.spd.toFixed(2) + '（' + wInterval(it).toFixed(2) + ' 秒一刀）<br>';
-    // ★ 真正打出去还受玩家等级影响（固有攻击那部分）—— 放最后一行，不干扰"比武器" ✓
-    var lv = (WSC.role && WSC.role.level) || 1;
-    var inh = 10 + 3 * lv + 0.08 * lv * lv;
-    var tot = Math.min(inh + wDamage(it), inh * 2.5);
-    extra += '<i style="opacity:.75">穿上后总攻击 ≈ ' + tot.toFixed(0) +
-      '（含你 Lv.' + lv + ' 的固有攻击 ' + inh.toFixed(0) + '）</i><br>';
   }
   box.innerHTML = '<b style="color:' + tierHex(it.tier || 0) + '">' + (it.name || '?') + '</b>' +
     '<i> · ' + (it.tier || 0) + ' 阶' + (it.itemLv ? (' · 物品 ' + it.itemLv + ' 级') : '') +
@@ -928,6 +973,21 @@ function bindBag() {
       while (el && el !== grid && !(el.getAttribute && el.getAttribute('data-id'))) { el = el.parentNode; }
       if (!el || el === grid || !el.getAttribute) { return; }
       if (el.getAttribute('data-w') !== '1') { return; }   // 材料不能穿 ✓
+      // ★ 先本地判一次等级：不够就把话说清楚、而且【留在面板里】✓
+      //   （原来只靠服务器回一条 toast 一闪而过 ✗ —— 用户就是这么被误导的 ✗）
+      var idx0 = +el.getAttribute('data-i');
+      var it0 = (BAG.items[idx0] || {}).item || {};
+      var need0 = wNeedLevel(it0);
+      if (need0) {
+        var myLv = (WSC.role && WSC.role.level) || 1;
+        // ★ 光说"穿不上"不够 —— 还要说清【它本来能给你多少】，玩家才知道值不值得留 ✓
+        var cur = BAG.weapon ? wRealHit(BAG.weapon) : wRealHit(DEFAULT_W);
+        BAG.msg = '✗ 穿不上【' + (it0.name || '') + '】：需要 ' + need0 + ' 级，你现在 ' + myLv +
+                  ' 级 · 它每击 ≈ ' + wRealHit(it0).toFixed(0) + '（你现在 ' + cur.toFixed(0) +
+                  '）· 先打怪升级，或穿低阶的 ✓';
+        bagRender();
+        return;
+      }
       bagEquip(el.getAttribute('data-id'));
     };
     grid.onmousemove = function (e) {
@@ -951,8 +1011,9 @@ function bindBag() {
       var w = BAG.weapon;
       if (!box || !w) { bagTipHide(); return; }
       box.innerHTML = '<b style="color:' + tierHex(w.tier || 0) + '">' + (w.name || '?') + '</b>' +
-        '<i> · ' + (w.tier || 0) + ' 阶 · 已装备</i><br>武器伤害 <b>' +
-        wDamage(w).toFixed(0) + '</b> · 每秒 <b>' + wDps(w).toFixed(0) + '</b><br><i>点一下脱下</i>';
+        '<i> · ' + (w.tier || 0) + ' 阶 · 已装备</i><br>实际每击 <b>' +
+        wRealHit(w).toFixed(0) + '</b> · 每秒 <b>' + wRealDps(w).toFixed(0) + '</b><br>' +
+        '<i>武器强度 ' + wStrength(w).toFixed(0) + ' · 点一下脱下</i>';
       box.style.display = 'block';
       box.style.left = Math.min(window.innerWidth - 240, e.clientX + 14) + 'px';
       box.style.top = Math.min(window.innerHeight - 70, e.clientY + 12) + 'px';
@@ -1059,7 +1120,19 @@ function wsOnMessage(raw) {
     if (window.showLogin) { showLogin(d.msg || '请重新登录'); }
     return;
   }
-  if (t === 'error' || t === 'notice') { if (d.msg || d.text) { toast(d.msg || d.text); } return; }
+  if (t === 'error' || t === 'notice') {
+    var _tx = d.msg || d.text || '';
+    /* ★ 第 52 轮：服务器说"等级不够"这类拒绝，除了 toast 还要【留在背包面板里】✓
+       （toast 一闪而过，玩家会以为"点了没反应"✗）*/
+    if (_tx.indexOf('等级不够') >= 0 || _tx.indexOf('不是武器') >= 0 ||
+        _tx.indexOf('没有这件') >= 0) {
+      BAG.msg = '✗ ' + _tx;
+      BAG.busy = false;
+      if ((SETCFG.setTab || '') === 'bag') { bagFetch(bagRender); }
+    }
+    if (_tx) { toast(_tx); }
+    return;
+  }
   /* ★ 第 47 轮：服务器告诉我「手上的武器换了」（穿上/脱下之后它主动推 ✓）
      → 本地预测的射程/攻击弧/冷却跟着换 ✓ 背包页开着的话顺手刷一下 ✓ */
   if (t === 'weapon') {

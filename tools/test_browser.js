@@ -1100,10 +1100,42 @@ async function register(name, pw) {
       '★★★ 每件武器都有【图标】（' + bagQ.withIcon + '/' + bagQ.weapons + ' 个槽画出了 SVG ✓）');
     ok(bagQ.tipShow === 'block' && bagQ.tipTxt.length > 2,
       '★★ 悬停显示详情（" + bagQ.tipTxt + " ✓ 像 MC 的提示框）');
-    ok(/武器伤害/.test(bagQ.stat0) && /每秒伤害/.test(bagQ.stat0) && /范围/.test(bagQ.stat0),
-      '★★ 属性栏显示的是【武器自己的伤害】（武器伤害/每秒伤害/范围 ✓ 用户要求不掺玩家等级）');
-    ok(!/攻击力/.test(bagQ.stat0),
-      '★★ 面板上不再显示"攻击力"（那个数掺了玩家等级、没法横向比武器 ✗ 用户要求去掉）');
+    ok(/实际每击/.test(bagQ.stat0) && /武器强度/.test(bagQ.stat0),
+      '★★ 显示分两行：实际每击（含你的等级 ✓）+ 武器强度（纯比较 ✓）—— ' +
+      '用户报的"显示 164、实际没那么高"就是这两件事混在一起了 ✗');
+    ok(/每秒伤害/.test(bagQ.stat0) && /范围/.test(bagQ.stat0),
+      '★ 每秒伤害 / 范围 都在 ✓');
+    /* ★★ 等级门槛必须看得见（用户报的"都是 68"就是穿不上但看不出来 ✗）★★ */
+    const lockQ = JSON.parse(await A.eval(
+      'var lv = (WSC.role && WSC.role.level) || 1;' +
+      'var out = {};' +
+      'out.need25 = wNeedLevel({ reqLevel: 25 });' +
+      'out.need1 = wNeedLevel({ reqLevel: 1 });' +
+      'out.needMine = wNeedLevel({ reqLevel: lv });' +
+      'out.lv = lv;' +
+      // 真每击必须等于"固有 × 系数 + 平伤"再封顶（和服务器一个口径 ✓）
+      'var inh = 10 + 3 * lv + 0.08 * lv * lv;' +
+      'var it = { slot: "weapon", tier: 4, itemLv: 3, reqLevel: 25,' +
+      '  base: { coeff: 1.40, atkSpeed: 0.75, reach: 3.0, arc: 1.55 } };' +
+      'var want = Math.min(inh * 1.40 + wFlat(it), inh * 2.5);' +
+      'out.real = Math.round(wRealHit(it) * 100) / 100;' +
+      'out.want = Math.round(want * 100) / 100;' +
+      'out.strength = Math.round(wStrength(it));' +
+      'return JSON.stringify(out);'
+    ) || '{}');
+    console.log('        [锁] 玩家 Lv.' + lockQ.lv + ' → 需要25级的=' + lockQ.need25 +
+      ' 需要1级的=' + lockQ.need1 + ' 需要本级=' + lockQ.needMine +
+      ' · 真每击 ' + lockQ.real + '（应 ' + lockQ.want + '）· 强度 ' + lockQ.strength);
+    ok(lockQ.need25 === 25 && lockQ.need1 === 0 && lockQ.needMine === 0,
+      '★★★ 等级门槛能判出来（需要 25 级 → 返回 25 ✓ 够的就返回 0 ✓）—— ' +
+      '穿不上时格子上锁、面板留红字，不再只靠一闪而过的 toast ✗');
+    ok(Math.abs(lockQ.real - lockQ.want) < 0.02,
+      '★★★ "实际每击"就是服务器那条公式（固有 × 系数 + 平伤，再封顶 ✓ ' +
+      lockQ.real + '）—— 不再是那个编出来的 100 基准 ✗');
+    ok(lockQ.strength > lockQ.real * 2,
+      '★ 武器强度（' + lockQ.strength + '）明显高于实际每击（' + lockQ.real +
+      '）—— 正因如此必须分开显示、并标清"强度只比武器"✓');
+    ok(!/攻击力/.test(bagQ.stat0), '★ 面板上不再显示"攻击力"这种混了口径的数 ✓');
     ok(/贴身|短|中|长|超远/.test(bagQ.stat0), '★ 范围有文字描述（贴身/短/中/长/超远 ✓）');
     ok(/打击面/.test(bagQ.stat0) && /(窄|中|宽|横扫)/.test(bagQ.stat0),
       '★★ 弧改成了文字描述（"打击面 宽 · 一片"这种 ✓ 用户要求）');

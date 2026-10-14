@@ -146,6 +146,12 @@
 .slot .tg{position:absolute;right:2px;bottom:0;font-size:10px;color:#ffd83d;
   text-shadow:0 1px 2px #000,0 0 3px #000}
 .slot.cur{outline:2px solid #ffd83d;outline-offset:-2px}
+/* ★ 等级不够：压暗 + 左下角标"需要 N 级"（一眼看出不是我不想穿 ✓）*/
+.slot.locked{background:rgba(0,0,0,.62);cursor:not-allowed}
+.slot.locked svg{opacity:.35}
+.slot.locked .lvl{position:absolute;left:1px;bottom:0;font-size:9px;color:#ff8a7a;
+  text-shadow:0 1px 2px #000,0 0 3px #000}
+.slot.locked:hover{border-color:#ff8a7a88}
 .slot.eqslot{width:48px;height:48px}
 .slot.eqslot svg{width:32px;height:32px}
 .bagEquipRow{display:flex;gap:12px;align-items:flex-start}
