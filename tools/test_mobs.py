@@ -307,7 +307,9 @@ try:
                                weapons.reach_of((p.weapon or {}).get('look') or 'sword'),
                                weapons.arc_of((p.weapon or {}).get('look') or 'sword')),
                  mm.mid in w.mobs))
-    ok(len(w.loot) == 1, '★ 打死僵尸 → 地上掉了一件（loot=%d）' % len(w.loot), list(w.loot))
+    # ★ 第 47 轮起：材料必掉的同时，装备还会【独立 roll 一次】✓
+    #   所以这里不能再要求"恰好 1 件"✗ —— 改成"至少掉了 1 件" ✓
+    ok(len(w.loot) >= 1, '★ 打死僵尸 → 地上掉了东西（loot=%d）' % len(w.loot), list(w.loot))
     lid = list(w.loot.keys())[0]
     lx, lz = w.loot[lid]['x'], w.loot[lid]['z']
 
@@ -334,8 +336,10 @@ try:
     w.loot['x2'] = {'x': 5.0, 'z': 6.0, 'item': {'name': '灵气结晶', 'tier': 1}, 'ttl': 10.0}
     p.x, p.z = 0.0, 0.0
     arr = w._loot_for(p)
-    ok(arr and len(arr[0]) == 5 and arr[0][3] == '灵气结晶' and arr[0][4] == 1,
-       '快照格式 [id,x,z,name,tier]（%r）' % (arr[0] if arr else None), arr)
+    # ★ 第 47 轮起地上可能同时有【材料】和【装备】（各自独立 roll ✓）
+    #   而 _loot_for 是【按距离】排的 ✗ → 不能假定第 0 个就是那块结晶 ✗ → 找一下 ✓
+    _hit = [x for x in (arr or []) if len(x) == 5 and x[3] == '灵气结晶' and x[4] == 1]
+    ok(bool(_hit), '快照格式 [id,x,z,name,tier]（%r）' % (arr[0] if arr else None), arr)
 finally:
     drops.BASE_CHANCE = saved_chance
     drops.CHANCE_CAP = saved_cap
@@ -715,6 +719,67 @@ _w._save_pick(_db, (1, _wep, 0))
 ok(_n_rows() == 5,
    '★★★ 武器永远是【一件一行】（捡两把同款 → 两行 ✓ 不堆叠 ✓）', _n_rows())
 ok(_stack_of('玄铁双手斧') == 1, '★★ 而且武器的 stack 一直是 1 ✓', _stack_of('玄铁双手斧'))
+
+print('')
+print('== ㉑ ★ 版本 2 迁移：历史重复材料合并（删数据，必须有测试钉住）==')
+import db as dbmod
+_sq = sqlite3.connect(':memory:')
+_sq.execute('CREATE TABLE items(id INTEGER PRIMARY KEY, role_id INT, in_storage INT,'
+            ' slot_index INT, stack INT, item_json TEXT, created_at INT)')
+
+
+def _ins(rid, name, tier, n, slot=None, iid=None):
+    it = {'name': name, 'tier': tier, 'kind': 'material'}
+    if slot:
+        it = {'name': name, 'slot': slot, 'tier': tier, 'itemLv': 3, 'look': 'axe',
+              'base': {'coeff': 1.4}, 'reqLevel': 25}
+    _sq.execute('INSERT INTO items(id, role_id, in_storage, slot_index, stack, item_json, created_at)'
+                ' VALUES(?,?,0,-1,?,?,0)',
+                (iid, rid, n, __import__('json').dumps(it, ensure_ascii=False)))
+
+
+# 造出"历史遗留"的样子：同一份材料一堆行 ✓ 还有同名不同阶 ✓ 还有武器 ✓
+for i, iid in enumerate([1, 2, 3]):
+    _ins(7, '破布', 0, 2, None, iid)          # 3 行 ×2 = 总共 6
+_ins(7, '破布', 1, 5, None, 4)                # 同名不同阶 → 必须留着
+_ins(7, '破布', 1, 3, None, 5)                # 这个要和上面合并成 8
+_ins(8, '破布', 0, 4, None, 6)                # 别人（role 8）→ 不许并到 role 7
+_ins(7, '玄铁双手斧', 4, 1, 'weapon', 7)       # 武器 → 一根都不许动
+_ins(7, '玄铁双手斧', 4, 1, 'weapon', 8)
+_sq.commit()
+_before = _sq.execute('SELECT COUNT(*) FROM items').fetchone()[0]
+for _sql in dbmod.MIGRATIONS[2]:
+    _sq.execute(_sql)
+_sq.commit()
+_after = _sq.execute('SELECT COUNT(*) FROM items').fetchone()[0]
+
+
+def _q(name, tier, rid=7, slot=None):
+    if slot:
+        return _sq.execute("SELECT COUNT(*) FROM items WHERE role_id=? AND stack=1"
+                           " AND json_extract(item_json,'$.slot')=?",
+                           (rid, slot)).fetchone()[0]
+    r = _sq.execute("SELECT COUNT(*), SUM(stack) FROM items WHERE role_id=?"
+                    " AND json_extract(item_json,'$.name')=?"
+                    " AND json_extract(item_json,'$.tier')=?"
+                    " AND json_extract(item_json,'$.slot') IS NULL",
+                    (rid, name, tier)).fetchone()
+    return r
+
+
+_c0 = _q('破布', 0)
+ok(_c0[0] == 1 and _c0[1] == 6,
+   '★★ 3 行"破布 0 阶 ×2" → 合成 1 行 stack=6（%d 行 / %s ✓）' % (_c0[0], _c0[1]), _c0)
+_c1 = _q('破布', 1)
+ok(_c1[0] == 1 and _c1[1] == 8,
+   '★★ 同名不同阶【不混】：1 阶自己合成 1 行 stack=8（%d 行 / %s ✓）' % (_c1[0], _c1[1]), _c1)
+_c8 = _q('破布', 0, rid=8)
+ok(_c8[0] == 1 and _c8[1] == 4,
+   '★★ 别人（role 8）的不并到 role 7（各自 1 行 stack=4 ✓）', _c8)
+_wp = _q('', 0, slot='weapon')
+ok(_wp == 2, '★★★ 武器【一根都没动】（迁移前 2 行 → 迁移后还是 2 行 ✓）', _wp)
+ok(_before - _after == 3,
+   '★ 一共删掉 3 行重复（%d → %d ✓ 只删材料、不碰装备 ✓）' % (_before, _after), (_before, _after))
 
 print('')
 if fails:

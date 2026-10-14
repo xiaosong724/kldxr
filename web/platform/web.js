@@ -969,9 +969,17 @@ function bagRender() {
   }
   var selTip = document.getElementById('bagSelTip');
   if (selTip) {
-    selTip.textContent = (selItem && selItem.slot === 'weapon')
-      ? (selIsEquipped ? '这件正拿在手上' : '点「使用」穿上它')
-      : '点上面的格子选中一件武器';
+    if (selItem && selItem.slot === 'weapon') {
+      var m7 = wMastery(selItem);
+      var rq7 = +((selItem.reqLevel) || 1);
+      var lv7 = (WSC.role && WSC.role.level) || 1;
+      /* ★ 第 55 轮：这句也把"建议等级 + 发挥度"写清楚（用户要求进文案 ✓）*/
+      selTip.textContent = (selItem.name || '武器') + ' · ' + (selItem.tier || 0) + ' 阶 · 建议 ' +
+        rq7 + ' 级（你 ' + lv7 + ' 级）· 发挥 ' + Math.round(m7 * 100) + '%' +
+        (selIsEquipped ? ' · 正拿在手上' : '');
+    } else {
+      selTip.textContent = '点上面的格子选中一件武器';
+    }
   }
   if (mg) {
     mg.textContent = BAG.msg || (BAG.items.length ? '' :
@@ -1002,10 +1010,22 @@ function bagTipAt(e, el) {
       '打击面：' + arcWord(s.arc) + '<br>' +
       '攻速 ×' + s.spd.toFixed(2) + '（' + wInterval(it).toFixed(2) + ' 秒一刀）<br>';
   }
+  /* ★★ 第 55 轮：等级需求 + 发挥度【写进文案】★★
+     用户要求："武器等级需求还是没有显示，把它改到文案里吧，以及发挥度"
+     → 不再只靠角上那个小黄标（太小、还得对上位置 ✗）→ 直接在名字这行写成字 ✓ */
+  var m5 = (it.slot === 'weapon') ? wMastery(it) : 1;
+  var req5 = +((it && it.reqLevel) || 1);
+  var lv5 = (WSC.role && WSC.role.level) || 1;
+  var lvlTxt = '';
+  if (it.slot === 'weapon') {
+    lvlTxt = (m5 < 1)
+      ? '<i> · 建议 ' + req5 + ' 级（你 ' + lv5 + ' 级）· 发挥 ' + Math.round(m5 * 100) + '%</i>'
+      : '<i> · 建议 ' + req5 + ' 级（已达标 · 发挥 100%）</i>';
+  }
   box.innerHTML = '<b style="color:' + tierHex(it.tier || 0) + '">' + (it.name || '?') + '</b>' +
     '<i> · ' + (it.tier || 0) + ' 阶' + (it.itemLv ? (' · 物品 ' + it.itemLv + ' 级') : '') +
-    '</i><br>' + extra +
-    '<i>' + (it.slot === 'weapon' ? '点一下穿上' : '材料（以后做合成用）') + '</i>';
+    '</i>' + lvlTxt + '<br>' + extra +
+    '<i>' + (it.slot === 'weapon' ? '选中后点「使用」穿上' : '材料（以后做合成用）') + '</i>';
   box.style.display = 'block';
   box.style.left = Math.min(window.innerWidth - 260, e.clientX + 14) + 'px';
   box.style.top = Math.min(window.innerHeight - 120, e.clientY + 12) + 'px';
@@ -1086,8 +1106,12 @@ function bindBag() {
       var box = document.getElementById('bagTipBox');
       var w = BAG.weapon;
       if (!box || !w) { bagTipHide(); return; }
+      var m6 = wMastery(w);
+      var lv6 = (WSC.role && WSC.role.level) || 1;
       box.innerHTML = '<b style="color:' + tierHex(w.tier || 0) + '">' + (w.name || '?') + '</b>' +
-        '<i> · ' + (w.tier || 0) + ' 阶 · 已装备</i><br>实际每击 <b>' +
+        '<i> · ' + (w.tier || 0) + ' 阶 · 已装备</i>' +
+        (m6 < 1 ? ('<i> · 建议 ' + (w.reqLevel || 1) + ' 级（你 ' + lv6 + ' 级）· 发挥 ' +
+                   Math.round(m6 * 100) + '%</i>') : '') + '<br>实际每击 <b>' +
         wRealHit(w).toFixed(0) + '</b> · 每秒 <b>' + wRealDps(w).toFixed(0) + '</b><br>' +
         '<i>武器强度 ' + wStrength(w).toFixed(0) + ' · 点一下脱下</i>';
       box.style.display = 'block';

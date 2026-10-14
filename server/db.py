@@ -13,7 +13,7 @@ import time
 
 # ============================================================ 版本与迁移
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # 每个版本一组 SQL。**新版本往后追加，不要改历史版本** ✓
 MIGRATIONS = {
@@ -145,6 +145,44 @@ MIGRATIONS = {
         )""",
     ],
 }
+
+# ★ 版本 2（第 55 轮）：把历史上【重复的材料行】合并成一行
+#
+#   为什么需要：材料堆叠是第 54 轮才做的 ✓
+#   在那之前捡的每份材料都单独占一行（实测有个角色背包里 13 行"破布"✗）
+#   新捡的会自动堆 ✓ 但老行不会自己合并 ✗ → 这里做一次性整理 ✓
+#
+#   ★ 只动【材料】（item_json 里没有 slot 字段的 ✓）
+#     武器/防具一律不碰 ✓（装备永远一件一行 ✓）
+#   ★ 合并键 = role_id + in_storage + 名字 + 品阶（和别人、别的阶都不混 ✓）
+#   ★ 保留 id 最小的那行，把总数写进去，其余删掉 ✓
+#   ★ 踩过的坑：DELETE 的子查询必须【按同一套键】GROUP BY ✗
+#     不然"名字相同但品阶不同"的行也会被删 ✗
+MIGRATIONS[2] = [
+    """UPDATE items SET stack = (
+        SELECT SUM(b.stack) FROM items b
+         WHERE b.role_id = items.role_id
+           AND b.in_storage = items.in_storage
+           AND json_extract(b.item_json,'$.name') = json_extract(items.item_json,'$.name')
+           AND json_extract(b.item_json,'$.tier') = json_extract(items.item_json,'$.tier')
+           AND json_extract(b.item_json,'$.slot') IS NULL)
+      WHERE json_extract(items.item_json,'$.slot') IS NULL
+        AND items.id = (
+            SELECT MIN(c.id) FROM items c
+             WHERE c.role_id = items.role_id
+               AND c.in_storage = items.in_storage
+               AND json_extract(c.item_json,'$.name') = json_extract(items.item_json,'$.name')
+               AND json_extract(c.item_json,'$.tier') = json_extract(items.item_json,'$.tier')
+               AND json_extract(c.item_json,'$.slot') IS NULL)""",
+    """DELETE FROM items
+      WHERE json_extract(item_json,'$.slot') IS NULL
+        AND id NOT IN (
+            SELECT MIN(id) FROM items
+             WHERE json_extract(item_json,'$.slot') IS NULL
+             GROUP BY role_id, in_storage,
+                      json_extract(item_json,'$.name'),
+                      json_extract(item_json,'$.tier'))""",
+]
 
 
 # ============================================================ 工具
