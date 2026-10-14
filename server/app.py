@@ -168,6 +168,17 @@ class Api(BaseHTTPRequestHandler):
             return self.api_health()
         if path == '/api/profile':
             return self.api_profile()
+        if path == '/api/bag':                 # ★ 第 47 轮：背包 + 已装备的武器
+            return self.api_bag()
+        # ★★ 第 48 轮：后台管理 ★★
+        #   /admin 页面本身可以公开（空壳，没登录啥也拿不到 ✓）
+        #   真正有数据、有能力的都是 /api/admin/*，每一个都验管理 token ✓
+        if path in ('/admin', '/admin/'):
+            return self.static('/admin.html')
+        if path == '/api/admin/status':
+            return self.api_admin_status()
+        if path == '/api/admin/players':
+            return self.api_admin_players()
         if path == '/ws-config.js':
             return self.ws_config()
         if path.startswith('/api/'):
@@ -196,6 +207,12 @@ class Api(BaseHTTPRequestHandler):
             return self.api_login(body)
         if path == '/api/logout':
             return self.api_logout()
+        if path == '/api/admin/login':
+            return self.api_admin_login(body)
+        if path == '/api/admin/logout':
+            return self.api_admin_logout()
+        if path == '/api/admin/act':
+            return self.api_admin_act(body)
         return self._send(404, {'ok': False, 'error': 'not found', 'path': path})
 
     # ---------- 账号接口（P0-3） ----------
@@ -222,6 +239,100 @@ class Api(BaseHTTPRequestHandler):
             return self._send(401, {'ok': False, 'error': r})
         return self._send(200, {'ok': True, 'role': authmod.role_public(r['role'])})
 
+    # ---------- 后台管理（第 48 轮） ----------
+
+    def _admin_token(self):
+        """管理 token：优先 X-Admin 头；也支持 ?at= （方便浏览器直接点开自测）"""
+        tk = self.headers.get('X-Admin')
+        if tk:
+            return tk.strip()
+        if '?' in self.path:
+            for kv in self.path.split('?', 1)[1].split('&'):
+                if kv.startswith('at='):
+                    return urllib.parse.unquote(kv[3:]).strip()
+        return ''
+
+    def _admin_ok(self):
+        import admin as adminmod
+        return adminmod.check(self.cfg, self._admin_token())
+
+    def api_admin_login(self, body):
+        import admin as adminmod
+        ip = self.client_address[0] if self.client_address else '-'
+        ok, r = adminmod.login(self.cfg, body.get('password'), ip)
+        if not ok:
+            return self._send(401, {'ok': False, 'error': r})
+        print('  [管理] 管理员登录成功（%s）' % ip)
+        return self._send(200, {'ok': True, 'token': r})
+
+    def api_admin_logout(self):
+        import admin as adminmod
+        adminmod.logout(self._admin_token())
+        return self._send(200, {'ok': True})
+
+    def api_admin_status(self):
+        import admin as adminmod
+        if not self._admin_ok():
+            return self._send(401, {'ok': False, 'error': '没登录或登录过期了'})
+        # ★ 世界状态用【只读快照】—— tick 线程每 15 tick 换一个新 dict（不直接遍历世界 ✓）
+        stat = (self.world.admin_stat if self.world else {}) or {}
+        acc = role_n = 0
+        try:
+            with dbmod.db(self.cfg) as c:
+                acc = c.execute('SELECT COUNT(*) FROM accounts').fetchone()[0]
+                role_n = c.execute('SELECT COUNT(*) FROM roles').fetchone()[0]
+        except Exception:
+            pass
+        return self._send(200, {'ok': True, 'stat': stat, 'accounts': acc, 'roles': role_n,
+                                'sessions': adminmod.session_count(),
+                                'playerDebug': bool(self.cfg.get('allow_player_debug'))})
+
+    def api_admin_players(self):
+        if not self._admin_ok():
+            return self._send(401, {'ok': False, 'error': '没登录或登录过期了'})
+        rows = []
+        try:
+            with dbmod.db(self.cfg) as c:
+                for r in c.execute('SELECT id, name, level, exp, hp, x, z FROM roles'
+                                   ' ORDER BY level DESC, id DESC LIMIT 200').fetchall():
+                    rows.append({'id': r[0], 'name': r[1], 'level': r[2], 'exp': r[3],
+                                 'hp': r[4], 'x': round(float(r[5] or 0), 1),
+                                 'z': round(float(r[6] or 0), 1)})
+        except Exception:
+            pass
+        online = set(q.get('name') for q in
+                     ((self.world.admin_stat or {}).get('players') or [])) if self.world else set()
+        for r in rows:
+            r['online'] = r['name'] in online
+        return self._send(200, {'ok': True, 'players': rows})
+
+    def api_admin_act(self, body):
+        """管理动作：spawn / give / kick / heal / say
+
+        ★ 这里【只入队】—— 真正改世界状态的是 tick 线程（世界状态只有它能碰 ✓）
+        """
+        if not self._admin_ok():
+            return self._send(401, {'ok': False, 'error': '没登录或登录过期了'})
+        act = (body.get('act') or '').strip()
+        if act not in ('spawn', 'give', 'kick', 'heal', 'say'):
+            return self._send(400, {'ok': False, 'error': '不认识的动作'})
+        if self.world is None:
+            return self._send(503, {'ok': False, 'error': '世界没起来'})
+        self.world.post_admin(act, {k: v for k, v in body.items() if k != 'act'})
+        return self._send(200, {'ok': True, 'act': act})
+
+    # ---------- 背包 / 装备 ----------
+
+    def api_bag(self):
+        """背包 + 手上的武器（只读 ✓ 打开面板/登录时拉一次就够了）"""
+        ok, r = authmod.check_token(self.cfg, self._token())
+        if not ok:
+            return self._send(401, {'ok': False, 'error': r})
+        rid = r['role']['id']
+        w, wid = authmod.weapon_of(self.cfg, rid)
+        return self._send(200, {'ok': True, 'items': authmod.bag_of(self.cfg, rid),
+                                'weapon': w, 'weaponItemId': wid})
+
     # ---------- 其他接口 ----------
 
     def api_health(self):
@@ -229,18 +340,18 @@ class Api(BaseHTTPRequestHandler):
             with dbmod.db(self.cfg) as c:
                 n = c.execute('SELECT COUNT(*) FROM accounts').fetchone()[0]
                 roles = c.execute('SELECT COUNT(*) FROM roles').fetchone()[0]
+            # ★ 第 48 轮：健康检查只报"活着没 + 世界在不在跑" ✓
+            #   账号数/角色数/数据库路径这些【内部信息】搬到管理页了 ✗
+            #   （它以前对着玩家把家底全吐出来 —— 用户要求搬走 ✓）
+            w = (self.world.admin_stat if self.world else None) or {}
             out = {
                 'ok': True,
                 'version': self.cfg.get('version', '?'),
-                'schema': dbmod.SCHEMA_VERSION,
-                'db': os.path.basename(self.cfg['db']),
-                'accounts': n,
-                'roles': roles,
                 'ws_port': self.cfg.get('ws_port'),
                 'ts': dbmod.now_ms(),
+                'world': {'online': w.get('online', 0), 'tick': w.get('tick', 0),
+                          'mobs': w.get('mobs', 0), 'tickMs': w.get('tickMs', 0)},
             }
-            if self.world is not None:
-                out['world'] = self.world.stats()
             return self._send(200, out)
         except Exception as e:
             return self._send(500, {'ok': False, 'error': str(e)})

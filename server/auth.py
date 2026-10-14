@@ -240,6 +240,33 @@ def logout(cfg, token):
     return True, {'ok': True}
 
 
+# ---------------------------------------------------------------- 背包 / 装备（第 47 轮）
+
+def bag_of(cfg, role_id, cap=60):
+    """读【背包】（in_storage=0）里的东西 → [{id, item}, ...]（新的在前 ✓）
+
+    ★ 只读，不改状态 —— 所以走 HTTP 就行，不用占 tick 线程 ✓
+    ★ cap 是保险：背包再多也不会一次全发给客户端（省流量 + 免得面板卡）✓
+    """
+    import json
+    out = []
+    try:
+        with dbmod.db(cfg) as c:
+            rows = c.execute(
+                'SELECT id, item_json FROM items WHERE role_id=? AND in_storage=0'
+                ' ORDER BY id DESC LIMIT ?', (role_id, int(cap))).fetchall()
+    except Exception:
+        return out
+    for rid, js in rows:
+        try:
+            it = json.loads(js)
+        except Exception:
+            continue
+        if isinstance(it, dict):
+            out.append({'id': rid, 'item': it})
+    return out
+
+
 # ---------------------------------------------------------------- 装备（第 47 轮）
 
 def weapon_of(cfg, role_id):

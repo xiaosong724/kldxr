@@ -39,6 +39,33 @@ def drop_chance(mob_lv, killer_lv):
     return min(CHANCE_CAP, BASE_CHANCE * (1.0 + z / 200.0))
 
 
+# ------------------------------------------------------------------ 装备类（第 47 轮）
+#   §8 那张表：装备的基础概率 12%~30%（比材料低一档），品阶也按怪的等级 ✓
+#   ★ 和材料是【各自独立 roll 一次】（§8 开头："全部概率到身上"）——
+#     所以一次击杀可能同时掉材料和装备 ✓ 互不影响 ✓
+EQUIP_BASE = 0.20         # 装备基础掉率（§8 给的区间中值 ✓）
+EQUIP_CAP = 0.34          # 封顶（同材料的 0.95 思路：留点悬念，但装备更低 ✓）
+
+
+def equip_chance(mob_lv, killer_lv):
+    """装备掉率 = 基础 × (1 + min(Z, K+20)/200)，封顶 EQUIP_CAP ✓"""
+    z = min(int(mob_lv), int(killer_lv) + 20)
+    return min(EQUIP_CAP, EQUIP_BASE * (1.0 + z / 200.0))
+
+
+def roll_equip(mob_lv, killer_lv, rng=None):
+    """装备类掉落：返回一件装备（现在的实现 = 武器）或 None
+
+    ★ 独立于材料那一次 roll ✓（§8 开头写了"全部概率到身上"）
+    ★ 具体造什么交给 weapons.roll_weapon（类型/区间/滚完再夹 都在那边 ✓）
+    """
+    r = rng or random
+    if r.random() > equip_chance(mob_lv, killer_lv):
+        return None
+    import weapons
+    return weapons.roll_weapon(mob_lv, killer_lv, r)
+
+
 def roll_drop(mob_lv, killer_lv, rng=None):
     """给一次击杀 roll 掉落：返回 {'name','tier','kind'} 或 None（什么都没掉）"""
     r = rng or random

@@ -33,6 +33,7 @@ var G = {
   MOB_D: 0.45,         // ★ 妖兽碰撞箱深 ✓
   SPEED: 4.4,
   MOB_SPEED: 1.35,
+  ATK_CD: 0.62,          // ★ 第 47 轮：跟着手上的武器走（setWeapon 里改 ✓）
   ATK_RANGE: 2.4,
   /* ★ 攻击扇形的半角（弧度）——第 34 轮加的。
      用户反馈：原来是"离得近就打"，背对着僵尸也能打，不合理 ✗
@@ -1040,6 +1041,24 @@ var MOB_CLASSES = {
           [0.42, 0.18, 0.54, 0xe8e8e4, -0.30, 0.09, 0.07], [0.42, 0.18, 0.54, 0xe8e8e4, 0.30, 0.09, 0.07]] }
 };
 function mobClassOf(kind) { return (kind && MOB_CLASSES[kind]) ? MOB_CLASSES[kind] : null; }
+
+/* ============ ★ 手上的武器（第 47 轮，方案 §7.4~§7.6）============
+   服务器是权威（射程/弧/冷却都在服务器 ✓ 客户端算不了假账 ✗）
+   这里只做两件事：
+     ① 把【本地预测】的常量改成这把武器的（不然会出现"看着打到了、服务器说没中"✗）
+     ② 给 UI 一个地方查"我现在拿的是什么"
+   ★ 换武器只改这三个 G 值 + 记录，不动别的 —— 表现层（手上模型）后面再做 ✓ */
+var MY_WEAPON = null;
+function setWeapon(w) {
+  MY_WEAPON = (w && w.slot === 'weapon') ? w : null;
+  var b = (MY_WEAPON && MY_WEAPON.base) || null;
+  // ★ 没武器 → 用默认单手剑的数值（和服务器那边一致 ✓）
+  var spd = b ? (+b.atkSpeed || 1.15) : 1.15;
+  G.ATK_RANGE = b ? (+b.reach || 2.4) : 2.4;
+  G.ATK_ARC = b ? (+b.arc || 1.05) : 1.05;
+  G.ATK_CD = 0.62 / Math.max(0.6, Math.min(2.2, spd));
+  return MY_WEAPON;
+}
 /* ★ 模型往下埋了多少（量出来的：脚在 y=-0.46）—— mob() 会把整体抬回来 ✓
    ★ 走路摆动的幅度也调大了：原来 0.6 弧度 × 只露 0.25 米的腿 = 看不出来在走 ✗ */
 var MOB_FEET = 0.46;
@@ -2600,7 +2619,7 @@ function frame(ts) {
   /* ★ 攻击冷却 → 按钮（第 33 轮）：平时哑光、冷却时按比例压暗 + 转一圈
      只在变化超过 4% 时才写界面 —— 每帧都碰 DOM 是白烧性能 ✗ */
   if (UI.atkCool) {
-    var _cdp = (atkCd > 0) ? Math.min(1, atkCd / ATK_CD) : 0;
+    var _cdp = (atkCd > 0) ? Math.min(1, atkCd / (G.ATK_CD || 0.62)) : 0;
     if (Math.abs(_cdp - _atkCdP) > 0.04 || (_cdp === 0) !== (_atkCdP === 0)) {
       _atkCdP = _cdp;
       UI.atkCool(_cdp);
@@ -2608,7 +2627,7 @@ function frame(ts) {
   }
   if (dead) { atkHeld = false; }   // ★ 倒下了不能挥剑 ✓
   if (atkHeld && atkCd <= 0 && atkT < 0 && !dead) {
-    atkT = 0; atkCd = ATK_CD;
+    atkT = 0; atkCd = (G.ATK_CD || 0.62);
     NET.atkSeq++;        // ★ 告诉别人"我挥剑了"（下一包位置一起带过去 ✓）
     sfx('swing', 0.9);   // ★ MC 挥剑声（6 变体随机 ✓）   // 与动画(0.86s)配合 ✓ 连击流畅 ✓
     /* ★ 判定：只打【正前方扇形】里的目标（第 34 轮改的）

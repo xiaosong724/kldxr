@@ -566,7 +566,14 @@ function openSet() {
       drow.appendChild(b);
       return b;
     }
-    addBtn('生成 20 只', function () { spawnStress(20); openSet(); });
+    /* ★★ 第 48 轮：玩家端的"刷怪/发武器"全部【搬到管理页】了 ✗ ★★
+       以前任何玩家点这里就能自己刷一堆怪（联机时走 spawn 意图，服务器真给他刷 ✗）
+       现在服务器【默认拒绝】那条意图（config 的 allow_player_debug=false ✓）
+       要临时调试：改 config 打开，或者直接用 /admin 页 ✓ */
+    addBtn('刷怪已移到管理页（/admin）', function () {
+      toast('刷怪/发武器在管理页：浏览器打开 /admin');
+      openSet();
+    });
     addBtn('生成 50 只', function () { spawnStress(50); openSet(); });
     addBtn('补满到上限 ' + G.MOB_MAX, function () { spawnStress(G.MOB_MAX); openSet(); });
     addBtn('持续生成（每秒+5）', function () { toggleGrow(); openSet(); }, _growTimer);

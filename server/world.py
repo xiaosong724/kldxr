@@ -97,6 +97,11 @@ class World(object):
         # ★ 本 tick 的治疗事件（第 46 轮）：[[医生x, 医生z, 目标x, 目标z, 回了多少], ...]
         #   医生一多，玩家必须能看出【谁给谁回了多少】✗ → 所以发事件、客户端画连线+数字 ✓
         self.heals = []
+        # ★★ 第 48 轮：后台管理 ★★
+        #   admin_stat = 给管理页看的【只读快照】，每隔十几 tick 换一个新 dict
+        #   （HTTP 线程读它：读一次引用是安全的 ✓ 绝不让 HTTP 线程直接遍历世界状态 ✗）
+        self.admin_stat = {'tick': 0, 'online': 0, 'mobs': 0, 'loot': 0, 'players': []}
+        self._admin_acc = 0
         self.srv_conns = {}             # ★ 由 net.Net 填：连接表（只在 asyncio 循环里访问）
         self.tick_count = 0
         self.tick_ms = 0.0              # 上一帧耗时
@@ -117,6 +122,33 @@ class World(object):
 
     def post_intent(self, cid, t, d):
         self.inbox.put(('intent', cid, (t, d)))
+
+    def post_admin(self, act, payload=None):
+        """HTTP 线程（管理页）→ tick 线程 的管理操作
+
+        ★ 和玩家意图走同一个 inbox ✓ 所以照样是【只有 tick 线程改世界状态】✓
+        """
+        self.inbox.put(('admin', None, (act, payload or {})))
+
+    def _publish_admin(self):
+        """每十几 tick 发布一次给管理页看的快照（只读 ✓）
+
+        ★ 为什么是"发布"而不是"直接查"：世界状态只有 tick 线程能碰 ✗
+          HTTP 线程直接遍历 players/mobs 就是数据竞争 ✗
+          这里换一个新 dict，HTTP 那边读引用 —— 安全又便宜 ✓
+        """
+        ps = []
+        for q in self.players.values():
+            ps.append({'name': q.name, 'level': int(q.role.get('level') or 1),
+                       'hp': int(q.hp), 'x': round(q.x, 1), 'z': round(q.z, 1),
+                       'weapon': ((q.weapon or {}).get('name') or '（默认单手剑）')})
+        self.admin_stat = {
+            'tick': self.tick_count, 'online': len(self.players),
+            'mobs': len(self.mobs), 'loot': len(self.loot),
+            'tickMs': round(self.tick_ms, 3), 'tickMaxMs': round(self.tick_max_ms, 3),
+            'dropped': self.dropped_intents, 'pendingSave': self.saves.qsize(),
+            'players': ps,
+        }
 
     def post_save(self, sql, params=()):
         self.saves.put((sql, params))
@@ -173,6 +205,13 @@ class World(object):
             except queue.Empty:
                 break
             n += 1
+            if kind == 'admin':
+                # ★ 管理操作（第 48 轮）：没有 cid，走单独一支 ✓
+                try:
+                    self._handle_admin(payload[0], payload[1])
+                except Exception:
+                    pass
+                continue
             if kind == 'leave':
                 p = self.players.pop(cid, None)
                 if p:
@@ -233,6 +272,11 @@ class World(object):
         for p in self.players.values():
             p.intents = 0
         self.tick_count += 1
+        # ★ 第 48 轮：每 15 tick 发一次管理页快照（15 × 33ms ≈ 半秒，够实时了 ✓）
+        self._admin_acc += 1
+        if self._admin_acc >= 15:
+            self._admin_acc = 0
+            self._publish_admin()
 
     def _handle_intent(self, p, t, d):
         if t == 'move':
@@ -260,10 +304,38 @@ class World(object):
         elif t == 'pick':
             self._intent_pick(p, d)           # ★ 捡东西（第 38 轮）
         elif t == 'spawn':
-            # 调试用：让【服务器】在我附近刷 n 只（客户端那个"生成 20 只"按钮联机时走这里 ✓）
+            # ★★ 第 48 轮：这个能力【搬到管理页】了 ✗ ★★
+            #   以前任何玩家发一个 spawn 就能自己刷一堆怪（还能指定职业/等级/清场）✗
+            #   要临时给玩家用，只能改 config 的 allow_player_debug=true（本地调试用 ✓）
+            if not (self.cfg or {}).get('allow_player_debug'):
+                if 'spawn' not in p.warned:
+                    p.warned.add('spawn')
+                    self._send_cid(p.cid, P.pack('error', msg='刷怪已移到管理页（/admin）'))
+                return
             self._debug_spawn(p, int(_f(d.get('n'), 5)), bool(d.get('clear')),
-                              d.get('kind') or None,          # ★ 可指定职业（第 46 轮）
-                              d.get('lv'))                    # ★ 可指定等级（第 46 轮）
+                              d.get('kind') or None,
+                              d.get('lv'))
+        elif t == 'giveweapon':
+            # ★ 同上：发武器也搬到管理页了 ✗（玩家端默认不给 ✓）
+            if not (self.cfg or {}).get('allow_player_debug'):
+                if 'giveweapon' not in p.warned:
+                    p.warned.add('giveweapon')
+                    self._send_cid(p.cid, P.pack('error', msg='发武器已移到管理页（/admin）'))
+                return
+            # ★ 调试：直接往背包里塞一件武器（打开背包就能穿）★
+            #   为什么要这个：装备栏还没做的时候，玩家/测试【没法验证武器手感】✗
+            #   有了它，双击一下就能立刻试"匕首快 / 斧头慢" ✓
+            import json
+            import db as dbmod
+            lv = max(1, int(p.role.get('level') or 1))
+            w = weapons.roll_weapon(lv + 6, lv)
+            w['reqLevel'] = 1                     # 调试给的就不卡等级了 ✓
+            self.post_save(
+                'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
+                ' VALUES(?,0,-1,1,?,?)',
+                (p.role_id, json.dumps(w, ensure_ascii=False), dbmod.now_ms()))
+            self._send_cid(p.cid, P.pack('notice',
+                                         text='调试：背包里多了一件【%s】—— 打开背包就能穿上 ✓' % w['name']))
         elif t == 'equipset':
             # ★ 第 47 轮：网络线程已经查库 + 校验完了，这里只换内存里的引用 ✓
             #   （tick 线程不许碰磁盘 ✗ 所以查库那步在 net.py 做）
@@ -563,6 +635,54 @@ class World(object):
         self.mob_seq += 1
         self.mobs[str(self.mob_seq)] = mobs.Mob(self.mob_seq, mobs.roll_level(base), x, z)
 
+    def _find_player(self, name):
+        """按名字找在线玩家（管理页用 ✓ 找不到返回 None）"""
+        if not name:
+            return None
+        for q in self.players.values():
+            if q.name == name:
+                return q
+        return None
+
+    def _handle_admin(self, act, d):
+        """管理页的操作（第 48 轮）—— ★ 只有 tick 线程会进来 ✓
+
+        ★ 管理页通过 HTTP 进来，但真正改世界状态的是这里（tick 线程）✓
+          所以"只有 tick 线程碰世界"这条规矩没破 ✓
+        """
+        if act == 'say':
+            txt = str(d.get('text') or '')[:80]
+            if txt:
+                self._broadcast(P.pack('notice', text='[管理] ' + txt))
+            return
+        q = self._find_player(d.get('name'))
+        if q is None:
+            return
+        if act == 'spawn':
+            n = max(0, min(int(d.get('n') or 5), mobs.MOB_CAP))
+            self._debug_spawn(q, n, bool(d.get('clear')), d.get('kind') or None, d.get('lv'))
+            if n:
+                self._send_cid(q.cid, P.pack('notice',
+                                             text='管理员在你附近放了 %d 只僵尸' % n))
+        elif act == 'give':
+            import json
+            import db as dbmod
+            lv = max(1, int(q.role.get('level') or 1))
+            look = d.get('kind') or None
+            w = weapons.make_weapon(look or 'sword', int(d.get('tier') or 0),
+                                    weapons.roll_coeff(look or 'sword'), lv // 4 + 1)
+            w['reqLevel'] = 1                      # 管理员发的就不卡等级 ✓
+            self.post_save(
+                'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
+                ' VALUES(?,0,-1,1,?,?)',
+                (q.role_id, json.dumps(w, ensure_ascii=False), dbmod.now_ms()))
+            self._send_cid(q.cid, P.pack('notice', text='管理员给了你一件【%s】—— 打开背包就能穿 ✓' % w['name']))
+        elif act == 'kick':
+            self._send_cid(q.cid, P.pack('kick', code='admin', msg='管理员把你请下线了'))
+        elif act == 'heal':
+            q.hp = int(q.role.get('hpMax') or 200)     # 满血（管理页的"救一下"✓）
+            self._send_cid(q.cid, P.pack('notice', text='管理员把你治好了'))
+
     def _debug_spawn(self, p, n, clear, kind=None, lv=None):
         """调试：在我附近直接刷 n 只 / 清空（不做安全区判断 —— 就是要能立刻试 ✓）
 
@@ -693,13 +813,26 @@ class World(object):
         self._roll_loot(p, m)
 
     def _roll_loot(self, p, m):
-        """僵尸死了 roll 一次掉落（方案 §8：每次击杀独立 roll ✓）"""
-        it = drops.roll_drop(m.lv, int(p.role.get('level') or 1))
+        """僵尸死了 roll 掉落（方案 §8：每次击杀【逐项独立】roll ✓）
+
+        ★ 第 47 轮：材料和装备各 roll 一次 —— 所以一次击杀有可能两样都掉 ✓
+          （§8 开头那句"全部概率到身上"就是这个意思 ✓）
+        """
+        klv = int(p.role.get('level') or 1)
+        it = drops.roll_drop(m.lv, klv)
+        self._drop_one(p, m, it)
+        eq = drops.roll_equip(m.lv, klv)          # ★ 装备类（独立 roll）
+        self._drop_one(p, m, eq)
+
+    def _drop_one(self, p, m, it):
+        """把一件掉落物放到地上（it 为 None 就什么都不做 ✓）"""
         if not it:
             return
         self.loot_seq += 1
         lid = str(self.loot_seq)
-        self.loot[lid] = {'x': m.x, 'z': m.z, 'item': it, 'ttl': drops.DROP_TTL}
+        # ★ 装备的坐标稍微错开一点 —— 不然和材料叠在同一点，捡的时候看不出来哪件是哪件 ✗
+        ox = 0.0 if it.get('slot') != 'weapon' else 0.7
+        self.loot[lid] = {'x': m.x + ox, 'z': m.z, 'item': it, 'ttl': drops.DROP_TTL}
         self._send_cid(p.cid, P.pack('notice', text='掉落：%s（%d 阶）走过去自动捡 ✓'
                                      % (it['name'], it['tier'])))
 

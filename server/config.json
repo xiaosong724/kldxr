@@ -5,5 +5,8 @@
   "ws_port": 8900,
   "db": "${HERE}\\game.db",
   "web_root": "${HERE}\\..\\web",
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "admin_password": "xiuxian-admin",
+  "allow_player_debug": false,
+  "_管理员说明": "管理页在 /admin；密码就是上面的 admin_password，★ 对外开服前一定要改掉 ✗；allow_player_debug=true 会把\"刷怪/发武器\"还给玩家（只该在本地调试时开 ✓）"
 }

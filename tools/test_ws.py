@@ -27,12 +27,17 @@ def ok(cond, msg, got=None):
         fails.append(msg)
 
 
-def http(method, path, body=None, token=None):
+def http(method, path, body=None, token=None, admin=False):
+    """打真服务器的 HTTP 接口
+
+    ★ admin=True 时 token 走【X-Admin】头 —— 管理接口认的是这个 ✓
+      （第 48 轮踩过：管理 token 塞进 X-Token 头 → 401 → 刷怪静默失败 ✗）
+    """
     data = json.dumps(body).encode('utf-8') if body is not None else None
     req = urllib.request.Request(API + path, data=data, method=method)
     req.add_header('Content-Type', 'application/json; charset=utf-8')
     if token:
-        req.add_header('X-Token', token)
+        req.add_header('X-Admin' if admin else 'X-Token', token)
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             return r.status, json.loads(r.read().decode('utf-8'))
@@ -137,6 +142,34 @@ def wait_near_mob(c, px, pz, near=12.0, timeout=8.0):
             if best is not None:
                 return best
     return None
+
+
+ADMIN_PW = os.environ.get('ADMIN_PW') or 'xiuxian-admin'
+_ADMIN = {'token': None}
+
+
+def admin_spawn(name, n=1, clear=False, kind=None, lv=None):
+    """让【管理员】在某个玩家附近刷怪（第 48 轮）
+
+    ★ 为什么测试也改走这条路：玩家端的 spawn 意图已经被服务器关掉了 ✗
+      （那是"任何玩家都能自己刷怪"的漏洞 —— 用户要求搬到 /admin ✓）
+    ★ 顺带把管理链路也端到端测了一遍 ✓
+    """
+    if _ADMIN['token'] is None:
+        st, j = http('POST', '/api/admin/login', {'password': ADMIN_PW})
+        if st != 200 or not j.get('ok'):
+            print('        [调试] 管理登录失败：HTTP %s %r（密码对得上 config.json 吗？）' % (st, j))
+            return False
+        _ADMIN['token'] = j['token']
+    body = {'act': 'spawn', 'name': name, 'n': n}
+    if clear:
+        body['clear'] = 1
+    if kind:
+        body['kind'] = kind
+    if lv:
+        body['lv'] = lv
+    st, j = http('POST', '/api/admin/act', body, token=_ADMIN['token'], admin=True)
+    return st == 200 and j.get('ok')
 
 
 def wait_loot(c, timeout=3.5):
@@ -566,7 +599,7 @@ try:
     ma.drain(0.8)
     mb.drain(0.8)
 
-    ma.send_json('spawn', n=1)
+    admin_spawn(NAMES[0], n=1)               # ★ 第 48 轮：刷怪走管理接口 ✓
     one = wait_near_mob(ma, PX, PZ)          # ★ 只认"3~9 米"的那只（调试刷的）✓
     ms = [one] if one else None
     ok(bool(ms), '★ 服务器把僵尸推下来了（快照带 mobs，而且就在我旁边）', (ms or [])[:1])
@@ -659,7 +692,7 @@ try:
             # ★ 掉率是 75%~95%（方案 §8）不是必掉 ✗ → 多杀几只，出一件就够 ✓
             loots, att = None, 0
             for att in range(6):
-                ma.send_json('spawn', n=1)
+                admin_spawn(NAMES[0], n=1)
                 time.sleep(0.4)
                 atk_at(20 + att, True)        # 站它面前砍（位置+挥刀同一批包 ✓）
                 ls = wait_loot(ma, timeout=3.0)
@@ -710,11 +743,11 @@ try:
             # ★ 等级要指定成 Lv.10（361 血）：测试号是 Lv.30，伤害 172 ——
             #   放在 Lv.30 的怪（1293 血）身上一刀只掉 13%，卡在 85% 门槛之上 → 医生判定"不用治" ✗
             #   放在 Lv.10（361 血）身上一刀掉到 48% ✓ 而且打得死不了 ✓ 正好是"残血待治" ✓
-            ma.send_json('spawn', n=1, clear=True, kind='医生')
+            admin_spawn(NAMES[0], clear=True)
             time.sleep(0.8)
-            ma.send_json('spawn', n=3, kind='医生', lv=10)       # 多刷几个：打起来容易误伤死 ✗
+            admin_spawn(NAMES[0], n=3, kind='医生', lv=10)      # 多刷几个：打起来容易误伤死 ✗
             time.sleep(0.4)
-            ma.send_json('spawn', n=3, kind='白领', lv=10)      # 治疗目标（Lv.10 ≈ 357 血 ✓）
+            admin_spawn(NAMES[0], n=3, kind='白领', lv=10)     # 治疗目标（Lv.10 ≈ 357 血 ✓）
             time.sleep(0.8)
             # ★ 两个坑（都踩过）：
             #   ① 一刀只把怪打到 86.7%（172/1293），【刚好在 85% 门槛之上】→ 医生判定"血还够"不治 ✗

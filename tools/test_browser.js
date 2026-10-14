@@ -14,6 +14,36 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+/* ============================================================
+   ★ 第 48 轮：管理接口辅助
+   为什么测试要用它：玩家端的 spawn/giveweapon 已经【被服务器关掉】✗
+   （那是"任何玩家都能自己刷怪"的漏洞 ✓ 现在搬到 /admin 了）
+   所以测试改从管理接口刷 —— 顺便把管理链路也端到端测了一遍 ✓
+   ============================================================ */
+const ADMIN_PW = process.env.ADMIN_PW || 'xiuxian-admin';
+const ADMIN_URL = process.env.ADMIN_URL || 'http://127.0.0.1:8899';
+const ADMIN_NAME = process.env.ADMIN_NAME || '浏览器甲';
+let ADMIN_TOKEN = null;
+async function ADMIN_LOGIN() {
+  if (ADMIN_TOKEN) { return ADMIN_TOKEN; }
+  const r = await fetch(ADMIN_URL + '/api/admin/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: ADMIN_PW })
+  }).then(x => x.json()).catch(() => null);
+  if (!r || !r.ok) { throw new Error('管理登录失败：' + JSON.stringify(r)); }
+  ADMIN_TOKEN = r.token;
+  return ADMIN_TOKEN;
+}
+async function ADMIN_ACT(act, body) {
+  const tk = await ADMIN_LOGIN();
+  const r = await fetch(ADMIN_URL + '/api/admin/act', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Admin': tk },
+    body: JSON.stringify(Object.assign({ act: act, name: ADMIN_NAME }, body || {}))
+  }).then(x => x.json()).catch(() => null);
+  return r;
+}
+
 const PAGE = process.argv[2] || 'http://127.0.0.1:8899/';
 const ORIGIN = new URL(PAGE).origin;
 
@@ -586,9 +616,11 @@ async function register(name, pw) {
          机器被别的测试占满时一次等不到，整条就假红 ✗ */
     let nMob = 0;
     for (let att = 0; att < 3; att++) {
-      await A.eval(
-        'if (typeof netServerSpawn === "function") { netServerSpawn(0, true); netServerSpawn(6); } return 1;'
-      );
+      /* ★ 第 48 轮：刷怪改走【管理接口】——
+         玩家端的 spawn 意图已经被服务器关掉了 ✗（那是"谁都能自己刷怪"的漏洞）
+         ★ 注意这是【Node 侧】的调用，不能塞进 A.eval 的字符串里 ✗（浏览器里没有 ADMIN_ACT）*/
+      await ADMIN_ACT('spawn', { n: 0, clear: 1 });
+      await ADMIN_ACT('spawn', { n: 6 });
       await sleep(3600);
       nMob = Number(await A.eval('return Object.keys(NET.rmobs).length;')) || 0;
       if (nMob > 0) { break; }

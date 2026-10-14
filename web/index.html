@@ -123,6 +123,38 @@
 #loginCard button:disabled{opacity:.5;cursor:default}
 #loginHint{margin-top:14px;font-size:12.5px;color:#e0776a;min-height:17px;line-height:1.5}
 #loginCard .tip{margin-top:12px;font-size:11.5px;color:#63768a}
+
+/* ---- 背包 / 装备面板（第 47 轮）---- */
+#bagBtn{position:fixed;top:14px;right:110px;cursor:pointer;pointer-events:auto}
+#bag.ovl{position:fixed;inset:0;z-index:20;display:none;background:rgba(0,0,0,.45);
+  align-items:center;justify-content:center}
+#bag.ovl.on{display:flex}
+.bagBox{width:min(780px,94vw);max-height:86vh;display:flex;flex-direction:column;
+  background:rgba(26,22,18,.94);border:1px solid #6a5a44;border-radius:10px;
+  box-shadow:0 10px 40px #000a;color:#f2e8d4;font-size:13px}
+.bagTop{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #4a3f31}
+.bagTop b{font-size:15px;color:#ffd83d}
+.bagTop #bagMsg{flex:1;color:#cfc3aa;font-size:12px}
+.bagCols{display:flex;gap:10px;padding:10px 14px;overflow:auto}
+.bagCol{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.bagH{color:#cfc3aa;font-size:12px;padding-bottom:2px;border-bottom:1px solid #3a3228}
+.bagH i{font-style:normal;color:#8f8570}
+.bagList{display:flex;flex-direction:column;gap:4px;overflow:auto;max-height:48vh}
+.bagIt{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:6px;
+  background:rgba(60,52,40,.55);cursor:pointer;border:1px solid transparent}
+.bagIt:hover{background:rgba(90,78,58,.75);border-color:#8a7450}
+.bagIt.cur{border-color:#ffd83d}
+.bagIt .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bagIt .tg{font-size:11px;color:#8f8570}
+.bagEq{padding:8px;border-radius:6px;background:rgba(60,52,40,.55);min-height:34px}
+.bagStat{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;color:#cfc3aa}
+.bagStat s{text-decoration:none;color:#ffd83d;font-weight:700}
+.bagFoot{display:flex;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid #4a3f31}
+.bagTip{color:#8f8570;font-size:12px}
+.bagB{background:rgba(70,58,42,.9);color:#f2e8d4;border:1px solid #8a7450;border-radius:6px;
+  padding:5px 12px;cursor:pointer;font-size:12px}
+.bagB:hover{background:rgba(96,80,56,.95)}
+.bagEmpty{color:#8f8570;font-size:12px;padding:6px}
 </style>
 </head><body>
 <canvas id="cv"></canvas>
@@ -139,6 +171,32 @@
 </div>
 <div id="hud" class="pane">左半屏拖动 = 走 · 右下 = 攻击</div>
 <div id="setBtn" class="pane">⚙ 设置</div>
+<!-- ★ 背包 / 装备（第 47 轮，方案 §7.7）—— 有武器掉落，就得能看见、能穿上 ✓ -->
+<div id="bagBtn" class="pane">🎒 背包</div>
+<div id="bag" class="ovl">
+  <div class="bagBox">
+    <div class="bagTop">
+      <b>背包 / 装备</b><span id="bagMsg"></span>
+      <button id="bagClose" class="bagB">关闭</button>
+    </div>
+    <div class="bagCols">
+      <div class="bagCol">
+        <div class="bagH">背包 <i>（点一下穿上）</i></div>
+        <div id="bagList" class="bagList"></div>
+      </div>
+      <div class="bagCol">
+        <div class="bagH">已装备</div>
+        <div id="bagEq" class="bagEq"></div>
+        <div id="bagStat" class="bagStat"></div>
+        <button id="bagOff" class="bagB">脱下</button>
+      </div>
+    </div>
+    <div class="bagFoot">
+      <button id="bagGive" class="bagB">调试：给我一把随机武器</button>
+      <span class="bagTip">按 <b>B</b> 开关 · 打僵尸也会掉武器（走过去自动捡）</span>
+    </div>
+  </div>
+</div>
 <div id="atk"><div class="cd"></div><svg class="ic" viewBox="0 0 24 24" fill="none"
   stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
   <polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5"/>

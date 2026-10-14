@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>后台管理 · 末日丧尸 × 组队修仙</title>
+<style>
+ html,body{margin:0;height:100%;background:#141210;color:#f2e8d8;
+   font-family:ui-monospace,Consolas,monospace;font-size:13px}
+ a{color:#ffd83d}
+ .wrap{max-width:1100px;margin:0 auto;padding:18px}
+ h1{font-size:17px;color:#ffd83d;margin:0 0 4px}
+ .sub{color:#8f8570;font-size:12px;margin-bottom:14px}
+ .card{background:rgba(30,26,20,.9);border:1px solid #4a3f31;border-radius:10px;padding:12px 14px;margin-bottom:12px}
+ .card h2{font-size:14px;margin:0 0 8px;color:#cfc3aa;font-weight:600}
+ .row{display:flex;flex-wrap:wrap;gap:14px}
+ .kpi{min-width:92px}
+ .kpi b{display:block;font-size:19px;color:#ffd83d}
+ .kpi s{text-decoration:none;color:#8f8570;font-size:11px}
+ table{width:100%;border-collapse:collapse}
+ th,td{text-align:left;padding:5px 8px;border-bottom:1px solid #332c24;font-size:12px}
+ th{color:#8f8570;font-weight:600}
+ tr:hover td{background:rgba(70,58,42,.35)}
+ .on{color:#7ee08a}
+ .off{color:#6a625a}
+ button{background:rgba(70,58,42,.9);color:#f2e8d4;border:1px solid #8a7450;border-radius:6px;
+   padding:4px 10px;cursor:pointer;font-size:12px;margin-right:4px}
+ button:hover{background:rgba(96,80,56,.95)}
+ button.warn{border-color:#a05a4a}
+ input{background:rgba(20,18,16,.9);color:#f2e8d4;border:1px solid #4a3f31;border-radius:6px;
+   padding:6px 9px;font-size:13px;font-family:inherit}
+ #msg{color:#ffb4a0;font-size:12px;min-height:16px;margin-top:6px}
+ .hide{display:none}
+ .tip{color:#8f8570;font-size:11px}
+</style></head>
+<body>
+<div class="wrap">
+  <h1>后台管理 · 末日丧尸 × 组队修仙</h1>
+  <div class="sub">这里是**不该出现在玩家那边**的能力：刷怪 / 发武器 / 踢人 / 喊话 / 看内部状态 ✓</div>
+
+  <!-- 登录 -->
+  <div class="card" id="loginCard">
+    <h2>管理员登录</h2>
+    <input id="pw" type="password" placeholder="管理密码（config.json 的 admin_password）" style="width:280px">
+    <button id="btnLogin">登录</button>
+    <div class="tip" style="margin-top:8px">
+      密码在 <code>server/config.json</code> 的 <code>admin_password</code> ·
+      ★ 对外开服前一定要改掉 ✗
+    </div>
+    <div id="msg"></div>
+  </div>
+
+  <!-- 面板 -->
+  <div id="panel" class="hide">
+    <div class="card">
+      <h2>世界状态 <span class="tip" id="auto"></span></h2>
+      <div class="row" id="kpis"></div>
+      <div class="tip" style="margin-top:6px">
+        在线玩家（实时）· <span id="cfgInfo"></span>
+      </div>
+      <div id="online" style="margin-top:6px"></div>
+    </div>
+
+    <div class="card">
+      <h2>喊话</h2>
+      <input id="say" placeholder="给所有人发一条公告" style="width:60%">
+      <button id="btnSay">发送</button>
+    </div>
+
+    <div class="card">
+      <h2>玩家 <span class="tip">（点名字那行的按钮操作那个玩家）</span></h2>
+      <table>
+        <thead><tr><th>状态</th><th>名字</th><th>等级</th><th>经验</th><th>坐标</th><th>操作</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <button id="btnOut">退出管理登录</button>
+      <button id="btnRefresh">立即刷新</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   后台管理页（第 48 轮）
+   ★ 这个页面是【public 的】—— 但没登录什么都拿不到：
+     所有数据/能力接口都要 X-Admin 头（token 由 /api/admin/login 发 ✓）
+   ★ 这里的每个动作都是"入队"，真正改世界的是 tick 线程 ✓
+   ============================================================ */
+var TOKEN = '';
+try { TOKEN = localStorage.getItem('adminToken') || ''; } catch (e) { }
+
+function $(id) { return document.getElementById(id); }
+
+function api(path, opt) {
+  opt = opt || {};
+  opt.headers = Object.assign({ 'Content-Type': 'application/json' }, opt.headers || {});
+  if (TOKEN) { opt.headers['X-Admin'] = TOKEN; }
+  return fetch(path, opt).then(function (r) {
+    return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; });
+  });
+}
+
+function msg(t, color) {
+  $('msg').textContent = t || '';
+  $('msg').style.color = color || '#ffb4a0';
+}
+
+function showPanel(on) {
+  $('panel').className = on ? '' : 'hide';
+  $('loginCard').className = on ? 'card hide' : 'card';
+}
+
+function doLogin() {
+  var pw = $('pw').value;
+  if (!pw) { return msg('先填密码'); }
+  api('/api/admin/login', { method: 'POST', body: JSON.stringify({ password: pw }) })
+    .then(function (r) {
+      if (!r.ok) { return msg(r.error || '登录失败'); }
+      TOKEN = r.token;
+      try { localStorage.setItem('adminToken', TOKEN); } catch (e) { }
+      msg('登录成功 ✓', '#7ee08a');
+      showPanel(true);
+      refresh();
+    });
+}
+
+function doLogout() {
+  api('/api/admin/logout', { method: 'POST', body: '{}' }).then(function () {
+    TOKEN = '';
+    try { localStorage.removeItem('adminToken'); } catch (e) { }
+    showPanel(false);
+    msg('已退出');
+  });
+}
+
+function act(name, body) {
+  body = body || {};
+  body.act = name;
+  return api('/api/admin/act', { method: 'POST', body: JSON.stringify(body) })
+    .then(function (r) {
+      if (!r.ok) { return msg(r.error || '失败'); }
+      msg('已执行：' + name + (body.name ? ' → ' + body.name : ''), '#7ee08a');
+      setTimeout(refresh, 300);
+    });
+}
+
+function kpi(label, val) {
+  return '<div class="kpi"><b>' + val + '</b><s>' + label + '</s></div>';
+}
+
+function refresh() {
+  if (!TOKEN) { return; }
+  api('/api/admin/status').then(function (r) {
+    if (!r.ok) {
+      if ((r.error || '').indexOf('登录') >= 0) { showPanel(false); msg(r.error); }
+      return;
+    }
+    var s = r.stat || {};
+    $('kpis').innerHTML =
+      kpi('在线', s.online || 0) + kpi('僵尸', s.mobs || 0) + kpi('地上物', s.loot || 0) +
+      kpi('tick', s.tick || 0) + kpi('tick 耗时 ms', s.tickMs || 0) +
+      kpi('最慢 tick ms', s.tickMaxMs || 0) + kpi('账号', r.accounts) + kpi('角色', r.roles) +
+      kpi('丢掉的意思', s.dropped || 0) + kpi('待存档', s.pendingSave || 0) +
+      kpi('管理会话', r.sessions || 0);
+    var ps = s.players || [];
+    $('online').innerHTML = ps.length
+      ? ps.map(function (q) {
+          return '<div>' + q.name + ' · Lv.' + q.level + ' · HP ' + q.hp +
+            ' · (' + q.x + ', ' + q.z + ') · ' + q.weapon + '</div>';
+        }).join('')
+      : '<span class="tip">现在没人在线</span>';
+    $('cfgInfo').innerHTML = '玩家端调试能力：<b>' +
+      (r.playerDebug ? '<span class="warn">开着（allow_player_debug=true）</span>'
+                     : '<span class="on">已关闭 ✓</span>') + '</b>';
+  });
+  api('/api/admin/players').then(function (r) {
+    if (!r.ok) { return; }
+    $('rows').innerHTML = (r.players || []).map(function (p) {
+      var nm = p.name.replace(/</g, '&lt;');
+      return '<tr><td>' + (p.online ? '<span class="on">在线</span>' : '<span class="off">离线</span>') +
+        '</td><td>' + nm + '</td><td>' + p.level + '</td><td>' + p.exp + '</td>' +
+        '<td>' + p.x + ', ' + p.z + '</td>' +
+        '<td>' +
+        '<button data-a="spawn" data-n="' + nm + '">刷 5 只</button>' +
+        '<button data-a="give" data-n="' + nm + '">给武器</button>' +
+        '<button data-a="heal" data-n="' + nm + '">治疗</button>' +
+        '<button class="warn" data-a="kick" data-n="' + nm + '">踢下线</button>' +
+        '</td></tr>';
+    }).join('') || '<tr><td colspan="6" class="tip">还没有角色</td></tr>';
+  });
+}
+
+/* 事件绑定 */
+$('btnLogin').onclick = doLogin;
+$('pw').onkeydown = function (e) { if (e.key === 'Enter') { doLogin(); } };
+$('btnOut').onclick = doLogout;
+$('btnRefresh').onclick = refresh;
+$('btnSay').onclick = function () {
+  var t = $('say').value.trim();
+  if (!t) { return; }
+  act('say', { text: t });
+  $('say').value = '';
+};
+$('rows').onclick = function (e) {
+  var b = e.target;
+  if (!b || b.tagName !== 'BUTTON') { return; }
+  var a = b.getAttribute('data-a'), n = b.getAttribute('data-n');
+  if (a === 'give') { act('give', { name: n, kind: 'axe', tier: 4 }); }
+  else if (a === 'spawn') { act('spawn', { name: n, n: 5 }); }
+  else if (a === 'heal') { act('heal', { name: n }); }
+  else if (a === 'kick') { if (confirm('把 ' + n + ' 踢下线？')) { act('kick', { name: n }); } }
+};
+
+/* 开局：有 token 就直接进面板（过期的话第一次刷新会踢回登录 ✓） */
+if (TOKEN) { showPanel(true); refresh(); }
+setInterval(function () { if (TOKEN && !document.hidden) { refresh(); } }, 1500);
+</script>
+</body></html>

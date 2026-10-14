@@ -649,6 +649,29 @@ w3._mob_heal(1.0 / 30.0)
 ok(almost.hp > _hp4, '（对照）刚好低于线就会治 ✓', almost.hp - _hp4)
 
 print('')
+print('== ⑲ ★ 玩家端不该有的能力（第 48 轮：搬到管理页了）==')
+# ★ 这一节是"收权"的回归护栏：哪天有人把开关改回去，这里立刻红 ✓
+w, p = mk_world(0.0, 0.0)
+w.mobs.clear()
+_before = len(w.mobs)
+w._handle_intent(p, 'spawn', {'n': 5})           # 玩家喊"给我刷 5 只"
+ok(len(w.mobs) == _before,
+   '★★ 玩家发 spawn【一只都刷不出来】（实测 %d 只 —— 以前任何玩家都能自己刷 ✗）' % len(w.mobs),
+   len(w.mobs))
+w._handle_intent(p, 'giveweapon', {})            # 玩家喊"给我发武器"
+ok('giveweapon' in p.warned,
+   '★★ 玩家发 giveweapon 也被拒了（会回一条"已移到管理页"的提示 ✓）', sorted(p.warned))
+# 对照：管理页那条路还通（cfg 里开了开关就应该照常工作 ✓）
+class _Cfg(dict):
+    pass
+_c = _Cfg({'allow_player_debug': True})
+w.cfg = _c
+w._handle_intent(p, 'spawn', {'n': 2, 'lv': 3})
+ok(len(w.mobs) > _before,
+   '（对照）把 allow_player_debug 打开 → 调试刷怪照常可用（%d 只 ✓ 本地调试不受影响）' % len(w.mobs),
+   len(w.mobs))
+
+print('')
 if fails:
     print('FAILED: %d 条 ✗' % len(fails))
     for f in fails:
