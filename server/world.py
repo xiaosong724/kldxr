@@ -650,6 +650,11 @@ class World(object):
         ★ 管理页通过 HTTP 进来，但真正改世界状态的是这里（tick 线程）✓
           所以"只有 tick 线程碰世界"这条规矩没破 ✓
         """
+        if act == 'notify':
+            q = self._find_player(d.get('name'))
+            if q is not None:
+                self._send_cid(q.cid, P.pack('notice', text=str(d.get('text') or '')[:120]))
+            return
         if act == 'say':
             txt = str(d.get('text') or '')[:80]
             if txt:
@@ -664,19 +669,8 @@ class World(object):
             if n:
                 self._send_cid(q.cid, P.pack('notice',
                                              text='管理员在你附近放了 %d 只僵尸' % n))
-        elif act == 'give':
-            import json
-            import db as dbmod
-            lv = max(1, int(q.role.get('level') or 1))
-            look = d.get('kind') or None
-            w = weapons.make_weapon(look or 'sword', int(d.get('tier') or 0),
-                                    weapons.roll_coeff(look or 'sword'), lv // 4 + 1)
-            w['reqLevel'] = 1                      # 管理员发的就不卡等级 ✓
-            self.post_save(
-                'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
-                ' VALUES(?,0,-1,1,?,?)',
-                (q.role_id, json.dumps(w, ensure_ascii=False), dbmod.now_ms()))
-            self._send_cid(q.cid, P.pack('notice', text='管理员给了你一件【%s】—— 打开背包就能穿 ✓' % w['name']))
+        # ★ give 不在这里做 —— 它是【写库】，放在 HTTP 层（离线玩家也能收到 ✓）
+        #   见 app.py 的 _admin_give()
         elif act == 'kick':
             self._send_cid(q.cid, P.pack('kick', code='admin', msg='管理员把你请下线了'))
         elif act == 'heal':

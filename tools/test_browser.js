@@ -1021,6 +1021,99 @@ async function register(name, pw) {
       '★★★ 淡出【没有改共享材质的 opacity】✓（改了会全场一起淡 ✗ —— 第 44 轮的教训）');
     ok(healQ.beamsAfter === 0, '★ 到期后连线回收干净 ✓');
 
+    /* ★★ 第 48 轮：菜单 + 图标格子背包 ★★
+       用户要求：① 设置按钮改成菜单、背包集成进去（少一个按钮 ✓）
+                ② 背包要像 MC 那样是【图标格子】，不要纯文字列表 ✓
+       ③ 穿上一把武器 → 本地预测的 冷却/射程/攻击弧 要跟着换
+          （不换会出现"看着打到了、服务器说没中"✗）*/
+    // ★ 先【脱光】再测 —— 账号是持久的，上一轮测试可能已经穿着双手斧了 ✗
+    //   （踩过：基线本来就是 0.827，于是"换武器会变慢"这条永远不成立 ✗）
+    await A.eval('if (WSC && WSC.ready) { wsSend("unequip", {}); } return 1;');
+    await sleep(900);
+    // 再让管理员给一件好认的武器（双手斧：慢、长、弧大 ✓）
+    await ADMIN_ACT('give', { kind: 'axe', tier: 5 });
+    await sleep(700);
+    const menuQ = JSON.parse(await A.eval(
+      'var out = {};' +
+      'out.btnTxt = (document.getElementById("setBtn") || {}).textContent || "";' +
+      'out.hasBagBtn = !!document.getElementById("bagBtn");' +
+      'var tb = document.querySelectorAll("#setTabs .tab"); out.hasBagTab = false;' +
+      'for (var i = 0; i < tb.length; i++) {' +
+      '  if (tb[i].getAttribute("data-tab") === "bag") { out.hasBagTab = true; } }' +
+      'var pn = document.querySelectorAll("#setPanel .tabpane"); out.hasBagPane = false;' +
+      'for (var j = 0; j < pn.length; j++) {' +
+      '  if (pn[j].getAttribute("data-pane") === "bag") { out.hasBagPane = true; } }' +
+      'out.hasGrid = !!document.getElementById("bagGrid");' +
+      'out.hasEqSlot = !!document.getElementById("bagEqSlot");' +
+      'return JSON.stringify(out);'
+    ) || '{}');
+    console.log('        [菜单] 按钮="' + menuQ.btnTxt + '" 独立背包按钮=' + menuQ.hasBagBtn +
+      ' 背包标签=' + menuQ.hasBagTab + ' 背包页=' + menuQ.hasBagPane +
+      ' 格子=' + menuQ.hasGrid + ' 装备槽=' + menuQ.hasEqSlot);
+    ok(String(menuQ.btnTxt).indexOf('菜单') >= 0, '★★ 设置按钮改成「菜单」了（' + menuQ.btnTxt + '）');
+    ok(menuQ.hasBagBtn === false, '★★ 界面上少了一个按钮（独立背包按钮已去掉 ✓）');
+    ok(menuQ.hasBagTab === true && menuQ.hasBagPane === true, '★ 背包是菜单里的一个标签页 ✓');
+    ok(menuQ.hasGrid === true && menuQ.hasEqSlot === true,
+      '★★ 背包是【格子 + 装备槽】（不是纯文字列表 ✓ 用户要求像 MC）');
+
+    // 打开菜单 → 背包页 → 等拉取
+    await A.eval('openSet("bag"); return 1;');
+    await sleep(1500);
+    const bagQ = JSON.parse(await A.eval(
+      'var out = {};' +
+      'out.tab = SETCFG.setTab;' +
+      'var sl = document.querySelectorAll("#bagGrid .slot"); out.slots = sl.length;' +
+      'out.empty = 0; out.withIcon = 0; out.weapons = 0;' +
+      'out.eqSlot = (document.getElementById("bagEqSlot") || {}).className || "";' +
+      'for (var k = 0; k < sl.length; k++) {' +
+      '  if (sl[k].className.indexOf("empty") >= 0) { out.empty++; continue; }' +
+      '  if (sl[k].querySelector("svg")) { out.withIcon++; }' +
+      '  if (sl[k].getAttribute("data-w") === "1") { out.weapons++; } }' +
+      'out.items = BAG.items.length;' +
+      'out.cd0 = G.ATK_CD; out.reach0 = G.ATK_RANGE; out.arc0 = G.ATK_ARC;' +
+      'out.stat0 = (document.getElementById("bagStat").textContent || "").slice(0, 40);' +
+      // 悬停第一件武器 → 提示框要出来（MC 那种 ✓）
+      'var w0 = null;' +
+      'for (var m = 0; m < sl.length; m++) {' +
+      '  if (sl[m].getAttribute && sl[m].getAttribute("data-w") === "1") { w0 = sl[m]; break; } }' +
+      'out.hasW = !!w0;' +
+      'if (w0) { var r = w0.getBoundingClientRect();' +
+      '  w0.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: r.left + 8, clientY: r.top + 8 })); }' +
+      'var bx = document.getElementById("bagTipBox");' +
+      'out.tipShow = bx ? bx.style.display : "none";' +
+      'out.tipTxt = bx ? (bx.textContent || "").slice(0, 40) : "";' +
+      'if (w0) { w0.click(); }' +
+      'return JSON.stringify(out);'
+    ) || '{}');
+    console.log('        [背包] 格子 ' + bagQ.slots + ' 个（空 ' + bagQ.empty + ' · 有图标 ' +
+      bagQ.withIcon + ' · 其中武器 ' + bagQ.weapons + '）共 ' + bagQ.items + ' 件');
+    console.log('        [背包] 悬停提示=' + bagQ.tipShow + ' "' + bagQ.tipTxt + '"');
+    console.log('        [背包] 属性栏：' + bagQ.stat0);
+    ok(bagQ.tab === 'bag', '★ 菜单停在背包页（SETCFG.setTab="bag" ✓）');
+    ok(bagQ.slots >= 16 && bagQ.slots % 8 === 0,
+      '★★ 背包是格子（' + bagQ.slots + ' 个槽，8 的倍数 —— 空槽也画出来才像格子 ✓）');
+    ok(bagQ.withIcon >= 1 && bagQ.withIcon === bagQ.weapons,
+      '★★★ 每件武器都有【图标】（' + bagQ.withIcon + '/' + bagQ.weapons + ' 个槽画出了 SVG ✓）');
+    ok(bagQ.tipShow === 'block' && bagQ.tipTxt.length > 2,
+      '★★ 悬停显示详情（" + bagQ.tipTxt + " ✓ 像 MC 的提示框）');
+    ok(/攻击力|射程|攻速/.test(bagQ.stat0), '★★ 属性栏把武器的真实数值算给玩家看 ✓');
+    await sleep(1700);
+    const eqQ = JSON.parse(await A.eval(
+      'return JSON.stringify({ wp: (MY_WEAPON || {}).name || "(默认剑)",' +
+      ' cd: Math.round(G.ATK_CD * 1000) / 1000, reach: G.ATK_RANGE, arc: G.ATK_ARC,' +
+      ' eqTxt: (document.getElementById("bagEqSlot").textContent || "").slice(0, 20),' +
+      ' eqW: document.getElementById("bagEqSlot").getAttribute("data-w") });'
+    ) || '{}');
+    console.log('        [背包] 穿后：' + eqQ.wp + '  cd=' + eqQ.cd + ' reach=' + eqQ.reach + ' arc=' + eqQ.arc);
+    ok(eqQ.wp !== '(默认剑)', '★★ 点一下格子就穿上了（现在是 ' + eqQ.wp + ' ✓）');
+    ok(eqQ.eqW === '1', '★ 装备槽里显示出了手上这把（图标 + 品阶角标 ✓）');
+    ok(eqQ.cd > bagQ.cd0 + 0.05,
+      '★★★ 换武器之后本地冷却跟着变（' + bagQ.cd0 + ' → ' + eqQ.cd + ' 秒，双手斧更慢 ✓）');
+    ok(eqQ.reach > bagQ.reach0 - 0.01 && eqQ.arc > bagQ.arc0 + 0.05,
+      '★★★ 射程/攻击弧也跟着换了（' + bagQ.reach0 + '→' + eqQ.reach + ' 米 · ' +
+      bagQ.arc0 + '→' + eqQ.arc + ' 弧度 ✓）');
+    await A.eval('closeSet(); return 1;');
+
     // 顺手截一张设置面板（SHOT2）—— 第三参数可指定截哪一页（默认 about ✓）
     if (process.env.SHOT2) {
       await A.eval('openSet(); setTab(' + JSON.stringify(process.env.SHOT_TAB || 'about') + '); return 1;');

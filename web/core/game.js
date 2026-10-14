@@ -417,7 +417,8 @@ initGlowLights();          // ★ 第 45 轮：2 盏发光灯在启动时就建�
       mobs[bi].boxDbg = bb; scene.add(bb);
     }
   }
-  bindInput(); bindSet(); bindDead(); applySet(); loadProfile();
+  bindInput(); bindSet(); bindBag(); bindDead(); applySet(); loadProfile();
+  // ★ 第 48 轮：bindBag() = 背包/装备那套（现在是菜单里的一个标签页 ✓ 快捷键 B）
   bindLogin();   // 登录浮层的按钮
   netInit();   // ★ 初始化联网（有 token 就直接连，没有就弹登录）✓
   /* ★ 手机测试用：?user=名字&pass=密码 → 自动登录（不用先去 2D 页面登录 ✓ 不给参数就完全不影响 ✓）*/

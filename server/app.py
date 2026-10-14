@@ -318,8 +318,50 @@ class Api(BaseHTTPRequestHandler):
             return self._send(400, {'ok': False, 'error': '不认识的动作'})
         if self.world is None:
             return self._send(503, {'ok': False, 'error': '世界没起来'})
-        self.world.post_admin(act, {k: v for k, v in body.items() if k != 'act'})
+        payload = {k: v for k, v in body.items() if k != 'act'}
+        # ★★ give 在【HTTP 层】直接做 ★★
+        #   为什么：发东西本质是【往背包表里插一条】，和"玩家在不在线"没关系 ✓
+        #   放在 tick 线程做的话，离线玩家就发不进去（而且 tick 线程不许查库 ✗）
+        #   踩过：管理员给还没上线的玩家发武器 → 静默什么也没发生 ✗
+        if act == 'give':
+            return self._admin_give(payload)
+        self.world.post_admin(act, payload)
         return self._send(200, {'ok': True, 'act': act})
+
+    def _admin_give(self, d):
+        """给某个角色发一件武器（写库 ✓ 在线的话再顺手告诉他一声 ✓）"""
+        import auth as authmod2
+        name = (d.get('name') or '').strip()
+        if not name:
+            return self._send(400, {'ok': False, 'error': '没写玩家名字'})
+        rid = lvl = None
+        try:
+            with dbmod.db(self.cfg) as c:
+                row = c.execute('SELECT id, level FROM roles WHERE name=? LIMIT 1', (name,)).fetchone()
+                if row:
+                    rid, lvl = row[0], int(row[1] or 1)
+        except Exception as e:
+            return self._send(500, {'ok': False, 'error': '查角色失败：%s' % e})
+        if rid is None:
+            return self._send(404, {'ok': False, 'error': '没有这个角色：%s' % name})
+        import weapons
+        look = d.get('kind') or 'sword'
+        if look not in weapons.TYPES:
+            look = 'sword'
+        tier = max(0, min(11, int(d.get('tier') or 0)))
+        w = weapons.make_weapon(look, tier, weapons.roll_coeff(look), max(1, lvl // 4 + 1))
+        w['reqLevel'] = 1                     # 管理员发的就不卡等级 ✓
+        try:
+            with dbmod.db(self.cfg) as c:
+                c.execute('INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
+                          ' VALUES(?,0,-1,1,?,?)',
+                          (rid, json.dumps(w, ensure_ascii=False), dbmod.now_ms()))
+        except Exception as e:
+            return self._send(500, {'ok': False, 'error': '写背包失败：%s' % e})
+        # 在线的话顺手告诉他（离线也无所谓，打开背包就能看到 ✓）
+        self.world.post_admin('notify', {'name': name,
+                                         'text': '管理员给了你一件【%s】—— 打开菜单→背包就能穿 ✓' % w['name']})
+        return self._send(200, {'ok': True, 'act': 'give', 'item': w['name'], 'role': name})
 
     # ---------- 背包 / 装备 ----------
 

@@ -471,6 +471,7 @@ function setTab(name) {
   }
   if (!hit) { return setTab('view'); }   // 存了个不存在的分类 → 退回第一页 ✓
   SETCFG.setTab = name;
+  if (name === 'bag') { bagFetch(bagRender); }   // ★ 切到背包页就拉一次（只读接口 ✓ 很便宜）
   return name;
 }
 
@@ -503,10 +504,13 @@ function doLogout() {
 }
 
 /* ---------- openSet ---------- */
-function openSet() {
+function openSet(wantTab) {
   var p = document.getElementById('setPanel');
   if (!p) { return; }
   p.style.display = 'block';
+  // ★ 第 48 轮：openSet('bag') 可以直接停在背包页（快捷键 B 用 ✓）
+  if (wantTab) { setTab(wantTab); }
+  if ((SETCFG.setTab || '') === 'bag') { bagFetch(bagRender); }   // 打开时拉一次背包 ✓
   mkOpts('rowDpr', [{ v: 1.0, t: '1.0x', s: '省' }, { v: 1.5, t: '1.5x', s: '较快' },
                     { v: 2.0, t: '2.0x', s: '清晰' }, { v: 2.5, t: '2.5x', s: '很清晰' },
                     { v: 3.0, t: '3.0x', s: '最清晰' }], 'dpr', setDpr());
@@ -580,6 +584,10 @@ function openSet() {
     addBtn('清除多余僵尸', function () { clearMobs(); openSet(); });
     addBtn('碰撞箱线框', function () { toggleBox(); openSet(); }, _boxOn);
     addBtn('地面贴图调试', function () { cycleTex(); openSet(); });
+    /* ★ 第 48 轮：发武器也是【管理页的能力】了（玩家端默认被拒 ✓）
+       留这个按钮是为了本地调试：把 config 的 allow_player_debug 改成 true 就能用 ✓
+       没开的话服务器会回一条提示、这里会弹出来（不会静默失败 ✓）*/
+    addBtn('调试：给我一件武器', function () { wsSend('giveweapon', {}); closeSet(); });
     /* ★★ 玩家互相伤害（PvP）开关 —— 全服统一 ✓ 关着的时候砍人只出动作不掉血 ✓ */
     addBtn((NET.pvp ? '☑ ' : '☐ ') + '玩家互相伤害（PvP）' + (NET.on ? '' : ' · 需联机'),
            function () { netSetPvp(!NET.pvp); openSet(); }, !!NET.pvp);
@@ -641,6 +649,251 @@ function openSet() {
 
   /* ★ 分类导航：按记住的那一页显示（第 31 轮）✓ */
   setTab(SETCFG.setTab || 'view');
+}
+
+/* ============================================================
+   ★ 背包 / 装备（第 47 轮做内容，第 48 轮改成【菜单里的标签页】）
+   为什么要它：武器会掉了，可是玩家【看不见、穿不上】✗ —— 那系统等于不存在 ✗
+   ★ 这一层是唯一能碰 DOM 的（core 只给数值 ✓）
+   ★ 穿上/脱下由【服务器】判定（是不是他的、等级够不够 ✓）—— 这里只发意图 ✓
+   ============================================================ */
+/* ★★ 图标：全部【程序画】的 SVG 描边 ★★
+   为什么不放图片素材：和武器模型一个思路 —— 不加素材 ✓ 也就不用担心版权/加载 ✓
+   颜色走 currentColor → 由【品阶色】着色（和地上掉落物用的是同一套 LOOT_COL ✓ 玩家能对上）*/
+var ICON_SVG = function (d) { return '<svg viewBox="0 0 24 24" stroke="currentColor">' + d + '</svg>'; };
+var ITEM_ICON = {
+  sword:  ICON_SVG('<path d="M12 2v13"/><path d="M8.5 15h7"/><path d="M12 15v6"/>'),
+  dagger: ICON_SVG('<path d="M12 5v9"/><path d="M9.5 14h5"/><path d="M12 14v5"/>'),
+  saber:  ICON_SVG('<path d="M13.5 2c-1 5-3.5 9-6.5 12"/><path d="M7 14h5"/><path d="M11 14l1 6"/>'),
+  staff:  ICON_SVG('<path d="M12 2v20"/><path d="M9 4h6"/><path d="M9 20h6"/>'),
+  spear:  ICON_SVG('<path d="M12 4v18"/><path d="M12 3l-2.5 5M12 3l2.5 5"/><path d="M9 9h6"/>'),
+  axe:    ICON_SVG('<path d="M10 3v18"/><path d="M10 6c5 0 8 2 8 5s-3 5-8 5"/>'),
+  hammer: ICON_SVG('<path d="M12 4v17"/><path d="M7 4h10v6H7z"/>'),
+  bow:    ICON_SVG('<path d="M6 3c6 3 6 15 0 18"/><path d="M6 3v18"/><path d="M6 3l2 3M6 21l2-3"/>'),
+  cloth:  ICON_SVG('<path d="M4 8l4-4 4 4 4-4 4 4v8l-4 4-4-4-4 4-4-4z"/>'),
+  iron:   ICON_SVG('<path d="M4 8h16v8H4z"/><path d="M8 8v8M16 8v8"/>'),
+  gear:   ICON_SVG('<circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>'),
+  vial:   ICON_SVG('<path d="M10 3h4v4l3 9a3 3 0 0 1-3 4h-4a3 3 0 0 1-3-4l3-9z"/><path d="M8.5 14h7"/>'),
+  crystal:ICON_SVG('<path d="M12 2l6 6-6 14-6-14z"/><path d="M6 8h12"/>'),
+  bone:   ICON_SVG('<path d="M7 7l10 10"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="6" r="2.2"/>'),
+  batt:   ICON_SVG('<path d="M4 8h13v8H4z"/><path d="M19 11v2"/><path d="M7 10v4M10 10v4"/>'),
+  glass:  ICON_SVG('<path d="M6 3l2 18M18 3l-2 18"/><path d="M7 9h10M6.6 15h10.8"/>'),
+  band:   ICON_SVG('<path d="M4 14l10-10 6 6-10 10z"/><path d="M9 9l6 6M12 6l6 6"/>'),
+  box:    ICON_SVG('<path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M4 7l8 4 8-4M12 11v10"/>')
+};
+var MAT_ICON_BY_NAME = {
+  '破布': 'cloth', '绷带': 'band', '锈铁': 'iron', '螺丝钉': 'gear', '生锈齿轮': 'gear',
+  '碎玻璃': 'glass', '灵气结晶': 'crystal', '兽骨': 'bone', '电池': 'batt',
+  '疫苗': 'vial', '铜线卷': 'gear'
+};
+function iconOfItem(it) {
+  if (!it) { return ITEM_ICON.box; }
+  if (it.slot === 'weapon') { return ITEM_ICON[it.look] || ITEM_ICON.sword; }
+  return ITEM_ICON[MAT_ICON_BY_NAME[it.name] || 'box'];
+}
+/* 品阶色 —— 和 core 里地上掉落物同一套 LOOT_COL ✓ */
+function tierHex(tier) {
+  var n = Math.max(0, Math.min(11, tier | 0));
+  var v = (typeof LOOT_COL !== 'undefined' && LOOT_COL[n]) || 0xffffff;
+  var s = v.toString(16);
+  while (s.length < 6) { s = '0' + s; }
+  return '#' + s;
+}
+
+var BAG = { items: [], weapon: null, weaponItemId: null, busy: false, msg: '' };
+
+function bagToken() {
+  try { return localStorage.getItem('token') || ''; } catch (e) { return ''; }
+}
+
+/* 拉一次背包（只读接口 ✓ 不用占 tick 线程）*/
+function bagFetch(cb) {
+  if (!NET.on || !WSC.ready) {           // 单机/离线：没有背包这个东西 ✓
+    BAG.items = []; BAG.weapon = MY_WEAPON; BAG.weaponItemId = null;
+    BAG.msg = '单机模式没有背包（联机才有 ✓）';
+    if (cb) { cb(); }
+    return;
+  }
+  fetch('/api/bag', { headers: { 'X-Token': bagToken() } })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (!j || !j.ok) { BAG.msg = (j && j.error) || '读背包失败'; }
+      else {
+        BAG.items = j.items || [];
+        BAG.weapon = j.weapon || null;
+        BAG.weaponItemId = j.weaponItemId || null;
+        BAG.msg = '';
+        setWeapon(BAG.weapon);           // ★ 手上的武器 → 射程/攻击弧/冷却一起换 ✓
+      }
+      if (cb) { cb(); }
+    })
+    .catch(function () { BAG.msg = '读背包失败（网络）'; if (cb) { cb(); } });
+}
+
+/* 攻击力那一栏：把服务器的公式在本地【照算一遍】给玩家看 ✓（服务器才是权威 ✓）
+   攻击力 = 固有攻击 × 武器系数 + 武器平伤（方案 §7.5）
+   固有攻击 = 10 + 3L + 0.08L²（方案 §4.5）*/
+function bagAtkPreview(w) {
+  var lv = (WSC.role && WSC.role.level) || 1;
+  var inherent = 10 + 3 * lv + 0.08 * lv * lv;
+  if (!w || !w.base) { return inherent; }
+  var flat = [3, 6, 10, 16, 24, 36, 52, 74, 104, 146, 205, 290][Math.max(0, Math.min(11, w.tier || 0))];
+  var atk = inherent * (+w.base.coeff || 1) + flat;
+  var cap = inherent * 2.5;              // ★ 装备贡献封顶 60%（§7.5）
+  return Math.min(atk, cap);
+}
+
+function bagRender() {
+  var grid = document.getElementById('bagGrid');
+  var eqs = document.getElementById('bagEqSlot');
+  var st = document.getElementById('bagStat');
+  var mg = document.getElementById('bagMsg');
+  var cnt = document.getElementById('bagCount');
+  if (!grid || !eqs || !st) { return; }
+
+  /* ---- 背包格子（像 MC：8 列，空位也画出来 → 才像格子而不是列表 ✓）---- */
+  var html = '';
+  for (var i = 0; i < BAG.items.length; i++) {
+    var e = BAG.items[i];
+    var it = e.item || {};
+    var isW = (it.slot === 'weapon');
+    var col = tierHex(it.tier || 0);
+    var cur = (BAG.weaponItemId && e.id === BAG.weaponItemId) ? ' cur' : '';
+    html += '<div class="slot' + cur + '" data-id="' + e.id + '" data-w="' + (isW ? 1 : 0) +
+      '" data-i="' + i + '"><span style="color:' + col + '">' + iconOfItem(it) + '</span>' +
+      '<span class="tg">' + (it.tier || 0) + '</span></div>';
+  }
+  var total = Math.max(16, Math.ceil((BAG.items.length + 1) / 8) * 8);
+  for (var p = BAG.items.length; p < total; p++) { html += '<div class="slot empty"></div>'; }
+  grid.innerHTML = html;
+  if (cnt) { cnt.textContent = BAG.items.length ? (BAG.items.length + ' 件') : ''; }
+
+  /* ---- 装备槽 ---- */
+  var w = BAG.weapon;
+  if (!w) {
+    eqs.className = 'slot eqslot empty';
+    eqs.innerHTML = '<span style="color:#4a4a52">' + ITEM_ICON.sword + '</span>';
+    eqs.setAttribute('data-w', '0');
+  } else {
+    eqs.className = 'slot eqslot';
+    eqs.innerHTML = '<span style="color:' + tierHex(w.tier || 0) + '">' + iconOfItem(w) + '</span>' +
+      '<span class="tg">' + (w.tier || 0) + '</span>';
+    eqs.setAttribute('data-w', '1');
+  }
+
+  /* ---- 数值（服务器才是权威；这里只是把公式照算一遍给玩家看 ✓）---- */
+  var atk = bagAtkPreview(w);
+  var spd = (w && w.base && w.base.atkSpeed) || 1.15;
+  var reach = (w && w.base && w.base.reach) || 2.4;
+  var arc = (w && w.base && w.base.arc) || 1.05;
+  var lv = (WSC.role && WSC.role.level) || 1;
+  var inherent = 10 + 3 * lv + 0.08 * lv * lv;
+  st.innerHTML =
+    '<span>攻击力 <s>' + atk.toFixed(1) + '</s>（武器占 ' +
+      (atk > 0 ? ((atk - inherent) / atk * 100).toFixed(0) : 0) + '%，上限 60%）</span>' +
+    '<span>每秒 <s>' + (atk / (0.62 / spd)).toFixed(1) + '</s></span>' +
+    '<span>攻速 <s>×' + (+spd).toFixed(2) + '</s>（' + (0.62 / spd).toFixed(2) + ' 秒一刀）</span>' +
+    '<span>射程 <s>' + (+reach).toFixed(1) + '</s> 米</span>' +
+    '<span>弧 <s>' + (+arc).toFixed(2) + '</s>（正前方 ' + Math.round(arc * 2 * 180 / Math.PI) + '°）</span>';
+  if (mg) {
+    mg.textContent = BAG.msg || (BAG.items.length ? '' :
+      '背包是空的 —— 打僵尸有机会掉武器（走过去自动捡 ✓）');
+  }
+}
+
+/* 悬停详情（MC 那种提示框 ✓）*/
+function bagTipAt(e, el) {
+  var box = document.getElementById('bagTipBox');
+  if (!box || !el) { return; }
+  var idx = +el.getAttribute('data-i');
+  var it = (BAG.items[idx] || {}).item;
+  if (!it) { return; }
+  var extra = '';
+  if (it.slot === 'weapon' && it.base) {
+    var spd = +it.base.atkSpeed || 1, rc = +it.base.reach || 0, ac = +it.base.arc || 0;
+    extra = '<i>攻速 ×' + spd.toFixed(2) + '（' + (0.62 / spd).toFixed(2) + ' 秒一刀）<br>' +
+      '射程 ' + rc.toFixed(1) + ' 米 · 弧 ' + ac.toFixed(2) + '</i><br>' +
+      '<i>攻击力 ≈ ' + bagAtkPreview(it).toFixed(1) + '</i><br>';
+  }
+  box.innerHTML = '<b style="color:' + tierHex(it.tier || 0) + '">' + (it.name || '?') + '</b>' +
+    '<i> · ' + (it.tier || 0) + ' 阶</i><br>' + extra +
+    '<i>' + (it.slot === 'weapon' ? '点一下穿上' : '材料（以后做合成用）') + '</i>';
+  box.style.display = 'block';
+  box.style.left = Math.min(window.innerWidth - 240, e.clientX + 14) + 'px';
+  box.style.top = Math.min(window.innerHeight - 90, e.clientY + 12) + 'px';
+}
+function bagTipHide() {
+  var box = document.getElementById('bagTipBox');
+  if (box) { box.style.display = 'none'; }
+}
+
+function bagEquip(id) {
+  if (!NET.on || !WSC.ready) { return; }
+  if (BAG.busy) { return; }
+  BAG.busy = true;
+  BAG.msg = '正在穿上…';
+  bagRender();
+  if (!wsSend('equip', { itemId: id })) { BAG.busy = false; BAG.msg = '没连上服务器'; bagRender(); return; }
+  // ★ 服务器的回执走 ws（notice + weapon 消息）→ 这里稍等一下重新拉一次 ✓
+  setTimeout(function () { BAG.busy = false; bagFetch(bagRender); }, 420);
+}
+
+function bagUnequip() {
+  if (!NET.on || !WSC.ready || BAG.busy) { return; }
+  BAG.busy = true;
+  BAG.msg = '正在脱下…';
+  bagRender();
+  if (!wsSend('unequip', {})) { BAG.busy = false; BAG.msg = '没连上服务器'; bagRender(); return; }
+  setTimeout(function () { BAG.busy = false; bagFetch(bagRender); }, 420);
+}
+
+function bindBag() {
+  var grid = document.getElementById('bagGrid');
+  if (grid) {
+    grid.onclick = function (e) {
+      var el = e.target;
+      while (el && el !== grid && !(el.getAttribute && el.getAttribute('data-id'))) { el = el.parentNode; }
+      if (!el || el === grid || !el.getAttribute) { return; }
+      if (el.getAttribute('data-w') !== '1') { return; }   // 材料不能穿 ✓
+      bagEquip(el.getAttribute('data-id'));
+    };
+    grid.onmousemove = function (e) {
+      var el = e.target;
+      while (el && el !== grid && !(el.getAttribute && el.getAttribute('data-id'))) { el = el.parentNode; }
+      if (!el || el === grid || !el.getAttribute) { bagTipHide(); return; }
+      bagTipAt(e, el);
+    };
+    grid.onmouseleave = bagTipHide;
+  }
+  // 点装备槽 = 脱下（MC 那种"点一下就摘"✓）
+  var eqs = document.getElementById('bagEqSlot');
+  if (eqs) {
+    eqs.onclick = function (e) {
+      if (e) { e.preventDefault(); }
+      if (eqs.getAttribute('data-w') !== '1') { return; }
+      bagUnequip();
+    };
+    eqs.onmousemove = function (e) {
+      var box = document.getElementById('bagTipBox');
+      var w = BAG.weapon;
+      if (!box || !w) { bagTipHide(); return; }
+      box.innerHTML = '<b style="color:' + tierHex(w.tier || 0) + '">' + (w.name || '?') + '</b>' +
+        '<i> · ' + (w.tier || 0) + ' 阶 · 已装备</i><br><i>点一下脱下</i>';
+      box.style.display = 'block';
+      box.style.left = Math.min(window.innerWidth - 240, e.clientX + 14) + 'px';
+      box.style.top = Math.min(window.innerHeight - 70, e.clientY + 12) + 'px';
+    };
+    eqs.onmouseleave = bagTipHide;
+  }
+  // ★ 快捷键 B：打开菜单并停在背包页
+  window.addEventListener('keydown', function (e) {
+    if (e.key !== 'b' && e.key !== 'B') { return; }
+    var tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA') { return; }
+    var panel = document.getElementById('setPanel');
+    if (panel && panel.style.display === 'block') { closeSet(); return; }
+    openSet('bag');
+  });
 }
 
 /* ---------- bindSet ---------- */
@@ -733,6 +986,15 @@ function wsOnMessage(raw) {
     return;
   }
   if (t === 'error' || t === 'notice') { if (d.msg || d.text) { toast(d.msg || d.text); } return; }
+  /* ★ 第 47 轮：服务器告诉我「手上的武器换了」（穿上/脱下之后它主动推 ✓）
+     → 本地预测的射程/攻击弧/冷却跟着换 ✓ 背包页开着的话顺手刷一下 ✓ */
+  if (t === 'weapon') {
+    setWeapon(d.w || null);
+    BAG.weapon = d.w || null;
+    BAG.busy = false;
+    if ((SETCFG.setTab || '') === 'bag') { bagFetch(bagRender); }
+    return;
+  }
   if (t === 'chat') { toast('[' + (d['from'] || '?') + '] ' + (d.text || '')); return; }
   if (t === 'snd') { if (d.name) { sfxAt(d.name, d.x || P.x, d.z || P.z, 1.0); } return; }
   if (t === 'hurt') { netApplyHurt(d); return; }
@@ -745,6 +1007,7 @@ function wsWelcome(d) {
   WSC.ready = true;
   WSC.role = d.role || null;
   if (d.cfg) { WSC.cfg = d.cfg; }
+  setWeapon((d.role && d.role.weapon) || null);   // ★ 第 47 轮：进世界就知道手上拿的是啥 ✓
   WSC.myId = (d.role && d.role.id) || 0;
   NET.myUid = WSC.myId;
   if (window.hideLogin) { hideLogin(); }
