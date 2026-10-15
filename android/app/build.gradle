@@ -1,0 +1,36 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.xiuxian.game'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.xiuxian.game"
+        minSdk 23                 // Android 6.0+（WebView 够新 ✓ 覆盖面够广 ✓）
+        targetSdk 34
+        versionCode 1
+        versionName "0.1.0"
+    }
+
+    buildTypes {
+        release {
+            // 试玩阶段先不混淆（出问题好查 ✓ 正式发布再开）
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+}
+
+dependencies {
+    // ★ 一个第三方依赖都没有 —— 纯 Android 原生 WebView 壳
+    //   为什么：依赖越少，编译越不容易出问题，包也越小 ✓
+}
