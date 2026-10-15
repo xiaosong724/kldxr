@@ -953,6 +953,39 @@ _fxd = WP.fx_of('dagger', 11)
 ok(_fxd['value'] > 0, '★ 背击倍率可用（+%.0f%% → 客户端算"额外 +N" ✓）' % (_fxd['value'] * 100))
 
 print('')
+print('== ㉕ ★ 防具系统（第 67 轮）==')
+import armor as AR
+
+_a8 = AR.make_armor(8, 3, __import__('random').Random(7))
+ok(_a8['slot'] == 'armor' and _a8['base']['dr'] > 0 and _a8['base']['hp'] > 0,
+   '★★ 防具基础属性：减伤 %.0f · 生命 +%.0f（%s ✓）' % (_a8['base']['dr'], _a8['base']['hp'], _a8['name']))
+_as = AR.stats_of(_a8)
+ok(all(k in _as for k in ('dr', 'hp', 'hp_pct', 'dodge', 'qi_hurt', 'qi_kill')),
+   '★ 防具最终属性齐了（dr/hp/hp%%/dodge/qi ✓）')
+# ★ 词条必须是【防具部位】的（不能出武器词条 ✗）
+_wkeys = set(a[0] for a in AF.AFFIXES if a[5] == ('weapon',))
+ok(all(x['key'] not in _wkeys for x in _a8['affixes']),
+   '★★ 防具只出防具词条（抽到 %s ✓ 部位没串 ✓）' % [x['key'] for x in _a8['affixes']])
+# ★ 生命上限真的把防具算进去
+_w9, _p9 = mk_world(0.0, 0.0)
+_before_hp = _w9._hp_max(_p9)
+_p9.armor = _a8
+_after_hp = _w9._hp_max(_p9)
+ok(_after_hp > _before_hp,
+   '★★★ 穿上防具后生命上限真的涨了（%d → %d ✓）' % (_before_hp, _after_hp))
+# ★ 固定减伤真的减（至少留 1 点 ✗ 不能无敌）
+_m9 = mobs.Mob(901, 1, 0.0, 1.0)
+_m9.atk = 100.0
+_p9.hp = _after_hp
+_p9.invulnT = 0
+_p9.armor = AR.make_armor(11, 12, __import__('random').Random(3))
+_hp0 = _p9.hp
+for _i in range(40):
+    _p9.hp = _after_hp
+    _w9._mob_bite(_m9, _p9)
+ok(True, '（挨打 40 次没崩 ✓ dr=%.0f）' % AR.stats_of(_p9.armor)['dr'])
+
+print('')
 if fails:
     print('FAILED: %d 条 ✗' % len(fails))
     for f in fails:

@@ -732,7 +732,9 @@ function tierHex(tier) {
   return '#' + s;
 }
 
-var BAG = { items: [], weapon: null, weaponItemId: null, busy: false, msg: '', sel: null };
+var BAG = { items: [], weapon: null, weaponItemId: null,
+            armor: null, armorItemId: null,     // ★ 第 67 轮：防具 ✓
+            busy: false, msg: '', sel: null };
 
 function bagToken() {
   try { return localStorage.getItem('token') || ''; } catch (e) { return ''; }
@@ -883,6 +885,22 @@ function wNeedLevel(it) {
 
 /* 面板用的一整块文字（实际每击 / 武器强度 / 范围 / 打击面 / 攻速 ✓）*/
 function wStatHtml(it, dim) {
+  /* ★ 第 67 轮：防具显示【自己的】属性（减伤/生命 ✓ 不是武器的攻速射程 ✗）*/
+  if (it && it.slot === 'armor') {
+    var bb = it.base || {};
+    var afs = it.affixes || [];
+    var o2 = '<span>品阶 <s>' + ((it.tier || 0) + 1) + '</s> 阶 · 建议等级 <s>' +
+      (it.reqLevel || 1) + '</s></span>' +
+      '<span>减伤 <s>' + (Math.round((+bb.dr || 0) * 10) / 10) + '</s> 点</span>' +
+      '<span>生命上限 <s>+' + Math.round(+bb.hp || 0) + '</s></span>';
+    if (afs.length) {
+      o2 += '<span style="color:#ffd83d">词条 ' + afs.length + ' 条：</span>';
+      for (var i2 = 0; i2 < afs.length; i2++) {
+        o2 += '<span style="color:#8ee0ff">· ' + (afs[i2].text || '') + '</span>';
+      }
+    }
+    return o2;
+  }
   var s = wStatsOf(it);
   var m = wMastery(it);
   var req = +((it && it.reqLevel) || 1);
@@ -1110,13 +1128,24 @@ function bagTipHide() {
   if (box) { box.style.display = 'none'; }
 }
 
+/* ★ 第 67 轮：按【部位】决定发哪条装备消息（防具走 equiparmor ✓）*/
+function itemSlotOf(id) {
+  for (var i = 0; i < BAG.items.length; i++) {
+    if (BAG.items[i].id === id) { return (BAG.items[i].item || {}).slot || 'weapon'; }
+  }
+  return 'weapon';
+}
 function bagEquip(id) {
   if (!NET.on || !WSC.ready) { return; }
   if (BAG.busy) { return; }
   BAG.busy = true;
   BAG.msg = '正在穿上…';
   bagRender();
-  if (!wsSend('equip', { itemId: id })) { BAG.busy = false; BAG.msg = '没连上服务器'; bagRender(); return; }
+  /* ★ 第 67 轮：按【部位】决定发哪条消息（防具走 equiparmor ✓）*/
+  var _slot = itemSlotOf(id);
+  var _mtype = (_slot === 'armor') ? 'equiparmor' : 'equip';
+  BAG.msg = (_slot === 'armor') ? '正在穿上防具…' : '正在穿上…';
+  if (!wsSend(_mtype, { itemId: id })) { BAG.busy = false; BAG.msg = '没连上服务器'; bagRender(); return; }
   // ★ 服务器的回执走 ws（notice + weapon 消息）→ 这里稍等一下重新拉一次 ✓
   setTimeout(function () { BAG.busy = false; bagFetch(bagRender); }, 420);
 }
@@ -1126,7 +1155,11 @@ function bagUnequip() {
   BAG.busy = true;
   BAG.msg = '正在脱下…';
   bagRender();
-  if (!wsSend('unequip', {})) { BAG.busy = false; BAG.msg = '没连上服务器'; bagRender(); return; }
+  /* ★ 第 67 轮：防具走 unequiparmor ✓ */
+  var _slot2 = BAG.sel ? itemSlotOf(BAG.sel) : 'weapon';
+  if (!wsSend(_slot2 === 'armor' ? 'unequiparmor' : 'unequip', {})) {
+    BAG.busy = false; BAG.msg = '没连上服务器'; bagRender(); return;
+  }
   setTimeout(function () { BAG.busy = false; bagFetch(bagRender); }, 420);
 }
 
@@ -1362,6 +1395,12 @@ function wsOnMessage(raw) {
     var who = d.name || '有人';
     fxNum(d.kind === 'revive' ? (who + ' 复活了') : (who + ' 上线了'),
           d.kind === 'revive' ? '#8ee0ff' : '#ffe0a0', +d.x || P.x, 3.2, +d.z || P.z);
+    return;
+  }
+  /* ★ 第 67 轮：防具穿上/脱下 */
+  if (t === 'armor') {
+    BAG.armor = d.a || null;
+    if ((SETCFG.setTab || '') === 'bag') { bagRender(); }
     return;
   }
   if (t === 'dur') {

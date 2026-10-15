@@ -297,6 +297,39 @@ def weapon_of(cfg, role_id):
     return w, row[0]
 
 
+def armor_of(cfg, role_id):
+    """当前穿的防具（没有就 None ✓）"""
+    return _equipped(cfg, role_id, 'armor')
+
+
+def equip_armor(cfg, role_id, item_id):
+    """穿上防具（★ 同样【没有等级门槛】✓ 高级防具只是发挥不出来 ✓）"""
+    if not item_id:
+        return False, '没指定装备'
+    import json
+    with db(self.cfg if False else cfg) as c:
+        row = c.execute('SELECT item_json FROM items WHERE id=? AND role_id=?',
+                        (int(item_id), role_id)).fetchone()
+        if not row:
+            return False, '背包里没有这件装备'
+        try:
+            it = json.loads(row[0])
+        except Exception:
+            return False, '这件装备的数据坏了'
+        if (it or {}).get('slot') != 'armor':
+            return False, '这不是防具'
+        c.execute('DELETE FROM equipment WHERE role_id=? AND slot=?', (role_id, 'armor'))
+        c.execute('INSERT INTO equipment (role_id, slot, item_id) VALUES (?,?,?)',
+                  (role_id, 'armor', int(item_id)))
+    return True, it
+
+
+def unequip_armor(cfg, role_id):
+    with db(cfg) as c:
+        c.execute('DELETE FROM equipment WHERE role_id=? AND slot=?', (role_id, 'armor'))
+    return True, None
+
+
 def equip_weapon(cfg, role_id, item_id, role_level):
     """装上一件武器 → (True, weapon 字典) / (False, 原因)
 

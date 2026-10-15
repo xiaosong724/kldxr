@@ -480,7 +480,9 @@ class Api(BaseHTTPRequestHandler):
         rid = r['role']['id']
         w, wid = authmod.weapon_of(self.cfg, rid)
         return self._send(200, {'ok': True, 'items': authmod.bag_of(self.cfg, rid),
-                                'weapon': w, 'weaponItemId': wid})
+                                'weapon': w, 'weaponItemId': wid,
+                                    'armor': authmod.armor_of(self.cfg, rid)[0],
+                                    'armorItemId': authmod.armor_of(self.cfg, rid)[1]})
 
     # ---------- 其他接口 ----------
 

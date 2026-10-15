@@ -25,6 +25,7 @@ import threading
 import time
 
 import affixes
+import armor as armormod
 import drops
 import mobs
 import weapons
@@ -64,7 +65,8 @@ class Player(object):
                  'weapon', 'weaponItemId',
                  'invulnT',   # ★ 复活无敌剩余时间（第 56 轮）
                  'wDur', 'wDurMax', 'wDurDirty',   # ★ 手上武器的耐久（第 59 轮）
-                 'atkSeq')   # ★★ 第 66 轮：挥砍序号（别人靠它播动作 ✓）
+                 'atkSeq',   # ★★ 第 66 轮：挥砍序号（别人靠它播动作 ✓）
+                 'armor', 'armorItemId')   # ★ 第 67 轮：防具 ✓
 
     def __init__(self, cid, role):
         self.cid = cid
@@ -83,7 +85,7 @@ class Player(object):
         #     以前客户端每个移动包都把 200 推上来，正好盖住了这个 0 ✓
         self.hp = int(role.get('hp') or 0)
         if self.hp <= 0:
-            self.hp = int(role.get('hpMax') or 200)
+            self.hp = int(role.get('hpMax') or 200)   # ★ 建号时还拿不到 _hp_max（self 还没就绪 ✓）
         self.qi = int(role.get('qi') or 0)
         self.atk = 0
         # ★★ 第 66 轮：挥砍序号 ★★
@@ -92,6 +94,9 @@ class Player(object):
         #   → 客户端那句 wk > o.atkSeq 永远不成立
         #   → 别人【永远看不到挥砍动作】✗（用户报的"攻击动画没有"✓）
         self.atkSeq = 0
+        # ★ 第 67 轮：防具（穿着的那件 ✓）
+        self.armor = role.get('armor') or None
+        self.armorItemId = role.get('armorItemId')
         self.atkT = 0.0          # ★ 挥刀冷却（服务器自己也算一份，防连点刷伤害）
         self.lastMe = None       # ★ 上次推给他的 exp/等级（变了才推，省带宽）
         self.intents = 0
@@ -394,6 +399,15 @@ class World(object):
                 (p.role_id, json.dumps(w, ensure_ascii=False), dbmod.now_ms()))
             self._send_cid(p.cid, P.pack('notice',
                                          text='调试：背包里多了一件【%s】—— 打开背包就能穿上 ✓' % w['name']))
+        elif t == 'armorset':
+            # ★ 第 67 轮：穿/脱防具（网络线程已经查库校验完了 ✓）
+            p.armor = d.get('armor') or None
+            p.armorItemId = d.get('itemId')
+            nm = (p.armor or {}).get('name')
+            self._send_cid(p.cid, P.pack('notice',
+                                         text=('穿上：%s' % nm) if nm else '脱下防具'))
+            self._send_cid(p.cid, P.pack('armor', a=p.armor or None,
+                                         hpm=self._hp_max(p)))
         elif t == 'equipset':
             # ★ 第 47 轮：网络线程已经查库 + 校验完了，这里只换内存里的引用 ✓
             #   （tick 线程不许碰磁盘 ✗ 所以查库那步在 net.py 做）
@@ -426,7 +440,7 @@ class World(object):
             #   现在：补满血 + 1.5 秒无敌（§用户要求）✓
             # ★ 血量上限：和管理页"治疗"用同一口径（role.hpMax，兜底 200 ✓）
             #   P1 阶段玩家血量还没有按等级成长（§4.5 的成长曲线是 P3 的事 ✓）
-            hpmax = int(p.role.get('hpMax') or 200)
+            hpmax = self._hp_max(p)     # ★ 第 67 轮：含防具加成 ✓
             p.hp = hpmax
             p.invulnT = REVIVE_INVULN
             p.role['hp'] = p.hp
@@ -805,7 +819,7 @@ class World(object):
                                             'by': '管理员', 'kind': 'admin'})
             self._send_cid(q.cid, P.pack('dead', by='管理员'))
         elif act == 'heal':
-            q.hp = int(q.role.get('hpMax') or 200)     # 满血（管理页的"救一下"✓）
+            q.hp = self._hp_max(q)     # 满血（★ 第 67 轮：含防具加成 ✓）
             self._send_cid(q.cid, P.pack('notice', text='管理员把你治好了'))
 
     def _debug_spawn(self, p, n, clear, kind=None, lv=None):
@@ -834,6 +848,17 @@ class World(object):
             self.mobs[str(self.mob_seq)] = mobs.Mob(
                 self.mob_seq, _lv, p.x + math.sin(ang) * dist, p.z + math.cos(ang) * dist,
                 kind=kind)
+
+    def _hp_max(self, p):
+        """生命上限（角色基础 + 防具的 hp / hp%% ✓ 第 67 轮）
+
+        ★ 一定要【一处算、处处用】✗
+          以前 hpMax 散在好几处（role['hpMax'] or 200 ✗）
+          加了防具之后再散着写，迟早出现"治疗治不满 / 复活半血"✗
+        """
+        base = int((p.role or {}).get('hpMax') or 200)
+        st = armormod.stats_of(p.armor)
+        return max(1, int(round((base + st['hp']) * (1.0 + st['hp_pct'] / 100.0))))
 
     def _break_weapon(self, p):
         """武器耐久归零 → 损坏消失（第 59 轮 用户要求 ✓）
@@ -879,11 +904,23 @@ class World(object):
         dv, crit = mobs.roll_damage(m.atk)
         # ★★ 第 59 轮：单手剑的【招架】—— 按手上武器的概率把这一口减半 ✓
         #   （意图写在武器文案里 ✓ 玩家看得到才不冤 ✓）
+        # ★★ 第 67 轮：防具在这里生效（闪避 → 固定减伤 → 受击回灵气 ✓）
+        _st = armormod.stats_of(p.armor)
+        if _st['dodge'] > 0 and random.random() < (_st['dodge'] / 100.0):
+            # 闪开了：这一口完全没打到 ✓ 但也不回灵气（没被打到 ✓）
+            self._send_cid(p.cid, P.pack('fx', kind='dodge'))
+            return
         _w = p.weapon or {}
         _fx = weapons.fx_of(_w.get('look'), int(_w.get('tier') or 0))
         if _fx and _fx['name'] == '招架' and random.random() < _fx['chance']:
             dv = max(1, int(round(dv * (1.0 - _fx['value']))))
             self._send_cid(p.cid, P.pack('fx', kind='parry'))
+        # ★ 固定减伤（防具的 dr ✓）：至少挨 1 点（不然穿了甲就无敌了 ✗）
+        if _st['dr'] > 0:
+            dv = max(1, int(round(dv - _st['dr'])))
+        # ★ 受击回灵气（词条 ✓）
+        if _st['qi_hurt'] > 0:
+            p.qi = min(int((p.role or {}).get('qiMax') or 100), int(p.qi) + int(_st['qi_hurt']))
         p.hp = max(0, int(p.hp) - dv)
         self._add_pend(p.cid, 'hurts', {'dmg': dv, 'x': round(m.x, 2), 'z': round(m.z, 2),
                                         'by': m.kind, 'kind': 'mob', 'crit': bool(crit)})
@@ -1000,7 +1037,7 @@ class World(object):
             # ★★ 第 60 轮：吸血词条 —— 按造成的伤害回血 ✓
             _ls = _T.get('lifesteal', 0.0)
             if _ls > 0:
-                hpm = int(p.role.get('hpMax') or 200)
+                hpm = self._hp_max(p)     # ★ 第 67 轮：含防具加成 ✓
                 p.hp = min(hpm, int(p.hp) + max(1, int(round(dv * _ls / 100.0))))
 
             # ★★ 命中后按武器类型触发机制 ★★
@@ -1066,6 +1103,13 @@ class World(object):
                     self._mob_died(p, o)
 
     def _mob_died(self, p, m):
+        # ★ 第 67 轮：击杀回灵气（防具词条 ✓）
+        try:
+            _qi = armormod.stats_of(p.armor)['qi_kill']
+            if _qi > 0:
+                p.qi = min(int((p.role or {}).get('qiMax') or 100), int(p.qi) + int(_qi))
+        except Exception:
+            pass
         """僵尸死了 → 给击杀者经验 → 够就升级 → 落库"""
         role = p.role
         role['exp'] = int(role.get('exp') or 0) + int(m.exp)
@@ -1104,6 +1148,13 @@ class World(object):
         _t = affixes.totals(((p.weapon or {}).get('affixes')))
         _tb = 1.0 + _t.get('treasure', 0.0) / 100.0
         it = drops.roll_drop(m.lv, klv, luck=_tb)
+        # ★ 第 67 轮：掉到东西时有 25% 概率是【防具】✓
+        #   （不然防具永远拿不到 ✗ 只能靠管理页发 ✗）
+        if it and random.random() < 0.25:
+            _ta = max(0, min(11, int(it.get('tier') or 0)))
+            it = {'name': it.get('name'), 'tier': _ta, 'kind': 'armor',
+                  'slot': 'armor',
+                  'armor': armormod.make_armor(_ta, max(1, klv // 4 + 1))}
         self._drop_one(p, m, it)
         eq = drops.roll_equip(m.lv, klv)          # ★ 装备类（独立 roll）
         self._drop_one(p, m, eq)

@@ -63,6 +63,20 @@ class Net(object):
         # ★ 高频消息一律入队，交给 tick 线程 —— 这里绝不碰世界状态
         # ★★ 第 47 轮：装备是【罕见操作 + 要查库】→ 在网络线程做，tick 线程不碰磁盘 ✓
         #   服务器自己查这件是不是他的、是不是武器、等级够不够（见 auth.equip_weapon ✓）
+        if t in ('equiparmor', 'unequiparmor'):
+            import auth as authmod4
+            role = self.authed.get(conn.cid) or {}
+            if t == 'equiparmor':
+                _ok2, _r2 = authmod4.equip_armor(self.cfg, role.get('id'),
+                                                 (d or {}).get('itemId'))
+            else:
+                _ok2, _r2 = authmod4.unequip_armor(self.cfg, role.get('id'))
+            if not _ok2:
+                conn.push_text(P.pack('notice', text=str(_r2)))
+                return
+            self.world.post_intent(conn.cid, 'armorset',
+                                   {'armor': _r2, 'itemId': int((d or {}).get('itemId') or 0)})
+            return
         if t in ('equip', 'unequip'):
             import auth as authmod3
             role = self.authed.get(conn.cid) or {}
