@@ -12,32 +12,29 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
-import android.widget.TextView
 
 /**
- * 块来修仙 —— 安卓壳（把 H5 游戏装进 APK 给好友试玩）
+ * 块来修仙测试版 —— 安卓壳（把 H5 游戏装进 APK 给好友试玩）
  *
  * ★★★ 唯一需要你改的东西：GAME_URL ★★★
- *   改成【跑服务器那台电脑】的地址：
- *     · 同一个 WiFi：http://192.168.31.180:8899/
- *     · 外网：见 android/README.md 的方案 B
+ *   改成【跑服务器那台电脑】的地址（同一个 WiFi 用局域网 IP ✓ 外网见 android/README.md）
+ *   WebSocket 端口不用单独配 —— 客户端会拿网页地址的主机名 + 8900 自动拼 ✓
  *
- *   WebSocket 端口不用单独配 —— 客户端会拿网页地址的主机名 + 8900 自动拼
+ * ★ 历次真机问题（都别改回去）：
+ *   · 全屏那句必须放在 setContentView 之后 ✗ 放前面会 NPE 闪退（第 184 轮 ✓）
+ *   · Manifest 用 fullSensor（横竖都能转 ✓）不能写死横屏（第 180 轮 ✓）
+ *   · 明文 http / ws 必须放行（usesCleartextTraffic + MIXED_CONTENT ✓）第 175 轮 ✓
  *
- * ★ 关于屏幕方向（第 180 轮改动）
- *   以前写死 sensorLandscape（只能横屏）✗ 用户要求横竖都能用 ✓
- *   → Manifest 改成 fullSensor（四个方向都允许 ✓ 跟着重力感应转 ✓）
- *   → 这里【不做】任何强制旋转 ✗ 交回给系统 ✓
- *
- * ★ 关于"横屏下面没铺满"（第 180 轮改动）
- *   原因是这个 Activity 没有真正全屏 ✗
- *   系统栏（导航条 / 手势条）占着屏幕底下一条 ✗ 网页只能用剩下的部分 ✓
- *   而且横屏时刘海那侧还会留黑边 ✓
- *   → 见下面 goFullscreen()：把系统栏藏掉 + 允许内容铺到刘海区 ✓
+ * ★ 第 191 轮新增：服务器没开 / 重启时显示【维护中】页面 + 重新连接按钮
+ *   以前这种情况 WebView 会甩出浏览器自己的"无法连接"✗ 很难看也不像游戏 ✓
+ *   现在：主页面加载失败 → 换成一张自带的维护页（深色、和游戏一个风格 ✓）
+ *        上面有【重新连接】按钮 + 每 15 秒自动重试一次 ✓
  */
 class MainActivity : Activity() {
 
@@ -45,29 +42,20 @@ class MainActivity : Activity() {
         /** ★ 改这里：跑服务器那台电脑的地址（末尾要带 / ） */
         const val GAME_URL = "http://192.168.31.180:8899/"
 
-        private const val HINT_OFFLINE =
-            "连不上服务器。\n\n请确认：\n" +
-            "① 电脑上游戏服务器已经启动\n" +
-            "② 手机和电脑在同一个 WiFi\n" +
-            "③ 地址填对了（现在填的是：%s）\n\n" +
-            "点屏幕任意位置重试"
+        /** 维护页上的自动重试间隔（秒）*/
+        private const val RETRY_SEC = 15
     }
 
     private lateinit var web: WebView
-    private lateinit var cover: TextView
+    private var showingMaint = false
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        /* 屏幕常亮：玩久了不该自动锁屏 */
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        /* ★★ 真机闪退教我的事（第 184 轮）★★
-           这里【不能】调 goFullscreen() ✗
-           因为此时还没 setContentView ✓ 界面（DecorView）根本不存在 ✓
-           → window.insetsController 是 null → NullPointerException → 一启动就闪退 ✓✓
-           崩溃日志：MainActivity.goFullscreen(MainActivity.kt:148) ← onCreate 调的 ✓
-           → 挪到 setContentView 之后再调 ✓（见下面）*/
+        /* ★ 这里不能调 goFullscreen() ✗ 界面还没建出来 → 会 NPE 闪退 ✓
+           （第 184 轮真机踩过 ✓ 挪到 setContentView 之后 ✓）*/
 
         val root = FrameLayout(this)
         root.setBackgroundColor(Color.parseColor("#1a1208"))
@@ -91,44 +79,31 @@ class MainActivity : Activity() {
         web.setBackgroundColor(Color.parseColor("#1a1208"))
         web.isScrollbarFadingEnabled = true
         web.overScrollMode = View.OVER_SCROLL_NEVER
-        /* ★ 第 180 轮：不要让 WebView 自己留边距 ✗ 让它铺满整个窗口 ✓ */
         web.setPadding(0, 0, 0, 0)
+
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView?, url: String?): Boolean = false
+
+            /**
+             * 加载失败 → 换成维护页
+             * ★ 只看【主页面】的失败（isForMainFrame）✗
+             *   子资源（图片/音效）加载失败不该整页变维护 ✓
+             */
             override fun onReceivedError(
-                v: WebView?, errorCode: Int, description: String?, failingUrl: String?
+                view: WebView?, request: WebResourceRequest?, error: WebResourceError?
             ) {
-                showCover(true)
+                if (request == null || request.isForMainFrame) { showMaintenance() }
             }
 
-            override fun onPageFinished(v: WebView?, url: String?) {
-                showCover(false)
+            override fun onPageFinished(view: WebView?, url: String?) {
+                /* 真正的游戏页加载成功 → 清掉"正在维护"的标记 ✓ */
+                if (url != null && url.startsWith("http")) { showingMaint = false }
             }
         }
         web.webChromeClient = WebChromeClient()
 
-        cover = TextView(this)
-        cover.setTextColor(Color.parseColor("#f2e8d8"))
-        cover.setBackgroundColor(Color.parseColor("#1a1208"))
-        cover.textSize = 15f
-        cover.setPadding(60, 60, 60, 60)
-        cover.gravity = android.view.Gravity.CENTER
-        cover.text = String.format(HINT_OFFLINE, GAME_URL)
-        cover.visibility = View.GONE
-        cover.setOnClickListener {
-            showCover(false)
-            web.reload()
-        }
-
         root.addView(
             web,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        )
-        root.addView(
-            cover,
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -143,26 +118,62 @@ class MainActivity : Activity() {
     }
 
     /**
-     * 真·全屏：把状态栏和导航条都藏掉，并允许内容铺到刘海区域
+     * 服务器连不上 → 显示自带的维护页
      *
-     * ★ 不这么做会怎样（用户报的"横屏下面没铺满"）：
-     *   导航条占着底部一条 ✗ 网页高度 = 屏幕高 − 导航条高 ✓
-     *   横屏时刘海那侧也会被让开 → 一侧留黑边 ✓
+     * ★ 为什么用 loadDataWithBaseURL 拼一段 HTML，而不是放 assets 文件：
+     *   需要把 GAME_URL 注入进页面（"重新连接"按钮要用 ✓）
+     *   直接拼最省事，也不用多一个资源文件 ✓
      */
+    private fun showMaintenance() {
+        if (showingMaint) { return }
+        showingMaint = true
+        val html = """
+<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+ html,body{margin:0;height:100%;background:#1a1208;color:#f2e8d8;
+   font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+   display:flex;align-items:center;justify-content:center;
+   -webkit-user-select:none;user-select:none}
+ .box{text-align:center;padding:0 28px;max-width:440px}
+ .t{font-size:22px;font-weight:800;color:#ffd83d;letter-spacing:2px;margin-bottom:10px}
+ .s{font-size:13px;line-height:1.9;opacity:.86}
+ .addr{font-size:12px;opacity:.5;margin-top:12px;word-break:break-all}
+ button{margin-top:22px;padding:12px 30px;font-size:15px;font-weight:700;
+   color:#1a1208;background:#ffd83d;border:0;border-radius:24px;cursor:pointer}
+ button:active{background:#e0b800}
+ .cd{margin-top:12px;font-size:12px;opacity:.6}
+</style></head><body><div class="box">
+ <div class="t">服务器维护中</div>
+ <div class="s">
+   正在等待服务器重新上线。<br>
+   如果你是房主：去电脑上把游戏服务器重新启动一下。
+ </div>
+ <button onclick="retry()">重新连接</button>
+ <div class="cd" id="cd"></div>
+ <div class="addr">$GAME_URL</div>
+</div>
+<script>
+ var left = $RETRY_SEC;
+ var cd = document.getElementById('cd');
+ function tick() {
+   cd.textContent = left + ' 秒后自动重试';
+   if (left <= 0) { retry(); return; }
+   left--; setTimeout(tick, 1000);
+ }
+ function retry() { location.replace('$GAME_URL'); }
+ tick();
+</script></body></html>
+"""
+        web.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+    }
+
     private fun goFullscreen() {
-        /* ★ 第 184 轮：全屏失败也绝不能闪退 ✓
-           各家 ROM 对 insets 的实现不完全一样 ✓ 万一抛异常就跳过这一帧 ✓
-           大不了系统栏留着 ✗ 也比进不去游戏强 ✓ */
-        try {
-            goFullscreenInner()
-        } catch (e: Throwable) {
-            // 静默跳过（下一帧 onWindowFocusChanged 还会再试一次 ✓）
-        }
+        try { goFullscreenInner() } catch (e: Throwable) { /* 全屏失败也绝不能闪退 ✓ */ }
     }
 
     private fun goFullscreenInner() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            /* Android 11+：新的 insets API */
             window.setDecorFitsSystemWindows(false)
             window.insetsController?.let {
                 it.hide(WindowInsets.Type.systemBars())
@@ -170,7 +181,6 @@ class MainActivity : Activity() {
                     WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
         } else {
-            /* Android 10 及以下：老 API（还能用，先留着） */
             @Suppress("DEPRECATION")
             window.decorView.systemUiVisibility = (
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE
@@ -183,22 +193,15 @@ class MainActivity : Activity() {
         }
     }
 
-    /**
-     * 从别的地方切回来时，系统栏可能又冒出来了 → 再藏一次
-     * （immersive 模式的标准做法，不加的话过一会儿底部又会多一条）
-     */
+    /** 从别处切回来时系统栏可能又冒出来 → 再藏一次（immersive 的标准做法 ✓）*/
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) { goFullscreen() }
     }
 
-    private fun showCover(show: Boolean) {
-        runOnUiThread { cover.visibility = if (show) View.VISIBLE else View.GONE }
-    }
-
-    /** 返回键：网页能后退就后退，不能再退就退出 */
+    /** 返回键：能后退就后退；在维护页上按返回就直接退出 ✓ */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK && web.canGoBack()) {
+        if (keyCode == KeyEvent.KEYCODE_BACK && !showingMaint && web.canGoBack()) {
             web.goBack()
             return true
         }
