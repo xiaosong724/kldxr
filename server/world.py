@@ -51,6 +51,7 @@ PARTY_INVITE_TTL = 60.0       # ★ 第 82 轮用户改：10 秒 → 1 分钟 �
                               #   （原因：弹窗没看到就没了 ✗
                               #    现在界面里也有待处理列表 ✓ 给一分钟才够用 ✓）
 PARTY_INVITE_RATE = 3         # 10 秒最多发 3 次邀请 ✓
+AUTO_SAVE_INTERVAL = 15.0   # ★ 第 109 轮：定时存盘（防崩溃/重启丢状态 ✗）
 PARTY_PUSH_INTERVAL = 1.0     # roster 每秒补推一次（血条要动 ✓）
 # ★ 第 82 轮：大厅（独立页 ✓ 队长邀请 + 玩家申请 两条路 ✓）
 PARTY_APPLY_TTL = 60.0        # ★ 第 82 轮用户改：30 秒 → 1 分钟 ✓（和邀请一致 ✓）
@@ -173,6 +174,7 @@ class World(object):
         self.party_open = {}      # pid -> 是否出现在招募列表里
         self.lobby_stat = {'players': [], 'parties': []}   # tick 发布 ✓ HTTP 只读 ✓
         self._lobby_acc = 0.0
+        self._save_acc = 0.0   # ★ 第 109 轮：定时存盘用 ✓
         self._arrow_id = 0                  # mid -> mobs.Mob（P2：僵尸也归 tick 线程独占 ✓）
         self.mob_seq = 0
         self.loot = {}                  # lid -> {'x','z','item','ttl'}（P2 第二刀：地上掉的 ✓）
@@ -337,6 +339,20 @@ class World(object):
 
         # ③ 僵尸：刷怪 / 回收 / AI（P2 第一刀）
         #    ★ 和玩家一样【只在 tick 线程跑】→ 一张快照发出去时，世界是"冻结"的 ✓
+        # ★★ 第 109 轮（用户要求：血量/坐标要保存）★★
+        #   查下来：存档只发生在【离开世界】那一刻 ✗ 没有定时存盘 ✗
+        #   → 服务器崩溃 / 重启 / 被强杀 → 状态回到上次离开时 ✗
+        #   （我这几轮 taskkill 重启了很多次 ✗ 所以用户每次都感觉"没保存"✓）
+        #   → 每 15 秒给所有在线玩家排一次存档 ✓ 最多丢 15 秒 ✓
+        self._save_acc += TICK_DT
+        if self._save_acc >= AUTO_SAVE_INTERVAL:
+            self._save_acc = 0.0
+            for _q9 in self.players.values():
+                try:
+                    self._save_player(_q9)
+                except Exception:
+                    pass
+
         # ★ 第 82 轮：大厅名单（每秒发布一次 ✓ HTTP 只读 ✓ 不加锁 ✓）
         self._lobby_acc += TICK_DT
         if self._lobby_acc >= LOBBY_INTERVAL:
