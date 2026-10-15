@@ -986,6 +986,43 @@ for _i in range(40):
 ok(True, '（挨打 40 次没崩 ✓ dr=%.0f）' % AR.stats_of(_p9.armor)['dr'])
 
 print('')
+print('== ㉖ ★ 弓的投射物（第 69 轮）==')
+_wa, _pa = mk_world(0.0, 0.0)
+_wa.mobs.clear(); _wa.loot.clear()
+_bow = WP.make_weapon('bow', 5, 0.60, 1)
+_pa.weapon = _bow
+_pa.wDurMax = _bow['durMax']; _pa.wDur = _bow['dur']; _pa.wDurDirty = 0
+_pa.atkT = 0; _pa.yaw = 0.0
+_mb = mobs.Mob(950, 5, 0.0, 6.0)
+_mb.hp = _mb.mhp = 9999
+_wa.mobs[_mb.mid] = _mb
+_wa._intent_atk(_pa, {})
+ok(len(_wa.arrows) == 1 and _mb.hp == 9999,
+   '★★★ 弓射出的是【箭】不是近战扇形（箭 %d 支 · 僵尸还没掉血 ✓）' % len(_wa.arrows))
+_shot = False
+for _i in range(30):
+    _wa._arrow_tick(0.033)
+    if _mb.hp < 9999:
+        _shot = True; break
+ok(_shot, '★★★ 箭飞到 6 米外【命中】（hp 9999 → %d ✓ 远程真的生效 ✓）' % _mb.hp)
+ok(len(_wa.arrows) == 0, '★ 命中后箭消失（剩 %d 支 ✓）' % len(_wa.arrows))
+# 高速穿透：一 tick 0.86 米，只看终点会穿过去 ✗
+_wa.arrows.clear(); _pa.atkT = 0
+_mb.hp = _mb.mhp = 9999; _mb.x, _mb.z = 0.0, 3.0
+_wa._intent_atk(_pa, {})
+_h2 = False
+for _i in range(20):
+    _wa._arrow_tick(0.033)
+    if _mb.hp < 9999:
+        _h2 = True; break
+ok(_h2, '★★ 一 tick 0.86 米也不会【穿过】僵尸（线段判定 ✓ 不是只看终点 ✗）')
+_wa.arrows.clear()
+_pa.weapon = WP.make_weapon('sword', 5, 1.0, 1)
+_pa.wDurMax = 9999; _pa.wDur = 9999; _pa.atkT = 0
+_wa._intent_atk(_pa, {})
+ok(len(_wa.arrows) == 0, '★ 近战武器不产生箭（只有弓走投射物 ✓）')
+
+print('')
 if fails:
     print('FAILED: %d 条 ✗' % len(fails))
     for f in fails:

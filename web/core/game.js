@@ -207,6 +207,7 @@ var SFX_FILES_WAV = {
 
 /* ===== ★ 多人联网配置（必须在 init 调用之前 ✓ 否则 NET undefined ✗）===== */
 var NET = {  on: false, token: '', lastPost: 0, lastGet: 0,
+  arrows: {},               // ★ 第 69 轮：在飞的箭（id → mesh ✓）
   rate: 0.0333,              // ★ 30Hz（33ms 一包 ✓）
   /* ★★ 自适应抖动缓冲（借用实时音视频的做法）★★
      固定延迟只有两个坏选择：调小了 → 网络一抖就得靠外推，画面打嗝 ✗
@@ -1803,6 +1804,34 @@ function wsApplyWorld(d) {
     }, t);
   }
   for (var uid in NET.others) { if (!seen[uid]) { removeOther(uid); } }
+
+  /* ★★ 第 69 轮：箭（弓的投射物）★★
+     ★ 服务器只发 [id,x,z,yaw] ✓ 位置以服务器为准 → 这里直接摆 ✓
+     ★ 细长盒体 + 淡黄：看得清又不花哨 ✓ */
+  var arsS = d.ar || [], seenAr = {};
+  for (var aq = 0; aq < arsS.length; aq++) {
+    var aa = arsS[aq], aid = String(aa[0]);
+    seenAr[aid] = 1;
+    var am = NET.arrows[aid];
+    if (!am) {
+      am = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.8),
+        new THREE.MeshBasicMaterial({ color: 0xffe9a8 }));
+      am.position.y = 1.45;
+      scene.add(am);
+      NET.arrows[aid] = am;
+    }
+    am.position.x = +aa[1] || 0;
+    am.position.z = +aa[2] || 0;
+    am.rotation.y = +aa[3] || 0;
+  }
+  for (var aq2 in NET.arrows) {
+    if (!seenAr[aq2]) {
+      scene.remove(NET.arrows[aq2]);
+      NET.arrows[aq2].geometry.dispose();
+      NET.arrows[aq2].material.dispose();
+      delete NET.arrows[aq2];
+    }
+  }
 
   // ---- 妖兽（P2 才有内容，通道先留着）----
   var ms = d.mobs || [], seenMobs = {};

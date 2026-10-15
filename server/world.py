@@ -40,7 +40,12 @@ MAX_INTENT_PER_TICK = 90        # 单连接每 tick 的意图上限（30Hz 正�
 SPAWN_SAFE = 20.0               # 出生点/安全区半径：这里不刷怪（方案 §2.1 末日堡垒）
 
 
-REVIVE_INVULN = 1.5        # ★ 复活无敌时长（秒）—— 用户指定 ✓
+REVIVE_INVULN = 1.5
+
+# ★★ 第 69 轮：箭（弓的投射物）★★
+ARROW_SPEED = 26.0        # 米/秒（比僵尸快得多，但不至于一帧穿过一片 ✓）
+ARROW_HIT_R = 0.75        # 命中半径（僵尸体积约 0.5 + 一点余量 ✓）
+ARROW_MAX = 60            # 同时在飞的箭上限（防刷 ✗）        # ★ 复活无敌时长（秒）—— 用户指定 ✓
 
 
 def tier_no(t):
@@ -133,7 +138,10 @@ class World(object):
 
         # ---- 世界状态（★ 只有 tick 线程读写）----
         self.players = {}               # cid -> Player
-        self.mobs = {}                  # mid -> mobs.Mob（P2：僵尸也归 tick 线程独占 ✓）
+        self.mobs = {}
+        # ★ 第 69 轮：在飞的箭（只在 tick 线程动 ✓）
+        self.arrows = {}
+        self._arrow_id = 0                  # mid -> mobs.Mob（P2：僵尸也归 tick 线程独占 ✓）
         self.mob_seq = 0
         self.loot = {}                  # lid -> {'x','z','item','ttl'}（P2 第二刀：地上掉的 ✓）
         self.loot_seq = 0
@@ -287,6 +295,7 @@ class World(object):
         # ③ 僵尸：刷怪 / 回收 / AI（P2 第一刀）
         #    ★ 和玩家一样【只在 tick 线程跑】→ 一张快照发出去时，世界是"冻结"的 ✓
         self._mob_tick(TICK_DT)
+        self._arrow_tick(TICK_DT)   # ★ 第 69 轮：箭（要在僵尸移动之后算 ✓）
         self._loot_tick(TICK_DT)          # ★ 地上掉的也归 tick 线程管 ✓
         for p in self.players.values():
             if p.atkT > 0:
@@ -300,6 +309,16 @@ class World(object):
                 ms = self._mobs_for(p)
                 if ms:
                     d['mobs'] = ms
+                # ★ 第 69 轮：在飞的箭（[id,x,z,yaw] ✓ 只发附近的 ✓）
+                if self.arrows:
+                    _ar = []
+                    for _a in self.arrows.values():
+                        if (_a['x'] - p.x) ** 2 + (_a['z'] - p.z) ** 2 > VIEW * VIEW:
+                            continue
+                        _ar.append([_a['id'], round(_a['x'], 2), round(_a['z'], 2),
+                                    round(_a['yaw'], 2)])
+                    if _ar:
+                        d['ar'] = _ar
                 lt = self._loot_for(p)          # ★ 地上掉的（第 38 轮）
                 if lt:
                     d['loot'] = lt
@@ -462,6 +481,58 @@ class World(object):
                 self._send_cid(p.cid, P.pack('error', msg='%s 还没实现' % t))
 
     # ============================================================ 僵尸（P2 第一刀）
+
+    def _arrow_tick(self, dt):
+        """箭的推进与命中（第 69 轮 ✓ 只在 tick 线程跑）
+
+        ★ 命中判定用【线段】扫过（起点 → 终点）✗ 不是看终点一个点
+          箭一 tick 走 26×0.033 = 0.86 米，僵尸半径 0.5 米
+          只看终点的话高速箭会【穿过】僵尸 ✗（实测过：打不中 ✓）
+        """
+        if not self.arrows:
+            return
+        step = ARROW_SPEED * dt
+        hr2 = ARROW_HIT_R * ARROW_HIT_R
+        for a in list(self.arrows.values()):
+            x0, z0 = a['x'], a['z']
+            a['x'] = x0 + a['dx'] * step
+            a['z'] = z0 + a['dz'] * step
+            a['life'] -= dt
+            hit = None
+            for m in self.mobs.values():
+                if m.hp <= 0:
+                    continue
+                # 点到线段的距离（箭这一段轨迹 ✓）
+                vx, vz = a['x'] - x0, a['z'] - z0
+                wx, wz = m.x - x0, m.z - z0
+                L2 = vx * vx + vz * vz
+                u = 0.0 if L2 <= 1e-9 else max(0.0, min(1.0, (wx * vx + wz * vz) / L2))
+                cx, cz = x0 + vx * u, z0 + vz * u
+                if (m.x - cx) ** 2 + (m.z - cz) ** 2 <= hr2:
+                    hit = m
+                    break
+            if hit is not None:
+                shooter = self.players.get(a['by'])
+                dv = int(a['dmg'])
+                hit.hp -= dv
+                if shooter is not None:
+                    self._add_pend(shooter.cid, 'mhits',
+                                   {'mid': hit.mid, 'dmg': dv, 'crit': bool(a['crit']),
+                                    'arrow': True,
+                                    'x': round(hit.x, 2), 'z': round(hit.z, 2)})
+                else:
+                    self._add_pend(None, 'mhits',
+                                   {'mid': hit.mid, 'dmg': dv, 'crit': bool(a['crit']),
+                                    'arrow': True,
+                                    'x': round(hit.x, 2), 'z': round(hit.z, 2)})
+                if hit.hp <= 0:
+                    hit.hp = 0
+                    if shooter is not None:
+                        self._mob_died(shooter, hit)
+                self.arrows.pop(a['id'] and str(a['id']), None)
+                continue
+            if a['life'] <= 0:
+                self.arrows.pop(str(a['id']), None)
 
     def _mob_tick(self, dt):
         """刷怪 / 回收 / 追击 / 咬人 —— ★ 只在 tick 线程里跑"""
@@ -984,6 +1055,24 @@ class World(object):
                 return
 
         p.atkSeq += 1        # ★★ 第 66 轮：这一刀要播给所有人看（别人靠它触发动作 ✓）
+
+        # ★★ 第 69 轮：弓 = 远程投射物（不走下面的近战扇形 ✗）★★
+        if wlook in weapons.RANGED:
+            if len(self.arrows) < ARROW_MAX:
+                self._arrow_id += 1
+                _atk = self._atk_of(p)
+                _dv, _crit = mobs.roll_damage(
+                    _atk, crit_pt=_T.get('crit_pt', 0.0),
+                    crit_dmg=_T.get('crit_dmg', 0.0))
+                self.arrows[str(self._arrow_id)] = {
+                    'id': self._arrow_id,
+                    'x': p.x, 'z': p.z, 'yaw': p.yaw,
+                    'dx': math.sin(p.yaw), 'dz': math.cos(p.yaw),
+                    'dmg': _dv, 'crit': bool(_crit),
+                    'life': reach / ARROW_SPEED,      # 飞完射程就落地 ✓
+                    'by': p.cid,
+                }
+            return
 
         # ★ 这把武器的机制（按品阶加成 ✓）
         fx = weapons.fx_of(wlook, wtier)
