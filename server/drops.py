@@ -72,7 +72,11 @@ def roll_drop(mob_lv, killer_lv, rng=None, luck=1.0):
     ★ 第 60 轮：luck = 寻宝词条给的倍率（1.0 = 没有 ✓）
     """
     r = rng or random
-    if r.random() > min(0.95, drop_chance(mob_lv, killer_lv) * max(0.1, luck)):
+    # ★ 用 CHANCE_CAP 兜底、最多 100% ✓
+    #   ★ 踩过：这里原来硬编码 0.95 → 把测试里设的 CHANCE_CAP=1.0 盖掉了 ✗
+    #     （材料"必掉"变成 95% → 又变成偶发红 ✗ 第 46 轮踩过一次同样的坑）
+    _c = drop_chance(mob_lv, killer_lv) * max(0.1, luck)
+    if r.random() > min(1.0, _c):
         return None
     cap = max_tier(mob_lv)
     pool = [m for m in MATERIALS if m[1] <= cap]

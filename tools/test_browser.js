@@ -1158,7 +1158,9 @@ async function register(name, pw) {
       'var it = { slot: "weapon", tier: 4, itemLv: 3, reqLevel: 25,' +
       '  base: { coeff: 1.40, atkSpeed: 0.75, reach: 3.0, arc: 1.55 } };' +
       // ★ 第 54 轮：还要算【等级发挥度】——假武器给 reqLevel:1 就是满发挥 ✓
-      'var want = Math.min((inh * 1.40 + wFlat(it)) * wMastery(it), inh * 2.5);' +
+      // ★ 第 60 轮：封顶是 固有×(2.5+0.06×阶) ✓ 不是固定 2.5 ✗
+      'var cap = inh * (2.5 + 0.06 * (it.tier || 0));' +
+      'var want = Math.min((inh * 1.40 + wFlat(it)) * wMastery(it), cap);' +
       'out.real = Math.round(wRealHit(it) * 100) / 100;' +
       'out.want = Math.round(want * 100) / 100;' +
       'out.strength = Math.round(wStrength(it));' +

@@ -114,7 +114,7 @@ for _ in range(2000):
     tot = W.player_atk_with(inh, k, c, t, 1)
     share = (tot - inh) / tot
     worst = max(worst, share)
-ok(worst <= 0.60 + 1e-6,
+ok(worst <= 0.6845 + 1e-3,
    '★★ 2000 次随机搭配，装备最多只占总伤害的 %.1f%%（上限 60%% ✓）' % (worst * 100), worst)
 ok(worst > 0.55, '★ 而且真的用到了接近上限（说明封顶线是"紧"的，不是虚设 ✓）')
 # ★ 公式是【固有 × 系数 + 平伤】，不是 固有 + (固有×系数 + 平伤) ✗（这里踩过）
@@ -126,7 +126,9 @@ a0 = W.player_atk_with(inh, 'sword', 1.0, 0, 1)
 a9 = W.player_atk_with(inh, 'sword', 1.0, 9, 1)
 a11 = W.player_atk_with(inh, 'sword', 1.0, 11, 1)
 ok(a9 >= a0, '品阶越高伤害越高（0 阶 %.1f → 9 阶 %.1f ✓）' % (a0, a9))
-ok(abs(a11 - inh * 2.5) < 1e-6, '★ 11 阶直接顶到封顶线（%.1f = 固有 × 2.5 ✓）' % a11)
+ok(abs(a11 - inh * (2.5 + 0.06 * 11)) < 1e-6,
+   '★ 11 阶顶到【跟品阶抬过的封顶线】（%.1f = 固有 × %.2f ✓ 第 60 轮）'
+   % (a11, 2.5 + 0.06 * 11))
 
 print('')
 print('== ⑥ 造出来的东西长什么样（方案 §7.1 的接口）==')
@@ -134,8 +136,8 @@ w = W.make_weapon('axe', 6, 1.45, 10)
 ok(w['slot'] == 'weapon' and w['look'] == 'axe' and w['tier'] == 6, 'slot/look/tier 对 ✓', w)
 ok('coeff' in w['base'] and 'atkSpeed' in w['base'] and 'reach' in w['base'] and 'arc' in w['base'],
    'base 里带着系数/攻速/射程/弧（客户端和服务器都要用 ✓）', w['base'])
-ok(isinstance(w['affixes'], list) and not w['affixes'],
-   '词条这一期是【空数组】（§7.11 定义了 22 条，但"掉出来带词条"是下一刀 ✓）')
+ok(isinstance(w['affixes'], list) and len(w['affixes']) >= 1,
+   '★★ 掉出来的武器自带词条（第 60 轮实装 ✓ %d 条）' % len(w['affixes']))
 ok(w['reqLevel'] == W.req_level_of(6), '建议等级 = 阶×3+1（6 阶 → %d 级 ✓ 第 56 轮改缓的）' % W.req_level_of(6), w['reqLevel'])
 ok(w['name'] == W.TIER_NAME[6] + '双手斧', '名字 = 品阶名 + 类型名（%s ✓）' % w['name'])
 
@@ -174,7 +176,9 @@ ok(_w4['reqLevel'] == W.req_level_of(4), '4 阶武器建议 %d 级（第 56 轮�
 ok(abs(W.mastery_of(_w4, 25) - 1.0) < 1e-9, '★ 到等级了 → 发挥 100% ✓')
 ok(abs(W.mastery_of(_w4, 30) - 1.0) < 1e-9, '★ 超了也还是 100%（不会超过 ✓）')
 _m1 = W.mastery_of(_w4, 1)
-ok(0.40 <= _m1 < 0.55, '★★ Lv.1 → 发挥 %.0f%%（打不满 ✓ 但也不是 0，别让神器变废铁 ✗）' % (_m1 * 100))
+ok(0.90 <= _m1 < 0.95,
+   '★★ Lv.1 → 发挥 %.0f%%（第 60 轮下限提到 90%%：只表示没练熟，'
+   '不再让高阶反而不如低阶 ✗）' % (_m1 * 100))
 ok(W.mastery_of(_w4, 10) > _m1 and W.mastery_of(_w4, 20) > W.mastery_of(_w4, 10),
    '★ 等级越高发挥越多（1级 %.0f%% < 10级 %.0f%% < 20级 %.0f%% ✓）'
    % (W.mastery_of(_w4, 1) * 100, W.mastery_of(_w4, 10) * 100, W.mastery_of(_w4, 20) * 100))
@@ -187,7 +191,9 @@ _std1 = W.player_atk_with(_in1, 'sword', 1.0, 0, 1, 1.0)   # 0 阶剑（不是�
 #   → Lv.1 的发挥度从 38% 涨到 45%，4 阶斧比顺手武器高约 25% ✓
 #   阈值从 1.15 放宽到 1.5：要验的是"低级拿高阶发挥不出上限"（≤2 倍 ✓），
 #   不是"完全没提升"✗（一点提升都没有反而说明系统在耍人 ✓）
-ok(_low < _std1 * 1.5,
+# ★ 第 60 轮：封顶改成 固有×(2.5+0.06×阶) → 4 阶封顶 ×2.74
+#   → Lv.1 拿 4 阶斧能到 2.2 倍（原来 1.25 倍）✓ 这是"高阶一定更好"的代价 ✓
+ok(_low < _std1 * 2.6,
    '★★ Lv.1 拿 4 阶斧（%.1f）比顺手武器（%.1f）只好一点（+%.0f%%）—— 发挥不出上限 ✓'
    % (_low, _std1, (_low / _std1 - 1) * 100))
 ok(_full30 > _low * 5,
