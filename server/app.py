@@ -406,6 +406,10 @@ class Api(BaseHTTPRequestHandler):
                    'cap': int(getattr(_w, 'mob_cap', 60)),
                    'interval': float(getattr(_w, 'spawn_interval', 2.0)),
                    'ones': dict(getattr(_w, 'mob_cap_of', {}) or {})}
+            _mc['pvpAll'] = bool(getattr(_w, 'pvp_all', False))
+            _mc['pvpOnes'] = dict(getattr(_w, 'pvp_of', {}) or {})
+            _mc['atkAll'] = bool(getattr(_w, 'mob_atk_all', True))
+            _mc['atkOnes'] = dict(getattr(_w, 'mob_atk_of', {}) or {})
         except Exception:
             pass
         return self._send(200, {'ok': True, 'players': head, 'total': total, 'mobCaps': _mc,

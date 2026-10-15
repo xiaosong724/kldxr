@@ -113,7 +113,29 @@
         <input id="mobInt" type="number" min="0.2" max="30" step="0.5" value="2" style="width:70px">
         <button id="btnMobOther">应用</button>
       </div>
+      <hr style="border-color:#ffffff18;margin:10px 0">
+      <div style="margin:6px 0">
+        <b>PVP</b>
+        <button id="btnPvpAll">全服开启</button>
+        <button id="btnPvpAllOff">全服关闭</button>
+        <input id="pvpWho" placeholder="玩家名字" style="width:130px">
+        <button id="btnPvpOneOn">给他开</button>
+        <button id="btnPvpOneOff">给他关</button>
+        <button id="btnPvpClear">取消单独设置</button>
+        <span class="tip">★ 现在是【闸门】：真正的 PvP 伤害还没做 ✓ 状态已经存下来了 ✓</span>
+      </div>
+      <div style="margin:6px 0">
+        <b>妖兽伤害</b>
+        <button id="btnAtkAllOn">全服开启</button>
+        <button id="btnAtkAllOff">全服关闭</button>
+        <input id="atkWho" placeholder="玩家名字" style="width:130px">
+        <button id="btnAtkOneOn">给他开</button>
+        <button id="btnAtkOneOff">给他关</button>
+        <button id="btnAtkClear">取消单独设置</button>
+        <span class="tip">★ 关掉后僵尸照样刷、照样围着你，但咬不动你（方便看风景/截图）✓</span>
+      </div>
       <div id="mobNow" class="tip" style="margin-top:4px"></div>
+      <div id="swNow" class="tip" style="margin-top:2px"></div>
     </div>
 
     <div class="card">
@@ -242,6 +264,44 @@ function mobCapBind() {
   }
 }
 
+/* ★ 第 134 轮：两组开关的界面逻辑 ✓ */
+function swBind() {
+  var g = function (id) { return document.getElementById(id); };
+  var on = function (act_, body) {
+    act(act_, body);
+  };
+  var one = function (act_, whoId, on_) {
+    var who = (g(whoId).value || '').trim();
+    if (!who) { return msg('先填玩家名字', '#ff7a6a'); }
+    act(act_, { name: who, on: on_ });
+  };
+  var clr = function (act_, whoId) {
+    var who = (g(whoId).value || '').trim();
+    if (!who) { return msg('先填玩家名字', '#ff7a6a'); }
+    act(act_, { name: who, clear: 1 });
+  };
+  if (!g('btnPvpAll')) { return; }
+  g('btnPvpAll').onclick = function () { on('pvp', { on: 1 }); };
+  g('btnPvpAllOff').onclick = function () { on('pvp', { on: 0 }); };
+  g('btnPvpOneOn').onclick = function () { one('pvp', 'pvpWho', 1); };
+  g('btnPvpOneOff').onclick = function () { one('pvp', 'pvpWho', 0); };
+  g('btnPvpClear').onclick = function () { clr('pvp', 'pvpWho'); };
+  g('btnAtkAllOn').onclick = function () { on('mobatk', { on: 1 }); };
+  g('btnAtkAllOff').onclick = function () { on('mobatk', { on: 0 }); };
+  g('btnAtkOneOn').onclick = function () { one('mobatk', 'atkWho', 1); };
+  g('btnAtkOneOff').onclick = function () { one('mobatk', 'atkWho', 0); };
+  g('btnAtkClear').onclick = function () { clr('mobatk', 'atkWho'); };
+  if (typeof mobCaps === 'object' && mobCaps) {
+    var el = g('swNow');
+    if (el) {
+      el.textContent = '当前：PVP 全服' + (mobCaps.pvpAll ? '开' : '关') +
+        '（单独设置 ' + Object.keys(mobCaps.pvpOnes || {}).length + ' 人）· ' +
+        '妖兽伤害 全服' + (mobCaps.atkAll ? '开' : '关') +
+        '（单独设置 ' + Object.keys(mobCaps.atkOnes || {}).length + ' 人）';
+    }
+  }
+}
+
 function act(name, body) {
   body = body || {};
   body.act = name;
@@ -290,6 +350,7 @@ function refresh() {
        ★ 注意别插错地方 ✗ 我第一次插进了 doLogin 里 ✗（那边根本没有这个字段 ✗）*/
     mobCaps = r.mobCaps || null;
     if (typeof mobCapBind === 'function') { mobCapBind(); }
+    if (typeof swBind === 'function') { swBind(); }
     $('testInfo').textContent = r.testHidden
       ? ('（已隐藏 ' + r.testHidden + ' 个测试账号）') : '';
     $('pgInfo').textContent = '第 ' + PAGE + ' / ' + PAGES + ' 页 · 共 ' +

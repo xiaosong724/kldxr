@@ -202,6 +202,16 @@ class World(object):
         self.mob_cap = int(mobs.MOB_CAP)
         self.spawn_interval = float(mobs.SPAWN_INTERVAL)
         self.mob_cap_of = {}      # {role_id: 该人的上限} ✓ 没记录就用全局值
+        # ★★ 第 134 轮（用户要求）：两组开关（全人 / 单人）★★
+        #   PVP：开了才能互相打 ✓（现在是【闸门】：PvP 功能还没做 ✗
+        #         但状态已经存下来了 ✓ 将来那段代码直接读 _pvp_on() 就行 ✓）
+        #   妖兽伤害：关了妖兽就不会咬人 ✓（这个立刻真实生效 ✓）
+        #   ★ 默认值：PVP 关 ✗（朋友之间玩，默认不互相打 ✓）
+        #               妖兽伤害 开 ✓（原来就会咬 ✓ 不改现有体验 ✓）
+        self.pvp_all = False
+        self.pvp_of = {}          # {role_id: True/False} 单人覆盖 ✓
+        self.mob_atk_all = True
+        self.mob_atk_of = {}
         self._arrow_id = 0                  # mid -> mobs.Mob（P2：僵尸也归 tick 线程独占 ✓）
         self.mob_seq = 0
         self.loot = {}                  # lid -> {'x','z','item','ttl'}（P2 第二刀：地上掉的 ✓）
@@ -1098,6 +1108,22 @@ class World(object):
         v = self.mob_cap_of.get(rid)
         return int(v) if v is not None else int(self.mob_per_player)
 
+    def _pvp_on(self, q):
+        """这个人现在能不能参与 PVP（第 134 轮）—— 单人覆盖优先 ✓"""
+        rid = getattr(q, 'role_id', None)
+        v = self.pvp_of.get(rid)
+        return bool(v) if v is not None else bool(self.pvp_all)
+
+    def _mob_atk_on(self, q):
+        """妖兽现在能不能打这个人（第 134 轮）—— 单人覆盖优先 ✓
+
+        ★ 关掉之后：僵尸照样刷、照样追、照样围着你 ✗ 但咬不动你 ✓
+          （这样比"关掉就不刷怪"更好用 ✓ 想安全看风景/截图时用 ✓）
+        """
+        rid = getattr(q, 'role_id', None)
+        v = self.mob_atk_of.get(rid)
+        return bool(v) if v is not None else bool(self.mob_atk_all)
+
     def _owned_count(self, q):
         """数"标记给他"的僵尸有几只（第 132 轮：硬配额 ✓）
 
@@ -1164,6 +1190,33 @@ class World(object):
         # ★★ 第 133 轮：调整刷怪上限（用户要求）★★
         #   ★ 这一支【不需要 name】✗（全局设置人人可用 ✓）
         #     所以必须放在下面那个"先找人、找不到就 return"之前 ✗
+        # ★★ 第 134 轮：PVP 开关 / 妖兽伤害开关（全人 + 单人）★★
+        #   和 mobcap 一样：不需要名字就是全局 ✗ 所以放在"先找人"之前 ✓
+        if act in ('pvp', 'mobatk'):
+            who = str(d.get('name') or '').strip()
+            on = 1 if d.get('on') else 0
+            if act == 'pvp':
+                tab, gall, gname = self.pvp_of, 'pvp_all', 'PVP'
+            else:
+                tab, gall, gname = self.mob_atk_of, 'mob_atk_all', '妖兽伤害'
+            if who:
+                q = self._find_player(who)
+                if q is None:
+                    return
+                rid = getattr(q, 'role_id', None)
+                if d.get('clear'):
+                    tab.pop(rid, None)
+                    self._send_cid(q.cid, P.pack('notice',
+                        text='管理员取消了你的【%s】单独设置' % gname))
+                else:
+                    tab[rid] = bool(on)
+                    self._send_cid(q.cid, P.pack('notice',
+                        text='管理员把你的【%s】设成了%s' % (gname, '开' if on else '关')))
+            else:
+                setattr(self, gall, bool(on))
+                self._broadcast(P.pack('notice',
+                    text='[管理] 【%s】已全服%s' % (gname, '开启' if on else '关闭')))
+            return
         if act == 'mobcap':
             who = str(d.get('name') or '').strip()
             if 'per' in d and d.get('per') is not None:
@@ -1659,6 +1712,11 @@ class World(object):
         """
         # ★ 第 56 轮：复活无敌期间【咬不动】✓（不然复活的瞬间又被围死 ✗）
         if getattr(p, 'invulnT', 0) > 0:
+            return
+        # ★★ 第 134 轮：妖兽伤害开关 ✓（关了就咬不动 ✓）
+        #   ★ 放在这里（刚进函数、还没算伤害时）✗
+        #     比" 算完伤害再丢掉"省 CPU ✓ 而且不会误触发反伤类效果 ✓
+        if not self._mob_atk_on(p):
             return
         dv, crit = mobs.roll_damage(m.atk)
         # ★★ 第 118 轮：记下【原始伤害】★★
