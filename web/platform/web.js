@@ -767,6 +767,12 @@ function stRow(k, v, note) {
      所以这里带一份"显示用"的对照表 ✓
      （数值规则仍然只有服务器一份 ✓ 这里只管显示 ✓ 不参与计算 ✓）*/
 var MY_MQ = 0;      // ★ 第 152 轮：我自己的魔气（登录从 role 读 ✓ 变了服务器推 ✓）
+/* ★ 第 160 轮：构建号（服务器在 ws-config.js 里给的）
+   ★ 为什么在 platform 里读 window、不在 core 里读：
+     core 不许碰浏览器对象（分层铁律，check_core_dom 盯着）
+     这里读好、变成普通字符串，core 直接用就行 */
+var BUILD_TAG = (typeof window !== 'undefined' && window.BUILD)
+  ? String(window.BUILD) : '?';
 var TAL = { free: 0, pts: {}, raw: {}, eff: {}, live: [], perLevel: 3, ready: false };
 var TAL_META = [
   ['hp', '血量', '点'], ['atk', '攻击力', '点'],

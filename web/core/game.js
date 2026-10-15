@@ -3723,7 +3723,14 @@ function frame(ts) {
        · 坐标不要小数 ✗（toFixed(1) → Math.round ✓ 粒度到米就够了 ✓）*/
     UI.text('diag', Math.round(P.x) + ', ' + Math.round(P.z)
       + '   实体 ' + (NET.on ? Object.keys(NET.rmobs).length : mobs.length)
-      + '   道友 ' + Object.keys(NET.others).length);
+      + '   道友 ' + Object.keys(NET.others).length
+      /* ★ 第 160 轮：把构建号显示出来
+         玩家看一眼就知道自己跑的是不是最新代码
+         （以后遇到「我看不到」这类问题，先对这个数字）
+         ★ 上一版我把它加在了右括号【外面】✗
+           → 变成一句独立的无用语句 ✗ 画面上什么都不会多 ✓
+           （这种“代码写了、效果没有”的错最难查 ✗）*/
+      + '   版本 ' + BUILD_TAG)
   }
 }
 
