@@ -827,8 +827,10 @@ function wMastery(it) {
   var req = +((it && it.reqLevel) || 1);
   var lv = (WSC.role && WSC.role.level) || 1;
   if (req <= 1 || lv >= req) { return 1; }
-  var v = 0.40 + 0.60 * (lv / req);
-  return Math.max(0.40, Math.min(1, v));
+  // ★ 第 60 轮：下限 0.40 → 0.90（和 server/weapons.py 的 MASTERY_FLOOR 一致 ✓）
+  var F = 0.90;
+  var v = F + (1 - F) * (lv / req);
+  return Math.max(F, Math.min(1, v));
 }
 /* 满发挥（不打折、不封顶）—— 用来告诉玩家"你只发挥了它的多少" ✓ */
 function wFull(it) {
@@ -841,7 +843,9 @@ function wRealHit(it) {
   if (!b) { return 0; }
   var inh = wInherent();
   var v = wFull(it) * wMastery(it);       // ★ 先按等级发挥度打折
-  return Math.min(v, inh * 2.5);          // 再按 §7.5 封顶：装备最多贡献 60% ✓
+  // ★ 第 60 轮：封顶跟着品阶抬（2.5 + 0.06×阶 ✓ 和服务器一致）
+  var cap = inh * (2.5 + 0.06 * Math.max(0, Math.min(11, (it && it.tier) || 0)));
+  return Math.min(v, cap);
 }
 function wRealDps(it) {
   return wRealHit(it) * 1.1 / Math.max(0.05, wInterval(it));
@@ -881,6 +885,18 @@ function wStatHtml(it, dim) {
     '<span>打击面 ' + arcWord(s.arc) + '（正前方 ' +
       Math.round(s.arc * 2 * 180 / Math.PI) + '°）</span>' +
     '<span>攻速 <s>×' + s.spd.toFixed(2) + '</s>（' + wInterval(it).toFixed(2) + ' 秒一刀）</span>' +
+    /* ★★ 第 60 轮：词条也要写进文案 ★★
+       （用户："这些效果也要写到文案里，不然玩家不知道" ✓）
+       ★ 文案来自服务器（物品数据里的 affixes ✓）—— 不在 JS 里再抄一份表 ✗ */
+    ((it.affixes && it.affixes.length) ? (function () {
+      var out = '<span style="color:#ffd83d">词条 ' + it.affixes.length + ' 条：</span>';
+      for (var ai = 0; ai < it.affixes.length; ai++) {
+        var af = it.affixes[ai];
+        out += '<span style="color:#8ee0ff">· ' + (af.text || af.name || '') +
+          '</span>';
+      }
+      return out;
+    })() : '') +
     /* ★★ 第 59 轮：机制 + 耐久【必须写进文案】★★
        （用户原话："这些效果也要写到文案里，不然玩家不知道" ✓）
        ★ 机制文案来自服务器（物品数据里的 fx ✓）—— 不在 JS 里再抄一份表 ✗ */
@@ -928,6 +944,9 @@ function bagRender() {
       '<span style="color:' + col + '">' + iconOfItem(it) + '</span>' +
       '<span class="tg">' + ((it.tier || 0) + 1) + '</span>' +      // ★ 显示 1~12 ✓
       (!isW && n > 1 ? '<span class="cnt">' + n + '</span>' : '') +
+      // ★ 第 60 轮：武器有几条词条，右上角点一个小圆点数字（一眼分得出极品 ✓）
+      (isW && it.affixes && it.affixes.length
+        ? '<span class="affn">' + it.affixes.length + '</span>' : '') +
       (lowm ? '<span class="lvl">' + Math.round(wMastery(it) * 100) + '%</span>' : '') + '</div>';
   }
   var total = Math.max(16, Math.ceil((BAG.items.length + 1) / 8) * 8);
@@ -1000,7 +1019,8 @@ function bagRender() {
       var m8 = wMastery(selItem);
       var rq8 = +((selItem.reqLevel) || 1);
       var lv8 = (WSC.role && WSC.role.level) || 1;
-      selNameEl.textContent = (selItem.name || '武器') + ' · ' + ((selItem.tier || 0) + 1) + ' 阶 · 建议 ' +
+      selNameEl.textContent = (selItem.name || '武器') + ' · ' + ((selItem.tier || 0) + 1) + ' 阶 · ' +
+        ((selItem.affixes && selItem.affixes.length) ? (selItem.affixes.length + ' 词条 · ') : '') + '建议 ' +
         rq8 + ' 级（你 ' + lv8 + ' 级）· 发挥 ' + Math.round(m8 * 100) + '%';
     } else {
       selNameEl.textContent = '选中的武器（没选时 = 手上这把 / 默认剑）';

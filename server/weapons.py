@@ -18,6 +18,8 @@
 
 import random
 
+import affixes
+
 # ------------------------------------------------------------------ 类型表（§7.4）
 #   look: (攻速S, 系数下限, 系数上限, 射程(米), 攻击弧(弧度), 中文名)
 TYPES = {
@@ -69,9 +71,15 @@ def speed_of(look):
     return max(S_MIN, min(S_MAX, type_of(look)[0]))
 
 
-def interval_of(look):
-    """两次攻击的最短间隔（秒）—— S 越大间隔越小 ✓（§5.1）"""
-    return BASE_INTERVAL / speed_of(look)
+def interval_of(look, spd_pct=0.0):
+    """两次攻击的最短间隔（秒）—— S 越大间隔越小 ✓（§5.1）
+
+    ★ 第 60 轮：吃【攻速词条】—— S = 基础 S × (1+攻速%)，再夹回上下限 ✓（§7.11③③）
+      —— 攻速词条不能突破 §5.1 那条"防一秒十刀"的线 ✓
+    """
+    S = speed_of(look) * (1.0 + float(spd_pct or 0.0) / 100.0)
+    S = max(S_MIN, min(S_MAX, S))
+    return BASE_INTERVAL / S
 
 
 def windup_of(look):
@@ -114,7 +122,14 @@ def roll_coeff(look, rng=None):
 
 
 # ---------------------------------------------------------------- 等级发挥度（第 53 轮）
-MASTERY_FLOOR = 0.40        # 等级差很多时也至少发挥这么多（别让神器变废铁 ✗）
+# ★★ 第 60 轮：下限 0.40 → 0.90 ★★
+#   为什么：0.40 会让【高阶反而不如低阶】✗
+#     实测 Lv.1 匕首：0 阶 12.4 → 1 阶 8.5 ✗（越高级越弱 ✗）
+#     因为 0 阶要 1 级（100% 发挥），1 阶要 4 级（只有 55% 发挥）✗
+#   用户要求："高阶一定比低阶好，只是不用好太多" ✓
+#   → 下限提到 0.90：只是"没练熟"，不再反过来惩罚高阶 ✓
+#   （"等级不够发挥不出来"改由【封顶】来表达 ✓ 见 player_atk_with）
+MASTERY_FLOOR = 0.90
 
 
 def req_level_of(tier):
@@ -142,7 +157,8 @@ def mastery_of(w, level):
     return max(MASTERY_FLOOR, min(1.0, v))
 
 
-def player_atk_with(inherent, look, coeff, tier, item_lv=1, mastery=1.0, flat=None):
+def player_atk_with(inherent, look, coeff, tier, item_lv=1, mastery=1.0, flat=None,
+                    aff_w=None):
     """玩家攻击力 = 固有攻击 × 武器系数 + 武器平伤（§7.5 —— 一个字不差）
 
     ★★ 踩过的坑（第 47 轮）：这里一开始写成了 `固有 + (固有×系数 + 平伤)` ✗
@@ -158,9 +174,18 @@ def player_atk_with(inherent, look, coeff, tier, item_lv=1, mastery=1.0, flat=No
     #   以前这里写死 flat_of(tier, item_lv) → 空手的 flat0 标记会被绕过 ✗
     _flat = flat_of(tier, item_lv) if flat is None else float(flat)
     base = float(inherent) * float(coeff) + _flat
+    # ★★ 第 60 轮：词条在【发挥度和封顶之前】生效 ✓（§7.11③ 的顺序 ✓）
+    if aff_w is not None:
+        base = affixes.apply_affixes(aff_w, inherent, base)
     # ★ 第 53 轮：等级不够 → 武器那一份打折（§7.5 的封顶照样在后面生效 ✓）
     atk = base * max(0.0, min(1.0, float(mastery)))
-    cap = float(inherent) * 2.5
+    # ★★ 第 60 轮：封顶从固定 ×2.5 改成【跟着品阶抬】★★
+    #   原来所有品阶都撞同一个天花板 → 高阶被压平成一样高 ✗
+    #   实测：Lv.1 时 7~11 阶全是 32.7 ✗（高阶不比低阶好 ✗）
+    #   现在 ×(2.5 + 0.06×阶) → 12 阶封顶 ×3.16 ✓
+    #   ★ 代价：§7.5 那句"装备最多贡献 60%"变成 60%~68%（随品阶浮动）
+    #     严格 60% 就必然压平高阶 ✗ 两个要求不可兼得，按用户要求选"高阶一定更好" ✓
+    cap = float(inherent) * (2.5 + 0.06 * max(0, min(11, int(tier))))
     if atk > cap:
         atk = cap
     return atk
@@ -190,7 +215,7 @@ WEAPON_REF = 100.0     # 系数折算基准：纯比较用，和玩家等级无�
 FIST = {
     'id': 'fist', 'name': '空手', 'slot': 'weapon', 'tier': 0, 'itemLv': 1,
     'base': {'coeff': 0.75, 'atkSpeed': 1.15, 'reach': 2.4, 'arc': 1.05, 'critPt': 0},
-    'affixes': [], 'effect': None, 'look': 'sword', 'reqLevel': 1,
+    'affixes': [], 'effect': None, 'look': 'sword', 'reqLevel': 1,   # 空手无词条 ✓
     'flat0': True,          # ★ 标记：这件东西【没有】平伤那一份（只有空手有 ✓）
     'dur': 0, 'durMax': 0,  # ★ 空手没有耐久（不会坏 ✓）
     'fx': None,             # ★ 空手没有机制 ✓
@@ -337,7 +362,10 @@ def make_weapon(look, tier, coeff, item_lv=1, rng=None):
             'arc': arc_of(look),
             'critPt': 0,
         },
-        'affixes': [],
+        # ★★ 第 60 轮：词条 ★★
+        #   条数【看概率】（品阶只抬上限 ✓）· 同名不重复 ✓ · 只从已实装的池里抽 ✓
+        #   不传 rng 就用全局 random（掉落时传同一个 rng 保证可复现 ✓）
+        'affixes': affixes.roll_affixes(t, ('weapon',), rng),
         'effect': None,
         'look': look,
         'reqLevel': req_level_of(t),               # ★ 第 56 轮：改成平缓曲线（见 req_level_of）

@@ -66,10 +66,13 @@ def roll_equip(mob_lv, killer_lv, rng=None):
     return weapons.roll_weapon(mob_lv, killer_lv, r)
 
 
-def roll_drop(mob_lv, killer_lv, rng=None):
-    """给一次击杀 roll 掉落：返回 {'name','tier','kind'} 或 None（什么都没掉）"""
+def roll_drop(mob_lv, killer_lv, rng=None, luck=1.0):
+    """给一次击杀 roll 掉落：返回 {'name','tier','kind'} 或 None（什么都没掉）
+
+    ★ 第 60 轮：luck = 寻宝词条给的倍率（1.0 = 没有 ✓）
+    """
     r = rng or random
-    if r.random() > drop_chance(mob_lv, killer_lv):
+    if r.random() > min(0.95, drop_chance(mob_lv, killer_lv) * max(0.1, luck)):
         return None
     cap = max_tier(mob_lv)
     pool = [m for m in MATERIALS if m[1] <= cap]

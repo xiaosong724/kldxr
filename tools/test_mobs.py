@@ -859,6 +859,75 @@ ok(abs(_m.x - _x0) < 0.05 and abs(_m.z - _z0) < 0.05,
 ok(_m.stunT <= 0, '★ 眩晕时间会走完（%.2f 秒 ✓ 不会永久晕 ✗）' % _m.stunT)
 
 print('')
+print('== ㉓ ★ 词条（第 60 轮：条数看概率 + 分部位 + 生效 + 单调性）==')
+import affixes as AF
+import random as _rnd
+
+# ---- ① 条数：品阶只抬范围，条数看概率 ✓ ----
+_lo12, _ws12 = AF.count_weights(11)
+ok(_lo12 == 3 and len(_ws12) == 3,
+   '★★ 12 阶的条数范围是 3~5（不是"必定 5 条"✗ 用户要求看概率 ✓）')
+_lo1, _ws1 = AF.count_weights(0)
+ok(_lo1 == 1 and len(_ws1) == 1, '1 阶必定 1 条 ✓')
+_r = _rnd.Random(5)
+_seen = set()
+for _i in range(4000):
+    _seen.add(AF.roll_count(11, _r))
+ok(_seen == {3, 4, 5}, '★★ 12 阶实际能抽出 3/4/5 条（实测 %s ✓ 真的随机 ✓）' % sorted(_seen))
+
+# ---- ② 分部位：防具词条不会掉在武器上 ✓ ----
+_r2 = _rnd.Random(9)
+_wk = AF.roll_affixes(11, ('weapon',), _r2)
+_armor_keys = set(a[0] for a in AF.AFFIXES if a[5] == ('armor',))
+ok(all(a['key'] not in _armor_keys for a in _wk),
+   '★★ 武器上不会出现防具词条（抽到 %s ✓ 分部位生效 ✓）' % [a['key'] for a in _wk])
+ok(all(a['live'] for a in _wk),
+   '★★ 只掉【已实装】的词条（不给玩家"死词条"✗ %s ✓）' % [a['key'] for a in _wk])
+
+# ---- ③ 同名不重复 ✓ ----
+_dup = 0
+for _i in range(300):
+    _a = AF.roll_affixes(11, ('weapon',), _r2)
+    if len(set(x['key'] for x in _a)) != len(_a):
+        _dup += 1
+ok(_dup == 0, '★★ 同一件装备上不会出现两条同名（300 次里重复 %d 次 ✓）' % _dup)
+
+# ---- ④ pct 只作用于武器那一份（§7.11③①）----
+_inh = 360.0
+_w = {'base': {'coeff': 1.0}, 'affixes': [{'key': 'atk_pct', 'val': 100.0}]}
+_base = _inh * 1.0 + 50
+_got = AF.apply_affixes(_w, _inh, _base)
+ok(abs(_got - (_inh + 100)) < 0.01,
+   '★★★ 攻击力+100%% 只把【武器那 50 点】翻倍（%.0f → %.0f ✓ 固有 360 没被放大 ✓）'
+   % (_base, _got))
+
+# ---- ⑤ 装备带上词条 + 生效 ----
+_r3 = _rnd.Random(21)
+_w2 = WP.make_weapon('axe', 9, 1.45, 3, _r3)
+ok(len(_w2['affixes']) >= 1, '★ 掉出来的武器自带给词条（%d 条 ✓）' % len(_w2['affixes']))
+ok(all(('text' in a and a['text']) for a in _w2['affixes']),
+   '★★ 每条词条都有文案（写进 UI 给玩家看 ✓）')
+# ★ 这里必须【手动塞一条攻击力词条】✗
+#   随机抽到的是暴击/吸血的话，攻击力当然不变（上次就是这么假红的 ✗）
+_w2['affixes'] = [{'key': 'atk_pct', 'val': 30.0, 'name': '攻击力', 'mode': 'pct',
+                   'text': '攻击力 +30%', 'live': True}]
+_a1 = WP.player_atk_with(360.0, 'axe', 1.45, 9, 3, 1.0, flat=WP.flat_full(_w2))
+_a2 = WP.player_atk_with(360.0, 'axe', 1.45, 9, 3, 1.0, flat=WP.flat_full(_w2), aff_w=_w2)
+ok(_a2 > _a1 + 0.01,
+   '★★ 词条真的改攻击力（攻击力+30%%：%.0f → %.0f ✓）' % (_a1, _a2))
+# 暴击词条也要能被 roll_damage 吃到
+_c1 = [mobs.roll_damage(100.0, _rnd.Random(i), 0, 0) for i in range(200)]
+_c2 = [mobs.roll_damage(100.0, _rnd.Random(i), 50, 100) for i in range(200)]
+ok(sum(1 for d, c in _c2 if c) > sum(1 for d, c in _c1 if c),
+   '★★ 暴击率词条会让暴击变多（+50%%：%d → %d 次 / 200 ✓）'
+   % (sum(1 for d, c in _c1 if c), sum(1 for d, c in _c2 if c)))
+
+# ---- ⑥ 攻速词条不破 §5.1 上限 ----
+_iv = WP.interval_of('dagger', 9999.0)
+ok(abs(_iv - WP.BASE_INTERVAL / WP.S_MAX) < 1e-6,
+   '★★ 攻速词条再离谱也被夹回上限（间隔 %.3f 秒 = 0.62/%.1f ✓）' % (_iv, WP.S_MAX))
+
+print('')
 if fails:
     print('FAILED: %d 条 ✗' % len(fails))
     for f in fails:

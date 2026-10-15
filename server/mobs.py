@@ -278,7 +278,7 @@ def in_front(px, pz, yaw, tx, tz, rng=ATK_RANGE, arc=ATK_ARC):
     return abs(a) <= arc
 
 
-def roll_damage(atk_power, rng=None):
+def roll_damage(atk_power, rng=None, crit_pt=0.0, crit_dmg=0.0):
     """一次普攻的伤害（§5 的简化版：减伤/闪避等 P3 上装备后再接）
 
     基础伤害 = 攻击力 × 武器倍率（现在只有普攻，倍率 = 1.0）
@@ -287,8 +287,11 @@ def roll_damage(atk_power, rng=None):
     """
     r = rng or random
     base = max(1.0, float(atk_power))
-    crit = r.random() < CRIT_CHANCE
-    dv = base * (CRIT_MUL if crit else 1.0)
+    # ★ 第 60 轮：暴击率/爆伤可以被【词条】改 ✓
+    #   爆伤上限 250%（方案 §5：150% + 爆伤%，上限 250% ✓）
+    crit = r.random() < (CRIT_CHANCE + float(crit_pt or 0.0) / 100.0)
+    mul = min(2.5, CRIT_MUL + float(crit_dmg or 0.0) / 100.0)
+    dv = base * (mul if crit else 1.0)
     floor = base * 0.05
     if dv < floor:
         dv = floor

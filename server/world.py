@@ -24,6 +24,7 @@ import random
 import threading
 import time
 
+import affixes
 import drops
 import mobs
 import weapons
@@ -858,7 +859,8 @@ class World(object):
         return weapons.player_atk_with(inherent, w.get('look'), coeff,
                                        w.get('tier') or 0, int(w.get('itemLv') or 1),
                                        weapons.mastery_of(w, lv),
-                                       flat=weapons.flat_full(w))   # ★ 空手 flat=0 ✓
+                                       flat=weapons.flat_full(w),    # ★ 空手 flat=0 ✓
+                                       aff_w=w)                      # ★ 第 60 轮：词条 ✓
 
     def _intent_atk(self, p, d):
         """玩家挥了一刀 —— ★★ 服务器算伤害（客户端只报"我挥了"，不报打中谁）★★
@@ -877,7 +879,9 @@ class World(object):
         w = p.weapon or {}
         wlook = w.get('look') or weapons.DEFAULT_TYPE
         wtier = int(w.get('tier') or 0)
-        p.atkT = weapons.interval_of(wlook)
+        # ★ 第 60 轮：冷却吃【攻速词条】（S 再夹回 §5.1 上下限 ✓）
+        _T = affixes.totals(w.get('affixes'))
+        p.atkT = weapons.interval_of(wlook, _T.get('spd_pct', 0.0))
         reach = weapons.reach_of(wlook)
         arc = weapons.arc_of(wlook)
 
@@ -928,7 +932,8 @@ class World(object):
                     atk *= (1.0 + fx['value'])
                     back = True
 
-            dv, crit = mobs.roll_damage(atk)
+            dv, crit = mobs.roll_damage(atk, crit_pt=_T.get('crit_pt', 0.0),
+                                        crit_dmg=_T.get('crit_dmg', 0.0))
             # ★ 保安会格挡（方案 §3.3"高防、会格挡"）—— 防御属性已被砍（§4.5），
             #   所以这里用"减伤"实现，和方案 §5"减伤是唯一的减伤属性"一致 ✓
             blocked = False
@@ -939,6 +944,12 @@ class World(object):
             self._add_pend(p.cid, 'mhits', {'mid': m.mid, 'dmg': dv, 'crit': bool(crit),
                                             'block': blocked, 'back': back,
                                             'x': round(m.x, 2), 'z': round(m.z, 2)})
+
+            # ★★ 第 60 轮：吸血词条 —— 按造成的伤害回血 ✓
+            _ls = _T.get('lifesteal', 0.0)
+            if _ls > 0:
+                hpm = int(p.role.get('hpMax') or 200)
+                p.hp = min(hpm, int(p.hp) + max(1, int(round(dv * _ls / 100.0))))
 
             # ★★ 命中后按武器类型触发机制 ★★
             self._weapon_fx(p, m, fx, dv)
@@ -1037,7 +1048,10 @@ class World(object):
           （§8 开头那句"全部概率到身上"就是这个意思 ✓）
         """
         klv = int(p.role.get('level') or 1)
-        it = drops.roll_drop(m.lv, klv)
+        # ★ 第 60 轮：寻宝词条会按比例抬掉落概率 ✓
+        _t = affixes.totals(((p.weapon or {}).get('affixes')))
+        _tb = 1.0 + _t.get('treasure', 0.0) / 100.0
+        it = drops.roll_drop(m.lv, klv, luck=_tb)
         self._drop_one(p, m, it)
         eq = drops.roll_equip(m.lv, klv)          # ★ 装备类（独立 roll）
         self._drop_one(p, m, eq)
