@@ -215,6 +215,38 @@ function mkMobUI(name, hpMax) {
 }
 
 /* ---------- dmg ---------- */
+
+/* ★★ 第 74 轮：伤害飘字的性能修复 ★★
+   用户报："iPad 上攻击战斗时会掉帧，走路不会"
+
+   病根（战斗和走路的区别就在这儿 ✗）：
+     每命中一次就 new 一个 div ✓ 然后【每帧改 el.style.top】✗
+     → 改 top/left 会触发【布局重排】(layout) ✗
+     → 战斗时一屏十几个飘字 × 每个 42 帧 = 每帧十几次重排 ✗✗
+       移动端 GPU 不算弱，但重排是 CPU 的活 → 掉帧 ✓
+     走路没有任何飘字 → 所以只有战斗掉帧 ✓（和用户观察完全一致 ✓）
+   修：
+     ① 用 transform: translate3d 做动画 ✓
+        —— transform 只走【合成器】，不重排不重绘 ✓ 这是移动端优化的第一课 ✓
+     ② 同时在飞的飘字【封顶 14 个】✓ 超了就不生成（一屏也看不清更多 ✓）
+     ③ 循环改成按【时间】推进 ✓（不再"每帧固定挪 1.2px"✗ 高刷屏上会飘太快 ✗）
+   ★ 注意：这里没用"自动降画质"✗ —— 那是另一回事，这个纯属修实现方式 ✓
+*/
+var NUM_LIVE = 0, NUM_CAP = 14;
+function _numFly(el, life, dx, dy) {
+  var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  NUM_LIVE++;
+  (function up() {
+    var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    var k = Math.min(1, (now - t0) / life);
+    el.style.transform = 'translate3d(' + (dx * k).toFixed(1) + 'px,' +
+      (dy * k).toFixed(1) + 'px,0)';
+    el.style.opacity = String(1 - k);
+    if (k < 1) { requestAnimationFrame(up); }
+    else { el.remove(); NUM_LIVE--; }
+  })();
+}
+
 function dmg(txt, x, y, z, big) {
   if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
   var v = REUSE_V3.v.set(x, y, z).project(cam);
@@ -223,14 +255,9 @@ function dmg(txt, x, y, z, big) {
   el.style.cssText = 'position:fixed;z-index:12;font-weight:800;pointer-events:none;text-shadow:0 2px 5px #000;' +
     'font-size:' + (big ? 22 : 16) + 'px;color:' + (big ? '#ffd83d' : '#fff6e8') + ';' +
     'left:' + ((v.x * 0.5 + 0.5) * innerWidth) + 'px;top:' + ((-v.y * 0.5 + 0.5) * innerHeight) + 'px;';
+  if (NUM_LIVE >= NUM_CAP) { return; }      // ★ 封顶（一屏也看不清更多 ✗）
   document.body.appendChild(el);
-  var t = 0;
-  (function up() {
-    t += 1;
-    el.style.top = (parseFloat(el.style.top) - 1.2) + 'px';
-    el.style.opacity = String(1 - t / 42);
-    if (t < 42) { requestAnimationFrame(up); } else { el.remove(); }
-  })();
+  _numFly(el, 700, 0, -50);
 }
 
 /* ---------- healNum（治疗数字：绿色 + 号 ✓ 第 46 轮）----------
@@ -245,14 +272,9 @@ function fxNum(txt, color, x, y, z) {
   el.style.cssText = 'position:fixed;z-index:12;font-weight:800;pointer-events:none;' +
     'text-shadow:0 2px 5px #000;font-size:15px;color:' + color + ';' +
     'left:' + ((v.x * 0.5 + 0.5) * innerWidth) + 'px;top:' + ((-v.y * 0.5 + 0.5) * innerHeight) + 'px;';
+  if (NUM_LIVE >= NUM_CAP) { return; }      // ★ 封顶 ✓
   document.body.appendChild(el);
-  var t = 0;
-  (function up() {
-    t += 1;
-    el.style.top = (parseFloat(el.style.top) - 1.1) + 'px';
-    el.style.opacity = String(1 - t / 40);
-    if (t < 40) { requestAnimationFrame(up); } else { el.remove(); }
-  })();
+  _numFly(el, 660, 0, -46);
 }
 
 function healNum(txt, x, y, z) {
@@ -263,16 +285,10 @@ function healNum(txt, x, y, z) {
   el.style.cssText = 'position:fixed;z-index:12;font-weight:800;pointer-events:none;text-shadow:0 2px 5px #000;' +
     'font-size:17px;color:#7ee08a;' +
     'left:' + ((v.x * 0.5 + 0.5) * innerWidth) + 'px;top:' + ((-v.y * 0.5 + 0.5) * innerHeight) + 'px;';
+  if (NUM_LIVE >= NUM_CAP) { return; }      // ★ 封顶 ✓
   document.body.appendChild(el);
-  var t = 0;
-  (function up() {
-    t += 1;
-    el.style.top = (parseFloat(el.style.top) - 1.0) + 'px';
-    el.style.opacity = String(1 - t / 46);
-    if (t < 46) { requestAnimationFrame(up); } else { el.remove(); }
-  })();
+  _numFly(el, 660, 0, -46);
 }
-
 /* ---------- 方位标记（屏幕边缘的队友箭头）----------
    ★ 和名牌一样：core 只说"在哪个像素、朝哪个角度、写什么字"，不碰 style 属性名 ✓
      （小游戏里这套换成 canvas 自绘，只要改这里 ✓） */

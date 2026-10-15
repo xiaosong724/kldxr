@@ -1291,7 +1291,7 @@ function fillHeldWeapon(sw, look, tier) {
      弓本来就比刀剑宽（弓臂向两侧弯）→ 直接套在手上会和前臂穿模 ✗
      → 往【前、上、外】各推开一点 ✓（只对弓生效 ✓ 其他武器手感不变 ✗）*/
   if (useLook === 'bow') {
-    g.position.set(0.30, 0.16, 0.22);
+    g.position.set(0.30, -0.06, 0.22);   // ★ 第 74 轮：用户说靠上了→往下移 ✓
   }
   sw.add(g);
   return sw;

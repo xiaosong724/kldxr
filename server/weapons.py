@@ -346,6 +346,25 @@ def dur_max_of(tier):
     return DUR_MAX[max(0, min(11, int(tier)))]
 
 
+def ensure_dur(w):
+    """给【第 59 轮之前掉的】老武器补上耐久字段 ✓
+
+    ★ 用户报："耐久度在点击装备时就可以看到，而不是穿戴后才能看见"
+      病根：那些武器的 item_json 里【没有 dur/durMax】✗
+            → 客户端那条判断 (+it.durMax > 0) 不成立 → 耐久行直接不显示 ✗
+      → 读到就补上（意思就是"以后按新规矩算" ✓ 不用迁移整库 ✗）
+    """
+    if not isinstance(w, dict) or not w.get('base'):
+        return w
+    if w.get('slot') == 'armor':
+        return w
+    if not w.get('durMax'):
+        w['durMax'] = dur_max_of(w.get('tier') or 0)
+        if not w.get('dur'):
+            w['dur'] = w['durMax']
+    return w
+
+
 def make_weapon(look, tier, coeff, item_lv=1, rng=None):
     """造一件武器（字段照方案 §7.1 的接口，base 里放 §7.4/§7.5 要用的东西 ✓）
 

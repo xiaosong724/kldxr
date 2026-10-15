@@ -19,6 +19,7 @@ import threading
 import time
 
 import db as dbmod
+import weapons
 
 # ---------------------------------------------------------------- 参数
 
@@ -263,6 +264,9 @@ def bag_of(cfg, role_id, cap=60):
         except Exception:
             continue
         if isinstance(it, dict):
+            # ★ 第 74 轮：老武器（第 59 轮之前掉的）没有 dur/durMax
+            #   → 读到就补上 ✓ 不然背包里那条"耐久"根本不显示 ✗
+            weapons.ensure_dur(it)
             # ★ 第 54 轮：把数量带上（材料会堆叠 ✓ 武器永远是 1 ✓）
             out.append({'id': rid, 'item': it, 'stack': int(stack or 1)})
     return out
@@ -294,6 +298,7 @@ def weapon_of(cfg, role_id):
         return None, None
     if not isinstance(w, dict) or w.get('slot') != 'weapon':
         return None, None
+    weapons.ensure_dur(w)            # ★ 第 74 轮：老武器补耐久 ✓
     return w, row[0]
 
 
