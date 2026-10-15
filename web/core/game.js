@@ -206,6 +206,9 @@ var SFX_FILES_WAV = {
 };
 
 /* ===== ★ 多人联网配置（必须在 init 调用之前 ✓ 否则 NET undefined ✗）===== */
+/* ★ 第 71 轮：箭速（必须和 server/world.py 的 ARROW_SPEED 一致 ✓）*/
+var ARROW_SPEED = 14.0;
+
 var NET = {  on: false, token: '', lastPost: 0, lastGet: 0,
   arrows: {},               // ★ 第 69 轮：在飞的箭（id → mesh ✓）
   rate: 0.0333,              // ★ 30Hz（33ms 一包 ✓）
@@ -1270,7 +1273,13 @@ function fillHeldWeapon(sw, look, tier) {
        那时 g 还没定义 → 一持弓就 ReferenceError → 整个渲染循环挂掉 ✗✗
        （表现是“进世界后报错”+所有快照字段 undefined ✗）*/
   if (useLook === 'bow') {
-    g.rotation.set(0.18, 0, Math.PI * 0.5);
+    /* ★★ 第 71 轮 用户澄清：不是人拿反了，是【弓的弦】朝反了 ★★
+       看模型数据：弓臂向 +X 弯出去（x 到 0.40）✓
+                 弦也在 +X 侧（x = 0.46）✗
+       → 两者同侧 = 弦在【弓臂外侧】→ 朝前了 ✗
+       正确的弓：弓臂朝前弯，弦在【自己这侧】✓
+       → 整个绕竖轴转 180° 就对了 ✓（不能绕 Z 转 ✗ 那会把弓臂转到水平方向）*/
+    g.rotation.set(0, Math.PI, 0);
   }
   /* ★★ 第 54 轮：刀刃朝向修正（用户报的"拿着斧头时刀刃不是朝下"）★★
      病根：零件数据是"宽在 X、薄在 Z"——
@@ -1827,12 +1836,13 @@ function wsApplyWorld(d) {
          以前是一个光秃秃的黄方块 ✗
          现在拼一支真的：细杆 + 尖头（锥）+ 尾羽（两片）✓ */
       am = new THREE.Group();
+      /* ★ 第 71 轮 用户要求：银色箭头 + 灰色箭身 ✓ */
       var _shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.85, 6),
-        new THREE.MeshBasicMaterial({ color: 0xc9a86a }));
+        new THREE.MeshBasicMaterial({ color: 0x9aa0a6 }));
       _shaft.rotation.x = Math.PI / 2;
       am.add(_shaft);
       var _tip = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.18, 6),
-        new THREE.MeshBasicMaterial({ color: 0xe8f4ff }));
+        new THREE.MeshBasicMaterial({ color: 0xd6dde6 }));
       _tip.rotation.x = Math.PI / 2;
       _tip.position.z = 0.50;
       am.add(_tip);
@@ -1847,9 +1857,33 @@ function wsApplyWorld(d) {
       scene.add(am);
       NET.arrows[aid] = am;
     }
-    am.position.x = +aa[1] || 0;
-    am.position.z = +aa[2] || 0;
-    am.rotation.y = +aa[3] || 0;
+    /* ★★ 第 71 第三次改：箭不顺滑 ★★
+       原因：之前箭的位置【只在收到快照时才改】✗
+             快照 30Hz → 箭每 33毫秒跳一下 → 看着一顿一顿的 ✗
+       改法：箭的方向和速度都是已知的（服务器发了 yaw ✓
+             速度是常量 ✓）→ 客户端自己推 ✓
+             快照到了只做【软校正】（偏差大才吸附 ✗）
+       ★ 和玩家位置那套插值一个思路 ✓ */
+    am.userData.tx = +aa[1] || 0;
+    am.userData.tz = +aa[2] || 0;
+    am.userData.yaw = +aa[3] || 0;
+    am.rotation.y = am.userData.yaw;
+    if (am.userData.sx === undefined) {
+      am.position.x = am.userData.tx;
+      am.position.z = am.userData.tz;
+      am.userData.sx = am.position.x;
+      am.userData.sz = am.position.z;
+    } else {
+      var _ex = Math.abs(am.position.x - am.userData.tx);
+      var _ez = Math.abs(am.position.z - am.userData.tz);
+      if (_ex > 0.9 || _ez > 0.9) {           // 偏太多（丢包/刚刷出）→ 吸附 ✓
+        am.position.x = am.userData.tx;
+        am.position.z = am.userData.tz;
+      } else {                                 // 否则软修正（每包往正确位置拉一点 ✓）
+        am.position.x += (am.userData.tx - am.position.x) * 0.25;
+        am.position.z += (am.userData.tz - am.position.z) * 0.25;
+      }
+    }
   }
   for (var aq2 in NET.arrows) {
     if (!seenAr[aq2]) {
@@ -3147,6 +3181,13 @@ function frame(ts) {
   if (INVULN_T > 0) { INVULN_T = Math.max(0, INVULN_T - dt); }
   invRingUpdate();
   fxTick(dt);                       // ★ 第 63 轮：登场特效（复活/上线 ✓）
+  /* ★ 第 71 轮：箭每帧自己往前飞（不再等快照 ✗ 快照 30Hz 会一顿一顿的 ✗）*/
+  for (var _ak in NET.arrows) {
+    var _am = NET.arrows[_ak];
+    var _sp = (typeof ARROW_SPEED === 'number') ? ARROW_SPEED : 14.0;
+    _am.position.x += Math.sin(_am.rotation.y) * _sp * dt;
+    _am.position.z += Math.cos(_am.rotation.y) * _sp * dt;
+  }
   H.g.rotation.y = P.yaw;
   /* ★★ 第 56 轮：倒地时【不要】播走路姿势 ★★
      踩过：我那段倒地写在上面 ✓ 但这里 (rotation.x = 0) 又把它清零了 ✗
