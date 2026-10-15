@@ -138,7 +138,6 @@ class MainActivity : Activity() {
  .box{text-align:center;padding:0 28px;max-width:440px}
  .t{font-size:22px;font-weight:800;color:#ffd83d;letter-spacing:2px;margin-bottom:10px}
  .s{font-size:13px;line-height:1.9;opacity:.86}
- .addr{font-size:12px;opacity:.5;margin-top:12px;word-break:break-all}
  button{margin-top:22px;padding:12px 30px;font-size:15px;font-weight:700;
    color:#1a1208;background:#ffd83d;border:0;border-radius:24px;cursor:pointer}
  button:active{background:#e0b800}
@@ -146,12 +145,10 @@ class MainActivity : Activity() {
 </style></head><body><div class="box">
  <div class="t">服务器维护中</div>
  <div class="s">
-   正在等待服务器重新上线。<br>
-   如果你是房主：去电脑上把游戏服务器重新启动一下。
+   正在等待服务器重新上线。
  </div>
  <button onclick="retry()">重新连接</button>
  <div class="cd" id="cd"></div>
- <div class="addr">$GAME_URL</div>
 </div>
 <script>
  var left = $RETRY_SEC;
