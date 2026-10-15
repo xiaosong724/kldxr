@@ -1924,24 +1924,9 @@ function wsApplyWorld(d) {
     healNum('+' + Math.round(+he2[4] || 0), +he2[2], 2.95, +he2[3]);
   }
 
-  /* ★★★ 第 140 轮：我自己的血量【直接赋值】★★★
-     用户报："别人看我会掉血会倒地 ✓ 但我自己看不到 ✗"
-     根因：客户端的血量从来没被赋值过 ✗ 只在 hurt 消息上做减法 ✗
-           而上限是防具算出来的 1352 ✓
-           → 1352 被咬 -50 看着几乎没掉 ✗ 而服务器那边早 0 了 ✗
-     修：每帧拿服务器的真实值直接赋值 ✓（帧帧纠偏 ✗ 永远不会漂 ✓）
-     ★ 顺序：先赋值 → 再处理 hurts（只弹数字/音效 ✗ 不再参与算血 ✓）
-       这样即使 hurt 丢了 ✗ 下一帧也能纠回来 ✓ */
-  if (typeof d.hp === 'number') {
-    HP = d.hp;
-    if (typeof d.hpm === 'number' && d.hpm > 0) { HPMAX = d.hpm; }
-    if (HP > HPMAX) { HP = HPMAX; }
-    updHP();
-  }
-
-  // ---- 打在我身上的伤害（只管表现 ✗ 不算血 ✓）----
+  // ---- 打在我身上的伤害 ----
   var hs = d.hurts || [];
-  for (var h = 0; h < hs.length; h++) { netApplyHurt(hs[h], true); }
+  for (var h = 0; h < hs.length; h++) { netApplyHurt(hs[h]); }
 
   /* ---- ★ 我砍中僵尸的反馈（第 35 轮）----
      联机时伤害是【服务器算的】，所以数字也从服务器来 ✓
@@ -2635,18 +2620,11 @@ function mobDmgOn() { return SETCFG.mobDmg !== false; }
 /* ★ 玩家受伤的唯一入口
    kind = 'mob'（妖兽咬 ✓ 受"妖兽对玩家造成伤害"开关管）/ 'pvp'（玩家砍 ✓ 只受 PvP 开关管）
    ★ 两个开关各管各的，绝不互相影响 ✓ */
-/* ★★ 第 140 轮：加一个 cosOnly 参数 ★★
-   血量现在由【每帧的快照直接赋值】✓
-   → hurt 消息只管表现（数字 / 音效 / 震动 / 倒地判定✓）
-   → 再减一次就重了 ✗（虽然下一帧会纠回来 ✗ 但会闪一下 ✗）
-   ★ 为什么不直接删掉扣血：单机（没连服务器）时还靠它 ✓
-     那时候没有快照 ✗ 只能自己算 ✓ */
-function hurtPlayer(dv, fx, fz, kind, byName, cosOnly) {
+function hurtPlayer(dv, fx, fz, kind, byName) {
   if (dead) { return; }                            // ★ 已经倒下了就不再掉血（免得反复触发死亡 ✓）
   if (kind === 'mob' && !mobDmgOn()) { return; }   // ★ 关了就不掉血（但攻击动作/音效照旧 ✓）
   if (dv <= 0) { return; }
   HP -= dv; shake = 0.4;
-  if (cosOnly) { HP += dv; }                       // ★ 只做表现：把刚才那一口加回去 ✓
   sfx('zhurt', 0.9);
   if (!isFinite(fx)) { fx = P.x; }
   if (!isFinite(fz)) { fz = P.z; }
@@ -2670,7 +2648,7 @@ function hurtPlayer(dv, fx, fz, kind, byName, cosOnly) {
 
 
 /* ★ 服务器发来的掉血事件（妖兽咬我 / 别的玩家砍我 ✓ 服务器算的 ✓ 我只负责表现 ✓）*/
-function netApplyHurt(h, cosOnly) {
+function netApplyHurt(h) {
   if (!h) { return; }
   var dv = Math.round(+h.dmg || 0);
   if (dv <= 0) { return; }
@@ -2680,7 +2658,7 @@ function netApplyHurt(h, cosOnly) {
   if (h.pvp) {
     dmg((h.by || '道友') + ' 砍你', P.x, 3.4, P.z, true);   // ★ 提示是谁砍的 ✓
   }
-  hurtPlayer(dv, hx, hz, h.pvp ? 'pvp' : 'mob', h.pvp ? h.by : '', cosOnly);
+  hurtPlayer(dv, hx, hz, h.pvp ? 'pvp' : 'mob', h.pvp ? h.by : '');
 }
 
 /* 每帧：插值 + 朝向 + 走路动画 + 头顶昵称 ✓ */
