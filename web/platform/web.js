@@ -1220,19 +1220,18 @@ var MAT_ICON_BY_NAME = {
      · 两侧肩甲（半透明 ✓ 一眼看出是"穿在身上的甲"✓）
      · 中缝（深色线 ✓ 不管品阶是什么颜色都看得清 ✓）*/
 var ARMOR_ICON = '<svg viewBox="0 0 24 24" width="100%" height="100%">' +
-  /* ★★ 第 106 轮（用户："衣服盔甲的图标样式不够霸气"）★★
-     从"一件甲衣"改成【重甲】：
-       宽肩甲（往外翘）+ 厚胸甲（上宽下窄）+ V 字胸线 + 护心镜 + 腰甲 + 两颗铆钉 ✓
-     还是纯 SVG + currentColor ✓ 品阶颜色/发光自动跟着变 ✓ */
-  '<path d="M8.4 2.2 h7.2 l4.6 2.2 -0.6 4.6 -2.6 -0.7 V21 H7 V8.3 l-2.6 0.7 -0.6 -4.6 z"' +
-  ' fill="currentColor" opacity="0.92"/>' +
-  '<path d="M9.2 2.4 L12 6.6 L14.8 2.4" stroke="#000" stroke-opacity="0.30"' +
-  ' stroke-width="1.2" fill="none"/>' +
-  '<circle cx="12" cy="11.6" r="2.1" fill="#000" opacity="0.20"/>' +
-  '<circle cx="12" cy="11.6" r="0.9" fill="#000" opacity="0.30"/>' +
-  '<path d="M7 15.4 h10" stroke="#000" stroke-opacity="0.20" stroke-width="1"/>' +
-  '<circle cx="6.4" cy="5.4" r="0.7" fill="#000" opacity="0.28"/>' +
-  '<circle cx="17.6" cy="5.4" r="0.7" fill="#000" opacity="0.28"/>' +
+  /* ★★ 第 110 轮（用户："衣服短一点太长了，这六个都可以"）★★
+     用第一款【反甲（荆棘向）】✓ 并把身体收短：
+       下摆从 y=21 收到 y=16.8 ✓（只盖胸背 ✗ 不拖到腿 ✓）
+       肩甲也收紧一圈 ✓
+     纯 SVG + currentColor ✓ 品阶色/发光自动跟着变 ✓ */
+  '<path d="M8 4 h8 l4.4 2.1 -0.5 4 -2.3 -0.6 V16.8 H6.4 V9.5 l-2.3 0.6 -0.5 -4 z"' +
+  ' fill="currentColor" opacity="0.9"/>' +
+  '<path d="M4.4 4.2 l-2.5 -1.4 0.9 3 z M19.6 4.2 l2.5 -1.4 -0.9 3 z"' +
+  ' fill="currentColor" opacity="0.95"/>' +
+  '<path d="M12 7.4 l-1.3 2.1 1.3 2 1.3 -2 z" fill="currentColor" opacity="0.95"/>' +
+  '<path d="M6.6 11.6 l-1.6 1.1 1.6 1.1 z M17.4 11.6 l1.6 1.1 -1.6 1.1 z"' +
+  ' fill="currentColor" opacity="0.95"/>' +
   '</svg>';
 
 function iconOfItem(it) {
@@ -2191,6 +2190,28 @@ function wsWelcome(d) {
   setWeapon((d.role && d.role.weapon) || null);   // ★ 第 47 轮：进世界就知道手上拿的是啥 ✓
   WSC.myId = (d.role && d.role.id) || 0;
   NET.myUid = WSC.myId;
+  /* ★★★ 第 110 轮修的真 bug（用户："坐标和血量没有保存退出时的"）★★★
+     ★ 根因：服务器存了 ✓ 而 welcome 里也把 role（含 x/z/hp）发过来了 ✓
+              但客户端【没有采用】✗
+        · 位置：客户端是权威 ✓ → 它一进游戏就从 (0,0) 开始发位置包 ✗
+                → 把服务器上存的位置【覆盖】掉了 ✗✓
+        · 血量：客户端自己的 HP 从 200 开始 ✗ 没从服务器拿 ✗
+     修：进游戏的第一件事 —— 先采用存档里的位置和血量 ✓
+     （★ hp = 0 表示"按公式满值"✗ 这个约定不能忘 ✗ 所以只在 >0 时采用 ✓）*/
+  if (d.role) {
+    if (typeof d.role.x === 'number' && typeof d.role.z === 'number') {
+      P.x = d.role.x; P.z = d.role.z;
+      if (typeof d.role.yaw === 'number') { P.yaw = d.role.yaw; }
+    }
+    if (typeof d.role.hp === 'number' && d.role.hp > 0) {
+      HP = d.role.hp;
+    }
+    if (typeof d.role.hpMax === 'number' && d.role.hpMax > 0) {
+      HPMAX = d.role.hpMax;
+    }
+    if (HP > HPMAX) { HP = HPMAX; }
+    updHP();
+  }
   if (window.hideLogin) { hideLogin(); }
   netGoOnline();        // ★ 清掉本地自己模拟的那几只 → 世界归服务器 ✓
   var nm = (d.role && d.role.name) || '';

@@ -281,6 +281,12 @@ async function register(name, pw) {
     // ③ 互相看得见（P0-9 的验收标准）
     let seen = false;
     for (let i = 0; i < 25; i++) {
+    /* ★ 第 110 轮：现在会【恢复上次的位置】了 ✓
+       所以两个测试号会各自回到上次存档的地方 ✗ 互相看不见 ✗
+       → 测试前先把他们摆到一起 ✓（对真人玩家恢复位置是对的 ✓）*/
+    await A.eval('P.x = 0; P.z = 0; return 1;');
+    await B.eval('P.x = 2.5; P.z = 0; return 1;');
+
       await sleep(400);
       sa = await A.state(); sb = await B.state();
       if (sa && sb && sa.others && sb.others && sa.others.length && sb.others.length) { seen = true; break; }
