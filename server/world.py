@@ -100,7 +100,8 @@ class Player(object):
                  #   tal=已投点数 talRaw=原始值 talEff=有效值（过完上限 ✓）
                  #   ★ tick 线程只读这三个 ✗ 从不碰 DB ✗（铁律 ✓）
                  'tal', 'talRaw', 'talEff', 'talDirty', 'resetT',
-                 'mq', 'mqAt')   # ★ 第 149 轮：魔气值 ✓
+                 'mq', 'mqAt',
+                 'ghostAt')      # ★ 第 168 轮（用户 #5）：离线宽限的时刻 ✓
 
     def __init__(self, cid, role):
         self.cid = cid
@@ -141,6 +142,7 @@ class Player(object):
         # ★ 第 149 轮：魔气值（登录时已经算过自然衰减了 ✓）
         self.mq = int(role.get('mq') or 0)
         self.mqAt = int(role.get('mqAt') or 0)
+        self.ghostAt = None     # ★ 第 168 轮：不是 None 就表示“断线幽灵”✓
         _ar0 = self.armor or {}
         self.aDur = int(_ar0.get('dur') or 0)
         self.aDurMax = int(_ar0.get('durMax') or 0)
@@ -209,6 +211,7 @@ class World(object):
         self.mob_cap_of = {}      # {role_id: 该人的上限} ✓ 没记录就用全局值
         self.pvp_pair = {}        # ★ 第 150 轮：{(killer,victim): 上次算数时刻} —— 同一对 10 分钟只算一次 ✓
         self.pvp_pair_steal = {}  # ★ 第 167 轮：夺取自己一张表（默认 1 分钟 ✓）
+        self.ghost_grace = 6.0     # ★ 第 168 轮（用户 #5）：离线宽限（秒）
         # ★★ 第 134 轮（用户要求）：两组开关（全人 / 单人）★★
         #   PVP：开了才能互相打 ✓（现在是【闸门】：PvP 功能还没做 ✗
         #         但状态已经存下来了 ✓ 将来那段代码直接读 _pvp_on() 就行 ✓）
@@ -246,6 +249,16 @@ class World(object):
 
     # ============================================================ 网络线程调用
 
+    def _drop_ghosts_of(self, role_id):
+        """★ 第 168 轮：同一个角色的幽灵先清掉 ✗
+
+        为什么：6 秒宽限里他又登进来 →
+          幽灵（6 秒后落库）会把新会话的存档覆盖掉 ✗✓
+        """
+        for cid, q in list(self.players.items()):
+            if getattr(q, 'role_id', None) == role_id and getattr(q, 'ghostAt', None) is not None:
+                self.players.pop(cid, None)
+
     def post_join(self, conn, role):
         """认证通过：入队，等 tick 线程把他放进世界"""
         self._joinq.put((conn, role))
@@ -262,6 +275,23 @@ class World(object):
         ★ 和玩家意图走同一个 inbox ✓ 所以照样是【只有 tick 线程改世界状态】✓
         """
         self.inbox.put(('admin', None, (act, payload or {})))
+
+    def _ghost_tick(self):
+        """★ 第 168 轮（用户 #5）：收回超时的幽灵玩家
+
+        离线后先保留 ghost_grace 秒 ✓ 超时才真删 + 落库 ✓
+        """
+        now = now_s()
+        for cid, p in list(self.players.items()):
+            ga = getattr(p, 'ghostAt', None)
+            if ga is None:
+                continue
+            if now - ga >= self.ghost_grace:
+                self.players.pop(cid, None)
+                try:
+                    self._save_player(p)
+                except Exception:
+                    pass
 
     def _publish_admin(self):
         """每十几 tick 发布一次给管理页看的快照（只读 ✓）
@@ -328,6 +358,14 @@ class World(object):
                 conn, role = self._joinq.get_nowait()
             except queue.Empty:
                 break
+            # ★★ 第 168 轮（用户 #5）：先清掉同角色的【幽灵】★★
+            #   为什么：6 秒离线宽限里他又登进来 →
+            #     幽灵 6 秒后落库 → 把新会话的存档覆盖掉 ✗✓
+            #   ★ 放在 Player() 之前 ✗ 保证新会话不会被旧的清掉 ✓
+            try:
+                self._drop_ghosts_of(role.get('id'))
+            except Exception:
+                pass
             _np = Player(conn.cid, role)
             self.players[conn.cid] = _np
             # ★ 第 63 轮：上线也让附近的人"看得见"✓（不是凭空冒出来 ✗）
@@ -372,8 +410,18 @@ class World(object):
                     pass
                 continue
             if kind == 'leave':
-                p = self.players.pop(cid, None)
-                if p:
+                # ★★ 第 168 轮（用户 #5）：离线先保留 6 秒 ★★
+                #   用户原话："玩家离开或离线后服务器让他保留 6 秒
+                #             再算真离开，防止打不过直接退游戏"
+                #   ★ 血还没空 → 变成"幽灵"先留着 ✓ 怪物还能把他打死 ✓
+                #     血已经空了 → 直接删 ✗（都死了就不用留了 ✓）
+                p = self.players.get(cid)
+                if p is None:
+                    continue
+                if int(p.hp or 0) > 0:
+                    p.ghostAt = now_s()
+                else:
+                    self.players.pop(cid, None)
                     self._save_player(p)
             else:
                 p = self.players.get(cid)
@@ -540,6 +588,7 @@ class World(object):
         if self._admin_acc >= 15:
             self._admin_acc = 0
             self._publish_admin()
+            self._ghost_tick()   # ★ 第 168 轮（用户 #5）：收回超时的幽灵 ✓
 
     def _talent_op(self, p, d):
         """天赋加点 / 洗点（方案 §7.1 · 第 116 轮）
@@ -1425,6 +1474,14 @@ class World(object):
             role['exp'] = int(role.get('exp') or 0) - need
             role['level'] = lv + 1
             ups += 1
+        # ★★ 第 168 轮（用户 #1）：升级后恢复满血 ★★
+        #   ★ 放在循环【外面】✗ 连升两级也只回一次血 ✓（反正都是回满 ✓）
+        #   ★ 用 _hp_max（含防具/天赋加成 ✓）不是写死的 200 ✗
+        if ups > 0:
+            try:
+                q.hp = int(self._hp_max(q))
+            except Exception:
+                pass
         level = int(role.get('level') or 1)
         e = self._pend.get(q.cid)
         if e is None:
@@ -1434,6 +1491,7 @@ class World(object):
         except Exception:
             pass
         e['me'] = {'lv': level, 'exp': int(role.get('exp') or 0),
+                   'hp': int(q.hp or 0),   # ★ 第 168 轮：升级回满血后让客户端跟上 ✓
                    'need': mobs.level_up_need(level),
                    'inv': round(q.invulnT, 2),
                    # ★ 第 102 轮：把【有效血量上限】带上 ✓

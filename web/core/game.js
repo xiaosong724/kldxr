@@ -1973,6 +1973,16 @@ function wsApplyWorld(d) {
     if (HP > HPMAX) { HP = HPMAX; }
     updHP();
   }
+  /* ★★ 第 168 轮（用户 #1：升级后恢复满血）★★
+     服务器升级时把血拉满 ✓ 并在 me 里告诉我新血量 ✓
+     ★ 这里只认【升级这一条消息】里的值 ✗
+       不是第 140 轮那种“每帧同步”✗（那个你说不对 ✓ 已经改回去了 ✓）
+     ★ 只往上跟：只有比现在高才接受 ✗
+       （免得和其他地方的血量计算打架 ✗）*/
+  if (d.me && typeof d.me.hp === 'number' && d.me.hp > HP) {
+    HP = Math.min(d.me.hp, HPMAX > 0 ? HPMAX : d.me.hp);
+    updHP();
+  }
 
   if (d.me) {
     if (WSC.role) {
