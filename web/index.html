@@ -58,6 +58,30 @@
       · 大小仍由 --atk 驱动 → 设置里那档还照常生效 ✓
       · 冷却表现：.cd 这层用 conic-gradient 转一圈（--cd = 剩余比例，由 core 推过来）*/
  #atk{position:fixed;right:18px;bottom:56px;width:var(--atk,84px);height:var(--atk,84px);
+/* ★★ 第 185 轮（用户）：传送回安全区 —— 常驻按钮，放底部中间 ★★
+   为什么放中间：右下角是攻击键、左下角是摇杆 ✗ 只有中间是空的 ✓
+   为什么常驻：原来塞在菜单里 ✗ 打起来根本来不及开菜单点 ✓
+   ★ 底部留 64px：躲开手机的导航条/手势条区域 ✓（全屏时那是空的 ✓ 但别贴死 ✓）*/
+#safeTp{
+  position:fixed;left:50%;transform:translateX(-50%);bottom:64px;
+  /* ★ 第 186 轮：div 是块级元素，不写 width 会撑满一整行 ✗ 必须给 max-content */
+  width:max-content;max-width:70vw;min-width:104px;padding:9px 14px;border-radius:22px;
+  background:rgba(20,26,34,.72);border:1px solid #ffd83d66;
+  color:#ffe9a8;font-size:13px;font-weight:700;letter-spacing:.5px;
+  text-align:center;cursor:pointer;user-select:none;-webkit-user-select:none;
+  z-index:31;overflow:hidden;
+  text-shadow:0 1px 2px #000;transition:border-color .15s,color .15s
+}
+#safeTp:active{background:rgba(30,38,48,.9)}
+/* 读条时的填充（从左往右长 ✓ 一眼看出还剩多少）*/
+#safeTpFill{
+  position:absolute;left:0;top:0;height:100%;width:0%;
+  background:linear-gradient(90deg,#ffd83d55,#ffa53d88);
+  transition:width .1s linear;pointer-events:none
+}
+#safeTpTxt{position:relative;z-index:1}
+/* 读条中：变黄、不能再点（服务器也不认重复请求 ✓ 这里只是视觉）*/
+#safeTp.casting{border-color:#ffd83d;color:#fff}
    box-sizing:border-box;border-radius:50%;display:flex;align-items:center;justify-content:center;
    overflow:hidden;
    background:radial-gradient(circle at 36% 30%,
@@ -288,6 +312,9 @@
 <div id="hud" class="pane">左半屏拖动 = 走 · 右下 = 攻击</div>
 <div id="setBtn" class="pane">☰ 菜单</div>
 
+<!-- ★ 第 185 轮：传送回安全区（常驻按钮 ✓ 不占菜单 ✓ 点了自动关菜单 ✓）-->
+<div id="safeTp"><i id="safeTpFill"></i><span id="safeTpTxt">回安全区</span></div>
+
 <div id="atk"><div class="cd"></div><svg class="ic" viewBox="0 0 24 24" fill="none"
   stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
   <polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5"/>
@@ -436,18 +463,6 @@
   </div>
 
   <div class="tabpane" data-pane="ctrl">
-   <!-- 第 173 轮（用户 #6）：传送回安全区（读条 6 秒，受伤会中断）-->
-   <div class="setLabel">安全区</div>
-   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-     <button class="bagB" id="btnSafeTp">传送到安全区</button>
-     <span class="tip" style="opacity:.8">读条 6 秒，期间受到攻击会中断</span>
-   </div>
-   <div id="tpBar" style="display:none;position:relative;height:10px;margin-top:6px;
-        border-radius:5px;background:#000000a8;border:1px solid #ffffff33;overflow:hidden">
-     <i id="tpFill" style="position:absolute;left:0;top:0;height:100%;width:0%;
-        background:linear-gradient(90deg,#ffd83d,#ffa53d)"></i>
-   </div>
-   <div id="tpTxt" style="display:none;font-size:11px;opacity:.9;margin-top:3px">传送中…</div>
 
    <div class="setLabel">攻击键大小</div>
    <div id="rowAtk"></div>

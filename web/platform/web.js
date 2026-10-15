@@ -2106,28 +2106,34 @@ function bagPageBind() {
 var TPCAST = { left: 0, at: 0 };
 
 function tpBarRender() {
-  var bar = document.getElementById('tpBar');
-  var fill = document.getElementById('tpFill');
-  var txt = document.getElementById('tpTxt');
-  if (!bar || !fill || !txt) { return; }
+  /* ★ 第 185 轮：读条画在【常驻按钮】上（用户要求"在界面显示读秒进度"）*/
+  var btn = document.getElementById('safeTp');
+  var fill = document.getElementById('safeTpFill');
+  var txt = document.getElementById('safeTpTxt');
+  if (!btn || !fill || !txt) { return; }
   var show = TPCAST.left > 0;
-  bar.style.display = show ? 'block' : 'none';
-  txt.style.display = show ? 'block' : 'none';
-  if (!show) { fill.style.width = '0%'; return; }
+  if (!show) {
+    btn.classList.remove('casting');
+    fill.style.width = '0%';
+    txt.textContent = '回安全区';
+    return;
+  }
+  btn.classList.add('casting');
   var left = Math.max(0, TPCAST.left - (performance.now() / 1000 - TPCAST.at));
   var total = 6.0;
   fill.style.width = Math.min(100, (1 - left / total) * 100).toFixed(1) + '%';
-  txt.textContent = '传送中… 还剩 ' + left.toFixed(1) + ' 秒（受伤会中断）';
+  txt.textContent = '传送中 ' + left.toFixed(1) + 's';
 }
 
 function tpBind() {
-  var btn = document.getElementById('btnSafeTp');
+  var btn = document.getElementById('safeTp');
   if (!btn || btn._b) { return; }
   btn._b = true;
   btn.onclick = function () {
-    var bar = document.getElementById('tpBar');
-    if (bar && bar.style.display !== 'none') { return; }   /* 已经在读条了 ✓ */
-    wsSend('safetp', {});                                   /* 只是请求 ✗ 服务器说了算 ✓ */
+    if (btn.classList.contains('casting')) { return; }   /* 已经在读条了 ✓ */
+    /* ★ 用户要求：点了之后【关掉菜单】✗ 免得读条时还挡着视线 ✓ */
+    try { if (typeof closeSet === 'function') { closeSet(); } } catch (e) { }
+    wsSend('safetp', {});                                 /* 只是请求 ✓ 服务器说了算 ✓ */
   };
 }
 
@@ -2648,6 +2654,32 @@ function wsConnect() {
     var wasReady = WSC.ready;
     WSC.ready = false;
     if (WSC.on) { wsRetry(wasReady ? '连接断开' : '连不上服务器'); }
+    /* ★★ 第 186 轮（用户）：断开后【自动刷新一次】★★
+       用户原话："断开连接后自动刷新一次，这样可以同步一下服务器的界面改动"
+       目的：每次重新连上就顺手把前端代码也更新一遍 ✓
+             （服务器改了界面之后，不用手工清缓存 ✓）
+
+       ★★ 必须防死循环 ✗ 不然服务器没开的时候会无限刷新 ✓✓
+         做法：用 sessionStorage 记"上次自动刷新是什么时候"
+              20 秒内只允许刷一次 ✓
+              而且【只在"本来连上过"的情况下刷】✗
+              （一开始就连不上 → 不刷 ✓ 只显示"连不上服务器"提示 ✓）
+       ★ 为什么用 sessionStorage 而不是 localStorage：
+         标签页关掉就清 ✓ 下次打开是干净的一次 ✓ 不会越攒越多 ✓ */
+    try {
+      if (wasReady) {
+        var K = 'autoReloadAt';
+        var last = +(sessionStorage.getItem(K) || 0);
+        var now = Date.now();
+        if (now - last > 20000) {
+          sessionStorage.setItem(K, String(now));
+          console.log('[net] 断开 → 自动刷新一次（同步服务器上的界面改动）');
+          location.reload();
+        } else {
+          console.log('[net] 断开 → 20 秒内已经刷过一次了，这次只重连不刷新');
+        }
+      }
+    } catch (e) { }
   };
   s.onerror = function () { };
 }
