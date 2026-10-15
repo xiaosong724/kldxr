@@ -1862,9 +1862,21 @@ class World(object):
         #   ★ 而且只用 _dv0（roll_damage 刚出来那个值 ✓）
         #     不依赖中间任何一步 → 不会再出现"插错位置"✗
         dv = max(dv, max(1, int(round(_dv0 * DMG_FLOOR))))
+        _was_alive = int(p.hp) > 0                      # ★ 第 166 轮：记下“刚才还活着”✓
         p.hp = max(0, int(p.hp) - dv)
         self._add_pend(p.cid, 'hurts', {'dmg': dv, 'x': round(m.x, 2), 'z': round(m.z, 2),
                                         'by': m.kind, 'kind': 'mob', 'crit': bool(crit)})
+        # ★★ 第 166 轮（用户：被僵尸杀死也会掉 1 点魔气）★★
+        #   ★ 只在【从活着变成倒下】的那一下扣 ✗
+        #     （不然连续咬尸体会一直扣 ✗ 虽然僵尸不咬死人 ✓）
+        #   ★ 和 PVP 那边一样：只会到 0 为止 ✓ 走 post_save 落库 ✓
+        if _was_alive and int(p.hp or 0) <= 0 and int(p.mq or 0) > 0:
+            _lost = min(int(p.mq or 0), int(mqmod.cfg('killed_loss', mqmod.KILLED_LOSS)))
+            p.mq = max(0, int(p.mq or 0) - _lost)
+            self._mq_save(p)
+            self._send_cid(p.cid, P.pack(
+                'notice', text='你被%s打死了，魔气 −%d（现在 %d）'
+                              % (m.kind, _lost, int(p.mq or 0))))
 
     # ================================================================
     #  ★★★ 第 150 轮：PVP（用户确认的规则，方案 §15）★★★
