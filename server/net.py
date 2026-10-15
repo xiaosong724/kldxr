@@ -163,14 +163,31 @@ class Net(object):
             #   ★ 衰减就在这里算（用“上次结算时刻”现算 ✓）
             #     离线 10 小时回来 → 自动掉 10 点 ✓ 不需要任何定时器 ✓
             import mq as _mq
-            _mq_now = dbmod.now_ms()
+            # ★★ 第 162 轮修的真 bug（用户：刷新一下页面就没了）★★
+            #   这里原来写的是 dbmod.now_ms() ✗
+            #   而 net.py 【没有 import db】✗ → NameError ✗
+            #   → 而这整段被 try/except 包着 ✗ 异常被静默吞掉 ✗
+            #   → role['mq'] 永远设不上 ✗ → 客户端每次登录都是 0 ✗✓
+            #   ★ 和第 155 轮 world.py 那个是【同一个错】✗
+            #     我把 dbmod 用在了没导入它的文件里 ✗ 而且两次都被 try 吞了 ✗
+            #   ★ 改用本文件已有的 time → 毫秒 ✓
+            _mq_now = int(time.time() * 1000)
+            _mq_old = int(role.get('mq') or 0)
             _mq_v, _mq_at = _mq.settle(role.get('mq'), role.get('mq_at'), _mq_now)
             role['mq'] = _mq_v
             role['mqAt'] = _mq_at
-            if int(role.get('mq_at') or 0) != _mq_at:
+            # ★★★ 第 163 轮修的真 bug（用户：刷新一下就没了）★★★
+            #   原来的条件只看【mq_at 变没变】✗
+            #   而 settle 在【不到一小时】时也会把 mq_at 推到 now ✗
+            #   → 于是一次“没变化”的登录，也会把一份陈旧的 mq 原样写回库 ✗
+            #   → 刚用管理页设好的 400 就被冲成 0 ✗✓
+            #     （表现就是：设了也有用 ✓ 但一刷新就没了 ✗）
+            #   ★ 修：只有【魔气真的被自然衰减了】才落库 ✓
+            if _mq_v != _mq_old:
                 # 衰减真的发生了 → 落库 ✓（没变就不写 ✗ 省一次 IO ✓）
                 try:
-                    with dbmod.db(self.cfg) as _c:
+                    import db as _dbmod   # ★ 第 162 轮：本文件没导入 db ✗ 现场导一下 ✓
+                    with _dbmod.db(self.cfg) as _c:
                         _c.execute('UPDATE roles SET mq=?, mq_at=? WHERE id=?',
                                    (_mq_v, _mq_at, role.get('id')))
                         _c.commit()
@@ -180,8 +197,10 @@ class Net(object):
             _tp = authmod2.talents_of(self.cfg, role.get('id'))
             role['talents'] = _tp
             role['talentFree'] = _tal.free_points(role.get('level'), _tp)
-        except Exception:
-            pass
+        except Exception as _e:
+            # ★ 第 162 轮：不再静默吞异常 ✗
+            #   （这个 pass 让一个 NameError 隐藏了两轮 ✗ 白查了很久 ✓）
+            print('  [ws] 登录装载失败（武器/防具/天赋/魔气）：%r' % (_e,))
 
         self.authed[conn.cid] = role
         self.by_account[acc_id] = conn.cid

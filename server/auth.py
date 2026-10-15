@@ -148,6 +148,15 @@ def role_public(row):
         'yaw': row['yaw'],
         'talentFree': row['talent_free'],
         'playedAt': row['updated_at'],
+        # ★★★ 第 164 轮修的真 bug（用户：刷新一下就没了）★★★
+        #   这里是【挑过字段】的（只给客户端该看的 ✓ 设计正确 ✗）
+        #   但魔气漏了 → 网络层拿到的 role 里根本没有 mq ✗
+        #   → settle(None, ...) = 0 → 每次登录/刷新都从 0 开始 ✗✓
+        #     （表现：管理页设了也有 ✓ 但刷新就没了 ✗）
+        #   ★ 为什么难查：库里有（我查了库 ✓）内存里也能设（who 查了 ✓）
+        #     就这个中间层偷偷把它丢了 ✗（和客户端那个映射层一个毛病 ✗）
+        'mq': int(row['mq'] or 0),
+        'mqAt': int(row['mq_at'] or 0),
     }
 
 

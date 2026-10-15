@@ -96,7 +96,12 @@ UI.plate = {
     }
     if (!ui.mqEl) {
       var el = document.createElement('div');
+      /* ★ 第 162 轮（用户：恶魔头没有居中）：
+         原因：这个 div 是块级元素（占满一行）✗
+               而 SVG 是行内元素 → 只靠父级的 text-align 不一定靠调✗
+         修：自己也声明一次居中 + 用 flex 再保险一层 ✓ */
       el.style.cssText = 'font-size:11px;font-weight:700;line-height:1.25;'
+        + 'text-align:center;display:flex;justify-content:center;align-items:center;'
         + 'text-shadow:0 1px 2px #000,0 0 3px #000;white-space:nowrap';
       ui.wrap.insertBefore(el, ui.wrap.firstChild);   // ★ 插到最前面 = 名字上面那行 ✓
       ui.mqEl = el;
