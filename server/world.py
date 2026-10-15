@@ -1064,7 +1064,7 @@ class World(object):
         #   修：改成【按归属算】—— 一只僵尸算谁的就看它离谁最近 ✓
         #       （两个人站一起 → 各分一半 ✓ 于是每人能各刷到 8 ✓ 总共 16 ✓）
         cand = [q for q in ps
-                if self._owned_count(q, ps) < mobs.MOB_PER_PLAYER]
+                if self._owned_count(q) < mobs.MOB_PER_PLAYER]
         if not cand:
             return
         p = random.choice(cand)
@@ -1078,34 +1078,28 @@ class World(object):
         near = [q for q in ps if (q.x - x) ** 2 + (q.z - z) ** 2 <= mobs.SPAWN_TEAM_R ** 2]
         base = (random.choice(near) if near else p).role.get('level', 1) or 1
         self.mob_seq += 1
-        self.mobs[str(self.mob_seq)] = mobs.Mob(self.mob_seq, mobs.roll_level(base), x, z)
+        _m = mobs.Mob(self.mob_seq, mobs.roll_level(base), x, z)
+        # ★ 第 132 轮：打上【替谁刷的】标记 ✓（硬配额的依据 ✓）
+        _m.owner = getattr(p, 'role_id', None)
+        self.mobs[str(self.mob_seq)] = _m
 
-    def _owned_count(self, q, ps):
-        """数"归这只玩家管"的僵尸（第 131 轮）
+    def _owned_count(self, q):
+        """数"标记给他"的僵尸有几只（第 132 轮：硬配额 ✓）
 
-        ★ 为什么不能简单数"他 60 米内有几只"✗
-          组队/多人站一起时，大家的 60 米圈几乎重叠 ✗
-          → 会算成"每个人都只有那 8 只"✗ 于是总共还是 8 只 ✓
-        ★ 归属规则：一只僵尸算【离它最近的那个玩家】的 ✓
-          两人站一起时各分一半 → 每人能各刷到 8 只 ✓ 总共 16 ✓
-          两人离得远时自然互不影响 ✓
+        ★ 第 131 轮是"按距离算归属"✗ 有两个毛病：
+            ① 软上限：替 A 刷的那只后来离 B 更近 → 归属变了 → A 可能超过 8 ✓
+            ② 分配不均：僵尸追人跑 → 往一个人身边聚 → 别人刷不到 ✗
+        ★ 现在改成【刷的时候就打标记】✓（Mob.owner = 那个玩家的 role_id ✓）
+            · 每人严格 8 只 ✓ 谁都不会多也不会少 ✓
+            · 而且更快：O(僵尸数) ✓ 不用再跟每个玩家比距离 ✗
+        ★ 标记【不进协议】✗ 客户端不需要知道 ✓
         """
-        r2 = mobs.MOB_NEAR_R * mobs.MOB_NEAR_R
+        rid = getattr(q, 'role_id', None)
+        if rid is None:
+            return 0
         n = 0
         for m in self.mobs.values():
-            if m.hp <= 0:
-                continue
-            d2 = (m.x - q.x) ** 2 + (m.z - q.z) ** 2
-            if d2 > r2:
-                continue
-            mine = True
-            for o in ps:
-                if o is q:
-                    continue
-                if (m.x - o.x) ** 2 + (m.z - o.z) ** 2 < d2:
-                    mine = False
-                    break
-            if mine:
+            if m.owner == rid:
                 n += 1
         return n
 

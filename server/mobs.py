@@ -28,7 +28,11 @@ MOB_VIEW = 60.0           # 发给客户端的视野半径（和玩家的 VIEW �
 
 SPAWN_MIN = 20.0          # 离玩家至少这么远才刷（别在脸上弹出来 ✗）
 SPAWN_MAX = 34.0          # 最远刷到这么远
-SPAWN_INTERVAL = 4.0      # ★ 多久尝试刷一次（用户要求"慢一点"）
+SPAWN_INTERVAL = 2.0      # ★ 多久尝试刷一次
+                          #   第 132 轮（用户："补下一只的速度快一点"）：4.0 → 2.0 ✓
+                          #   ★ 历史：最初更快 → 第 35 轮用户说"慢一点"调到 4.0 ✗
+                          #     现在回到 2.0 ✓（因为现在有硬配额了 ✓
+                          #     不会像以前那样刷出一堆）
 SPAWN_PER_TRY = 1         # 一次最多补几只
 SPAWN_TEAM_R = 35.0       # 组队时以刷新点这个范围内的随机队员等级为准（§3.1）
 
@@ -214,9 +218,12 @@ class Mob(object):
                  'spd', 'atkT', 'atkAnim', 'windT', 'tgt', 'awayT', 'deadT', 'wx', 'wz', 'wT',
                  'healT', 'healCd', 'fleeT',
                  # ★ 第 59 轮：武器机制造成的状态
-                 'stunT', 'stunImmune', 'knockImmune', 'bleedT', 'bleedDmg', 'bleedFrom')
+                 'stunT', 'stunImmune', 'knockImmune', 'bleedT', 'bleedDmg', 'bleedFrom', 'owner' )
 
     def __init__(self, mid, lv, x, z, kind=None):
+        # ★ 第 132 轮：硬配额 —— 这只僵尸是【替谁刷的】✓
+        #   用 role_id 标记 ✗ 不进协议 ✗（客户端不需要知道 ✓）
+        self.owner = None
         self.mid = str(mid)
         self.kind = kind or random.choice(KINDS)
         self.lv = int(lv)
