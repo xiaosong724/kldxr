@@ -335,7 +335,12 @@ def equip_armor(cfg, role_id, item_id):
     if not item_id:
         return False, '没指定装备'
     import json
-    with db(self.cfg if False else cfg) as c:
+    # ★★ 第 101 轮修的真 bug：这里原来写的是 db(...) ✗
+    #   而本模块里 db 是以 dbmod 的名字导入的 ✓ → NameError ✗
+    #   → 异常发生在【网络线程】处理穿戴那一步 → 连接被掐断 ✗
+    #   → 用户看到的就是"一穿戴就断开连接"✓✓
+    #   （第 67 轮我写这段时太赶了 ✗ 还留了 self.cfg if False else cfg 这种垃圾 ✗ 一并清掉 ✓）
+    with dbmod.db(cfg) as c:
         row = c.execute('SELECT item_json FROM items WHERE id=? AND role_id=?',
                         (int(item_id), role_id)).fetchone()
         if not row:
@@ -353,7 +358,7 @@ def equip_armor(cfg, role_id, item_id):
 
 
 def unequip_armor(cfg, role_id):
-    with db(cfg) as c:
+    with dbmod.db(cfg) as c:      # ★ 第 101 轮：同上（原来也是 db ✗）
         c.execute('DELETE FROM equipment WHERE role_id=? AND slot=?', (role_id, 'armor'))
     return True, None
 
