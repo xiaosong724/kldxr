@@ -1939,7 +1939,124 @@ class World(object):
                 victim.name if False else killer.name,
                 ('，魔气 −%d（现在 %d）' % (mqmod.KILLED_LOSS, victim.mq)) if counted
                 else '')))
-        # ★ 第 5 步（夺取）下一轮接在这里 ✓ 现在先只做魔气 ✓
+        # ★★ 第 151 轮：夺取（方案 §5/§6 + 用户确认的 §14）★★
+        self._pvp_steal(killer, victim, counted)
+
+    def _pvp_steal(self, killer, victim, counted):
+        """夺取经验 / 物品（第 151 轮）
+
+        用户确认的规则：
+          概率 = 5% + 魔气/2 × 0.2%，封顶 15%；取【魔气高】那边的 ✓
+          只掷一次骰子 ✗ 经验比例看【实际夺取方】自己的魔气 ✓
+          背包里没装备的随机 1 件必夺 ✓
+          ★ 穿戴中的另外掷 1%（耐久原样保留 ✓）
+          没经验 → 扣 100 金币（金币系统还没做 ✗ 先留接口 ✓）
+          10 分钟限制挡住的那次不夺取 ✗
+        """
+        if not counted:
+            return                                   # 被防刷拦住了 → 不夺取 ✓
+        try:
+            who, pct = mqmod.pick_stealer(killer.mq, victim.mq)
+            stealer = killer if who == 'killer' else victim
+            loser = victim if who == 'killer' else killer
+            if random.random() * 100.0 >= pct:
+                self._send_cid(killer.cid, P.pack(
+                    'notice', text='夺取判定：%.0f%% 没中（对方没损失）' % pct))
+                return
+            # ---- 经验 ----
+            pct_exp = mqmod.steal_exp_pct(stealer.mq)
+            lrole = loser.role or {}
+            have = max(0, int(lrole.get('exp') or 0))
+            take = min(int(have * pct_exp), have)     # ★ 不会变负 → 不会掉级 ✓
+            got_exp = 0
+            if take > 0:
+                lrole['exp'] = have - take
+                got_exp = take
+                self._gain_exp(stealer, take)         # ★ 走正常升级检查 ✓
+                self.post_save('UPDATE roles SET exp=? WHERE id=?',
+                               (int(lrole['exp']), loser.role_id))
+            else:
+                # ★ 没经验 → 改扣 100 金币（用户确认 ✓）
+                #   金币系统还没做 ✗ 这里先只提示 ✓
+                #   ★ 做金币时：扣 loser 100 金币 → 给 stealer（用户确认：金币归夺取方 ✓）
+                #     没金币就什么都不扣 ✓
+                self._send_cid(killer.cid, P.pack(
+                    'notice', text='%s 没经验了（金币还没上，暂时什么都拿不到）' % loser.name))
+            # ---- 背包里没装备的：必夺 1 件 ----
+            #   ★ 用 SQL 直接改所有者 ✗ 不用先读出来 ✓
+            #     （tick 线程不能查库 ✗ 而 post_save 是把 SQL 交给 saver 线程 ✓）
+            taken_item = False
+            try:
+                n = int(getattr(loser, 'bagN', -1))
+                if n != 0:                            # ★ -1 = 不知道 → 还是试一下 ✓
+                    self.post_save(
+                        'UPDATE items SET role_id=? WHERE id IN ('
+                        ' SELECT id FROM items WHERE role_id=? AND in_storage=0'
+                        ' ORDER BY RANDOM() LIMIT 1)', (stealer.role_id, loser.role_id))
+                    taken_item = True
+            except Exception:
+                pass
+            # ---- ★ 穿戴中的：另外掷 1%（耐久原样保留 ✓）----
+            worn_taken = ''
+            try:
+                if random.random() * 100.0 < mqmod.WORN_STEAL_PCT:
+                    if loser.weaponItemId and (not loser.armorItemId or random.random() < 0.5):
+                        worn_taken = (loser.weapon or {}).get('name') or '武器'
+                        self._steal_worn(loser, stealer, 'weapon')
+                    elif loser.armorItemId:
+                        worn_taken = (loser.armor or {}).get('name') or '防具'
+                        self._steal_worn(loser, stealer, 'armor')
+            except Exception:
+                worn_taken = ''
+            # ---- 双方提示 ----
+            bits = []
+            if got_exp:
+                bits.append('%d 点经验' % got_exp)
+            if taken_item:
+                bits.append('一件背包物品')
+            if worn_taken:
+                bits.append('他身上的【%s】' % worn_taken)
+            if not bits:
+                bits.append('什么都没抢到')
+            self._send_cid(stealer.cid, P.pack(
+                'notice', text='你夺取了 %s 的 %s（概率 %.0f%% 中了）'
+                              % (loser.name, '、'.join(bits), pct)))
+            self._send_cid(loser.cid, P.pack(
+                'notice', text='%s 夺走了你的 %s' % (stealer.name, '、'.join(bits))))
+        except Exception:
+            pass
+
+    def _steal_worn(self, loser, stealer, which):
+        """把对方【穿着的】抢走（耐久原样保留 ✓）
+
+        ★ 三件事要一起做（少一件就不一致 ✗）：
+          ① 对方身上卸下（内存） ② 改库里的所有者（SQL）
+          ③ 把 equipment 里那条删掉（不然他重登又穿上了 ✗）
+        """
+        try:
+            rid = loser.role_id
+            if which == 'weapon':
+                iid = loser.weaponItemId
+                loser.weapon = None
+                loser.weaponItemId = None
+                loser.wDur = loser.wDurMax = 0
+            else:
+                iid = loser.armorItemId
+                loser.armor = None
+                loser.armorItemId = None
+                loser.aDur = loser.aDurMax = 0
+            if iid:
+                self.post_save('UPDATE items SET role_id=? WHERE id=? AND role_id=?',
+                               (stealer.role_id, iid, rid))
+                self.post_save('DELETE FROM equipment WHERE role_id=? AND slot=?', (rid, which))
+            # 被抢的人：装备与血量上限都变了 → 重算并告诉他 ✓
+            self._send_cid(loser.cid, P.pack('weapon' if which == 'weapon' else 'armor',
+                                             **({'w': None, 'hpm': self._hp_max(loser)}
+                                                if which == 'weapon'
+                                                else {'a': None, 'hpm': self._hp_max(loser)})))
+        except Exception:
+            pass
+
 
     def _mq_save(self, p):
         """魔气变了 → 落库（tick 线程只排队 ✗ saver 线程真写 ✓）"""
