@@ -1958,7 +1958,7 @@ function wsApplyWorld(d) {
   /* ---- ★ 我的经验 / 等级（变了服务器才带）→ 直接刷左上角 HUD ✓ ---- */
   /* ★ 第 102 轮：升级/经验推送里也带了【有效生命上限】✓
      （含防具加成 ✓ 不然升完级就对不上了 ✗）*/
-  if (typeof d.me.hpm === 'number' && d.me.hpm > 0) {
+  if (d.me && typeof d.me.hpm === 'number' && d.me.hpm > 0) {   // ★ 空值保护✗
     HPMAX = d.me.hpm;
     if (HP > HPMAX) { HP = HPMAX; }
     updHP();
