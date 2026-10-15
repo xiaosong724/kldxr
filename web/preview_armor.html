@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>防具图标候选（挑一个）</title>
+<style>
+  body{background:#141a22;color:#e8eef6;font:14px/1.6 -apple-system,"Microsoft YaHei",sans-serif;
+       margin:0;padding:20px}
+  h1{font-size:18px;margin:0 0 4px}
+  .tip{opacity:.7;font-size:12px;margin-bottom:16px}
+  .grid{display:flex;flex-wrap:wrap;gap:14px}
+  .card{background:#1b2430;border:1px solid #ffffff22;border-radius:12px;padding:14px;
+        width:210px;text-align:center}
+  .big{width:88px;height:88px;margin:0 auto 8px;display:block}
+  .slotrow{display:flex;align-items:center;justify-content:center;gap:10px;margin:8px 0 6px}
+  .slot{position:relative;width:44px;height:44px;border-radius:8px;border:1px solid #ffffff33;
+        display:flex;align-items:center;justify-content:center}
+  .slot svg{width:32px;height:32px}
+  .tg{position:absolute;left:2px;top:0;font-size:11px;font-weight:700;color:#9aa4b2}
+  .nm{font-weight:700;font-size:13px}
+  .ds{opacity:.72;font-size:11px;line-height:1.5;margin-top:2px}
+  .fa{color:#8ee0ff}  .fp{color:#c8b6ff}  .fi{color:#9aa4b2}  .fg{color:#ffd83d}
+  .fh{color:#7ee08a}  .fr{color:#ff9a7a}
+</style>
+</head>
+<body>
+<h1>防具图标候选 —— 挑一个（或者告诉我“2 和 5 结合一下”这种也行）</h1>
+<div class="tip">左边大图是放大效果 ✓ 中间是它在背包格子里【真实大小】的样子（44px 格子 / 32px 图标）✓</div>
+<div class="grid" id="grid"></div>
+
+<script>
+/* 6 个候选：都是纯 SVG ✓ 不用任何素材 ✓ 换一个只是换一段 path ✓ */
+var C = {
+  A: { n: '① 现在的（素胸甲）', d: '最简：一块圆肩胸甲，中间一条中缝', c: 'fa', svg:
+    '<path d="M6 3 L10 1 h4 l4 2 v6 c0 5 -3.6 8.4 -8 10 -4.4 -1.6 -8 -5 -8 -10 z" fill="currentColor" opacity=".9"/>' },
+  B: { n: '② 带肩甲', d: '胸甲 + 两侧肩片，一眼更像“穿在身上的甲”', c: 'fp', svg:
+    '<path d="M7 4 L11 1.5 h2 l4 2.5 v5.5 c0 4.6 -3.2 7.8 -7 9.5 -3.8 -1.7 -7 -4.9 -7 -9.5 z" fill="currentColor" opacity=".92"/>' +
+    '<path d="M4.2 4.2 L1.2 6.2 v3.4 l3 1.4 z M19.8 4.2 l3 2 v3.4 l-3 1.4 z" fill="currentColor" opacity=".55"/>' },
+  C: { n: '③ 护心镜（圆盘）', d: '一块圆镜 + 十字绑带，修仙味更足', c: 'fg', svg:
+    '<circle cx="12" cy="12" r="7.4" fill="currentColor" opacity=".9"/>' +
+    '<circle cx="12" cy="12" r="3.4" fill="#141a22" opacity=".85"/>' +
+    '<path d="M2 8 h20 v2.6 H2 z M2 13.4 h20 v2.6 H2 z" fill="currentColor" opacity=".45"/>' },
+  D: { n: '④ 铆钉板甲', d: '胸甲 + 中缝 + 四颗铆钉，最“硬”', c: 'fi', svg:
+    '<path d="M6 3.2 L10 1 h4 l4 2.2 v6 c0 4.8 -3.6 8.2 -8 9.8 -4.4 -1.6 -8 -5 -8 -9.8 z" fill="currentColor" opacity=".92"/>' +
+    '<path d="M12 2.4 v17" stroke="#141a22" stroke-width="1.1" opacity=".7"/>' +
+    '<circle cx="8.6" cy="6.4" r="1" fill="#141a22" opacity=".8"/><circle cx="15.4" cy="6.4" r="1" fill="#141a22" opacity=".8"/>' +
+    '<circle cx="8.6" cy="11.6" r="1" fill="#141a22" opacity=".8"/><circle cx="15.4" cy="11.6" r="1" fill="#141a22" opacity=".8"/>' },
+  E: { n: '⑤ 披风 / 斗篷', d: '另一种气质：不像甲，像罩在外面的大氅', c: 'fh', svg:
+    '<path d="M12 2 c3.4 0 6 2.4 6 5.6 v9.2 c0 2.4 -2.6 4.2 -6 4.2 s-6 -1.8 -6 -4.2 V7.6 C6 4.4 8.6 2 12 2 z" fill="currentColor" opacity=".85"/>' +
+    '<path d="M12 2 v19" stroke="#141a22" stroke-width="1.2" opacity=".55"/>' +
+    '<path d="M9 5.4 c1.8 1.6 4.2 1.6 6 0" stroke="#141a22" stroke-width="1.1" fill="none" opacity=".6"/>' },
+  F: { n: '⑥ 符甲（带灵纹）', d: '胸甲 + 中央灵纹圆环，高阶防具看着像法宝', c: 'fr', svg:
+    '<path d="M6 3.2 L10 1 h4 l4 2.2 v6 c0 4.8 -3.6 8.2 -8 9.8 -4.4 -1.6 -8 -5 -8 -9.8 z" fill="currentColor" opacity=".9"/>' +
+    '<circle cx="12" cy="10.4" r="3.2" fill="none" stroke="#141a22" stroke-width="1.2" opacity=".75"/>' +
+    '<circle cx="12" cy="10.4" r="1.2" fill="#141a22" opacity=".8"/>' +
+    '<path d="M12 4.2 v3 M12 13.6 v3.2" stroke="#141a22" stroke-width="1.1" opacity=".65"/>' }
+};
+(function () {
+  var out = [];
+  for (var k in C) {
+    var v = C[k];
+    out.push('<div class="card">' +
+      '<svg class="big ' + v.c + '" viewBox="0 0 24 24">' + v.svg + '</svg>' +
+      '<div class="slotrow"><div class="slot"><span class="tg">7</span>' +
+      '<svg class="' + v.c + '" viewBox="0 0 24 24">' + v.svg + '</svg></div>' +
+      '<div class="slot" style="background:linear-gradient(180deg,#8a7a6644,#8a7a6622)">' +
+      '<span class="tg">12</span>' +
+      '<svg class="' + v.c + '" viewBox="0 0 24 24" style="width:32px;height:32px;filter:drop-shadow(0 0 4px currentColor)">' +
+      v.svg + '</svg></div></div>' +
+      '<div class="nm ' + v.c + '">' + v.n + '</div>' +
+      '<div class="ds">' + v.d + '</div>' +
+      '</div>');
+  }
+  document.getElementById('grid').innerHTML = out.join('');
+})();
+</script>
+</body>
+</html>

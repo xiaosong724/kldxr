@@ -1655,7 +1655,12 @@ function bagRender() {
         ((selItem.affixes && selItem.affixes.length) ? (selItem.affixes.length + ' 词条 · ') : '') + '建议 ' +
         rq8 + ' 级（你 ' + lv8 + ' 级）· 发挥 ' + Math.round(m8 * 100) + '%';
     } else {
-      selNameEl.textContent = '选中的武器（没选时 = 手上这把 / 默认剑）';
+      // ★ 第 98 轮：按【部位】自动说话 ✗ 不要写死"武器"（用户要求 ✓）
+      var _sl9 = selItem ? (selItem.slot || '') : '';
+      selNameEl.textContent = _sl9 === 'armor'
+        ? '选中的防具（点「使用」穿上）'
+        : (_sl9 === 'weapon' ? '选中的武器（点「使用」穿上）'
+                             : '没选中装备（点上面的格子选一件）');
     }
   }
   var selTip = document.getElementById('bagSelTip');
