@@ -2899,8 +2899,16 @@ function netUpdate(dt) {
         var opct = Math.max(0, Math.min(100, (o.hp / (o.hpMax || 100)) * 100));
         UI.plate.hpWidth(o.ui, opct.toFixed(0) + '%');
         UI.plate.hpColor(o.ui, BAR_PLR);
-        UI.plate.name(o.ui, (o.name || '道友') + (o.realm ? ' ' + o.realm : '')
-          + ' ' + Math.max(0, Math.round(o.hp)) + '/' + Math.round(o.hpMax || 100));
+        /* ★★ 第 89 轮（用户要求）：其他玩家也把血量放进血条里 ✓
+           ★ 顺手修一个静默 bug：这行原来每帧覆盖名字 ✗
+             而"队友蓝色五角星"是在 addOther 里设的 ✓ → 被这行刷掉了 ✗
+             （所以你大概一直没看到那颗星 ✓ 现在这里也带上星 ✓）*/
+        var _mate3 = isPartyMate(uid);
+        UI.plate.name(o.ui,
+          (_mate3 ? '★ ' : '') + (o.name || '道友') + (o.realm ? ' ' + o.realm : ''),
+          _mate3 ? '#5aa8ff' : '#fff');
+        UI.plate.barText(o.ui, Math.max(0, Math.round(o.hp)) + '/' +
+          Math.round(o.hpMax || 100), '#fff', 10);
       }
     }
   }
@@ -2991,6 +2999,9 @@ function netUpdate(dt) {
       UI.plate.hpWidth(rm.ui, pct.toFixed(0) + '%');
       UI.plate.hpColor(rm.ui, BAR_MOB);   // ★ 妖兽一律红 ✓
       UI.plate.name(rm.ui, mobPlate(rm));   // ★ 职业 + 等级 + 血（第 36 轮）
+      /* ★ 第 89 轮（用户要求）：僵尸的血量数字也放进血条里 ✓（小一号 ✓）*/
+      UI.plate.barText(rm.ui, Math.max(0, Math.round(rm.hp)) + '/' +
+        Math.round(rm.hpMax || rm.mhp || 1), '#fff', 10);
       if (!_ov3) { _ov3 = new THREE.Vector3(); }
       _ov3.set(rx, (3.2 + MOB_FEET) * (rm.sk || 1), rz).project(cam);   // ★ 体型大了名牌也要抬高 ✓（+MOB_FEET 才不会陷进头顶 ✗）
       var vis2 = rm.alive && (_ov3.z > -1 && _ov3.z < 1 && Math.abs(_ov3.x) < 1.35 && Math.abs(_ov3.y) < 1.5);
@@ -3476,6 +3487,8 @@ function frame(ts) {
         UI.plate.hpWidth(m2.ui, pct.toFixed(0) + '%');
         UI.plate.hpColor(m2.ui, BAR_MOB);   // ★ 妖兽一律红 ✓
         UI.plate.name(m2.ui, mobPlate(m2));   // ★ 同上（单机的本地妖兽）
+        UI.plate.barText(m2.ui, Math.max(0, Math.round(m2.hp)) + '/' +
+          Math.round(m2.hpMax || m2.mhp || 1), '#fff', 10);
       }
     }
     if (m2.atkT >= 0) {

@@ -94,21 +94,24 @@ UI.plate = {
      · 把血条那层加高到 13px（原来的 6px 放不下 9px 的字 ✗）
      · 在条里叠一层居中的文字（绝对定位 ✓ 不占布局 ✓）
      · 只建一次，之后只改 textContent ✓（这是每帧可能调用的 ✓ 不能每次建元素 ✗）*/
-  barText: function (ui, s, color) {
+  barText: function (ui, s, color, h) {
     if (!ui || !ui.wrap || !ui.bar) { return; }
     var w = ui.bar.parentElement;
     if (!w) { return; }
+    var _H = h || 13;                     // ★ 第 89 轮：加个高度参数（僵尸/玩家用 10 ✓）
     if (!ui.bt) {
-      w.style.height = '13px';            // ★ 加高（原来 6px ✗ 字放不下）
+      w.style.height = _H + 'px';         // ★ 加高（原来 6px ✗ 字放不下）
       w.style.position = 'relative';
       var sp = document.createElement('span');
       sp.style.cssText = 'position:absolute;left:0;right:0;top:0;bottom:0;display:flex;' +
-        'align-items:center;justify-content:center;font-size:9px;font-weight:700;' +
+        'align-items:center;justify-content:center;font-size:' + (_H <= 10 ? 8 : 9) +
+        'px;font-weight:700;' +
         'color:#fff;text-shadow:0 1px 2px #000,0 0 3px #000;pointer-events:none;' +
         'letter-spacing:0.2px';
       w.appendChild(sp);
       ui.bt = sp;
-      if (ui.name) { ui.name.style.display = 'none'; }   // ★ 名字那行藏掉（数字进条里了 ✓）
+      // ★ 注意：只有【自己的血条】才藏名字 ✓
+      //   （僵尸那行还有"职业+等级"✗ 玩家那行还有名字 ✗ 藏了就丢信息了 ✓）
     }
     if (ui.bt.textContent !== s) { ui.bt.textContent = s; }
     if (color && ui.bt.style.color !== color) { ui.bt.style.color = color; }
