@@ -126,7 +126,11 @@ var TOKEN = '';
 /* ★ 第 64 轮：分页 / 测试账号开关 / 发装备选择 */
 var PAGE = 1, SHOW_TEST = false, PAGES = 1, TOTAL = 0;
 var TYPES = [['dagger', '匕首'], ['sword', '单手剑'], ['saber', '刀'], ['staff', '长棍'],
-             ['spear', '长枪'], ['axe', '双手斧'], ['hammer', '锤'], ['bow', '弓']];
+             ['spear', '长枪'], ['axe', '双手斧'], ['hammer', '锤'], ['bow', '弓'],
+             /* ★ 第 93 轮：加上【防具】✓（用户问"防具到底做了没"✗
+                根因就是这个菜单里没有 ✗ 所以只能靠打怪 25% 概率掉 ✓ 很难碰上 ✓
+                服务器早就支持 kind='armor' 了 ✓ 只是菜单没给选项 ✗）*/
+             ['armor', '防具']];
 var TIER_NAME = ['锈蚀', '破旧', '精铁', '镔铁', '玄铁', '灵纹',
                  '秘银', '灵器', '宝器', '灵宝', '仙器', '神品'];
 var givePick = { name: '', kind: 'sword', tier: 5, affix: 'auto' };
