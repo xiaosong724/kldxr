@@ -287,24 +287,116 @@ class Api(BaseHTTPRequestHandler):
                                 'sessions': adminmod.session_count(),
                                 'playerDebug': bool(self.cfg.get('allow_player_debug'))})
 
+    def _admin_del(self, d, all_test=False):
+        """删除账号（第 64 轮）—— ★ 只删【离线的】✓ 而且要显式确认 ✓
+
+        ★ 动了就找不回来了 ✗（角色/背包/装备一起删）→ 所以：
+           · 在线的一律拒绝（他还在玩 ✗）
+           · 前端要二次确认 ✓
+        """
+        names = []
+        if all_test:
+            keys = [str(k) for k in (self.cfg.get('test_name_keys') or [])]
+            try:
+                with dbmod.db(self.cfg) as c:
+                    for r in c.execute('SELECT name FROM roles').fetchall():
+                        if any(k and k in str(r[0] or '') for k in keys):
+                            names.append(r[0])
+            except Exception as e:
+                return self._send(500, {'ok': False, 'error': '查角色失败：%s' % e})
+        else:
+            nm = (d.get('name') or '').strip()
+            if not nm:
+                return self._send(400, {'ok': False, 'error': '没写名字'})
+            names = [nm]
+        live = set()
+        if self.world:
+            live = set(qq.get('name') for qq in
+                       ((self.world.admin_stat or {}).get('players') or []))
+        gone, skipped = [], []
+        for nm in names:
+            if nm in live:
+                skipped.append(nm)          # ★ 在线的不能删 ✗
+                continue
+            try:
+                with dbmod.db(self.cfg) as c:
+                    row = c.execute('SELECT id, account_id FROM roles WHERE name=? LIMIT 1',
+                                    (nm,)).fetchone()
+                    if not row:
+                        continue
+                    rid, aid = row[0], row[1]
+                    c.execute('DELETE FROM items WHERE role_id=?', (rid,))
+                    c.execute('DELETE FROM equipment WHERE role_id=?', (rid,))
+                    c.execute('DELETE FROM roles WHERE id=?', (rid,))
+                    if aid:
+                        c.execute('DELETE FROM tokens WHERE account_id=?', (aid,))
+                        c.execute('DELETE FROM accounts WHERE id=?', (aid,))
+                gone.append(nm)
+            except Exception:
+                skipped.append(nm)
+        return self._send(200, {'ok': True, 'act': 'delTest' if all_test else 'delplayer',
+                                'deleted': gone, 'skipped': skipped})
+
     def api_admin_players(self):
+        """玩家列表（第 64 轮：在线优先 + 分页 + 测试账号过滤）
+
+        ★ 用户要求：
+           ① 测试账号默认不显示（可以在页面上打开"显示测试账号"✓）
+           ② 在线的排前面 ✓ 并且分页 ✓
+        """
         if not self._admin_ok():
             return self._send(401, {'ok': False, 'error': '没登录或登录过期了'})
-        rows = []
+        q = {}
+        if '?' in self.path:
+            for kv in self.path.split('?', 1)[1].split('&'):
+                if '=' in kv:
+                    k, v = kv.split('=', 1)
+                    q[k] = urllib.parse.unquote(v)
+        try:
+            page = max(1, int(q.get('page') or 1))
+        except Exception:
+            page = 1
+        try:
+            size = max(5, min(100, int(q.get('size') or 20)))
+        except Exception:
+            size = 20
+        show_test = q.get('test') in ('1', 'true', 'yes')
+
+        keys = [str(k) for k in (self.cfg.get('test_name_keys') or [])]
+
+        def is_test(nm):
+            s = str(nm or '')
+            return any(k and k in s for k in keys)
+
+        online = set()
+        if self.world:
+            online = set(qq.get('name') for qq in
+                         ((self.world.admin_stat or {}).get('players') or []))
+        rows, test_n = [], 0
         try:
             with dbmod.db(self.cfg) as c:
                 for r in c.execute('SELECT id, name, level, exp, hp, x, z FROM roles'
-                                   ' ORDER BY level DESC, id DESC LIMIT 200').fetchall():
-                    rows.append({'id': r[0], 'name': r[1], 'level': r[2], 'exp': r[3],
+                                   ' ORDER BY level DESC, id DESC').fetchall():
+                    nm = r[1]
+                    if is_test(nm):
+                        test_n += 1
+                        if not show_test:
+                            continue
+                    rows.append({'id': r[0], 'name': nm, 'level': r[2], 'exp': r[3],
                                  'hp': r[4], 'x': round(float(r[5] or 0), 1),
-                                 'z': round(float(r[6] or 0), 1)})
+                                 'z': round(float(r[6] or 0), 1),
+                                 'online': nm in online, 'test': is_test(nm)})
         except Exception:
             pass
-        online = set(q.get('name') for q in
-                     ((self.world.admin_stat or {}).get('players') or [])) if self.world else set()
-        for r in rows:
-            r['online'] = r['name'] in online
-        return self._send(200, {'ok': True, 'players': rows})
+        # ★ 在线的排前面 ✓（其余保持"等级降序"✓）
+        rows.sort(key=lambda r: (0 if r['online'] else 1, -int(r['level'] or 1)))
+        total = len(rows)
+        pages = max(1, (total + size - 1) // size)
+        page = min(page, pages)
+        head = rows[(page - 1) * size: page * size]
+        return self._send(200, {'ok': True, 'players': head, 'total': total,
+                                'page': page, 'pages': pages, 'size': size,
+                                'online': len(online), 'testHidden': test_n})
 
     def api_admin_act(self, body):
         """管理动作：spawn / give / kick / heal / say
@@ -314,7 +406,8 @@ class Api(BaseHTTPRequestHandler):
         if not self._admin_ok():
             return self._send(401, {'ok': False, 'error': '没登录或登录过期了'})
         act = (body.get('act') or '').strip()
-        if act not in ('spawn', 'give', 'kick', 'heal', 'say', 'kill'):
+        if act not in ('spawn', 'give', 'kick', 'heal', 'say', 'kill',
+                       'delplayer', 'delTest'):
             return self._send(400, {'ok': False, 'error': '不认识的动作'})
         if self.world is None:
             return self._send(503, {'ok': False, 'error': '世界没起来'})
@@ -325,6 +418,8 @@ class Api(BaseHTTPRequestHandler):
         #   踩过：管理员给还没上线的玩家发武器 → 静默什么也没发生 ✗
         if act == 'give':
             return self._admin_give(payload)
+        if act in ('delplayer', 'delTest'):
+            return self._admin_del(payload, all_test=(act == 'delTest'))
         self.world.post_admin(act, payload)
         return self._send(200, {'ok': True, 'act': act})
 
@@ -349,7 +444,17 @@ class Api(BaseHTTPRequestHandler):
         if look not in weapons.TYPES:
             look = 'sword'
         tier = max(0, min(11, int(d.get('tier') or 0)))
+        # ★ 第 64 轮：支持指定词条条数（管理页的详细菜单 ✓）
+        #   不传就按品阶概率抽（和正常掉落一样 ✓）
         w = weapons.make_weapon(look, tier, weapons.roll_coeff(look), max(1, lvl // 4 + 1))
+        try:
+            affn = d.get('affixCount')
+            if affn is not None:
+                affn = max(0, min(5, int(affn)))
+                import affixes as afmod
+                w['affixes'] = afmod.roll_affixes(tier, ('weapon',))[:affn]
+        except Exception:
+            pass
         # ★ 第 56 轮：不再强制 reqLevel=1 ✗ —— 那会让背包显示「建议 1 级」
         #   看着像 bug ✗（用户就是被这个误导的 ✓）
         #   现在保留真实建议等级 ✓ 反正现在也不拦穿戴 ✓

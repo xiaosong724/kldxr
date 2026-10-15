@@ -8,5 +8,19 @@
   "version": "0.1.0",
   "admin_password": "xiuxian-admin",
   "allow_player_debug": false,
-  "_管理员说明": "管理页在 /admin；密码就是上面的 admin_password，★ 对外开服前一定要改掉 ✗；allow_player_debug=true 会把\"刷怪/发武器\"还给玩家（只该在本地调试时开 ✓）"
+  "_管理员说明": "管理页在 /admin；密码就是上面的 admin_password，★ 对外开服前一定要改掉 ✗；allow_player_debug=true 会把\"刷怪/发武器\"还给玩家（只该在本地调试时开 ✓）",
+  "test_name_keys": [
+    "TestCase",
+    "浏览器",
+    "背包",
+    "武器甲",
+    "格子",
+    "验锁",
+    "死亡甲",
+    "动作甲",
+    "新人乙",
+    "假死",
+    "测试"
+  ],
+  "_测试账号说明": "名字里含上面这些关键词的，管理页默认不显示 ✓；用「清理测试账号」可以真的删掉（只删离线的 ✓ 会二次确认 ✓）"
 }
