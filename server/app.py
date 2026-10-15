@@ -450,6 +450,10 @@ class Api(BaseHTTPRequestHandler):
             _mc['pvpOnes'] = dict(getattr(_w, 'pvp_of', {}) or {})
             _mc['atkAll'] = bool(getattr(_w, 'mob_atk_all', True))
             _mc['atkOnes'] = dict(getattr(_w, 'mob_atk_of', {}) or {})
+            # ★ 第 153 轮：把魔气配置一起报回去（管理页要显示当前值 ✓）
+            import mq as _mqm
+            _mc['mq'] = dict(_mqm.TUNE)
+            _mc['mqDoc'] = [list(x) for x in _mqm.TUNE_DOC]
         except Exception:
             pass
         return self._send(200, {'ok': True, 'players': head, 'total': total, 'mobCaps': _mc,
@@ -472,6 +476,8 @@ class Api(BaseHTTPRequestHandler):
                         # app.py 的白名单 + world._handle_admin 的分支 ✗
                         # 漏一处就是这个后果 ✗（按钮点了没反应 ✗）
                         'mobcap', 'pvp', 'mobatk', 'who',
+                        # ★ 第 153 轮：魔气配置 + 单人魔气
+                        'mqcfg', 'mqset',
                        'delplayer', 'delTest'):
             return self._send(400, {'ok': False, 'error': '不认识的动作'})
         if self.world is None:

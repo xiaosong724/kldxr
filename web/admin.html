@@ -137,6 +137,25 @@
       <div id="swNow" class="tip" style="margin-top:2px"></div>
     </div>
 
+    <!-- ★★ 第 153 轮（用户："把魔气的配置设置也加到管理页面"）★★
+         字段从服务器的 mqDoc 来（不手写 ✗ 手写迟早和服务器不一致 ✓）
+         ★ 改了立刻生效 ✗ 但【重启会回到默认】✓ 这是有意的：调平衡是临时的 ✓
+           定下来就改代码里的默认值（那样重启也在 ✓）—— 界面里写明了这一点 ✓ -->
+    <div class="card">
+      <h2>魔气设置 <span class="tip">（改完点应用，立刻生效 ✗ 重启会回默认 ✓）</span></h2>
+      <div id="mqFields" style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px 16px"></div>
+      <div style="margin-top:8px">
+        <button id="btnMqApply">应用</button>
+        <button id="btnMqReset">恢复默认</button>
+        <span class="tip" id="mqNow"></span>
+      </div>
+      <div class="tip" style="margin-top:6px">
+        ★ 经验四档（夺取方魔气 → 夺走对方当前经验的百分比）现在写死为：
+          0~99 → 5% · 100~199 → 8% · 200~500 → 10% · 501+ → 15%
+        （要改成可调跟我说 ✓ 现在先不做 ✗ 免得界面太复杂）
+      </div>
+    </div>
+
     <div class="card">
       <h2 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <span>玩家 <span class="tip">（在线的排前面 ✓ 点行尾按钮操作）</span></span>
@@ -147,7 +166,7 @@
         <button class="warn" id="btnClean">清理测试账号</button>
       </h2>
       <table>
-        <thead><tr><th>状态</th><th>名字</th><th>等级</th><th>经验</th><th>坐标</th><th>操作</th></tr></thead>
+        <thead><tr><th>状态</th><th>名字</th><th>等级</th><th>经验</th><th>坐标</th><th>魔气</th><th>操作</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
       <!-- ★ 第 64 轮：分页（在线优先 ✓ 服务器排好序了 ✓）-->
@@ -296,6 +315,26 @@ function swBind() {
   }
 }
 
+/* ★ 第 153 轮：行内魔气按钮（和 ovBind 一样用委托 ✓ 别每行绑一次 ✗）*/
+function mqRowBind() {
+  var rows = $('rows');
+  if (!rows || rows._mqb) { return; }
+  rows._mqb = true;
+  rows.addEventListener('click', function (e) {
+    var el = e.target;
+    if (!el || !el.getAttribute) { return; }
+    var s = el.getAttribute('data-mqset');
+    if (s) {
+      var inp = rows.querySelector('[data-mqv="' + s + '"]');
+      return act('mqset', { name: s, v: inp ? (+inp.value || 0) : 0 });
+    }
+    var a = el.getAttribute('data-mqadd');
+    if (a) { return act('mqset', { name: a, add: 10 }); }
+    var c = el.getAttribute('data-mqclr');
+    if (c) { return act('mqset', { name: c, clear: 1 }); }
+  });
+}
+
 /* ★ 第 136 轮：玩家列表里的单人控件（事件委托 ✓ 一行一个委托就够 ✗ 别每行绑一次 ✓）*/
 function ovBind() {
   var rows = $('rows');
@@ -324,6 +363,58 @@ function ovBind() {
     var c = el.getAttribute('data-capclr');
     if (c) { return act('mobcap', { name: c, clearOne: 1 }); }
   });
+}
+
+/* ★ 第 153 轮：魔气设置的界面逻辑 */
+function mqAdminColor(v) {
+  v = +v || 0;
+  if (v <= 0) { return '#e8eef6'; }
+  if (v < 50) { return '#ff7a6a'; }
+  if (v < 100) { return '#ff4a3a'; }
+  if (v < 200) { return '#e02020'; }
+  if (v < 500) { return '#b31414'; }
+  return '#7d0a0a';
+}
+function mqCfgRender() {
+  var box = document.getElementById('mqFields');
+  if (!box) { return; }
+  var mc = (mobCaps && mobCaps.mq) ? mobCaps.mq : null;
+  var doc = (mobCaps && mobCaps.mqDoc) ? mobCaps.mqDoc : null;
+  if (!mc || !doc) { box.innerHTML = '<span class="tip">（服务器还没上报配置）</span>'; return; }
+  var out = [];
+  for (var i = 0; i < doc.length; i++) {
+    var k = doc[i][0], name = doc[i][1], kind = doc[i][2], lo = doc[i][3], hi = doc[i][4];
+    var v = mc[k];
+    out.push('<label style="display:flex;align-items:center;gap:6px">' +
+      '<span class="tip" style="flex:1;min-width:0">' + name + '</span>' +
+      '<input data-mqk="' + k + '" type="number" step="' + (kind === 'float' ? '0.1' : '1') +
+      '" min="' + lo + '" max="' + hi + '" value="' + v + '" style="width:80px"></label>');
+  }
+  box.innerHTML = out.join('');
+  var now = document.getElementById('mqNow');
+  if (now) {
+    now.textContent = '当前：击杀 +' + mc.kill_gain + ' · 被杀 −' + mc.killed_loss +
+      ' · 每小时 −' + mc.decay_per_hour + ' · 伤害 +' + mc.dmg_per_point + '%/点（顶 ' +
+      mc.dmg_cap + '%）· 夺取 ' + mc.steal_base + '%起（顶 ' + mc.steal_cap +
+      '%）· 穿戴被夺 ' + mc.worn_steal_pct + '%';
+  }
+  var ap = document.getElementById('btnMqApply');
+  if (ap && !ap._b) {
+    ap._b = true;
+    ap.onclick = function () {
+      var body = {};
+      var ins = document.querySelectorAll('#mqFields input[data-mqk]');
+      for (var j = 0; j < ins.length; j++) {
+        body[ins[j].getAttribute('data-mqk')] = ins[j].value;
+      }
+      act('mqcfg', body);
+    };
+  }
+  var rs = document.getElementById('btnMqReset');
+  if (rs && !rs._b) {
+    rs._b = true;
+    rs.onclick = function () { act('mqcfg', { reset: 1 }); };
+  }
 }
 
 function act(name, body) {
@@ -396,6 +487,8 @@ function refresh() {
     if (typeof mobCapBind === 'function') { mobCapBind(); }
     if (typeof swBind === 'function') { swBind(); }
     if (typeof ovBind === 'function') { ovBind(); }
+    if (typeof mqCfgRender === 'function') { mqCfgRender(); }
+    if (typeof mqRowBind === 'function') { mqRowBind(); }
     $('testInfo').textContent = r.testHidden
       ? ('（已隐藏 ' + r.testHidden + ' 个测试账号）') : '';
     $('pgInfo').textContent = '第 ' + PAGE + ' / ' + PAGES + ' 页 · 共 ' +
@@ -407,11 +500,22 @@ function refresh() {
         '</td><td>' + nm + (p.test ? ' <span class="tip">测试</span>' : '') +
         '</td><td>' + p.level + '</td><td>' + p.exp + '</td>' +
         '<td>' + p.x + ', ' + p.z + '</td>' +
+        /* ★ 第 153 轮：魔气列（有魔气时按深浅上色 ✓ 一眼看出谁凶 ✓）*/
+        '<td>' + ((+p.mq > 0)
+          ? ('<b style="color:' + mqAdminColor(+p.mq) + '">👿 ' + p.mq + '</b>')
+          : '<span class="tip">0</span>') + '</td>' +
         '<td>' +
         /* ★★ 第 136 轮（用户："单独设置改到下面的玩家列表中去"）★★
            每行三个控件：PVP / 妖兽伤害（默认·开·关）+ 僵尸上限（数字 + 设/清）✓
            ★ 用 <select> 而不是 6 个按钮 ✗ 一行里塞得下 ✓ 而且一眼看得出当前是什么 ✓
            ★ 当前值从 p.ov 读（服务器在玩家列表里一起报回来的 ✓）*/
+        /* ★ 第 153 轮：行内魔气调整（测试用 ✓ 直接给 500 看头顶最深档 ✓）*/
+        '<span class="ov"><s>魔气</s>' +
+          '<input type="number" style="width:56px" data-mqv="' + nm + '" value="' +
+            ((+p.mq > 0) ? p.mq : '') + '" placeholder="0">' +
+          '<button data-mqset="' + nm + '">设</button>' +
+          '<button data-mqadd="' + nm + '">+10</button>' +
+          '<button data-mqclr="' + nm + '">清</button></span>' +
         '<span class="ov"><s>PVP</s><select data-ov="pvp" data-n="' + nm + '">' +
           '<option value="">默认</option>' +
           '<option value="1"' + ((p.ov && p.ov.pvp === true) ? ' selected' : '') + '>开</option>' +
@@ -434,7 +538,7 @@ function refresh() {
                     '<button class="warn" data-a="kick" data-n="' + nm + '">踢下线</button>'
                   : '<button class="warn" data-a="del" data-n="' + nm + '">删除</button>') +
         '</td></tr>';
-    }).join('') || '<tr><td colspan="6" class="tip">还没有角色</td></tr>';
+    }).join('') || '<tr><td colspan="7" class="tip">还没有角色</td></tr>';
   });
 }
 

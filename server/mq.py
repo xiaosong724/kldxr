@@ -39,6 +39,67 @@ LEVEL_GAP_MAX = 20      # 等级差 > 20 不算
 SAFE_R = 20.0           # 出生点安全区半径内不夺取（和 SPAWN_SAFE 一致 ✓）
 
 
+# ================================================================
+#  ★★ 第 153 轮：可调配置（管理页里能改，改完立刻生效）★★
+#    ★ 为什么用字典而不是直接改模块常量：
+#      常量被下面这些函数直接读 ✓ 想改就得重启 ✗
+#      字典可以在运行时替换 ✓ 而且【默认值就是上面那些常量】✓
+#         → 没改过的时候行为和以前完全一样 ✓
+#    ★ 重启会回到默认 ✗ 这是有意的：调平衡是临时的 ✗
+#      真定下来就改上面的默认值（那样重启也在 ✓）
+# ================================================================
+TUNE = {
+    'kill_gain': KILL_GAIN, 'killed_loss': KILLED_LOSS, 'decay_per_hour': DECAY_PER_HOUR,
+    'mq_max': MQ_MAX,
+    'dmg_per_point': DMG_PER_POINT, 'dmg_cap': DMG_CAP,
+    'steal_base': STEAL_BASE, 'steal_per_2': STEAL_PER_2, 'steal_cap': STEAL_CAP,
+    'worn_steal_pct': WORN_STEAL_PCT, 'gold_loss': GOLD_LOSS,
+    'pair_cooldown': PAIR_COOLDOWN, 'level_gap_max': LEVEL_GAP_MAX, 'safe_r': SAFE_R,
+    # ★ 经验四档：门槛 → 比例（从高到低 ✓ 第一个满足的生效 ✓）
+    'exp_tiers': [[501, 0.15], [200, 0.10], [100, 0.08], [0, 0.05]],
+}
+
+# 管理页要显示的中文说明（改配置时照着看 ✓ 不用翻代码 ✓）
+TUNE_DOC = [
+    ('kill_gain', '击杀一名玩家 +几点魔气', 'int', 0, 100),
+    ('killed_loss', '被玩家击杀 −几点魔气', 'int', 0, 100),
+    ('decay_per_hour', '自然衰减：每小时 −几点', 'int', 0, 100),
+    ('mq_max', '魔气数值上限', 'int', 1, 999999),
+    ('dmg_per_point', '每 1 点魔气 +%伤害', 'float', 0, 100),
+    ('dmg_cap', '伤害加成上限 %', 'float', 0, 1000),
+    ('steal_base', '夺取基础概率 %', 'float', 0, 100),
+    ('steal_per_2', '每 2 点魔气 +%概率', 'float', 0, 100),
+    ('steal_cap', '夺取概率上限 %', 'float', 0, 100),
+    ('worn_steal_pct', '穿戴中的装备被夺概率 %', 'float', 0, 100),
+    ('gold_loss', '对方没经验时扣多少金币（金币系统还没做）', 'int', 0, 999999),
+    ('pair_cooldown', '同一对玩家冷却（秒）', 'float', 0, 86400),
+    ('level_gap_max', '等级差超过多少不算', 'int', 0, 999),
+    ('safe_r', '安全区半径（米）', 'float', 0, 1000),
+]
+
+
+def cfg(k, dflt=None):
+    """取一个可调值（管理页改过就用改的 ✓）"""
+    try:
+        return TUNE.get(k, dflt)
+    except Exception:
+        return dflt
+
+
+def reset_tune():
+    """恢复默认（管理页的"恢复默认"按钮 ✓）"""
+    TUNE.update({
+        'kill_gain': KILL_GAIN, 'killed_loss': KILLED_LOSS, 'decay_per_hour': DECAY_PER_HOUR,
+        'mq_max': MQ_MAX,
+        'dmg_per_point': DMG_PER_POINT, 'dmg_cap': DMG_CAP,
+        'steal_base': STEAL_BASE, 'steal_per_2': STEAL_PER_2, 'steal_cap': STEAL_CAP,
+        'worn_steal_pct': WORN_STEAL_PCT, 'gold_loss': GOLD_LOSS,
+        'pair_cooldown': PAIR_COOLDOWN, 'level_gap_max': LEVEL_GAP_MAX, 'safe_r': SAFE_R,
+        'exp_tiers': [[501, 0.15], [200, 0.10], [100, 0.08], [0, 0.05]],
+    })
+    return dict(TUNE)
+
+
 def settle(mq, last_ts, now_ts):
     """按"上次结算时刻"现算自然衰减（第 1 步核心 ✓）
 
@@ -58,12 +119,12 @@ def settle(mq, last_ts, now_ts):
         last_ts = 0
     now_ts = int(now_ts or 0)
     if last_ts <= 0 or now_ts <= last_ts:
-        return max(0, min(MQ_MAX, mq)), (now_ts or last_ts)
+        return max(0, min(int(cfg('mq_max', MQ_MAX)), mq)), (now_ts or last_ts)
     hours = int((now_ts - last_ts) // 3600000)          # 毫秒 → 整小时
     if hours > 0:
-        mq = max(0, mq - hours * DECAY_PER_HOUR)
+        mq = max(0, mq - hours * int(cfg('decay_per_hour', DECAY_PER_HOUR)))
         last_ts = last_ts + hours * 3600000             # ★ 把已结算的时间消费掉 ✓
-    return max(0, min(MQ_MAX, mq)), last_ts
+    return max(0, min(int(cfg('mq_max', MQ_MAX)), mq)), last_ts
 
 
 def dmg_bonus_pct(mq):
@@ -72,7 +133,8 @@ def dmg_bonus_pct(mq):
         mq = int(mq or 0)
     except Exception:
         mq = 0
-    return min(DMG_CAP, max(0.0, mq * DMG_PER_POINT))
+    return min(float(cfg('dmg_cap', DMG_CAP)),
+               max(0.0, mq * float(cfg('dmg_per_point', DMG_PER_POINT))))
 
 
 def steal_chance(mq):
@@ -81,7 +143,9 @@ def steal_chance(mq):
         mq = int(mq or 0)
     except Exception:
         mq = 0
-    return min(STEAL_CAP, STEAL_BASE + (mq / 2.0) * STEAL_PER_2)
+    return min(float(cfg('steal_cap', STEAL_CAP)),
+               float(cfg('steal_base', STEAL_BASE)) +
+               (mq / 2.0) * float(cfg('steal_per_2', STEAL_PER_2)))
 
 
 def steal_exp_pct(mq):
@@ -90,7 +154,7 @@ def steal_exp_pct(mq):
         mq = int(mq or 0)
     except Exception:
         mq = 0
-    for th, pct in EXP_TIERS:
+    for th, pct in (cfg('exp_tiers') or EXP_TIERS):
         if mq >= th:
             return pct
     return 0.05
