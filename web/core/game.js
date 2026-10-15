@@ -1050,7 +1050,7 @@ function hero() {
   /* ★ 第 49 轮：手上这把不再是写死的剑 ✗ 而是按【当前武器】生成 ✓
      （数据就是那份已确认的示意图；换武器时 setWeapon → fillHeldWeapon 重建 ✓）
      ★ 攻击动画只认这个 Group 的 rotation，所以一行都不用改 ✓ */
-  fillHeldWeapon(sw);
+  fillHeldWeapon(sw, null, null);   // 先按本地默认造一个 ✓ 远端玩家随后会被替换成他自己的 ✓
   return { g: g, armL: armL, armR: armR, legL: legL, legR: legR, sw: sw };
 }
 
@@ -1246,7 +1246,11 @@ function buildWeaponMesh(look, tier) {
 }
 
 /* 把"手上那把"换成新的（换武器时调 ✓ 攻击动画不用改 —— 它只认这个 Group 的旋转 ✓）*/
-function fillHeldWeapon(sw) {
+function fillHeldWeapon(sw, look, tier) {
+  /* ★★ 第 65 轮：加了 look / tier 两个参数 ★★
+     以前它直接读全局 MY_WEAPON ✗ → 别人的小人也会拿【你的】武器 ✗
+     （用户报的："我拿弓箭，别的玩家手里也显示弓箭"✓）
+     ★ 不传就还是用 MY_WEAPON（本地玩家那条路照旧 ✓ 不用改调用点 ✗）*/
   if (!sw) { return; }
   for (var i = sw.children.length - 1; i >= 0; i--) {
     var c = sw.children[i];
@@ -1255,7 +1259,9 @@ function fillHeldWeapon(sw) {
     if (c.material && c.material.__mine) { c.material.dispose(); }   // ★ 只销毁自己克隆的 ✓
   }
   var w = MY_WEAPON;
-  var g = buildWeaponMesh(w ? w.look : 'sword', w ? (w.tier || 0) : 0);
+  var useLook = look || (w ? w.look : 'sword');
+  var useTier = (tier === undefined || tier === null) ? (w ? (w.tier || 0) : 0) : tier;
+  var g = buildWeaponMesh(useLook, useTier);
   /* ★★ 第 54 轮：刀刃朝向修正（用户报的"拿着斧头时刀刃不是朝下"）★★
      病根：零件数据是"宽在 X、薄在 Z"——
            也就是【正面看是刀的平面】（示意图就是这么画的 ✓ 所以图标也好看 ✓）
@@ -1790,6 +1796,7 @@ function wsApplyWorld(d) {
       x: w.x, z: w.z, yaw: w.y, hp: w.hp, hpm: 0,
       ct: w.t, atk: w.atk,
       wlook: w.w,            // ★ 第 61 轮：他手上是什么武器（动作原型要一致 ✓）
+      wtier: (typeof w.wt === 'number') ? w.wt : 0,   // ★ 第 65 轮：品阶（模型颜色/发光用 ✓）
       inv: +w.inv || 0,      // ★ 第 63 轮：他的无敌剩余（队友刚复活要看得见 ✓）
       dead: !!w.d            // ★ 第 57 轮：他倒下了没有（服务器同步给我的 ✓）
     }, t);
@@ -2106,6 +2113,8 @@ function addOther(w, t) {
   var o = NET.others[w.uid];
   if (!o) {
     var hh = hero();                       // 复用玩家模型 ✓
+    // ★ 第 65 轮：拿【他】的武器，不是我的 ✗
+    fillHeldWeapon(hh.sw, w.w || 'sword', (typeof w.wt === 'number') ? w.wt : 0);
     hh.g.scale.set(G.HERO_SCALE, G.HERO_SCALE, G.HERO_SCALE);
     hh.g.position.set(w.x, 0, w.z);
     scene.add(hh.g);
@@ -2133,6 +2142,12 @@ function addOther(w, t) {
      所以两处都要写 ✓（不然"别人看你死亡还是站着"永远修不好 ✗）*/
   o.dead = !!w.dead;
   o.inv = +w.inv || 0;       // ★ 第 63 轮：无敌剩余（每包都更新 ✓）
+  /* ★ 第 65 轮：他换武器了 → 手里那把也要换 ✓（不然永远是刚看到他时的武器 ✗）*/
+  var _wl = w.w || 'sword', _wt = (typeof w.wt === 'number') ? w.wt : 0;
+  if (_wl !== o.wlook || _wt !== o.wtier) {
+    o.wlook = _wl; o.wtier = _wt;
+    fillHeldWeapon(o.hh.sw, _wl, _wt);
+  }
   // ★ 他的挥剑序号变了 → 我这边从头播一遍挥剑动画 ✓（动作和你自己看到的一致 ✓）
   var wk = (typeof w.atk === 'number') ? w.atk : 0;
   if (wk !== o.atkSeq) {
@@ -2998,9 +3013,12 @@ function frame(ts) {
 
   /* ---- 移动 ---- */
   var ix = jx, iz = jy;
-  if (dead) { ix = 0; iz = 0; }   // ★ 倒下了就不能走（点复活才起来 ✓）
+  /* ★★ 第 65 轮修的真 bug：手机端（摇杆）死了走不动 ✓ 电脑端（WASD）还能走 ✗
+     病根：清零写在【按键之前】→ 按键又把它加回来了 ✗
+     → 所以必须放在【按键之后】覆盖一次 ✓（或者干脆不让按键生效 ✓）*/
   if (keys['w']) { iz -= 1; } if (keys['s']) { iz += 1; }
   if (keys['a']) { ix -= 1; } if (keys['d']) { ix += 1; }
+  if (dead) { ix = 0; iz = 0; }   // ★ 倒下了就不能走（点复活才起来 ✓ 手机/电脑都拦 ✓）
   var len = Math.hypot(ix, iz), moving = false;
   if (len > 0.08) {
     var nx = ix / Math.max(1, len), nz = iz / Math.max(1, len);

@@ -119,7 +119,8 @@ ok(worst <= 0.6845 + 1e-3,
 ok(worst > 0.55, '★ 而且真的用到了接近上限（说明封顶线是"紧"的，不是虚设 ✓）')
 # ★ 公式是【固有 × 系数 + 平伤】，不是 固有 + (固有×系数 + 平伤) ✗（这里踩过）
 _dflt = W.player_atk_with(inh, 'sword', 1.0, 0, 1)
-ok(abs(_dflt - (inh * 1.0 + W.flat_of(0, 1))) < 1e-6,
+# ★ 第 65 轮：平伤要 ÷ S（单手剑 S=1.15）→ 平伤 3 变成 2.61
+ok(abs(_dflt - (inh * 1.0 + W.flat_of(0, 1) / W.speed_of('sword'))) < 1e-6,
    '★ 默认单手剑 = 固有×1.0 + 平伤 = %.2f（不是 固有×2 ✓ 踩过这个坑）' % _dflt, _dflt)
 ok(_dflt > inh, '装上武器总是比不装强（%.2f → %.2f ✓）' % (inh, _dflt))
 a0 = W.player_atk_with(inh, 'sword', 1.0, 0, 1)

@@ -173,6 +173,15 @@ def player_atk_with(inherent, look, coeff, tier, item_lv=1, mastery=1.0, flat=No
     # ★ 第 58 轮：flat 可以显式传（空手要传 0 ✓）
     #   以前这里写死 flat_of(tier, item_lv) → 空手的 flat0 标记会被绕过 ✗
     _flat = flat_of(tier, item_lv) if flat is None else float(flat)
+    # ★★ 第 65 轮：平伤也按攻速缩放（除 S）★★
+    #   为什么：§7.4 那条夹子（S × 系数 ∈ [0.95,1.20]）只管住了【系数】✓
+    #   而"平伤"不随攻速变 ✗ → 高阶时平伤占 59%，把系数淹了 ✗
+    #     实测 12 阶：匕首每秒伤害 1416 vs 锤 803（差 75% ✗✗ 锤完全没人用）
+    #   除以 S 之后（和系数一个待遇 ✓）→ 离散度 75% → 3% ✓
+    #   基准是 S=1.0（长枪那种中速）→ 快的武器少拿平伤、慢的多拿 ✓
+    if look not in RANGED:          # 弓不走这条路（远程另有平衡 ✓）
+        _su = max(S_MIN, min(S_MAX, speed_of(look)))
+        _flat = _flat / _su
     base = float(inherent) * float(coeff) + _flat
     # ★★ 第 60 轮：词条在【发挥度和封顶之前】生效 ✓（§7.11③ 的顺序 ✓）
     if aff_w is not None:

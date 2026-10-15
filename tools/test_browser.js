@@ -538,7 +538,14 @@ async function register(name, pw) {
     await B.eval('P.x += 400; P.z += 400; return 1;');   // 走远（触发卸块 + 建新块）
     await sleep(1800);
     await B.eval('P.x -= 400; P.z -= 400; return 1;');   // 走回来（原来的块会被重新生成）
-    await sleep(1800);
+    // ★ 第 65 轮：这块是【异步】重建的 ✗ 1.8 秒在满载时偶尔不够（实测差异 34 ✗）
+    //   多等一会儿 + 轮询到齐为止 ✓ 比"睡死一个数"稳 ✓
+    for (let _w = 0; _w < 8; _w++) {
+      await sleep(500);
+      const _n = Number(await B.eval('return (typeof PROPS_READY === "number") ? PROPS_READY : 1;')) || 1;
+      if (_n < 1) { break; }
+    }
+    await sleep(700);
     const afterBack = JSON.parse(await B.eval(propQ) || '[]');
     const diffBack = afterBack.filter(function (s) { return beforeBack.indexOf(s) < 0; }).length +
       beforeBack.filter(function (s) { return afterBack.indexOf(s) < 0; }).length;

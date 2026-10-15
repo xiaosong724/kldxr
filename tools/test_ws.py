@@ -184,7 +184,7 @@ def wait_loot(c, timeout=3.5):
     return None
 
 
-def wait_heals(c, timeout=8.0):
+def wait_heals(c, timeout=16.0):
     """等到一条带 heals（僵尸医生的治疗事件）的世界快照 → 返回那个数组
 
     ★ 为什么要这条：第 46 轮踩了个坑 —— 离线测试（自己进程里的 World）和

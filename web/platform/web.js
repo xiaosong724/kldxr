@@ -855,12 +855,17 @@ function wMastery(it) {
 function wFull(it) {
   var b = wBase(it);
   if (!b) { return 0; }
-  return wInherent() * (+b.coeff || 1) + wFlat(it);
+  // ★ 第 65 轮：平伤 ÷ S（弓例外 ✓ 和服务器 weapons.player_atk_with 一致 ✓）
+  var S = Math.max(0.6, Math.min(2.2, +b.atkSpeed || 1.15));
+  var fl = wFlat(it);
+  if (it && it.look !== 'bow') { fl = fl / S; }
+  return wInherent() * (+b.coeff || 1) + fl;
 }
 function wRealHit(it) {
   var b = wBase(it);
   if (!b) { return 0; }
   var inh = wInherent();
+  /* ★ 第 65 轮：平伤也要 ÷ S（和服务器一致 ✓ 不一�致就是"显示和实际不符"✗）*/
   var v = wFull(it) * wMastery(it);       // ★ 先按等级发挥度打折
   // ★ 第 60 轮：封顶跟着品阶抬（2.5 + 0.06×阶 ✓ 和服务器一致）
   var cap = inh * (2.5 + 0.06 * Math.max(0, Math.min(11, (it && it.tier) || 0)));
