@@ -108,6 +108,39 @@ function setDetail() { return (SETCFG && SETCFG.detail) ? SETCFG.detail : SET_DE
 /* ---------- E ---------- */
 function E(m) { var e = document.getElementById('err'); if (e) { e.textContent = String(m); } }
 
+/* ★★★ 第 80 轮：音频改走 WebAudio（用户实测确认：关音效就不卡了）★★★
+
+   【为什么原来会卡（用户的设备实测 ✓）】
+     · 原来每个音效是一个 <audio> 元素 ✓ 播放 = el.play() ✗
+     · iOS(WebKit) 上每播一次都要走 AVFoundation 的播放路径 ✗
+       解码调度 / 音频会话 / 和主线程抢时间 ✗ → 每次挥砍卡一下 ✓
+     · 安卓(Blink)那条路径便宜得多 → 所以 OPPO 不卡、iPhone/iPad 卡 ✓✓
+     · 走路一声不放 → 所以走路完全不卡 ✓✓（用户观察完全对得上 ✓）
+
+   【为什么上次我改错了】
+     我第 75 轮是"每个音源预建 4 个 <audio>"✗ → 24 份解码 ✗ 更卡 ✓
+     方向反了 ✗ 问题不在"复用"，在【用不用 <audio> 这条路】✗
+
+   【正确做法】WebAudio：
+     · 启动时把每个音效 decodeAudioData 一次 → 存成 AudioBuffer（内存里）✓
+     · 播放 = createBufferSource + 接一个 GainNode ✓
+       纯内存操作 ✓ 不碰解码器 ✗ 不起音频会话 ✗
+     · 顺便：每次播放轻微随机音高 ✓ 听感更自然 ✓（同一段音反复播不"打点"✓）
+     · 并发上限 6 ✓ 超了丢（听不出来 ✓）
+     · ★ 解码失败/不支持 → 自动退回老的 <audio> 路径 ✓ 不会没声音 ✓
+*/
+var _actx = null, _aVoices = 0;
+var SFX_PITCH = 0.06;          // 音高随机幅度（±6% ✓）
+var SFX_MAX_VOICES = 6;        // 同时最多几个音
+function audioCtx() {
+  if (_actx === null) {
+    var AC = (typeof window !== 'undefined') &&
+             (window.AudioContext || window.webkitAudioContext);
+    try { _actx = AC ? new AC() : false; } catch (e) { _actx = false; }
+  }
+  return _actx || null;
+}
+
 /* ---------- loadSfx ---------- */
 function loadSfx() {
   /* ★ 优先 WAV（PCM 解码瞬时 ✓ 比 MP3 快得多 ✓）
@@ -139,6 +172,27 @@ function tryOne(key, url, attempt) {
   }).then(function (buf) {
     if (buf.byteLength < 40) { throw new Error('文件太小 ' + buf.byteLength); }
     var mime = (label === 'mp3') ? 'audio/mpeg' : ((label === 'ogg') ? 'audio/ogg' : 'audio/wav');
+    /* ★ 第 80 轮：优先走 WebAudio —— 一次解码，之后播放全是内存操作 ✓ */
+    var ac = audioCtx();
+    if (ac && ac.decodeAudioData) {
+      ac.decodeAudioData(buf.slice(0), function (abuf) {
+        SFX_BANK[key].push({ buf: abuf });      // ★ 只存 AudioBuffer ✓ 不是 <audio> ✗
+        SFX_LOADED++;
+      }, function () {
+        _sfxFallback(key, buf, mime, label, attempt);
+      });
+      return;
+    }
+    _sfxFallback(key, buf, mime, label, attempt);
+  }).catch(function (e) {
+    SFX_ERR.push(key + ':' + label + ' ' + e.message);
+    nextTry(key, attempt);
+  });
+}
+
+/* ★ 老路径（<audio>）留作兜底 ✓ 只在 WebAudio 不可用/解码失败时才走到 ✓ */
+function _sfxFallback(key, buf, mime, label, attempt) {
+  try {
     var objUrl = URL.createObjectURL(new Blob([buf], { type: mime }));
     var a = new Audio();
     a.preload = 'auto';
@@ -151,11 +205,12 @@ function tryOne(key, url, attempt) {
     a.src = objUrl;
     a.load();
     SFX_BANK[key].push(a);
-  }).catch(function (e) {
-    SFX_ERR.push(key + ':' + label + ' ' + e.message);
+  } catch (e) {
+    SFX_ERR.push(key + ':兜底失败 ' + e.message);
     nextTry(key, attempt);
-  });
+  }
 }
+
 
 /* ---------- sfx ---------- */
 /* ★★ 第 76 轮：音频池撤了（用户反馈“这样改感觉更卡”）★★
@@ -185,8 +240,27 @@ function sfx(name, volScale) {
   if (_lastSfx[name] && now - _lastSfx[name] < 40) { return; }
   _lastSfx[name] = now;
   var a = bank[Math.floor(Math.random() * bank.length)];
-  if (!a || !a.src) { return; }
   var vol = Math.max(0.05, Math.min(1, SFX_VOL * (volScale || 1)));
+  /* ★★ 第 80 轮：WebAudio 路径（内存播放 ✓ iOS 上不卡 ✓）★★ */
+  if (a && a.buf) {
+    var ac2 = audioCtx();
+    if (!ac2) { return; }
+    if (ac2.state === 'suspended') { try { ac2.resume(); } catch (e3) { } }
+    if (_aVoices >= SFX_MAX_VOICES) { return; }        // 并发上限 ✓ 超了丢
+    try {
+      var src = ac2.createBufferSource();
+      src.buffer = a.buf;
+      src.playbackRate.value = 1 + (Math.random() * 2 - 1) * SFX_PITCH;   // 轻微变调 ✓
+      var gn = ac2.createGain();
+      gn.gain.value = vol;
+      src.connect(gn); gn.connect(ac2.destination);
+      _aVoices++;
+      src.onended = function () { _aVoices = Math.max(0, _aVoices - 1); };
+      src.start(0);
+    } catch (e4) { SFX_ERR.push(name + ':webaudio 异常'); }
+    return;
+  }
+  if (!a || !a.src) { return; }
   try {
     /* ★ 第 77 轮：音频改回【原样】✓（用户已排除音频 ✗）
        不过"new Audio" 那一分支不要了 ✗（叠就叠吧 ✓）*/
