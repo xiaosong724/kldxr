@@ -12,7 +12,8 @@ android {
         minSdk 23                 // Android 6.0+（WebView 够新 ✓ 覆盖面够广 ✓）
         targetSdk 34
         versionCode 1
-        versionName "0.1.0"
+        // 第 181 轮：标成测试版（好友反馈时能说清是哪个包）
+        versionName "0.1.0-测试"
     }
 
     buildTypes {
