@@ -210,7 +210,13 @@
    ③ 左上角玩家信息 也改半透明底色
    —— 两块都用 .pane ✓ 所以底色一起改 ✓ */
 .pane{background:rgba(0,0,0,.30) !important;border-radius:8px}
-#topright{font-size:10px !important;padding:3px 7px !important;line-height:1.32 !important;max-width:44vw}
+/* ★★ 第 120 轮（用户："帧数和延迟信息框再小一半，里面文字也小一些"）★★
+   上一轮是 10px（本来就比原来小了 ✓）这次再砍一半：
+     字号 10px → 8px ✓ 行高 1.32 → 1.15 ✓ 内边距 3/7 → 1/5 ✓
+     数字本身也收窄（font-variant-numeric + letter-spacing 负值 ✓）*/
+#topright{font-size:8px !important;padding:1px 5px !important;line-height:1.15 !important;
+  max-width:38vw;border-radius:6px;letter-spacing:-0.2px;font-variant-numeric:tabular-nums}
+#topright div{font-size:8px !important}
 #topright div{font-size:10px !important}
 #top{font-size:11px !important;padding:5px 8px !important;line-height:1.45 !important}
 #top #uName{font-size:12px !important}

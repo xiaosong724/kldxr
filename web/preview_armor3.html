@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>防具图标候选 第三期</title>
+<style>
+  body{background:#141a22;color:#e8eef6;font:14px/1.6 -apple-system,"Microsoft YaHei",sans-serif;
+       margin:0;padding:16px}
+  h1{font-size:17px;margin:0 0 2px}
+  .tip{opacity:.7;font-size:12px;margin-bottom:12px}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+  .card{background:#1b2430;border:1px solid #ffffff22;border-radius:12px;padding:10px;text-align:center}
+  .big{width:70px;height:70px;margin:0 auto 6px;display:block}
+  .slotrow{display:flex;align-items:center;justify-content:center;gap:12px;margin:6px 0}
+  .slot{position:relative;width:44px;height:44px;border-radius:8px;border:1px solid #ffffff33;
+        display:flex;align-items:center;justify-content:center}
+  .slot svg{width:32px;height:32px}
+  .tg{position:absolute;left:2px;top:0;font-size:11px;font-weight:700;color:#9aa4b2}
+  .nm{font-weight:700;font-size:12px}
+  .ds{opacity:.7;font-size:10.5px;line-height:1.4;margin-top:2px}
+  .c1{color:#c8b6ff} .c2{color:#8ee0ff} .c3{color:#ffd83d}
+  .c4{color:#7ee08a} .c5{color:#ff9a7a}
+</style>
+</head>
+<body>
+<h1>防具图标候选 · 第三期（5 款）</h1>
+<div class="tip">左边=低阶（灰、压暗）· 右边=高阶（品阶色 + 发光）✓ 挑编号告诉我就行（也可以和前两期混搭）</div>
+<div class="grid" id="grid"></div>
+<script>
+/* 这一期全部走【短身】路线 ✓（用户上一轮说过"衣服短一点"✓ 六款统一收短 ✓） */
+var C = {
+  A: { n: '① 圆镜重甲', c: 'c1', d: '厚胸甲 + 大护心镜 + 宽肩片。最"正规军"', svg:
+    '<path d="M8.6 2.8 h6.8 l4.2 2 -0.5 4 -2.3 -0.7 V16.6 H7 V8.1 l-2.3 0.7 -0.5 -4 z"' +
+    ' fill="currentColor" opacity=".92"/>' +
+    '<path d="M4.6 3.4 c-1.3 0.2 -2.2 1.1 -2.4 2.4 v2.6 c0 1.1 0.8 1.9 1.9 2 z M19.4 3.4 c1.3 0.2 2.2 1.1 2.4 2.4' +
+    ' v2.6 c0 1.1 -0.8 1.9 -1.9 2 z" fill="currentColor" opacity=".8"/>' +
+    '<circle cx="12" cy="11" r="3.1" fill="none" stroke="#000" stroke-opacity=".35" stroke-width="1.3"/>' +
+    '<circle cx="12" cy="11" r="1.1" fill="#000" opacity=".32"/>' },
+  B: { n: '② 龙鳞胸甲', c: 'c2', d: '一片片叠的鳞 + 领口。有层次的厚', svg:
+    '<path d="M8.4 3 h7.2 l4.2 2 -0.5 4 -2.2 -0.6 V16.8 H6.9 V8.4 l-2.2 0.6 -0.5 -4 z"' +
+    ' fill="currentColor" opacity=".85"/>' +
+    '<path d="M8.8 7.2 l3.2 1.7 3.2 -1.7 M8.8 10.3 l3.2 1.7 3.2 -1.7 M8.8 13.4 l3.2 1.7 3.2 -1.7"' +
+    ' stroke="#000" stroke-opacity=".4" stroke-width="1.05" fill="none"/>' +
+    '<path d="M10 3.2 c0.6 1.2 3.4 1.2 4 0" stroke="#000" stroke-opacity=".3" stroke-width="1" fill="none"/>' },
+  C: { n: '③ 尖肩铁甲', c: 'c3', d: '肩上两个尖角 + V 胸线。最凶', svg:
+    '<path d="M8.4 3.4 h7.2 l4 1.8 -0.4 4 -2.2 -0.6 V16.6 H7 V8.6 l-2.2 0.6 -0.4 -4 z"' +
+    ' fill="currentColor" opacity=".92"/>' +
+    '<path d="M5.2 3.6 L1.6 0.9 l1.2 4.3 z M18.8 3.6 l3.6 -2.7 -1.2 4.3 z" fill="currentColor" opacity=".95"/>' +
+    '<path d="M9.6 6.4 L12 9.6 L14.4 6.4" stroke="#000" stroke-opacity=".32" stroke-width="1.2" fill="none"/>' +
+    '<path d="M7 13.2 h10" stroke="#000" stroke-opacity=".22" stroke-width="1"/>' },
+  D: { n: '④ 云纹法甲', c: 'c4', d: '胸甲 + 云纹卷线。偏道士、不像武将', svg:
+    '<path d="M8.6 3 h6.8 l4.2 2 -0.5 4 -2.2 -0.6 V16.8 H7 V8.4 l-2.2 0.6 -0.5 -4 z"' +
+    ' fill="currentColor" opacity=".9"/>' +
+    '<path d="M8.6 8.4 c1.6 0 2.2 1.2 3.4 1.2 s1.8 -1.2 3.4 -1.2 M8.6 12 c1.6 0 2.2 1.2 3.4 1.2 s1.8 -1.2 3.4 -1.2"' +
+    ' stroke="#000" stroke-opacity=".36" stroke-width="1.15" fill="none"/>' +
+    '<circle cx="12" cy="5.4" r="1.1" fill="#000" opacity=".26"/>' },
+  E: { n: '⑤ 骨甲', c: 'c5', d: '胸甲 + 肋骨纹 + 肩刺。最"末日"', svg:
+    '<path d="M8.4 3.2 h7.2 l4.2 2 -0.5 4 -2.2 -0.6 V16.6 H7 V8.6 l-2.2 0.6 -0.5 -4 z"' +
+    ' fill="currentColor" opacity=".86"/>' +
+    '<path d="M12 6 v10.4 M9.2 7.4 c1.6 0.9 1.6 2.3 0 3.2 M14.8 7.4 c-1.6 0.9 -1.6 2.3 0 3.2' +
+    ' M9.2 11.4 c1.6 0.9 1.6 2.3 0 3.2 M14.8 11.4 c-1.6 0.9 -1.6 2.3 0 3.2"' +
+    ' stroke="#000" stroke-opacity=".4" stroke-width="1.05" fill="none"/>' +
+    '<path d="M5.6 3.4 l-2.6 -1.2 0.7 3 z M18.4 3.4 l2.6 -1.2 -0.7 3 z" fill="currentColor" opacity=".95"/>' }
+};
+(function () {
+  var out = [];
+  for (var k in C) {
+    var v = C[k];
+    out.push('<div class="card">' +
+      '<svg class="big ' + v.c + '" viewBox="0 0 24 24">' + v.svg + '</svg>' +
+      '<div class="slotrow">' +
+      '<div class="slot"><span class="tg">3</span>' +
+      '<svg class="' + v.c + '" style="opacity:.55" viewBox="0 0 24 24">' + v.svg + '</svg></div>' +
+      '<div class="slot" style="background:linear-gradient(180deg,#8a7a6655,#8a7a6622)">' +
+      '<span class="tg">12</span>' +
+      '<svg class="' + v.c + '" viewBox="0 0 24 24" style="filter:drop-shadow(0 0 4px currentColor)">' +
+      v.svg + '</svg></div></div>' +
+      '<div class="nm ' + v.c + '">' + v.n + '</div>' +
+      '<div class="ds">' + v.d + '</div></div>');
+  }
+  document.getElementById('grid').innerHTML = out.join('');
+})();
+</script>
+</body>
+</html>
