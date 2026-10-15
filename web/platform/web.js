@@ -1503,8 +1503,8 @@ function bagRender() {
       '<span class="tg">' + ((it.tier || 0) + 1) + '</span>' +      // ★ 显示 1~12 ✓
       (!isW && n > 1 ? '<span class="cnt">' + n + '</span>' : '') +
       // ★ 第 60 轮：武器有几条词条，右上角点一个小圆点数字（一眼分得出极品 ✓）
-      (isW && it.affixes && it.affixes.length
-        ? '<span class="affn" title="词条 ' + it.affixes.length + ' 条">' + it.affixes.length + '</span>' : '') +
+      /* ★ 第 92 轮（用户要求）：去掉右上角的词条角标 ✗
+         词条条数只在【点开的弹窗/悬停】里看 ✓（那里写着“词条 N 条：…” ✓）*/
       /* ★ 第 91 轮（用户要求）：耐久直接显示在【格子下方】✓
          条 + 数字；点开详情（悬停/选中）里还有完整的"剩多少 / 共多少" ✓ */
       ((+it.durMax > 0) ? (function () {
@@ -1513,7 +1513,8 @@ function bagRender() {
         var _col = (_k > 0.5) ? '#7ee08a' : (_k > 0.2 ? '#ffd83d' : '#ff7a6a');
         return '<span class="durbar"><i style="width:' + (_k * 100).toFixed(1) +
           '%;background:' + _col + '"></i></span>' +
-          '<span class="durTxt" style="color:' + _col + '">' + Math.round(_dd) + '</span>';
+          '';   // ★ 第 92 轮（用户要求）：数字不显示在条下面 ✗
+                //   只在【点开的弹窗/悬停】里看完整的剩多少 ✓
       })() : '') +
       (lowm ? '<span class="lvl">' + Math.round(wMastery(it) * 100) + '%</span>' : '') + '</div>';
   }
