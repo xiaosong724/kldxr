@@ -787,6 +787,7 @@ function stRow(k, v, note) {
    ★ 12 个属性表的【中文名和顺序】从服务器发来的 raw/pts 里推不出来 ✗
      所以这里带一份"显示用"的对照表 ✓
      （数值规则仍然只有服务器一份 ✓ 这里只管显示 ✓ 不参与计算 ✓）*/
+var HP_FULL_PENDING = false;   /* 第 192 轮：等有效上限到了就把血填满 ✓ */
 var MY_MQ = 0;      // ★ 第 152 轮：我自己的魔气（登录从 role 读 ✓ 变了服务器推 ✓）
 /* ★ 第 160 轮：构建号（服务器在 ws-config.js 里给的）
    ★ 为什么在 platform 里读 window、不在 core 里读：
@@ -2867,6 +2868,10 @@ function wsOnMessage(raw) {
     if (typeof d.hpm === 'number' && d.hpm > 0) {
       HPMAX = d.hpm;
       if (HP > HPMAX) { HP = HPMAX; }
+      /* 第 192 轮：如果是【死着登录】的（存档 hp=0），
+         服务器发来有效上限的这一刻就把血填满 ✓
+         （服务器那边本来就是满血 ✓ 只是客户端自己记着 0 ✗）*/
+      if (HP_FULL_PENDING) { HP_FULL_PENDING = false; HP = HPMAX; updHP(); }
       updHP();
     }
     if ((SETCFG.setTab || '') === 'talent') { talRender(); }
@@ -2885,6 +2890,10 @@ function wsOnMessage(raw) {
     if (typeof d.hpm === 'number' && d.hpm > 0) {
       HPMAX = d.hpm;
       if (HP > HPMAX) { HP = HPMAX; }
+      /* 第 192 轮：如果是【死着登录】的（存档 hp=0），
+         服务器发来有效上限的这一刻就把血填满 ✓
+         （服务器那边本来就是满血 ✓ 只是客户端自己记着 0 ✗）*/
+      if (HP_FULL_PENDING) { HP_FULL_PENDING = false; HP = HPMAX; updHP(); }
       updHP();
     }
     if ((SETCFG.setTab || '') === 'bag') { bagRender(); }
@@ -2945,6 +2954,17 @@ function wsWelcome(d) {
     }
     if (typeof d.role.hp === 'number' && d.role.hp > 0) {
       HP = d.role.hp;
+    } else {
+      /* ★★ 第 192 轮（用户："死亡后不是点复活、而是刷新，血量不会恢复满"）★★
+         根因：存档里 hp=0 有两种含义 ✗
+           ① 新角色（按公式满值 ✓）
+           ② 上次死在世界里、下线时被写了 0 ✓
+         服务器那边两种都按【满血】处理 ✓（进世界就是满的 ✓ 还能被打 ✓）
+         但客户端这里只认 >0 ✗ → 它记着自己死前的 0 ✗
+         → 表现：服务器满血 ✓ 你屏幕上血条是空的 ✓✓ 一字不差 ✓
+         修：0 或缺省 → 先记个标记 ✗ 等服务器把【有效上限】发过来就填满 ✓
+           （★ 不能现在就填 ✗ 那会儿还不知道上限（含防具加成）✓）*/
+      HP_FULL_PENDING = true;
     }
     /* ★★ 第 111 轮修的真 bug（用户："血量只保存到了等级血量，防具加的血量没保存"）★★
        病根：这里原来拿 role.hpMax 当上限 ✗
