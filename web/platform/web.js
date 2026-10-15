@@ -101,15 +101,11 @@ UI.plate = {
       ui.wrap.insertBefore(el, ui.wrap.firstChild);   // ★ 插到最前面 = 名字上面那行 ✓
       ui.mqEl = el;
     }
-    var col = (typeof mqColor === 'function') ? mqColor(v) : '#ff5a4a';
-    var txt = ((typeof MQ_ICON === 'string') ? MQ_ICON : '\uD83D\uDC7F ') + v;
-    if (ui.mqEl.textContent !== txt) { ui.mqEl.textContent = txt; }
-    if (ui.mqEl.style.color !== col) { ui.mqEl.style.color = col; }
-    /* ★ 高魔气加一层发光 ✗ 让"看着就危险"这件事一眼可见 ✓ */
-    var glow = (v >= 200) ? ('0 0 6px ' + col) : 'none';
-    if (ui.mqEl.style.textShadow.indexOf('6px') < 0 !== (v >= 200)) {
-      ui.mqEl.style.textShadow = '0 1px 2px #000, 0 0 3px #000'
-        + (glow === 'none' ? '' : (', ' + glow));
+    /* ★ 第 157 轮：改成【自画的恶魔头】✗ 数字在头里面 ✓（用户要求 ✓）
+       ★ 只在值变了才重建 ✗（这个函数每帧都调 ✓ 每帧重画 SVG 会白烧 CPU ✓）*/
+    if (ui._mqV !== v) {
+      ui._mqV = v;
+      ui.mqEl.innerHTML = mqSvg(v);
     }
     ui.mqEl.style.display = 'block';
   },
@@ -989,6 +985,35 @@ function wikiBind() {
      头顶那一行是纯文本（textContent ✗）放不了 SVG ✗
      而表情图标在所有浏览器/手机上都渲染得出来 ✓
      （以后想换成自画像素图：把 UI.plate.name 改成支持 HTML 就行 ✗ 结构不用动 ✓）*/
+/* ★★ 第 157 轮（用户要求）：自己画的红色恶魔头 ★★
+   用户原话："自己做一个红色恶魔头，把数字放到恶魔头里，魔气越高恶魔头越大"
+
+   ① 手画：两只角 + 额头宽下巴尖 + 怒眼 + 数字在头里 —— 不抄任何素材 ✓
+   ② 数字在头【里面】（眼睛下面 ✓ 四位数自动缩小字号 ✓）
+   ③ 魔气越高头越大：22px（低）→ 40px（约 540 点封顶 ✓）
+     颜色仍是五档递增（浅红 → 正红 → 深红 → 暗红 → 血红偏黑 ✓）
+   ★ 只返回 SVG 字符串 ✗ "值变了才重建"由调用方负责 ✓
+     （这个函数每帧都会被调 ✓ 每帧重画 SVG 会白烧 CPU ✓）*/
+function mqSvg(v) {
+  v = Math.round(+v || 0);
+  var col = mqColor(v);
+  var sz = 22 + Math.min(18, Math.floor(v / 30));       // 22 → 40px
+  var fs = (v >= 1000) ? 9.5 : (v >= 100) ? 11 : 13;    // 数字越长越小
+  var dark = '#2a0505';
+  return '<svg width="' + sz + '" height="' + sz + '" viewBox="0 0 40 40" '
+    + 'style="display:block;filter:drop-shadow(0 1px 2px rgba(0,0,0,.85))">'
+    + '<path d="M9 14 L3 2 L16 9 Z" fill="' + col + '" stroke="' + dark + '" stroke-width="1.6"/>'
+    + '<path d="M31 14 L37 2 L24 9 Z" fill="' + col + '" stroke="' + dark + '" stroke-width="1.6"/>'
+    + '<path d="M20 6 C31 6 35 13 34 21 C33 30 27 37 20 37 C13 37 7 30 6 21 '
+    + 'C5 13 9 6 20 6 Z" fill="' + col + '" stroke="' + dark + '" stroke-width="1.8"/>'
+    + '<path d="M10 17 L18 21 L10 23 Z" fill="' + dark + '"/>'
+    + '<path d="M30 17 L22 21 L30 23 Z" fill="' + dark + '"/>'
+    + '<text x="20" y="33" text-anchor="middle" font-size="' + fs + '" '
+    + 'font-weight="700" fill="#fff" stroke="' + dark + '" stroke-width="0.7" '
+    + 'paint-order="stroke">' + v + '</text>'
+    + '</svg>';
+}
+
 var MQ_ICON = '\uD83D\uDC7F ';          // 👿 小恶魔
 function mqColor(mq) {
   mq = +mq || 0;
