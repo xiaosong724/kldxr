@@ -1272,15 +1272,6 @@ function fillHeldWeapon(sw, look, tier) {
      ★ 踩过的坑：我一开始把这段插在上面 ✗
        那时 g 还没定义 → 一持弓就 ReferenceError → 整个渲染循环挂掉 ✗✗
        （表现是“进世界后报错”+所有快照字段 undefined ✗）*/
-  if (useLook === 'bow') {
-    /* ★★ 第 71 轮 用户澄清：不是人拿反了，是【弓的弦】朝反了 ★★
-       看模型数据：弓臂向 +X 弯出去（x 到 0.40）✓
-                 弦也在 +X 侧（x = 0.46）✗
-       → 两者同侧 = 弦在【弓臂外侧】→ 朝前了 ✗
-       正确的弓：弓臂朝前弯，弦在【自己这侧】✓
-       → 整个绕竖轴转 180° 就对了 ✓（不能绕 Z 转 ✗ 那会把弓臂转到水平方向）*/
-    g.rotation.set(0, Math.PI, 0);
-  }
   /* ★★ 第 54 轮：刀刃朝向修正（用户报的"拿着斧头时刀刃不是朝下"）★★
      病根：零件数据是"宽在 X、薄在 Z"——
            也就是【正面看是刀的平面】（示意图就是这么画的 ✓ 所以图标也好看 ✓）
@@ -1290,7 +1281,12 @@ function fillHeldWeapon(sw, look, tier) {
            往下劈时刃先着 ✓
      ★ 八种武器一起修好（不是只修斧头）—— 因为它们共用同一套"宽在X"的数据 ✓
      ★ 图标不受影响：图标是"沿 -Z 看的平面投影"，正是示意图那个角度 ✓ */
-  g.rotation.y = -Math.PI / 2;
+  /* ★★ 第 71 轮：弓要【前后对调】= 在上面那 -90° 之外再多转 180° ★★
+     为什么写在这儿：下面这行是【整体赋值】✗ 不是叠加 ✗
+     我上一版在上面单独写了一句 g.rotation.set(0, Math.PI, 0) ✓
+     → 紧接着就被这一行覆盖掉了 ✗（所以"改了没效果"✓ 用户一眼看出来还是反的 ✓）
+     → 结论：弓的修正必须【折进这一行】✓ */
+  g.rotation.y = -Math.PI / 2 + ((useLook === 'bow') ? Math.PI : 0);
   sw.add(g);
   return sw;
 }
@@ -1842,12 +1838,12 @@ function wsApplyWorld(d) {
       _shaft.rotation.x = Math.PI / 2;
       am.add(_shaft);
       var _tip = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.18, 6),
-        new THREE.MeshBasicMaterial({ color: 0xd6dde6 }));
+        new THREE.MeshBasicMaterial({ color: 0xa9b2ba }));   // ★ 第 71 轮：用户说太亮→调暗 ✓
       _tip.rotation.x = Math.PI / 2;
       _tip.position.z = 0.50;
       am.add(_tip);
       var _fl = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.13, 0.18),
-        new THREE.MeshBasicMaterial({ color: 0xd85a4a }));
+        new THREE.MeshBasicMaterial({ color: 0xa9b2ba }));   // ★ 第 71 轮：尾羽也银色（不要红 ✗）
       _fl.position.z = -0.40;
       am.add(_fl);
       var _fl2 = _fl.clone();
