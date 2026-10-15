@@ -149,37 +149,20 @@ function tryOne(key, url, attempt) {
 }
 
 /* ---------- sfx ---------- */
-/* ★★ 第 75 轮：音频池（修 iPad 空打也掉帧）★★
-   用户报："ipad 直接空打也会掉帧"
+/* ★★ 第 76 轮：音频池撤了（用户反馈“这样改感觉更卡”）★★
+   我上一版给每个音源预建 4 个声道 ✗
+     而挥砍声有 6 个变体 → 一上来就是 24 份音频在解码 ✗✗
+     iOS 上这比“每次新建”还重 ✗（改错了方向 ✗）
 
-   病根：老代码在"上一个还在放"时会【现场 new Audio(...)】✗
-     iOS 上每 new Audio() = 开一个 AVPlayer ✗（慢 + 有并发上限 + 会抢主线程 ✗）
-     而挥砍声必然和上一次重叠（0.86 秒一刀 · 音效 0.3 秒 ✓）
-     → 每次挥砍都在新建 → 卡一下 ✓✓ 正好对上"空打也掉帧"✓
-     ★ 注意：和飘字那个重排问题是【两件事】✓ 都修了 ✓
+   现在改成【最省】的做法：
+     每个变体只保留 1 个 Audio ✓
+     它还在响 → 【直接丢掉这一声】✓ 不新建、也不预建 ✗
+       （重叠的一声本来就听不出来 ✗ 丢了也没关系 ✓）
 
-   修：每个音源【预建 4 个声道】✓ 播放时轮询复用 ✓ 永不 new Audio ✓
-       4 个不够时就抢最老的那个（把 currentTime 归零重播 ✓ 不新建 ✓）*/
-var _sfxPool = {};
-function sfxVoice(src) {
-  var pool = _sfxPool[src];
-  if (!pool) {
-    pool = _sfxPool[src] = [];
-    for (var i = 0; i < 4; i++) {
-      var vo = new Audio(src);
-      vo.preload = 'auto';
-      pool.push(vo);
-    }
-    return pool[0];
-  }
-  for (var j = 0; j < pool.length; j++) {
-    if (pool[j].paused || pool[j].ended) { return pool[j]; }
-  }
-  // 4 个都在放 → 抢第 0 个（归零重播 ✓ 不新建 ✓）
-  try { pool[0].currentTime = 0; } catch (e2) { }
-  return pool[0];
-}
-
+   ★ 如果还是卡，请直接把设置里的音效关掉打一局 ✓
+     关了就不卡 → 确实是音频问题 ✓ 我再想别的方法
+     关了还卡 → 不是音频 ✗ 我去查别的（下一个怀疑：每帧投影血条）
+*/
 function sfx(name, volScale) {
   if (!SFX_ON) { return; }
   if (!_audioUnlocked) { unlockAudio(); }
@@ -196,10 +179,10 @@ function sfx(name, volScale) {
   if (!a || !a.src) { return; }
   var vol = Math.max(0.05, Math.min(1, SFX_VOL * (volScale || 1)));
   try {
-    /* ★ 第 75 轮：不再 new Audio ✗ 从池里取一个声道 ✓
-       （老代码这里是 new Audio(a.src) ✗）*/
-    var use = sfxVoice(a.src);
-    if (use.paused || use.ended) { try { use.currentTime = 0; } catch (e) { } }
+    /* ★ 第 76 轮：还在响 → 丢掉这一声 ✓（不新建 ✗ 也不预建 ✗）*/
+    var use = a;
+    if (!use.paused && !use.ended && use.currentTime > 0) { return; }
+    try { use.currentTime = 0; } catch (e) { }
     use.volume = vol;
     var p = use.play();
     if (p && p.catch) { p.catch(function (err) { SFX_ERR.push(name + ':' + (err && err.name ? err.name : '失败')); }); }
