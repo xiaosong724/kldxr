@@ -403,6 +403,31 @@ async function register(name, pw) {
     ok(seeQ.arch === 'thrust',
       '★★ 而且动作也对（长枪=刺 ✓ 不是兜底成"扫"✗）');
 
+    /* ★★★ 第 66 轮：别人要能【看到挥砍动作】★★★
+       用户报："武器同步了，攻击动画没有"
+       病根：客户端拿快照的 'atk' 当"他挥了几刀"的计数器 ✓
+             但服务器发的一直是 o.atk（攻击力，从没赋过值 → 永远 0 ✗）
+             → wk > o.atkSeq 永远不成立 → 远端动作永远不播 ✗
+       修：服务器加 atkSeq，每次挥出去 +1 ✓ 快照发它 ✓ */
+    const seqA = JSON.parse(await A.eval(
+      'var o = null;' +
+      'for (var uid in NET.others) { if (NET.others[uid].name === "浏览器乙") { o = NET.others[uid]; break; } }' +
+      'return JSON.stringify({ seq: o ? o.atkSeq : null, atkT: o ? o.atkT : null });') || '{}');
+    await B.eval('if (NET.on && WSC.ready) {' +
+                 ' wsSend("atk", { x: P.x + Math.sin(P.yaw), z: P.z + Math.cos(P.yaw) }); } return 1;');
+    await sleep(350);
+    const seqB = JSON.parse(await A.eval(
+      'var o = null;' +
+      'for (var uid in NET.others) { if (NET.others[uid].name === "浏览器乙") { o = NET.others[uid]; break; } }' +
+      'return JSON.stringify({ seq: o ? o.atkSeq : null, atkT: o ? o.atkT : null,' +
+      ' armR: o ? Math.round(o.hh.armR.rotation.x * 100) / 100 : null });') || '{}');
+    console.log('        [动作同步] 甲看乙：挥之前 seq=' + seqA.seq + ' · 挥之后 seq=' +
+      seqB.seq + ' atkT=' + seqB.atkT + ' 手臂=' + seqB.armR);
+    ok(seqB.seq > seqA.seq,
+      '★★★ 服务器把【挥砍序号】同步过来了（' + seqA.seq + ' → ' + seqB.seq + ' ✓）');
+    ok(seqB.atkT >= 0,
+      '★★★ 甲那边【真的在播挥砍动作】（atkT=' + seqB.atkT + ' 秒 ✓ 不是永远 -1 ✗）');
+
 
     /* ③b ★ 玩家【移动】同步：甲按住 w 走一会儿，乙那边看到的位置必须跟着变
        （用户反馈过的真 bug：能看到人，但人钉在原地不动 ✗

@@ -1794,7 +1794,8 @@ function wsApplyWorld(d) {
     addOther({
       uid: w.id, name: w.n, realm: '', lv: w.lv,
       x: w.x, z: w.z, yaw: w.y, hp: w.hp, hpm: 0,
-      ct: w.t, atk: w.atk,
+      ct: w.t,
+      atk: (typeof w.atk === 'number') ? w.atk : -1,   // ★ 挥砍序号（服务器第 66 轮改的 ✓）
       wlook: w.w,            // ★ 第 61 轮：他手上是什么武器（动作原型要一致 ✓）
       wtier: (typeof w.wt === 'number') ? w.wt : 0,   // ★ 第 65 轮：品阶（模型颜色/发光用 ✓）
       inv: +w.inv || 0,      // ★ 第 63 轮：他的无敌剩余（队友刚复活要看得见 ✓）

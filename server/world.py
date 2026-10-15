@@ -63,7 +63,8 @@ class Player(object):
                  'intents', 'joined', 'name', 'role_id', 'warned', 'atkT', 'lastMe',
                  'weapon', 'weaponItemId',
                  'invulnT',   # ★ 复活无敌剩余时间（第 56 轮）
-                 'wDur', 'wDurMax', 'wDurDirty')   # ★ 手上武器的耐久（第 59 轮）
+                 'wDur', 'wDurMax', 'wDurDirty',   # ★ 手上武器的耐久（第 59 轮）
+                 'atkSeq')   # ★★ 第 66 轮：挥砍序号（别人靠它播动作 ✓）
 
     def __init__(self, cid, role):
         self.cid = cid
@@ -85,6 +86,12 @@ class Player(object):
             self.hp = int(role.get('hpMax') or 200)
         self.qi = int(role.get('qi') or 0)
         self.atk = 0
+        # ★★ 第 66 轮：挥砍序号 ★★
+        #   客户端一直拿快照里的 'atk' 当"他挥了几刀"的计数器 ✓
+        #   但服务器发的一直是 o.atk（攻击力，而且从没赋过值 → 永远是 0 ✗）
+        #   → 客户端那句 wk > o.atkSeq 永远不成立
+        #   → 别人【永远看不到挥砍动作】✗（用户报的"攻击动画没有"✓）
+        self.atkSeq = 0
         self.atkT = 0.0          # ★ 挥刀冷却（服务器自己也算一份，防连点刷伤害）
         self.lastMe = None       # ★ 上次推给他的 exp/等级（变了才推，省带宽）
         self.intents = 0
@@ -939,6 +946,8 @@ class World(object):
                 self._break_weapon(p)
                 return
 
+        p.atkSeq += 1        # ★★ 第 66 轮：这一刀要播给所有人看（别人靠它触发动作 ✓）
+
         # ★ 这把武器的机制（按品阶加成 ✓）
         fx = weapons.fx_of(wlook, wtier)
         # ① 僵尸：扇形里按武器机制结算（第 59 轮 ✓）
@@ -1252,7 +1261,8 @@ class World(object):
                 't': round(o.ct, 3),      # ★ 对方自己的钟 → 客户端做插值时间轴
                 'hp': o.hp,
                 'lv': (o.role or {}).get('level', 1),
-                'atk': o.atk,
+                'atk': o.atkSeq,   # ★ 第 66 轮：发【挥砍序号】✗ 不是攻击力
+                                   #   （攻击力是个从不变化的数 ✗ 客户端拿它当计数器 → 动作永远不播 ✗）
                 # ★ 第 61 轮：手上的武器类型 —— 别的玩家要按它放对应的动作 ✓
                 #   （不然别人砍起来永远是同一套 ✗）
                 'w': (o.weapon or {}).get('look') or 'sword',
