@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>防具图标 · 像素胸甲（我的世界合金胸甲那种风格）</title>
+<style>
+  body{background:#141a22;color:#e8eef6;font:14px/1.6 -apple-system,"Microsoft YaHei",sans-serif;
+       margin:0;padding:16px}
+  h1{font-size:17px;margin:0 0 2px}
+  .tip{opacity:.75;font-size:12px;margin-bottom:12px;line-height:1.7}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .card{background:#1b2430;border:1px solid #ffffff22;border-radius:12px;padding:12px;text-align:center}
+  .zoom{width:150px;height:150px;margin:0 auto 6px;display:block}
+  .row3{display:flex;align-items:flex-end;justify-content:center;gap:12px;margin:6px 0}
+  .s{display:flex;flex-direction:column;align-items:center;gap:4px}
+  .s i{font-style:normal;font-size:10px;opacity:.5}
+  .slot{position:relative;width:44px;height:44px;border-radius:8px;border:1px solid #ffffff33;
+        display:flex;align-items:center;justify-content:center}
+  .slot svg{width:34px;height:34px}
+  .tg{position:absolute;left:2px;top:0;font-size:11px;font-weight:700;color:#9aa4b2}
+  .nm{font-weight:700;font-size:13px}
+  .ds{opacity:.72;font-size:11px;line-height:1.5;margin-top:3px;text-align:left}
+  .c1{color:#b9a6ff} .c2{color:#8ee0ff} .c3{color:#ffd83d}
+</style>
+</head>
+<body>
+<h1>防具图标 · 像素胸甲（参考《我的世界》下界合金胸甲那种味道）</h1>
+<div class="tip">
+  ★ 说明：这是<b>我自己排的 16×16 像素图</b> ✓ <b>没有抄它的贴图</b> ✗（和音效那条一个道理 ——
+  参考"风格/气质"可以 ✓ 直接拿人家的图不行 ✗）<br>
+  ★ 像素画的好处：<b>缩到 32px 反而更清楚</b> ✓ 而且"这是胸甲"没有歧义 ✓<br>
+  ★ 颜色还是跟着品阶走 ✓（下面三款就是同一张图换三个品阶色 ✓）
+</div>
+<div class="grid" id="grid"></div>
+<script>
+/* ============ 16×16 像素胸甲 ============
+   图例：. 空 / o 描边 / k 领口镂空 / d 暗面 / m 中间色(= 品阶色) / l 亮面 / r 铆钉
+   结构（这是"像胸甲"的关键，缺一条就变衣服）：
+     · 顶部中央【领口镂空】✓ —— 有领口才像"穿在身上的甲"
+     · 两侧【肩带】往外挑 ✓
+     · 上身宽、腰收窄 ✓（衣服是直的 ✗ 甲是梯形的 ✓）
+     · 中间一条【竖向亮面】= 金属反光 ✓
+     · 腰上一道【横向接缝】+ 两颗铆钉 ✓ */
+var MAP = [
+  '..oooo....oooo..',
+  '.ollllo..ollllo.',
+  'ollmmmmoommmmllo',
+  'olmmmmmmmmmmmmmo',
+  'olmmlmmmmmmmmmmo',
+  'olmlmmmmmmmmmmmo',
+  'olmlmmmmmmmmmmmo',
+  'odmlmmmmmmmmmmmo',
+  'odmlmmmmmmmmmmmo',
+  'odmlmmmmmmmmmmdo',
+  '.olmlmmmmmmmmdo.',
+  '.oolmlmmmmmmdoo.',
+  '..ooodmrrrmdooo.',
+  '...ooodddddooo..',
+  '....oooooooo....',
+  '................'
+];
+function px(color, hl, dk, out) {
+  var s = '', y, x, ch, f;
+  for (y = 0; y < MAP.length; y++) {
+    for (x = 0; x < MAP[y].length; x++) {
+      ch = MAP[y][x];
+      if (ch === '.') { continue; }
+      if (ch === 'o') { f = out; }
+      else if (ch === 'k') { f = out; }
+      else if (ch === 'l') { f = hl; }
+      else if (ch === 'd') { f = dk; }
+      else if (ch === 'r') { f = out; }
+      else { f = color; }
+      s += '<rect x="' + x + '" y="' + y + '" width="1" height="1" fill="' + f + '"/>';
+    }
+  }
+  return s;
+}
+function big(cls) {
+  return '<svg class="zoom ' + cls + '" viewBox="0 0 16 16" shape-rendering="crispEdges">' +
+    px('currentColor', '#ffffff44', '#00000044', '#00000088') + '</svg>';
+}
+function small(cls) {
+  return '<svg class="' + cls + '" viewBox="0 0 16 16" shape-rendering="crispEdges">' +
+    px('currentColor', '#ffffff44', '#00000044', '#00000088') + '</svg>';
+}
+var V = [
+  { n: '① 低阶（灰铁）', c: 'c1', d: '3 阶防具的样子：偏灰、不发亮 ✓ 一眼看出是"普通货"✓' },
+  { n: '② 中阶（灵器）', c: 'c2', d: '8 阶：蓝紫灵光 ✓ 亮面开始明显 ✓' },
+  { n: '③ 高阶（神品）', c: 'c3', d: '12 阶：金色 + 背包里带发光 ✓ 远看就知道是好东西 ✓' }
+];
+(function () {
+  var out = [];
+  for (var i = 0; i < V.length; i++) {
+    var v = V[i];
+    out.push('<div class="card">' + big(v.c) +
+      '<div class="row3">' +
+      '<div class="s"><span class="' + v.c + '" style="display:inline-block">' +
+        small(v.c).replace('class="' + v.c + '"', 'class="' + v.c + '" width="64" height="64"') +
+      '</span><i>64px</i></div>' +
+      '<div class="s"><div class="slot"><span class="tg">' + (i === 0 ? 3 : (i === 1 ? 8 : 12)) + '</span>' +
+        '<span class="' + v.c + '" style="display:inline-block">' +
+        small(v.c).replace('class="' + v.c + '"', 'class="' + v.c + '" width="34" height="34"') +
+        '</span></div><i>背包真实大小</i></div>' +
+      '</div><div class="nm ' + v.c + '">' + v.n + '</div>' +
+      '<div class="ds">' + v.d + '</div></div>');
+  }
+  document.getElementById('grid').innerHTML = out.join('');
+})();
+</script>
+</body>
+</html>
