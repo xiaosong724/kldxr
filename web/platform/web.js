@@ -1065,6 +1065,60 @@ UI.atkCool = function (p) {
 /* ★ 第 31 轮加的：设置项变多了，堆一屏又长又难找 →
    顶部分类（画面/操作/音效/调试/信息），点哪类显示哪页 ✓
    停在哪个分类会记住（SETCFG.setTab）→ 下次打开还在原地 ✓ */
+/* ★★ 第 115 轮（用户："滑动不了"）★★
+   根因：桌面端【鼠标滚轮是纵向的】✗
+        而我在 #setTabs 上把纵向隐藏了（overflow-y:hidden ✓）
+        → 滚轮事件没有可滚动方向 → 什么也不发生 ✓✓ 用户："滑动不了"✓
+        （CSS 的 overflow-x:auto 只在【触屏拖动】和【shift+滚轮】下才响应 ✗
+          鼠标用户根本不知道要按 shift ✗ 这是网页横向滚动最常见的坑 ✓）
+   修三件事：
+     ① 鼠标【按住拖动】可以滑 ✓（最直觉 ✓）
+     ② 滚轮直接横滑 ✓（不用按 shift ✓）
+     ③ 拖动时不要误触发"点了某个页签"✗（位移超过 5px 就吞掉这次点击 ✓）
+   ★ 注意用 window 上挂 move/up ✗ 不是元素上 ✗
+     否则鼠标拖出元素范围就断了 ✓（手感会一卡一卡的 ✗）*/
+var _tabDrag = null;
+function tabScrollInit() {
+  var box = document.getElementById('setTabs');
+  if (!box || box._dragOk) { return; }
+  box._dragOk = true;
+
+  box.addEventListener('pointerdown', function (e) {
+    _tabDrag = { x: e.clientX, sl: box.scrollLeft, moved: 0, id: e.pointerId };
+    try { box.setPointerCapture(e.pointerId); } catch (e2) { }
+  });
+  window.addEventListener('pointermove', function (e) {
+    if (!_tabDrag) { return; }
+    var dx = e.clientX - _tabDrag.x;
+    if (Math.abs(dx) > _tabDrag.moved) { _tabDrag.moved = Math.abs(dx); }
+    if (_tabDrag.moved > 5) {
+      box.scrollLeft = _tabDrag.sl - dx;
+      box.style.cursor = 'grabbing';
+    }
+  });
+  window.addEventListener('pointerup', function () {
+    if (_tabDrag && _tabDrag.moved > 5) {
+      /* ★ 拖过就不能算"点击"✗ 否则想滑一下结果切到了别的页签 ✓ */
+      box._swallow = true;
+      setTimeout(function () { box._swallow = false; }, 60);
+    }
+    _tabDrag = null;
+    box.style.cursor = '';
+  });
+  /* ③ 吞掉"拖动结束时的那次点击" ✓（捕获阶段 ✓ 比页签自己的监听更早 ✓）*/
+  box.addEventListener('click', function (e) {
+    if (box._swallow) { e.stopPropagation(); e.preventDefault(); }
+  }, true);
+  /* ② 滚轮横滑 ✓ */
+  box.addEventListener('wheel', function (e) {
+    var d = (Math.abs(e.deltaX) > Math.abs(e.deltaY)) ? e.deltaX : e.deltaY;
+    if (!d) { return; }
+    var before = box.scrollLeft;
+    box.scrollLeft += d;
+    if (box.scrollLeft !== before) { e.preventDefault(); }   // 还有得滑才拦 ✓ 到底了放行 ✓
+  }, { passive: false });
+  box.style.cursor = 'grab';
+}
 function setTab(name) {
   if (!name) { name = SET_DEF.setTab || 'view'; }
   var tabs = document.querySelectorAll('#setTabs .tab');
@@ -1265,6 +1319,7 @@ function openSet(wantTab) {
   }
 
   /* ★ 分类导航：按记住的那一页显示（第 31 轮）✓ */
+  tabScrollInit();   // ★ 第 115 轮：菜单导航可拖动/滚轮横滑 ✓
   setTab(SETCFG.setTab || 'view');
   if ((SETCFG.setTab || '') === 'stat') { statRender(); }
 }

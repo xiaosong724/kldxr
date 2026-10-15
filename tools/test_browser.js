@@ -1438,6 +1438,25 @@ async function register(name, pw) {
     ok(String(hpQ.shown || '').indexOf('9999') >= 0,
       '★★ 血条文字也刷了（"' + hpQ.shown + '" ✓）');
     ok(hpQ.restored === hpQ.before, '★ 测完还原了（' + hpQ.restored + ' ✓）');
+    /* ★★ 第 115 轮：菜单导航可滑动 ★★
+       用户报过"滑动不了"✗ 根因是鼠标滚轮在横向容器上不响应 ✗
+       → 现在靠三件事：CSS overflow-x:auto + 拖动 + 滚轮横滑 ✓
+       这条断言盯住"初始化真的跑了"✓（上次就是靠 CSS 自己没成 ✗）*/
+    const nav = JSON.parse(await A.eval(
+      'var b = document.getElementById("setTabs");' +
+      'if (!b) { return JSON.stringify({ ok: false, why: "没有 #setTabs" }); }' +
+      'var cs = getComputedStyle(b);' +
+      'return JSON.stringify({ ok: true, ox: cs.overflowX, wrap: cs.flexWrap,' +
+      ' inited: !!b._dragOk, cursor: b.style.cursor,' +
+      ' tabs: b.querySelectorAll(".tab").length,' +
+      ' wrapEl: !!document.getElementById("setTabsWrap") });'
+    ) || '{}');
+    console.log('        [导航] overflowX=' + nav.ox + ' flexWrap=' + nav.wrap +
+      ' 初始化=' + nav.inited + ' 光标=' + nav.cursor +
+      ' 页签数=' + nav.tabs + ' 渐变层=' + nav.wrapEl);
+    ok(nav.ok && nav.ox === 'auto', '★★ 菜单导航横向可滑（overflow-x=' + nav.ox + ' ✓）');
+    ok(nav.inited === true, '★★ 拖动/滚轮横滑已初始化（_dragOk ✓ 用户报的就是这个✗）');
+    ok(nav.wrapEl === true, '★ 右侧渐变提示层在（能看出右边还有页签 ✓）');
     await A.eval('closeSet(); return 1;');
 
     /* ★★ 第 61 轮：三套挥砍动作（劈 / 扫 / 刺）★★
