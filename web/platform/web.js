@@ -1213,10 +1213,19 @@ var MAT_ICON_BY_NAME = {
   '碎玻璃': 'glass', '灵气结晶': 'crystal', '兽骨': 'bone', '电池': 'batt',
   '疫苗': 'vial', '铜线卷': 'gear'
 };
-/* ★ 第 68 轮：防具图标（一块胸甲 ✓ 简单但一眼认得出 ✓）*/
+/* ★★ 第 99 轮：用户从 6 个候选里选了【②带肩甲的盔甲样式】★★
+   （预览页在 web/preview_armor.html ✓ 以后想换回来对照着挑 ✓）
+   三部分拼的：
+     · 胸甲主体（圆肩 + 收腰 ✓）
+     · 两侧肩甲（半透明 ✓ 一眼看出是"穿在身上的甲"✓）
+     · 中缝（深色线 ✓ 不管品阶是什么颜色都看得清 ✓）*/
 var ARMOR_ICON = '<svg viewBox="0 0 24 24" width="100%" height="100%">' +
-  '<path d="M6 3 L10 1 h4 l4 2 v6 c0 5 -3.6 8.4 -8 10 -4.4 -1.6 -8 -5 -8 -10 z"' +
-  ' fill="currentColor" opacity="0.9"/></svg>';
+  '<path d="M7 4 L11 1.5 h2 l4 2.5 v5.5 c0 4.6 -3.2 7.8 -7 9.5 -3.8 -1.7 -7 -4.9 -7 -9.5 z"' +
+  ' fill="currentColor" opacity="0.92"/>' +
+  '<path d="M4.2 4.2 L1.2 6.2 v3.4 l3 1.4 z M19.8 4.2 l3 2 v3.4 l-3 1.4 z"' +
+  ' fill="currentColor" opacity="0.55"/>' +
+  '<path d="M12 3 v15.5" stroke="#000" stroke-opacity="0.28" stroke-width="1"/>' +
+  '</svg>';
 
 function iconOfItem(it) {
   if (!it) { return ITEM_ICON.box; }
