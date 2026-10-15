@@ -1485,7 +1485,11 @@ function bagRender() {
   for (var i = 0; i < BAG.items.length; i++) {
     var e = BAG.items[i];
     var it = e.item || {};
-    var isW = (it.slot === 'weapon');
+    /* ★★ 第 97 轮修的 bug：这里原来只认 weapon ✗
+       → 防具被当成【材料】渲染（数量角标、材料图标分支…）✗✓✓
+       → 改成"武器或防具都算装备"✓（变量名保留 isW 免得改一堆引用 ✗
+         但它现在的含义是 isEquipment ✓）*/
+    var isW = (it.slot === 'weapon' || it.slot === 'armor');
     var col = tierHex(it.tier || 0);
     // ★ 第 68 轮：防具也要能标"已装备"（不然穿上之后格子上没有绿点 ✗）
     var cur = ((BAG.weaponItemId && String(e.id) === String(BAG.weaponItemId)) ||
@@ -1609,7 +1613,12 @@ function bagRender() {
       useBtn.className = 'bagB off';
       useBtn.disabled = false;
       useBtn.setAttribute('data-act', 'off');
-    } else if (selItem && selItem.slot === 'weapon' && selItem !== DEFAULT_W) {
+    /* ★★ 第 97 轮修的 bug（用户报："防具点开就是材料，使用按钮也是灰的"）★★
+       这里原来写死了 slot === 'weapon' ✗ → 防具永远点不了"使用" ✗✓✓
+       （也就是说：防具做完了、格子也画了，但【根本穿不上】✗）
+       → 改成 武器 和 防具 都能用 ✓ */
+    } else if (selItem && (selItem.slot === 'weapon' || selItem.slot === 'armor') &&
+               selItem !== DEFAULT_W) {
       useBtn.textContent = '使 用';
       useBtn.className = 'bagB';
       useBtn.disabled = false;
@@ -1624,9 +1633,21 @@ function bagRender() {
   /* ★ 第 56 轮（用户第 5 条）：名字和数值挂在【选中的武器】标题下 ✓
      不再写进"装备"那一段（那样点别的武器时，看着像已装备的数值变了 ✗）*/
   var selNameEl = document.getElementById('bagSelName');
-  var isW8 = !!(selItem && selItem.slot === 'weapon' && selItem !== DEFAULT_W);
+  // ★ 第 97 轮：防具也算"装备"✓（原来只认 weapon ✗ → 防具被当成材料显示 ✗）
+  var isW8 = !!(selItem && (selItem.slot === 'weapon' || selItem.slot === 'armor') &&
+                selItem !== DEFAULT_W);
   if (selNameEl) {
-    if (isW8) {
+    if (isW8 && selItem.slot === 'armor') {
+      /* ★ 第 97 轮：防具单独一行文案 ✗
+         不然会去算"发挥度"（那是武器专属的 ✗ 对防具没意义 ✓）*/
+      var rqA = +((selItem.reqLevel) || 1);
+      var lvA = (WSC.role && WSC.role.level) || 1;
+      selNameEl.textContent = (selItem.name || '防具') + ' · ' +
+        ((selItem.tier || 0) + 1) + ' 阶 · ' +
+        ((selItem.affixes && selItem.affixes.length)
+          ? (selItem.affixes.length + ' 词条 · ') : '') +
+        '建议 ' + rqA + ' 级（你 ' + lvA + ' 级）';
+    } else if (isW8) {
       var m8 = wMastery(selItem);
       var rq8 = +((selItem.reqLevel) || 1);
       var lv8 = (WSC.role && WSC.role.level) || 1;
@@ -1687,7 +1708,11 @@ function bagTipAt(e, el) {
   box.innerHTML = '<b style="color:' + tierHex(it.tier || 0) + '">' + (it.name || '?') + '</b>' +
     '<i> · ' + ((it.tier || 0) + 1) + ' 阶' + (it.itemLv ? (' · 物品 ' + it.itemLv + ' 级') : '') +
     '</i>' + lvlTxt + '<br>' + extra +
-    '<i>' + (it.slot === 'weapon' ? '选中后点「使用」穿上' : '材料（以后做合成用）') + '</i>';
+    /* ★ 第 97 轮：防具也是能穿的 ✗ 原来只有 weapon 显示"点使用穿上"✗
+       其余一律显示"材料（以后做合成用）"✗✓✓
+       —— 用户说的"防具点开就是材料"就是这一行 ✓ */
+    '<i>' + ((it.slot === 'weapon' || it.slot === 'armor')
+      ? '选中后点「使用」穿上' : '材料（以后做合成用）') + '</i>';
   box.style.display = 'block';
   box.style.left = Math.min(window.innerWidth - 260, e.clientX + 14) + 'px';
   box.style.top = Math.min(window.innerHeight - 120, e.clientY + 12) + 'px';
