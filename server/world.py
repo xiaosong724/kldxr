@@ -50,6 +50,10 @@ PARTY_INVITE_DIST = 20.0      # 邀请的距离（防全图骚扰 ✗）
 PARTY_INVITE_TTL = 10.0       # 邀请有效期（没人理就作废 ✓）
 PARTY_INVITE_RATE = 3         # 10 秒最多发 3 次邀请 ✓
 PARTY_PUSH_INTERVAL = 1.0     # roster 每秒补推一次（血条要动 ✓）
+# ★ 第 82 轮：大厅（独立页 ✓ 队长邀请 + 玩家申请 两条路 ✓）
+PARTY_APPLY_TTL = 30.0        # 申请 30 秒过期 ✓
+PARTY_APPLY_RATE = 3          # 每人 10 秒最多 3 次申请 ✓
+LOBBY_INTERVAL = 1.0          # 大厅名单发布频率 ✓
 
 # ★★ 第 69 轮：箭（弓的投射物）★★
 ARROW_SPEED = 14.0        # 米/秒（比僵尸快得多，但不至于一帧穿过一片 ✓）
@@ -157,6 +161,11 @@ class World(object):
         self.party_rate = {}      # role_id -> [ts, ...]（邀请限流 ✓）
         self._party_seq = 0
         self._party_acc = 0.0
+        # ★ 第 82 轮：申请入队 + 招募开关 + 大厅名单
+        self.party_apply = {}     # pid -> [(role_id, ts)...]
+        self.party_open = {}      # pid -> 是否出现在招募列表里
+        self.lobby_stat = {'players': [], 'parties': []}   # tick 发布 ✓ HTTP 只读 ✓
+        self._lobby_acc = 0.0
         self._arrow_id = 0                  # mid -> mobs.Mob（P2：僵尸也归 tick 线程独占 ✓）
         self.mob_seq = 0
         self.loot = {}                  # lid -> {'x','z','item','ttl'}（P2 第二刀：地上掉的 ✓）
@@ -310,6 +319,39 @@ class World(object):
 
         # ③ 僵尸：刷怪 / 回收 / AI（P2 第一刀）
         #    ★ 和玩家一样【只在 tick 线程跑】→ 一张快照发出去时，世界是"冻结"的 ✓
+        # ★ 第 82 轮：大厅名单（每秒发布一次 ✓ HTTP 只读 ✓ 不加锁 ✓）
+        self._lobby_acc += TICK_DT
+        if self._lobby_acc >= LOBBY_INTERVAL:
+            self._lobby_acc = 0.0
+            _lp = []
+            for _q in self.players.values():
+                _w = _q.weapon or {}
+                _hm = max(1, self._hp_max(_q))
+                _qm = max(1, int((_q.role or {}).get('qiMax') or 100))
+                _lp.append({'id': _q.role_id, 'name': _q.name,
+                            'lv': int((_q.role or {}).get('level') or 1),
+                            'look': _w.get('look') or 'sword',
+                            'tier': int(_w.get('tier') or 0),
+                            'hp': int(round(100.0 * max(0, int(_q.hp or 0)) / _hm)),
+                            'qi': int(round(100.0 * max(0, int(_q.qi or 0)) / _qm)),
+                            'x': round(_q.x, 1), 'z': round(_q.z, 1),
+                            'party': (self.party_of.get(_q.role_id) is not None)})
+            _lq = []
+            for _pid, _pt in self.parties.items():
+                if not self.party_open.get(_pid, True):
+                    continue
+                if len(_pt['members']) >= PARTY_MAX:
+                    continue
+                _nm, _ld = [], ''
+                for _q2 in self._party_members(_pid):
+                    _nm.append(_q2.name)
+                    if _q2.role_id == _pt['leader']:
+                        _ld = _q2.name
+                _lq.append({'pid': _pid, 'leader': _ld, 'n': len(_pt['members']),
+                            'max': PARTY_MAX, 'names': _nm})
+            # ★ 整对象替换（读的人拿到旧的也没事 ✓ 不会读到半个 ✗）
+            self.lobby_stat = {'players': _lp, 'parties': _lq}
+
         self._party_acc += TICK_DT
         if self._party_acc >= PARTY_PUSH_INTERVAL:
             self._party_acc = 0.0
@@ -1083,6 +1125,7 @@ class World(object):
                 self._party_seq += 1
                 mypid = 'p%d' % self._party_seq
                 self.parties[mypid] = {'id': mypid, 'leader': rid, 'members': [rid]}
+                self.party_open[mypid] = True      # ★ 建队默认上榜 ✓
                 self.party_of[rid] = mypid
                 self._party_push(mypid)
             if len(self.parties[mypid]['members']) >= PARTY_MAX:
@@ -1155,6 +1198,74 @@ class World(object):
                 self._send_cid(q.cid, P.pack('party', roster=None, pid=None, me=q.role_id))
                 self._send_cid(q.cid, P.pack('notice', text='队伍解散了'))
             self.parties.pop(pid, None)
+
+        elif op == 'apply':
+            # ★ 玩家 → 申请加入某个队（第 82 轮 ✓）
+            pid = (d or {}).get('pid') or None
+            pt = self.parties.get(pid)
+            if not pt:
+                return self._send_cid(p.cid, P.pack('notice', text='这个队伍已经不存在了'))
+            if rid in self.party_of:
+                return self._send_cid(p.cid, P.pack('notice', text='你已经有队伍了'))
+            if len(pt['members']) >= PARTY_MAX:
+                return self._send_cid(p.cid, P.pack('notice', text='这个队伍已经满了'))
+            rl = [x for x in self.party_rate.get(rid, []) if now - x < 10.0]
+            if len(rl) >= PARTY_APPLY_RATE:
+                return self._send_cid(p.cid, P.pack('notice', text='申请发太快了，缓一缓'))
+            rl.append(now)
+            self.party_rate[rid] = rl
+            lst = [x for x in self.party_apply.get(pid, [])
+                   if now - x[1] < PARTY_APPLY_TTL and x[0] != rid]
+            lst.append((rid, now))
+            self.party_apply[pid] = lst
+            self._send_cid(p.cid, P.pack('notice', text='已申请加入，等队长同意'))
+            for q in self._party_members(pid):
+                if q.role_id == pt['leader']:
+                    self._send_cid(q.cid, P.pack('partyapply', pid=pid, name=p.name,
+                                                 cid=rid))
+
+        elif op in ('okapply', 'noapply'):
+            pid = self.party_of.get(rid)
+            pt = self.parties.get(pid) if pid else None
+            if not pt or pt['leader'] != rid:
+                return self._send_cid(p.cid, P.pack('notice', text='只有队长能处理申请'))
+            who = int((d or {}).get('cid') or 0)
+            self.party_apply[pid] = [x for x in self.party_apply.get(pid, []) if x[0] != who]
+            tgt = find_q(who)
+            if op == 'noapply':
+                if tgt:
+                    self._send_cid(tgt.cid, P.pack('notice', text='队长拒绝了你的申请'))
+                return
+            if tgt is None:
+                return self._send_cid(p.cid, P.pack('notice', text='那个人不在了'))
+            if len(pt['members']) >= PARTY_MAX:
+                return self._send_cid(p.cid, P.pack('notice', text='队伍满了'))
+            if who in self.party_of:
+                return self._send_cid(p.cid, P.pack('notice', text='他已经有队伍了'))
+            pt['members'].append(who)
+            self.party_of[who] = pid
+            self.party_apply[pid] = []
+            self._send_cid(tgt.cid, P.pack('notice', text='队长同意你加入了'))
+            for q in self._party_members(pid):
+                self._send_cid(q.cid, P.pack('notice', text='%s 加入了队伍' % tgt.name))
+            self._party_push(pid)
+
+        elif op == 'cancelapply':
+            pid = (d or {}).get('pid') or None
+            if pid:
+                self.party_apply[pid] = [x for x in self.party_apply.get(pid, [])
+                                         if x[0] != rid]
+            self._send_cid(p.cid, P.pack('notice', text='已取消申请'))
+
+        elif op == 'recruit':
+            pid = self.party_of.get(rid)
+            pt = self.parties.get(pid) if pid else None
+            if not pt or pt['leader'] != rid:
+                return
+            self.party_open[pid] = bool((d or {}).get('on', True))
+            self._send_cid(p.cid, P.pack('notice',
+                                         text=('已开启招募（大厅能看到你们队）'
+                                               if self.party_open[pid] else '已关闭招募')))
 
         elif op == 'chat':
             pid = self.party_of.get(rid)
