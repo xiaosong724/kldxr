@@ -736,6 +736,7 @@ function stRow(k, v, note) {
    ★ 12 个属性表的【中文名和顺序】从服务器发来的 raw/pts 里推不出来 ✗
      所以这里带一份"显示用"的对照表 ✓
      （数值规则仍然只有服务器一份 ✓ 这里只管显示 ✓ 不参与计算 ✓）*/
+var MY_MQ = 0;      // ★ 第 152 轮：我自己的魔气（登录从 role 读 ✓ 变了服务器推 ✓）
 var TAL = { free: 0, pts: {}, raw: {}, eff: {}, live: [], perLevel: 3, ready: false };
 var TAL_META = [
   ['hp', '血量', '点'], ['atk', '攻击力', '点'],
@@ -949,6 +950,27 @@ function wikiBind() {
     if (k) { wikiRender(k); }
   });
 }
+/* ★★ 第 152 轮：魔气的显示工具 ★★
+   ★ 为什么用表情图标而不是自画 SVG：
+     头顶那一行是纯文本（textContent ✗）放不了 SVG ✗
+     而表情图标在所有浏览器/手机上都渲染得出来 ✓
+     （以后想换成自画像素图：把 UI.plate.name 改成支持 HTML 就行 ✗ 结构不用动 ✓）*/
+var MQ_ICON = '\uD83D\uDC7F ';          // 👿 小恶魔
+function mqColor(mq) {
+  mq = +mq || 0;
+  if (mq <= 0) { return '#fff'; }
+  if (mq < 50) { return '#ff7a6a'; }      // 浅红
+  if (mq < 100) { return '#ff4a3a'; }     // 正红
+  if (mq < 200) { return '#e02020'; }     // 深红
+  if (mq < 500) { return '#b31414'; }     // 暗红
+  return '#7d0a0a';                        // 血红偏黑（最高档 ✓）
+}
+function mqStealPct(mq) { return Math.min(15, 5 + (+mq || 0) / 2 * 0.2); }
+function mqExpPct(mq) {
+  mq = +mq || 0;
+  return (mq >= 501) ? '15%' : (mq >= 200) ? '10%' : (mq >= 100) ? '8%' : '5%';
+}
+
 function statRender() {
   var r = WSC.role || {};
   var lv = r.level || 1;
@@ -979,6 +1001,12 @@ function statRender() {
     (((typeof TAL !== 'undefined') && TAL.raw && TAL.raw.hp)
       ? stRow('其中天赋', '+' + Math.round(TAL.raw.hp), '天赋里点的血量') : '') +
     stRow('灵气', '等技能系统做了一起展示', '现在灵气还没有用处');
+    /* ★ 第 152 轮：自己的魔气（属性页 ✓）*/
+    + stRow('魔气值', (MY_MQ > 0 ? (MQ_ICON + MY_MQ) : '0'),
+        (MY_MQ > 0
+          ? ('伤害 +' + Math.min(50, MY_MQ) + '% · 夺取概率 ' + mqStealPct(MY_MQ).toFixed(1) +
+             '% · 夺取经验 ' + mqExpPct(MY_MQ) + '（详见 菜单→百科→魔气值）')
+          : '没有魔气（杀人才会涨，详见百科）'))
 
   /* ---- 武器 ---- */
   var w = MY_WEAPON;
@@ -2527,6 +2555,11 @@ function wsOnMessage(raw) {
     fxNum('[队伍] ' + (d.name || '?') + '：' + (d.text || ''), '#8ee0ff', P.x, 2.8, P.z);
     return;
   }
+  if (t === 'mq') {              // ★ 第 152 轮：服务器告诉我魔气变了 ✓
+    MY_MQ = +d.v || 0;
+    if ((SETCFG.setTab || '') === 'stat') { statRender(); }
+    return;
+  }
   if (t === 'talents') {          // ★ 第 116 轮：天赋状态 ✓
     TAL.free = +d.free || 0;
     TAL.pts = d.pts || {};
@@ -2600,6 +2633,7 @@ function wsWelcome(d) {
   WSC.role = d.role || null;
   if (d.cfg) { WSC.cfg = d.cfg; }
   setWeapon((d.role && d.role.weapon) || null);   // ★ 第 47 轮：进世界就知道手上拿的是啥 ✓
+  MY_MQ = +((d.role && d.role.mq) || 0);   // ★ 第 152 轮：进世界先读自己的魔气 ✓
   WSC.myId = (d.role && d.role.id) || 0;
   NET.myUid = WSC.myId;
   /* ★★★ 第 110 轮修的真 bug（用户："坐标和血量没有保存退出时的"）★★★

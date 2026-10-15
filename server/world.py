@@ -2483,6 +2483,9 @@ class World(object):
                 #   服务器这里一句话就说清了 ✓ 最可靠 ✓
                 'mate': 1 if (self.party_of.get(o.role_id) is not None and
                               self.party_of.get(o.role_id) == self.party_of.get(p.role_id)) else 0,
+                # ★ 第 152 轮：头顶要显示魔气 → 快照里带上它 ✓
+                #   （只有 >0 才有意义 ✗ 客户端拿不到就是 0 ✓）
+                'mq': (int(o.mq or 0) if int(o.mq or 0) > 0 else 0),
                 'n': o.name,
                 'x': round(o.x, 3),
                 'z': round(o.z, 3),

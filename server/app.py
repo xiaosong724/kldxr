@@ -400,7 +400,7 @@ class Api(BaseHTTPRequestHandler):
         rows, test_n = [], 0
         try:
             with dbmod.db(self.cfg) as c:
-                for r in c.execute('SELECT id, name, level, exp, hp, x, z FROM roles'
+                for r in c.execute('SELECT id, name, level, exp, hp, x, z, mq FROM roles'   # ★ 第 152 轮：带上魔气 ✓
                                    ' ORDER BY level DESC, id DESC').fetchall():
                     nm = r[1]
                     if is_test(nm):
@@ -426,7 +426,8 @@ class Api(BaseHTTPRequestHandler):
                     rows.append({'id': r[0], 'name': nm, 'level': r[2], 'exp': r[3],
                                  'hp': r[4], 'x': round(float(r[5] or 0), 1),
                                  'z': round(float(r[6] or 0), 1),
-                                 'online': nm in online, 'test': is_test(nm), 'ov': _ov})
+                                 'online': nm in online, 'test': is_test(nm), 'ov': _ov,
+                                 'mq': int(r[7] or 0)})   # ★ 第 152 轮：魔气 ✓
         except Exception:
             pass
         # ★ 在线的排前面 ✓（其余保持"等级降序"✓）

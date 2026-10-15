@@ -2255,9 +2255,14 @@ function addOther(w, t) {
      ★ 每包都刷 ✓ 所以组队/退队/踢人之后名字会立刻跟着变 ✓ */
   if (o.ui) {
     var _mate2 = isPartyMate(w.uid);
+    /* ★★ 第 152 轮（用户要求）：有魔气就在名字前面显示【恶魔图标 + 数字】★★
+       红色 ✓ 魔气越高颜色越深 ✓ 魔气 0 → 整个标记消失 ✓ */
+    var _mq = +w.mq || 0;
+    o.mq = _mq;
     UI.plate.name(o.ui,
+      (_mq > 0 ? (MQ_ICON + _mq + '  ') : '') +
       (_mate2 ? '★ ' : '') + (w.name || '道友') + ' ' + (w.realm || ''),
-      _mate2 ? '#5aa8ff' : '#fff');
+      _mq > 0 ? mqColor(_mq) : (_mate2 ? '#5aa8ff' : '#fff'));
   }
   /* ★ 第 65 轮：他换武器了 → 手里那把也要换 ✓（不然永远是刚看到他时的武器 ✗）*/
   var _wl = w.wlook || 'sword', _wt = (typeof w.wtier === 'number') ? w.wtier : 0;
