@@ -1287,6 +1287,12 @@ function fillHeldWeapon(sw, look, tier) {
      → 紧接着就被这一行覆盖掉了 ✗（所以"改了没效果"✓ 用户一眼看出来还是反的 ✓）
      → 结论：弓的修正必须【折进这一行】✓ */
   g.rotation.y = -Math.PI / 2 + ((useLook === 'bow') ? Math.PI : 0);
+  /* ★ ★ 第 72 轮 用户报：“弓和手臂贴的太紧了” ★★
+     弓本来就比刀剑宽（弓臂向两侧弯）→ 直接套在手上会和前臂穿模 ✗
+     → 往【前、上、外】各推开一点 ✓（只对弓生效 ✓ 其他武器手感不变 ✗）*/
+  if (useLook === 'bow') {
+    g.position.set(0.30, 0.16, 0.22);
+  }
   sw.add(g);
   return sw;
 }
@@ -3085,6 +3091,19 @@ function heroAtkPose(heroObj, atkT, bx, bz, byaw, look) {
   heroObj.g.position.x = bx + Math.sin(byaw) * lp(9);
   heroObj.g.position.z = bz + Math.cos(byaw) * lp(9);
   heroObj.g.position.y = lp(10);
+  /* ★★ 第 72 轮 用户报："拉弓的动作一点也不像，另一个手都没有拉弓的动作" ★★
+     病根：关键帧表只有 armL.rotation.x 一个左手通道 ✗
+           只绕 X 转 = 手在【身前上下抡】✗ 做不出"把弦拉到脸侧"这个动作 ✗
+     修：拉弓这套单独给左手补 y / z 通道 ✓
+         抬手（x 往前上）→ 收到身体中线（z）→ 拉满 → 撒放往外弹 → 收回 ✓ */
+  if (arch === 'draw') {
+    var LK = [[0.00, 0.00], [-1.20, 0.95], [-1.45, 1.15], [-0.35, 0.35], [0.00, 0.00]];
+    var lx = LK[f][0] + (LK[f + 1][0] - LK[f][0]) * ee;
+    var lz = LK[f][1] + (LK[f + 1][1] - LK[f][1]) * ee;
+    heroObj.armL.rotation.x = lx;
+    heroObj.armL.rotation.z = lz;          // ★ 往身体中线收（这就是"拉弦"的样子 ✓）
+    heroObj.armL.rotation.y = -lz * 0.35;  // ★ 略往前合一点 ✓
+  }
   if (atkT >= TOTAL) { return false; }
   return true;
 }
