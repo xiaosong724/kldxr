@@ -90,3 +90,50 @@ android/app/src/main/java/com/xiuxian/game/MainActivity.kt
 - 应用图标（现在用系统默认图标）
 - 自动重连提示优化（现在是游戏内一条横幅）
 - 版本号显示 / 强制更新（服务器发构建号，客户端不一致就提示更新）
+
+
+---
+
+## 六、版本要求（对不上会 Sync 失败）
+
+这套工程钉的是一组**互相兼容**的版本，别单独改其中一个：
+
+| 项 | 版本 | 写在哪 |
+|---|---|---|
+| Gradle | **8.7** | gradle/wrapper/gradle-wrapper.properties |
+| Android Gradle Plugin | **8.5.2** | build.gradle |
+| Kotlin | **1.9.24** | build.gradle |
+| **Gradle JDK** | **17 或 21** | ★ 见下面这条，最容易踩 |
+| compileSdk | **34** | 没装的话 Sync 会提示你装 |
+
+### ★ 最常见的报错：Gradle JDK 版本不对
+
+报错长这样：
+
+```
+Incompatible Gradle JVM version
+The project's Gradle version 8.7 is incompatible with the Gradle JVM version 25 ...
+Gradle 8.7 supports Java versions between 1.8 and 21
+```
+
+**原因**：Gradle 8.7 最高只支持 Java 21，而电脑上装了 Java 25 并被选中了。
+
+**修法（二选一）**：
+
+1. 报错框里直接点 **Apply compatible Gradle JDK configuration and sync** —— 最省事
+2. 手动改：
+   File → Settings → Build, Execution, Deployment → Build Tools → Gradle
+   → **Gradle JDK** 下拉框 → 选 **jbr-21** 或 **jbr-17**（带 jbr- 前缀的是 Android Studio 自带的）
+   → Apply → File → Sync Project with Gradle Files
+
+**不要选**：Java 25 / 系统里那个最新的 JDK
+
+### 网络慢怎么办
+
+工程里已经把两处换成国内镜像了（第 178 轮）：
+
+- Gradle 本体下载 → 腾讯镜像（gradle-wrapper.properties 里的 distributionUrl）
+- 依赖仓库 → 阿里云优先 + 官方兜底（settings.gradle）
+
+如果哪天镜像失效，把 distributionUrl 换回官方
+https://services.gradle.org/distributions/gradle-8.7-bin.zip 即可。
