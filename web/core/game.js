@@ -2744,7 +2744,7 @@ function markColor(o, isMate) {
    · 那行字就写"123 / 200" ✓ 位置正好压在血条上 → 就是你说的"血量文字内置"✓
    · 每帧刷：宽度 + 颜色（绿→黄→红）+ 数字 ✓
    · 血量没变就不写 DOM ✗（这是每帧都跑的代码 ✗ 能省就省 ✓）*/
-var _selfUI = null, _selfHp = -1;
+var _selfUI = null, _selfHp = -1, _selfMx = -1;   // ★ 第 108 轮：上限也要记 ✗
 function updateSelfBar() {
   if (dead) {
     if (_selfUI) { UI.plate.show(_selfUI, false); }
@@ -2755,8 +2755,14 @@ function updateSelfBar() {
   var mx = Math.max(0, Math.round(HP));
   var mm = Math.max(1, Math.round(HPMAX));
   var pct = Math.max(0, Math.min(100, mx / mm * 100));
-  if (mx !== _selfHp) {
+  /* ★★ 第 108 轮（用户："装备穿戴后头上的血量不会立即刷新，要挨打后才会"）★★
+     病根：这个判断只看【当前血量】✗
+           换装备时变的是【上限】✗ 当前血量没变 → 条件不成立 → 条子不重画 ✗
+           → 只有挨打（血量变了）才顺带刷出来 ✓✓ 和用户描述一致 ✓
+     修：上限也一起记 ✓ 上限变了同样重画 ✓ */
+  if (mx !== _selfHp || mm !== _selfMx) {
     _selfHp = mx;
+    _selfMx = mm;
     UI.plate.hpWidth(_selfUI, pct.toFixed(1) + '%');
     UI.plate.hpColor(_selfUI, pct > 60 ? 'linear-gradient(180deg,#7ee08a,#3aa04a)'
                     : (pct > 25 ? 'linear-gradient(180deg,#ffd83d,#c9a02a)'

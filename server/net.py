@@ -149,6 +149,14 @@ class Net(object):
             if _w:
                 role['weapon'] = _w
                 role['weaponItemId'] = _wid
+            # ★★★ 第 108 轮修的真 bug（用户："重新进游戏后要重新穿戴防具才有效"）★★★
+            #   这里原来【只挂了武器】✗ 防具从来没读 ✗
+            #   → 重进之后 p.armor = None → 减伤/生命加成本来就是按 p.armor 算的 ✗
+            #   → 全都没了 ✓ 必须当场再穿一次才有 ✓✓ 和用户描述一字不差 ✓
+            _a, _aid = authmod2.armor_of(self.cfg, role.get('id'))
+            if _a:
+                role['armor'] = _a
+                role['armorItemId'] = _aid
         except Exception:
             pass
 
