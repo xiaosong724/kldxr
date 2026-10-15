@@ -297,7 +297,9 @@
    <div class="tab on" data-tab="view">画面</div>
    <div class="tab" data-tab="ctrl">操作</div>
    <div class="tab" data-tab="audio">音效</div>
-   <div class="tab" data-tab="dbg">调试</div>
+   <!-- ★ 第 128 轮（用户）：【调试】页签已移除 ✗
+        那些开关（刷怪/无敌等）本来就只该管理员用 ✗
+        → 现在全部收进【管理页】✓（本轮正在做）-->
    <div class="tab" data-tab="about">信息</div>
   </div></div>
 
@@ -406,10 +408,7 @@
    <div id="rowSfx"></div>
   </div>
 
-  <div class="tabpane" data-pane="dbg">
-   <div class="setLabel">调试与测试</div>
-   <div id="rowDbg"></div>
-  </div>
+  <!-- ★ 第 128 轮：调试面板已移除 ✗（内容全部挪到管理页 ✓）-->
 
   <div class="tabpane" data-pane="about">
    <div class="setLabel">账号</div>

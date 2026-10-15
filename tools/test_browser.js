@@ -942,9 +942,12 @@ async function register(name, pw) {
     ok(s1.tabs && s1.tabs.length >= 4, '设置面板有分类导航（' + (s1.tabs || []).length + ' 类：' + (s1.tabs || []).join('/') + '）');
     ok(s1.onTab.length === 1 && s1.onPane.length === 1 && s1.onTab[0] === s1.onPane[0],
       '默认只显示一页（当前 ' + JSON.stringify(s1.onTab) + '）');
-    ok(s1.rowDpr > 0 && s1.rowAtk > 0 && s1.rowSfx > 0 && s1.rowDbg > 0,
-      '各类的设置项都建出来了（画面 ' + s1.rowDpr + ' · 操作 ' + s1.rowAtk +
-      ' · 音效 ' + s1.rowSfx + ' · 调试 ' + s1.rowDbg + '）');
+    /* ★ 第 128 轮（用户）：【调试】页签已移除 ✗
+       那些开关（刷怪/无敌等）本来就只该管理员用 ✗
+       → 断言改成：【调试必须是 0】✓（以后谁加回来立刻红 ✗）*/
+    ok(s1.rowDpr > 0 && s1.rowAtk > 0 && s1.rowSfx > 0 && s1.rowDbg === 0,
+      '★ 调试开关全部收进管理页（画面 ' + s1.rowDpr + ' · 操作 ' +
+      s1.rowAtk + ' · 音效 ' + s1.rowSfx + ' · 调试 ' + s1.rowDbg + ' ✓）');
 
     // ① 点「操作」分类 → 应该只显示操作页
     await A.eval('document.querySelector(\'#setTabs .tab[data-tab="ctrl"]\').click(); return 1;');
