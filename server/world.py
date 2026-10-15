@@ -1296,7 +1296,14 @@ class World(object):
                                   int(q.mq or 0) + int(d.get('add') or 0)))
             else:
                 q.mq = max(0, min(int(mqmod.cfg('mq_max', mqmod.MQ_MAX)), int(d.get('v') or 0)))
-            q.mqAt = dbmod.now_ms()
+            # ★★ 第 155 轮修的真 bug：这里原来写的是 dbmod.now_ms() ✗
+            #   而 world.py 里【没有导入 dbmod】✗（那是 app.py 的东西 ✗）
+            #   → NameError → 而 tick 派发那边把异常吞了 ✗
+            #   → 表现就是【接口返回 200、但魔气根本没变】✗✓
+            #     （用户报的就是这个 ✓ 这种最难查 ✗）
+            #   ★ 改用 world.py 自己就有的 now_s() → 毫秒 ✓
+            #     （第 149 轮 net.py 用 dbmod.now_ms() 存的 ✓ 两边单位必须一致 ✗）
+            q.mqAt = int(now_s() * 1000)
             self._send_cid(q.cid, P.pack('mq', v=int(q.mq or 0)))   # ★ 客户端立刻刷新 ✓
             self._send_cid(q.cid, P.pack(
                 'notice', text='管理员把你的魔气值设成了 %d' % int(q.mq or 0)))

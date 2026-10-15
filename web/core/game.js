@@ -2257,12 +2257,10 @@ function addOther(w, t) {
     var _mate2 = isPartyMate(w.uid);
     /* ★★ 第 152 轮（用户要求）：有魔气就在名字前面显示【恶魔图标 + 数字】★★
        红色 ✓ 魔气越高颜色越深 ✓ 魔气 0 → 整个标记消失 ✓ */
-    var _mq = +w.mq || 0;
-    o.mq = _mq;
+    o.mq = +w.mq || 0;          // ★ 魔气单独一行显示 ✓ 不再拼进名字 ✗
     UI.plate.name(o.ui,
-      (_mq > 0 ? (MQ_ICON + _mq + '  ') : '') +
       (_mate2 ? '★ ' : '') + (w.name || '道友') + ' ' + (w.realm || ''),
-      _mq > 0 ? mqColor(_mq) : (_mate2 ? '#5aa8ff' : '#fff'));
+      _mate2 ? '#5aa8ff' : '#fff');
   }
   /* ★ 第 65 轮：他换武器了 → 手里那把也要换 ✓（不然永远是刚看到他时的武器 ✗）*/
   var _wl = w.wlook || 'sword', _wt = (typeof w.wtier === 'number') ? w.wtier : 0;
@@ -2783,6 +2781,8 @@ function updateSelfBar() {
     // ★ 第 88 轮（用户要求）：数字显示在【血条里面】✓ 不是条上面 ✓
     UI.plate.barText(_selfUI, String(mx), '#fff');   // ★ 第 111 轮：只显示剩余量 ✓
   }
+  /* ★ 第 155 轮（用户要求）：自己也看得见自己的魔气 ✓ 就在头顶（血条上面一行）✓ */
+  UI.plate.mq(_selfUI, (typeof MY_MQ === 'number') ? MY_MQ : 0);
   if (!_mark3) { _mark3 = new THREE.Vector3(); }
   _mark3.set(P.x, 3.05, P.z).project(cam);
   var on = (_mark3.z > -1 && _mark3.z < 1 && Math.abs(_mark3.x) < 1.3 && Math.abs(_mark3.y) < 1.6);
@@ -2952,11 +2952,11 @@ function netUpdate(dt) {
            ★ 对策（这次做到）：改名的地方【只此一处】✗
              上面 addOther 那段也一并保留 ✓ 但两边用同一套拼法 ✓
            → 以后要改名，改这里就够了 ✓（我在 addOther 里也加了同样的注释 ✓）*/
-        var _mq3 = +o.mq || 0;
         UI.plate.name(o.ui,
-          (_mq3 > 0 ? (MQ_ICON + _mq3 + '  ') : '') +
           (_mate3 ? '★ ' : '') + (o.name || '道友') + (o.realm ? ' ' + o.realm : ''),
-          _mq3 > 0 ? mqColor(_mq3) : (_mate3 ? '#5aa8ff' : '#fff'));
+          _mate3 ? '#5aa8ff' : '#fff');
+        // ★ 第 155 轮：魔气【单独一行】放在名字上面 ✓（用户要求 ✓）
+        UI.plate.mq(o.ui, o.mq);
         // ★ 第 127 轮：只显示剩余量 ✗（用户报：看别人血条里有个 "/100" ✗）
         //   ★ 第 111 轮我就想改这里 ✗ 但当时用的是字串替换且【没加断言】✗
         //     缩进对不上 → 静默失败 ✗ 所以一直没生效 ✗（这次加了断言 ✓）

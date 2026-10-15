@@ -79,6 +79,40 @@ UI.plate = {
         'translate(-50%,-100%) translate(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px)';
     }
   },
+  /* ★★ 第 155 轮（用户要求）：魔气【单独一行】，在名字那行上面 ★★
+     · 格式：👿 500（红色，五档递增 ✓）
+     · v<=0 → 整行隐藏（不显示"0"✗）
+     · ★ 为什么单独一个元素：
+         ① 用户明确说"第一行是他的名字"✗ 魔气要另起一行 ✓
+         ② 拼进名字会撞上"两处都在写名字"那个老坑 ✓（我踩过 4 次 ✗）
+           独立元素只有一处写 ✓ 谁都不会覆盖谁 ✓
+     · ★ 只建一次，之后只改文字和颜色 ✗（每帧都会调 ✓ 不能每次建元素 ✓）*/
+  mq: function (ui, v) {
+    if (!ui || !ui.wrap) { return; }
+    v = Math.round(+v || 0);
+    if (v <= 0) {
+      if (ui.mqEl) { ui.mqEl.style.display = 'none'; }
+      return;
+    }
+    if (!ui.mqEl) {
+      var el = document.createElement('div');
+      el.style.cssText = 'font-size:11px;font-weight:700;line-height:1.25;'
+        + 'text-shadow:0 1px 2px #000,0 0 3px #000;white-space:nowrap';
+      ui.wrap.insertBefore(el, ui.wrap.firstChild);   // ★ 插到最前面 = 名字上面那行 ✓
+      ui.mqEl = el;
+    }
+    var col = (typeof mqColor === 'function') ? mqColor(v) : '#ff5a4a';
+    var txt = ((typeof MQ_ICON === 'string') ? MQ_ICON : '\uD83D\uDC7F ') + v;
+    if (ui.mqEl.textContent !== txt) { ui.mqEl.textContent = txt; }
+    if (ui.mqEl.style.color !== col) { ui.mqEl.style.color = col; }
+    /* ★ 高魔气加一层发光 ✗ 让"看着就危险"这件事一眼可见 ✓ */
+    var glow = (v >= 200) ? ('0 0 6px ' + col) : 'none';
+    if (ui.mqEl.style.textShadow.indexOf('6px') < 0 !== (v >= 200)) {
+      ui.mqEl.style.textShadow = '0 1px 2px #000, 0 0 3px #000'
+        + (glow === 'none' ? '' : (', ' + glow));
+    }
+    ui.mqEl.style.display = 'block';
+  },
   hpWidth: function (ui, pct) { if (ui && ui.bar) { ui.bar.style.width = pct; } },
   hpColor: function (ui, color) { if (ui && ui.bar) { ui.bar.style.background = color; } },
   /* ★ 第 87 轮：加颜色参数 ✓
