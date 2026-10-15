@@ -1220,16 +1220,19 @@ var MAT_ICON_BY_NAME = {
      · 两侧肩甲（半透明 ✓ 一眼看出是"穿在身上的甲"✓）
      · 中缝（深色线 ✓ 不管品阶是什么颜色都看得清 ✓）*/
 var ARMOR_ICON = '<svg viewBox="0 0 24 24" width="100%" height="100%">' +
-  /* ★★ 第 102 轮（用户："改成衣服的盔甲样式"）★★
-     从"一块胸甲板"改成【一件穿在身上的甲衣】：
-       衣身 + 两侧袖子 + 领口 + 中缝 + 下摆横线 ✓
-     用 currentColor ✓ 品阶颜色自动跟着变 ✓ */
-  '<path d="M8.6 3 h6.8 l5 2.6 -1.7 4.3 -2.3 -0.9 V21 H7.6 V9 l-2.3 0.9 L3.6 5.6 z"' +
-  ' fill="currentColor" opacity="0.9"/>' +
-  '<path d="M9.4 3.2 c0.7 1.5 4.5 1.5 5.2 0" stroke="#000" stroke-opacity="0.32"' +
-  ' stroke-width="1.1" fill="none"/>' +
-  '<path d="M12 5.2 V21" stroke="#000" stroke-opacity="0.22" stroke-width="0.9"/>' +
-  '<path d="M7.6 13.4 h8.8" stroke="#000" stroke-opacity="0.22" stroke-width="0.9"/>' +
+  /* ★★ 第 106 轮（用户："衣服盔甲的图标样式不够霸气"）★★
+     从"一件甲衣"改成【重甲】：
+       宽肩甲（往外翘）+ 厚胸甲（上宽下窄）+ V 字胸线 + 护心镜 + 腰甲 + 两颗铆钉 ✓
+     还是纯 SVG + currentColor ✓ 品阶颜色/发光自动跟着变 ✓ */
+  '<path d="M8.4 2.2 h7.2 l4.6 2.2 -0.6 4.6 -2.6 -0.7 V21 H7 V8.3 l-2.6 0.7 -0.6 -4.6 z"' +
+  ' fill="currentColor" opacity="0.92"/>' +
+  '<path d="M9.2 2.4 L12 6.6 L14.8 2.4" stroke="#000" stroke-opacity="0.30"' +
+  ' stroke-width="1.2" fill="none"/>' +
+  '<circle cx="12" cy="11.6" r="2.1" fill="#000" opacity="0.20"/>' +
+  '<circle cx="12" cy="11.6" r="0.9" fill="#000" opacity="0.30"/>' +
+  '<path d="M7 15.4 h10" stroke="#000" stroke-opacity="0.20" stroke-width="1"/>' +
+  '<circle cx="6.4" cy="5.4" r="0.7" fill="#000" opacity="0.28"/>' +
+  '<circle cx="17.6" cy="5.4" r="0.7" fill="#000" opacity="0.28"/>' +
   '</svg>';
 
 function iconOfItem(it) {
@@ -1436,7 +1439,19 @@ function wStatHtml(it, dim) {
     } else {
       o2 += '<span style="opacity:.7">（这件没有词条）</span>';
     }
-    o2 += '<span style="opacity:.75">点【使用】穿上 · 点右边的防具槽脱下</span>';
+    /* ★★ 第 106 轮（用户第 3、4 条）★★
+       · 耐久要能看到：原来防具这段【没写耐久】✗（武器的有 ✓）→ 用户："耐久度是多少看不到"✓
+       · 信息"太简单"：把能写的都写上 ✓ 并且说清每条是什么意思 ✓ */
+    o2 += ((+it.durMax > 0) ? ('<span>耐久 <s>' +
+        ((typeof it.dur === 'number') ? it.dur : it.durMax) + '</s> / ' + it.durMax +
+        ' 次挨打' + (function () {
+          var k = ((typeof it.dur === 'number') ? it.dur : it.durMax) / it.durMax;
+          return k <= 0.2 ? ' <i style="color:#ff7a6a;font-style:normal">⚠ 快坏了</i>'
+                          : (k <= 0.5 ? ' <i style="color:#ffd83d;font-style:normal">磨损过半</i>' : '');
+        })() + '（每挨一次 -1，归零就损坏消失）</span>') : '') +
+      '<span style="opacity:.75">穿上它只是【带上减伤和生命】✓ 不影响你的攻击' +
+        '（攻击看手上那把武器 ✓）</span>' +
+      '<span style="opacity:.75">点【使用】穿上 · 点武器槽右边的防具槽脱下</span>';
     return o2;
   }
   var s = wStatsOf(it);

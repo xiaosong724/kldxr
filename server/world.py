@@ -1486,7 +1486,11 @@ class World(object):
             self._send_cid(p.cid, P.pack('fx', kind='parry'))
         # ★ 固定减伤（防具的 dr ✓）：至少挨 1 点（不然穿了甲就无敌了 ✗）
         if _st['dr'] > 0:
-            dv = max(1, int(round(dv - _st['dr'])))
+            # ★★ 第 106 轮（用户要求）："基础减伤不能[把伤害]低于实际受到伤害的 10%" ★★
+            #   也就是：不管减伤多高，最后至少还要吃【原来伤害的 10%】✗
+            #   → 不然高品阶防具能把伤害压到 1 点，等于无敌 ✓
+            _floor = max(1, int(round(dv * 0.10)))
+            dv = max(_floor, int(round(dv - _st['dr'])))
         # ★ 受击回灵气（词条 ✓）
         if _st['qi_hurt'] > 0:
             p.qi = min(int((p.role or {}).get('qiMax') or 100), int(p.qi) + int(_st['qi_hurt']))
