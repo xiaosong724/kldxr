@@ -179,9 +179,9 @@ function sfx(name, volScale) {
   if (!a || !a.src) { return; }
   var vol = Math.max(0.05, Math.min(1, SFX_VOL * (volScale || 1)));
   try {
-    /* ★ 第 76 轮：还在响 → 丢掉这一声 ✓（不新建 ✗ 也不预建 ✗）*/
+    /* ★ 第 77 轮：音频改回【原样】✓（用户已排除音频 ✗）
+       不过"new Audio" 那一分支不要了 ✗（叠就叠吧 ✓）*/
     var use = a;
-    if (!use.paused && !use.ended && use.currentTime > 0) { return; }
     try { use.currentTime = 0; } catch (e) { }
     use.volume = vol;
     var p = use.play();
@@ -226,48 +226,96 @@ function mkMobUI(name, hpMax) {
 
 /* ---------- dmg ---------- */
 
-/* ★★ 第 74 轮：伤害飘字的性能修复 ★★
-   用户报："iPad 上攻击战斗时会掉帧，走路不会"
+/* ★★★ 第 77 轮：飘字【复用池】（这次应该才是 iPad 掉帧的真凶）★★★
+   用户线索（非常关键）：
+     "光是走路没有问题，哪怕怪多也不会卡 ✓
+      但一旦攻击或者挨打就开始掉帧 ✗"
+   → 共同的差别不是"怪多"，而是【这两条路径都要弹飘字】✓
+   → 而我上一轮只修掉了"每帧改 top 触发布局"✗
+     没修掉"【每次都 new 一个 div】"✗✗
 
-   病根（战斗和走路的区别就在这儿 ✗）：
-     每命中一次就 new 一个 div ✓ 然后【每帧改 el.style.top】✗
-     → 改 top/left 会触发【布局重排】(layout) ✗
-     → 战斗时一屏十几个飘字 × 每个 42 帧 = 每帧十几次重排 ✗✗
-       移动端 GPU 不算弱，但重排是 CPU 的活 → 掉帧 ✓
-     走路没有任何飘字 → 所以只有战斗掉帧 ✓（和用户观察完全一致 ✓）
-   修：
-     ① 用 transform: translate3d 做动画 ✓
-        —— transform 只走【合成器】，不重排不重绘 ✓ 这是移动端优化的第一课 ✓
-     ② 同时在飞的飘字【封顶 14 个】✓ 超了就不生成（一屏也看不清更多 ✓）
-     ③ 循环改成按【时间】推进 ✓（不再"每帧固定挪 1.2px"✗ 高刷屏上会飘太快 ✗）
-   ★ 注意：这里没用"自动降画质"✗ —— 那是另一回事，这个纯属修实现方式 ✓
+   iOS 上 new 一个 div 的代价：
+     · 建一个合成层（它 position:fixed + text-shadow ✓ 必成层）✗
+     · 光栅化文字（font-weight:800 + 阴影 ✗ 比普通文字贵得多）✗
+     · 移除时再回收一次 ✗
+   → 一秒钟几次还能忍 ✓ 但命中密集时是几十次 ✗ 每次都是一次光栅化 ✗
+   → 这就是"攻击/挨打掉帧，走路不卡"✓✓
+
+   修法：预建 16 个飘字 div 循环复用 ✓
+     · 永不 create/remove ✓ 只改 textContent + transform + opacity ✓
+     · 不用的改成 display:none ✓（比 remove 便宜得多 ✓ 层还在、下次直接用 ✓）
+     · 满了就抢最老的 ✓（一屏也看不清更多 ✗）
 */
-var NUM_LIVE = 0, NUM_CAP = 14;
-function _numFly(el, life, dx, dy) {
-  var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-  NUM_LIVE++;
-  (function up() {
-    var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    var k = Math.min(1, (now - t0) / life);
-    el.style.transform = 'translate3d(' + (dx * k).toFixed(1) + 'px,' +
-      (dy * k).toFixed(1) + 'px,0)';
-    el.style.opacity = String(1 - k);
-    if (k < 1) { requestAnimationFrame(up); }
-    else { el.remove(); NUM_LIVE--; }
-  })();
+var NUM_CAP = 16, _numPool = [], _numNext = 0, _numLive = 0;
+function _numSlot() {
+  if (_numPool.length < NUM_CAP) {
+    var el = document.createElement('div');
+    el.style.cssText = 'position:fixed;z-index:12;font-weight:800;pointer-events:none;' +
+      'text-shadow:0 2px 5px #000;will-change:transform,opacity;display:none;' +
+      'left:0;top:0;transform:translate3d(-9999px,0,0)';
+    document.body.appendChild(el);
+    var o = { el: el, busy: false, t0: 0, life: 1, y0: 0, x0: 0 };
+    _numPool.push(o);
+    return o;
+  }
+  // 先找空闲的
+  for (var i = 0; i < _numPool.length; i++) {
+    var k = (_numNext + i) % _numPool.length;
+    if (!_numPool[k].busy) { _numNext = (k + 1) % _numPool.length; return _numPool[k]; }
+  }
+  // 都忙 → 抢最老的（那个本来就快消失了 ✓）
+  var w = _numPool[_numNext]; _numNext = (_numNext + 1) % _numPool.length;
+  return w;
+}
+function _numFlyAt(txt, color, sx, sy, big, life) {
+  var o = _numSlot();
+  o.busy = true; o.life = life; o.x0 = sx; o.y0 = sy;
+  o.el.textContent = txt;
+  o.el.style.display = 'block';
+  o.el.style.color = color;
+  o.el.style.fontSize = (big ? 22 : 16) + 'px';
+  o.el.style.transform = 'translate3d(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px,0)';
+  o.el.style.opacity = '1';
+  o.t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  if (!o.anim) {
+    o.anim = true;
+    (function loop() {
+      var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      var k = (now - o.t0) / o.life;
+      if (!o.busy || k >= 1) {
+        o.busy = false; o.el.style.display = 'none';
+      } else {
+        o.el.style.transform = 'translate3d(' + o.x0.toFixed(1) + 'px,' +
+          (o.y0 - 46 * k).toFixed(1) + 'px,0)';
+        o.el.style.opacity = String(1 - k);
+        requestAnimationFrame(loop);
+      }
+    })();
+  } else {
+    // 已经在跑循环 → 它自己会发现 t0 变了（重播 ✓）
+    // ★ 但那个循环只在自己那格空闲时退出 ✗ 所以这里补一次唤醒
+    requestAnimationFrame(function () { if (o.busy && !o.wake) { o.wake = true; (function lp() {
+      var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      var k = (now - o.t0) / o.life;
+      if (!o.busy || k >= 1) { o.busy = false; o.el.style.display = 'none'; o.wake = false; }
+      else { o.el.style.transform = 'translate3d(' + o.x0.toFixed(1) + 'px,' +
+             (o.y0 - 46 * k).toFixed(1) + 'px,0)'; o.el.style.opacity = String(1 - k);
+             requestAnimationFrame(lp); }
+    })(); } });
+  }
+}
+/* 老接口保留 ✓ 内部全部走池 */
+function _numProject(x, y, z, txt, color, big, life) {
+  if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
+  var v = REUSE_V3.v.set(x, y, z).project(cam);
+  if (v.z < -1 || v.z > 2) { return; }
+  _numFlyAt(txt, color, (v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight,
+            big, life);
 }
 
 function dmg(txt, x, y, z, big) {
-  if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
-  var v = REUSE_V3.v.set(x, y, z).project(cam);
-  var el = document.createElement('div');
-  el.textContent = txt;
-  el.style.cssText = 'position:fixed;z-index:12;font-weight:800;pointer-events:none;text-shadow:0 2px 5px #000;' +
-    'font-size:' + (big ? 22 : 16) + 'px;color:' + (big ? '#ffd83d' : '#fff6e8') + ';' +
-    'left:' + ((v.x * 0.5 + 0.5) * innerWidth) + 'px;top:' + ((-v.y * 0.5 + 0.5) * innerHeight) + 'px;';
-  if (NUM_LIVE >= NUM_CAP) { return; }      // ★ 封顶（一屏也看不清更多 ✗）
-  document.body.appendChild(el);
-  _numFly(el, 700, 0, -50);
+  // ★ 第 77 轮：全部走复用池 ✓ 不再 new div ✗
+  _numProject(x, y, z, txt, big ? '#ffd83d' : '#fff6e8', big, 700);
 }
 
 /* ---------- healNum（治疗数字：绿色 + 号 ✓ 第 46 轮）----------
@@ -275,29 +323,13 @@ function dmg(txt, x, y, z, big) {
      和 dmg 一套做法（core 只说"在哪个像素、写什么字"，不碰 style ✓） */
 /* ★ 第 62 轮：指定颜色的飘字（dmg 的颜色写死了 ✗ 效果文字要区分颜色 ✓）*/
 function fxNum(txt, color, x, y, z) {
-  if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
-  var v = REUSE_V3.v.set(x, y, z).project(cam);
-  var el = document.createElement('div');
-  el.textContent = txt;
-  el.style.cssText = 'position:fixed;z-index:12;font-weight:800;pointer-events:none;' +
-    'text-shadow:0 2px 5px #000;font-size:15px;color:' + color + ';' +
-    'left:' + ((v.x * 0.5 + 0.5) * innerWidth) + 'px;top:' + ((-v.y * 0.5 + 0.5) * innerHeight) + 'px;';
-  if (NUM_LIVE >= NUM_CAP) { return; }      // ★ 封顶 ✓
-  document.body.appendChild(el);
-  _numFly(el, 660, 0, -46);
+  // ★ 第 77 轮：走池 ✓
+  _numProject(x, y, z, txt, color, false, 660);
 }
 
 function healNum(txt, x, y, z) {
-  if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
-  var v = REUSE_V3.v.set(x, y, z).project(cam);
-  var el = document.createElement('div');
-  el.textContent = txt;
-  el.style.cssText = 'position:fixed;z-index:12;font-weight:800;pointer-events:none;text-shadow:0 2px 5px #000;' +
-    'font-size:17px;color:#7ee08a;' +
-    'left:' + ((v.x * 0.5 + 0.5) * innerWidth) + 'px;top:' + ((-v.y * 0.5 + 0.5) * innerHeight) + 'px;';
-  if (NUM_LIVE >= NUM_CAP) { return; }      // ★ 封顶 ✓
-  document.body.appendChild(el);
-  _numFly(el, 660, 0, -46);
+  // ★ 第 77 轮：走池 ✓
+  _numProject(x, y, z, txt, '#7ee08a', false, 660);
 }
 /* ---------- 方位标记（屏幕边缘的队友箭头）----------
    ★ 和名牌一样：core 只说"在哪个像素、朝哪个角度、写什么字"，不碰 style 属性名 ✓
