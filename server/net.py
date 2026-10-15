@@ -157,6 +157,12 @@ class Net(object):
             if _a:
                 role['armor'] = _a
                 role['armorItemId'] = _aid
+            # ★ 第 114 轮：天赋也在这里装载 ✓（方案 §5 第 1 条 ✓）
+            #   role['talents'] = {stat: points} ✓ role['talentFree'] = 推导值 ✓
+            import talents as _tal
+            _tp = authmod2.talents_of(self.cfg, role.get('id'))
+            role['talents'] = _tp
+            role['talentFree'] = _tal.free_points(role.get('level'), _tp)
         except Exception:
             pass
 

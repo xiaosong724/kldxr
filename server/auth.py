@@ -302,6 +302,49 @@ def weapon_of(cfg, role_id):
     return w, row[0]
 
 
+def talents_of(cfg, role_id):
+    """读天赋加点（第 114 轮，方案 docs/天赋方案.md §6）
+
+    ★ 线程纪律：这个方法【只在网络线程调】✓（登录时装载 ✓ 或处理加点 intent 前 ✓）
+      tick 线程只读内存里的 Player.tal ✗ 从不碰 DB ✓（铁律 ✓）
+    """
+    out = {}
+    try:
+        with dbmod.db(cfg) as c:
+            for stat, pts in c.execute(
+                    'SELECT stat, points FROM talents WHERE role_id=?', (role_id,)):
+                try:
+                    n = int(pts or 0)
+                except Exception:
+                    continue
+                if n > 0:
+                    out[str(stat)] = n
+    except Exception:
+        return {}
+    return out
+
+
+def talent_set(cfg, role_id, stat, points):
+    """写一个属性的点数（points<=0 就删行 ✓ 不留垃圾行 ✓ 方案 §9）"""
+    with dbmod.db(cfg) as c:
+        if int(points or 0) <= 0:
+            c.execute('DELETE FROM talents WHERE role_id=? AND stat=?', (role_id, stat))
+        else:
+            c.execute('INSERT INTO talents(role_id, stat, points) VALUES(?,?,?) '
+                      'ON CONFLICT(role_id, stat) DO UPDATE SET points=excluded.points',
+                      (role_id, stat, int(points)))
+        c.commit()
+    return True
+
+
+def talent_reset(cfg, role_id):
+    """洗点：全清 ✓"""
+    with dbmod.db(cfg) as c:
+        c.execute('DELETE FROM talents WHERE role_id=?', (role_id,))
+        c.commit()
+    return True
+
+
 def armor_of(cfg, role_id):
     """读出这个角色【已装备的防具】→ (armor 字典 或 None, item_id 或 None)
 

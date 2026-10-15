@@ -218,6 +218,19 @@
 .slot .durbar{left:2px;right:2px;bottom:1px;height:3px}
 .slot .durTxt{position:absolute;left:0;right:0;bottom:-9px;font-size:8px;text-align:center;
   color:#cfc9bf;text-shadow:0 1px 2px #000;line-height:8px}
+/* ★★ 第 114 轮（用户："菜单导航现在有点多，上面要可以滑动"）★★
+   页签已经 8 个了 ✓ 加上天赋就是 9 个 ✗ 窄屏/手机上右边的会被挤出屏幕 ✗
+   → 横向可滑 ✓ 不换行 ✓ 隐藏滚动条（滑动时自会看到内容动 ✓）
+   ★ 手机上还要 -webkit-overflow-scrolling: touch ✓ 才有惯性滑动 ✓ */
+#setTabs{overflow-x:auto;overflow-y:hidden;flex-wrap:nowrap;white-space:nowrap;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none;-ms-overflow-style:none;
+  scroll-behavior:smooth;padding-bottom:2px}
+#setTabs::-webkit-scrollbar{display:none;height:0}
+#setTabs .tab{flex:0 0 auto}
+/* ★ 右边加一层"还能往右滑"的渐变提示 ✗ 不然玩家不知道右边还有页签 ✗ */
+#setTabsWrap{position:relative}
+#setTabsWrap::after{content:'';position:absolute;right:0;top:0;bottom:2px;width:18px;
+  pointer-events:none;background:linear-gradient(90deg,#0000,#00000088)}
 </style>
 </head><body>
 <canvas id="cv"></canvas>
@@ -267,7 +280,7 @@
   </div>
 
   <!-- ★ 分类导航：点不同分类切不同面板（第 31 轮）-->
-  <div id="setTabs">
+  <div id="setTabsWrap"><div id="setTabs">
    <div class="tab" data-tab="bag">背包</div>
    <div class="tab" data-tab="party">组队</div>
    <div class="tab" data-tab="stat">属性</div>
@@ -276,7 +289,7 @@
    <div class="tab" data-tab="audio">音效</div>
    <div class="tab" data-tab="dbg">调试</div>
    <div class="tab" data-tab="about">信息</div>
-  </div>
+  </div></div>
 
   <div class="tabpane" data-pane="bag">
    <!-- ★ 第 48 轮：改成【格子背包】（用户要求：像我的世界那样用图标，不要纯文字）✓

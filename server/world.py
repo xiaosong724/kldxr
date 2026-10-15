@@ -88,7 +88,11 @@ class Player(object):
                  'wDur', 'wDurMax', 'wDurDirty',   # ★ 手上武器的耐久（第 59 轮）
                  'atkSeq',   # ★★ 第 66 轮：挥砍序号（别人靠它播动作 ✓）
                  'armor', 'armorItemId',   # ★ 第 67 轮：防具 ✓
-                 'aDur', 'aDurMax', 'aDurDirty')   # ★ 第 103 轮：防具耐久 ✓
+                 'aDur', 'aDurMax', 'aDurDirty',   # ★ 第 103 轮：防具耐久 ✓
+                 # ★ 第 114 轮：天赋（方案§6 → 内存字段 ✓）
+                 #   tal=已投点数 talRaw=原始值 talEff=有效值（过完上限 ✓）
+                 #   ★ tick 线程只读这三个 ✗ 从不碰 DB ✗（铁律 ✓）
+                 'tal', 'talRaw', 'talEff', 'talDirty', 'resetT')
 
     def __init__(self, cid, role):
         self.cid = cid
@@ -119,6 +123,13 @@ class Player(object):
         # ★ 第 67 轮：防具（穿着的那件 ✓）
         self.armor = role.get('armor') or None
         self.armorItemId = role.get('armorItemId')
+        # ★ 第 114 轮：天赋（登录时由 net.py 装载进 role ✓ 这里只读内存 ✗）
+        import talents as _tal2
+        self.tal = dict(role.get('talents') or {})
+        self.talRaw = _tal2.raw_of(self.tal)
+        self.talEff = _tal2.effective(self.talRaw)
+        self.talDirty = False
+        self.resetT = 0.0
         _ar0 = self.armor or {}
         self.aDur = int(_ar0.get('dur') or 0)
         self.aDurMax = int(_ar0.get('durMax') or 0)
