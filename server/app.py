@@ -396,7 +396,19 @@ class Api(BaseHTTPRequestHandler):
         pages = max(1, (total + size - 1) // size)
         page = min(page, pages)
         head = rows[(page - 1) * size: page * size]
-        return self._send(200, {'ok': True, 'players': head, 'total': total,
+        # ★ 第 133 轮：顺便把"当前刷怪设置"报回去 ✓（管理页要显示"当前：每人 8 只…"✓）
+        #   ★ 这几个都是普通 int/float ✓ HTTP 线程直接读没事 ✗ 不是复杂对象 ✓
+        #     （跨线程规矩：tick 线程改、HTTP 线程只读简单值 ✓）
+        _mc = {}
+        try:
+            _w = self.world
+            _mc = {'per': int(getattr(_w, 'mob_per_player', 8)),
+                   'cap': int(getattr(_w, 'mob_cap', 60)),
+                   'interval': float(getattr(_w, 'spawn_interval', 2.0)),
+                   'ones': dict(getattr(_w, 'mob_cap_of', {}) or {})}
+        except Exception:
+            pass
+        return self._send(200, {'ok': True, 'players': head, 'total': total, 'mobCaps': _mc,
                                 'page': page, 'pages': pages, 'size': size,
                                 'online': len(online), 'testHidden': test_n})
 

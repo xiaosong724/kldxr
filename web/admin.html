@@ -87,6 +87,35 @@
       <button id="btnSay">发送</button>
     </div>
 
+    <!-- ★★ 第 133 轮（用户："在管理里可以调整单人上限的功能"）★★
+         三组：全局 · 单人 · 其它限制 ✓
+         ★ 单人那组要填名字（只对那个人生效 ✓ 清空就是取消单独设置 ✓） -->
+    <div class="card">
+      <h2>刷怪上限 <span class="tip">（改完立刻生效 ✓ 不用重启 ✓ 玩家会收到提示 ✓）</span></h2>
+      <div style="margin:6px 0">
+        <b>所有人</b>
+        <input id="mobPer" type="number" min="1" max="30" value="8" style="width:70px">
+        <span class="tip">每人上限（默认 8）</span>
+        <button id="btnMobPer">应用给所有人</button>
+      </div>
+      <div style="margin:6px 0">
+        <b>单人</b>
+        <input id="mobWho" placeholder="玩家名字" style="width:140px">
+        <input id="mobOne" type="number" min="1" max="30" value="8" style="width:70px">
+        <button id="btnMobOne">只给这个人设成</button>
+        <button id="btnMobClear">取消他的单独设置</button>
+      </div>
+      <div style="margin:6px 0">
+        <b>其它</b>
+        <span class="tip">全服上限</span>
+        <input id="mobCap" type="number" min="1" max="300" value="60" style="width:70px">
+        <span class="tip">补怪间隔（秒）</span>
+        <input id="mobInt" type="number" min="0.2" max="30" step="0.5" value="2" style="width:70px">
+        <button id="btnMobOther">应用</button>
+      </div>
+      <div id="mobNow" class="tip" style="margin-top:4px"></div>
+    </div>
+
     <div class="card">
       <h2 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <span>玩家 <span class="tip">（在线的排前面 ✓ 点行尾按钮操作）</span></span>
@@ -167,6 +196,7 @@ function doLogin() {
       try { localStorage.setItem('adminToken', TOKEN); } catch (e) { }
       msg('登录成功 ✓', '#7ee08a');
       showPanel(true);
+      mobCapBind();
       refresh();
     });
 }
@@ -178,6 +208,38 @@ function doLogout() {
     showPanel(false);
     msg('已退出');
   });
+}
+
+/* ★ 第 133 轮：刷怪上限的界面逻辑 */
+var mobCaps = null;   // 服务器报回来的当前值 ✓
+function mobCapBind() {
+  var g = function (id) { return document.getElementById(id); };
+  if (!g('btnMobPer')) { return; }
+  g('btnMobPer').onclick = function () {
+    act('mobcap', { per: +g('mobPer').value || 8 });
+  };
+  g('btnMobOne').onclick = function () {
+    var who = (g('mobWho').value || '').trim();
+    if (!who) { return msg('先填玩家名字', '#ff7a6a'); }
+    act('mobcap', { per: +g('mobOne').value || 8, name: who });
+  };
+  g('btnMobClear').onclick = function () {
+    var who = (g('mobWho').value || '').trim();
+    if (!who) { return msg('先填玩家名字', '#ff7a6a'); }
+    act('mobcap', { clearOne: 1, name: who });
+  };
+  g('btnMobOther').onclick = function () {
+    act('mobcap', { cap: +g('mobCap').value || 60, interval: +g('mobInt').value || 2 });
+  };
+  if (typeof mobCaps === 'object' && mobCaps) {
+    g('mobNow').textContent = '当前：每人 ' + mobCaps.per + ' 只 · 全服 ' + mobCaps.cap +
+      ' 只 · 每 ' + mobCaps.interval + ' 秒补一只' +
+      (mobCaps.ones && Object.keys(mobCaps.ones).length
+        ? ' · 单独设置 ' + JSON.stringify(mobCaps.ones) : '');
+    g('mobPer').value = mobCaps.per;
+    g('mobCap').value = mobCaps.cap;
+    g('mobInt').value = mobCaps.interval;
+  }
 }
 
 function act(name, body) {
@@ -224,6 +286,10 @@ function refresh() {
     .then(function (r) {
     if (!r.ok) { return; }
     PAGE = r.page || 1; PAGES = r.pages || 1; TOTAL = r.total || 0;
+    /* ★ 第 133 轮：顺手收下"当前刷怪设置"✓（管理页要显示"当前：每人 8 只…"）
+       ★ 注意别插错地方 ✗ 我第一次插进了 doLogin 里 ✗（那边根本没有这个字段 ✗）*/
+    mobCaps = r.mobCaps || null;
+    if (typeof mobCapBind === 'function') { mobCapBind(); }
     $('testInfo').textContent = r.testHidden
       ? ('（已隐藏 ' + r.testHidden + ' 个测试账号）') : '';
     $('pgInfo').textContent = '第 ' + PAGE + ' / ' + PAGES + ' 页 · 共 ' +

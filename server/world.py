@@ -193,6 +193,15 @@ class World(object):
         self._lobby_acc = 0.0
         self._save_acc = 0.0   # ★ 第 109 轮：定时存盘用 ✓
         self.talent_rate = {}   # ★ 第 116 轮：加点限流（长按会刷屏 ✗）
+        # ★★ 第 133 轮（用户："在管理里可以调整单人上限的功能"）★★
+        #   为什么不直接改 mobs.MOB_PER_PLAYER ✗
+        #     那是模块常量 ✗ 改了全进程生效、重启就没、而且没办法单独给某个人调 ✗
+        #   → 放在 World 里存一份【全局值】✓ + 一张【单人覆盖表】✓
+        #     全局值默认取 mobs.MOB_PER_PLAYER（8 ✓）→ 没改过时行为和之前完全一样 ✓
+        self.mob_per_player = int(mobs.MOB_PER_PLAYER)
+        self.mob_cap = int(mobs.MOB_CAP)
+        self.spawn_interval = float(mobs.SPAWN_INTERVAL)
+        self.mob_cap_of = {}      # {role_id: 该人的上限} ✓ 没记录就用全局值
         self._arrow_id = 0                  # mid -> mobs.Mob（P2：僵尸也归 tick 线程独占 ✓）
         self.mob_seq = 0
         self.loot = {}                  # lid -> {'x','z','item','ttl'}（P2 第二刀：地上掉的 ✓）
@@ -790,10 +799,10 @@ class World(object):
 
         # ---- ① 刷怪（节流 + 上限）----
         self._spawn_acc += dt
-        if self._spawn_acc >= mobs.SPAWN_INTERVAL:
+        if self._spawn_acc >= self.spawn_interval:   # ★ 第 133 轮：可调 ✓
             self._spawn_acc = 0.0
             for _ in range(mobs.SPAWN_PER_TRY):
-                if len(self.mobs) >= mobs.MOB_CAP and not self._evict_far():
+                if len(self.mobs) >= self.mob_cap and not self._evict_far():   # ★ 可调 ✓
                     break
                 self._spawn_one(ps)
 
@@ -1064,7 +1073,7 @@ class World(object):
         #   修：改成【按归属算】—— 一只僵尸算谁的就看它离谁最近 ✓
         #       （两个人站一起 → 各分一半 ✓ 于是每人能各刷到 8 ✓ 总共 16 ✓）
         cand = [q for q in ps
-                if self._owned_count(q) < mobs.MOB_PER_PLAYER]
+                if self._owned_count(q) < self._cap_of(q)]   # ★ 第 133 轮：可调上限 ✓
         if not cand:
             return
         p = random.choice(cand)
@@ -1082,6 +1091,12 @@ class World(object):
         # ★ 第 132 轮：打上【替谁刷的】标记 ✓（硬配额的依据 ✓）
         _m.owner = getattr(p, 'role_id', None)
         self.mobs[str(self.mob_seq)] = _m
+
+    def _cap_of(self, q):
+        """这个玩家的僵尸上限（第 133 轮）—— 单人覆盖优先，否则用全局值 ✓"""
+        rid = getattr(q, 'role_id', None)
+        v = self.mob_cap_of.get(rid)
+        return int(v) if v is not None else int(self.mob_per_player)
 
     def _owned_count(self, q):
         """数"标记给他"的僵尸有几只（第 132 轮：硬配额 ✓）
@@ -1145,6 +1160,33 @@ class World(object):
             txt = str(d.get('text') or '')[:80]
             if txt:
                 self._broadcast(P.pack('notice', text='[管理] ' + txt))
+            return
+        # ★★ 第 133 轮：调整刷怪上限（用户要求）★★
+        #   ★ 这一支【不需要 name】✗（全局设置人人可用 ✓）
+        #     所以必须放在下面那个"先找人、找不到就 return"之前 ✗
+        if act == 'mobcap':
+            who = str(d.get('name') or '').strip()
+            if 'per' in d and d.get('per') is not None:
+                v = max(1, min(30, int(d.get('per'))))
+                if who:
+                    q = self._find_player(who)
+                    if q is None:
+                        return
+                    self.mob_cap_of[getattr(q, 'role_id', None)] = v
+                    self._send_cid(q.cid, P.pack('notice',
+                        text='管理员把你的僵尸上限调成了 %d 只' % v))
+                else:
+                    self.mob_per_player = v
+                    self._broadcast(P.pack('notice',
+                        text='[管理] 每人僵尸上限改为 %d 只' % v))
+            if 'cap' in d and d.get('cap') is not None and not who:
+                self.mob_cap = max(1, min(300, int(d.get('cap'))))
+            if 'interval' in d and d.get('interval') is not None and not who:
+                self.spawn_interval = max(0.2, min(30.0, float(d.get('interval'))))
+            if 'clearOne' in d and who:
+                q = self._find_player(who)
+                if q is not None:
+                    self.mob_cap_of.pop(getattr(q, 'role_id', None), None)
             return
         q = self._find_player(d.get('name'))
         if q is None:
