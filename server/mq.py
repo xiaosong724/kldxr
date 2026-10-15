@@ -35,6 +35,13 @@ EXP_TIERS = ((501, 0.15), (200, 0.10), (100, 0.08), (0, 0.05))
 
 # ---------------- 防刷（用户确认：不设击杀上限 ✗ 靠这几条 ✓）----------------
 PAIR_COOLDOWN = 600.0   # ★ 同一对玩家 10 分钟只算一次（最关键的一条 ✓）
+# ★ 第 167 轮（用户）：夺取的 CD 单独一把锁 ✗ 不和魔气合用 ✓
+#   用户原话：一直杀一个人获得魔气的 CD 是 10 分钟，
+#             那夺取的 CD 也是 10 分钟吗，是的话夺取改成 1 分钟
+#   ★ 为什么这样更合理：魔气 = 长期声望（涨得慢才值钱 ✓）
+#     夺取 = 每次打架的收益（太慢就没意思了 ✗）
+#     合用一把锁 → 为了防刷魔气，把夺取也锁死了 ✗
+STEAL_COOLDOWN = 60.0   # ★ 同一对玩家【夺取】的冷却（秒）
 LEVEL_GAP_MAX = 20      # 等级差 > 20 不算
 SAFE_R = 20.0           # 出生点安全区半径内不夺取（和 SPAWN_SAFE 一致 ✓）
 
@@ -55,6 +62,7 @@ TUNE = {
     'steal_base': STEAL_BASE, 'steal_per_2': STEAL_PER_2, 'steal_cap': STEAL_CAP,
     'worn_steal_pct': WORN_STEAL_PCT, 'gold_loss': GOLD_LOSS,
     'pair_cooldown': PAIR_COOLDOWN, 'level_gap_max': LEVEL_GAP_MAX, 'safe_r': SAFE_R,
+    'steal_cooldown': STEAL_COOLDOWN,
     # ★ 经验四档：门槛 → 比例（从高到低 ✓ 第一个满足的生效 ✓）
     'exp_tiers': [[501, 0.15], [200, 0.10], [100, 0.08], [0, 0.05]],
 }
@@ -72,7 +80,8 @@ TUNE_DOC = [
     ('steal_cap', '夺取概率上限 %', 'float', 0, 100),
     ('worn_steal_pct', '穿戴中的装备被夺概率 %', 'float', 0, 100),
     ('gold_loss', '对方没经验时扣多少金币（金币系统还没做）', 'int', 0, 999999),
-    ('pair_cooldown', '同一对玩家冷却（秒）', 'float', 0, 86400),
+    ('pair_cooldown', '同一对玩家【魔气】冷却（秒）', 'float', 0, 86400),
+    ('steal_cooldown', '同一对玩家【夺取】冷却（秒）', 'float', 0, 86400),
     ('level_gap_max', '等级差超过多少不算', 'int', 0, 999),
     ('safe_r', '安全区半径（米）', 'float', 0, 1000),
 ]
@@ -138,6 +147,7 @@ def changed_tune():
         'steal_base': STEAL_BASE, 'steal_per_2': STEAL_PER_2, 'steal_cap': STEAL_CAP,
         'worn_steal_pct': WORN_STEAL_PCT, 'gold_loss': GOLD_LOSS,
         'pair_cooldown': PAIR_COOLDOWN, 'level_gap_max': LEVEL_GAP_MAX, 'safe_r': SAFE_R,
+    'steal_cooldown': STEAL_COOLDOWN,
         'exp_tiers': [[501, 0.15], [200, 0.10], [100, 0.08], [0, 0.05]],
     }
     out = {}
@@ -163,6 +173,7 @@ def reset_tune():
         'steal_base': STEAL_BASE, 'steal_per_2': STEAL_PER_2, 'steal_cap': STEAL_CAP,
         'worn_steal_pct': WORN_STEAL_PCT, 'gold_loss': GOLD_LOSS,
         'pair_cooldown': PAIR_COOLDOWN, 'level_gap_max': LEVEL_GAP_MAX, 'safe_r': SAFE_R,
+    'steal_cooldown': STEAL_COOLDOWN,
         'exp_tiers': [[501, 0.15], [200, 0.10], [100, 0.08], [0, 0.05]],
     })
     return dict(TUNE)

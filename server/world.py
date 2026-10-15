@@ -208,6 +208,7 @@ class World(object):
         self.spawn_interval = float(mobs.SPAWN_INTERVAL)
         self.mob_cap_of = {}      # {role_id: 该人的上限} ✓ 没记录就用全局值
         self.pvp_pair = {}        # ★ 第 150 轮：{(killer,victim): 上次算数时刻} —— 同一对 10 分钟只算一次 ✓
+        self.pvp_pair_steal = {}  # ★ 第 167 轮：夺取自己一张表（默认 1 分钟 ✓）
         # ★★ 第 134 轮（用户要求）：两组开关（全人 / 单人）★★
         #   PVP：开了才能互相打 ✓（现在是【闸门】：PvP 功能还没做 ✗
         #         但状态已经存下来了 ✓ 将来那段代码直接读 _pvp_on() 就行 ✓）
@@ -1916,15 +1917,23 @@ class World(object):
             return False, 'level_gap'
         return True, 'ok'
 
-    def _pvp_pair_ok(self, a_, b_):
-        """防刷：同一对玩家 10 分钟只算一次（用户确认：不设击杀上限 ✓ 靠这条 ✓）"""
+    def _pvp_pair_ok(self, a_, b_, kind='mq'):
+        """防刷：同一对玩家的冷却（魔气和夺取各一把锁 ✗ 第 167 轮拆开的 ✓）"""
         ka = getattr(a_, 'role_id', None)
         kb = getattr(b_, 'role_id', None)
         now = now_s()
-        ts = self.pvp_pair.get((ka, kb))
-        if ts is not None and now - ts < mqmod.PAIR_COOLDOWN:
+        # ★★ 第 167 轮（用户）：两把独立的锁 ★★
+        #   kind='mq'    → 魔气（默认 10 分钟）
+        #   kind='steal' → 夺取（默认 1 分钟）
+        #   ★ 为什么拆：魔气是长期声望 ✓ 夺取是每次打架的收益 ✓
+        #     合用一把锁 → 为了防刷魔气，把夺取也锁死了 ✗
+        book = self.pvp_pair_steal if kind == 'steal' else self.pvp_pair
+        cd = float(mqmod.cfg('steal_cooldown', mqmod.STEAL_COOLDOWN)) if kind == 'steal' \
+            else float(mqmod.cfg('pair_cooldown', mqmod.PAIR_COOLDOWN))
+        ts = book.get((ka, kb))
+        if ts is not None and now - ts < cd:
             return False
-        self.pvp_pair[(ka, kb)] = now
+        book[(ka, kb)] = now
         return True
 
     def _pvp_hit(self, p, q, reach, arc):
@@ -1972,7 +1981,8 @@ class World(object):
     def _pvp_killed(self, killer, victim):
         """玩家击杀玩家：魔气 +2 / 被杀 −1（用户确认 ✓）+ 防刷判定 ✓"""
         # ★ 防刷：这一对 10 分钟内只算一次 ✗（不然开小号互刷 ✓）
-        counted = self._pvp_pair_ok(killer, victim)
+        counted = self._pvp_pair_ok(killer, victim, 'mq')       # ★ 魔气那把锁（10 分钟 ✓）
+        steal_ok = self._pvp_pair_ok(killer, victim, 'steal')   # ★ 第 167 轮：夺取另一把锁（1 分钟 ✓）
         if counted:
             killer.mq = min(mqmod.MQ_MAX, int(killer.mq or 0) + mqmod.KILL_GAIN)
             victim.mq = max(0, int(victim.mq or 0) - mqmod.KILLED_LOSS)
@@ -1985,14 +1995,14 @@ class World(object):
             'notice', text='你击杀了 %s%s' % (
                 victim.name,
                 ('，魔气 +%d（现在 %d）' % (mqmod.KILL_GAIN, killer.mq)) if counted
-                else '（同一对手 10 分钟内只算一次，魔气没变）')))
+                else '（魔气冷却没到——同一对手 10 分钟内只算一次；夺取是另外一条冷却（1 分钟））')))
         self._send_cid(victim.cid, P.pack(
             'notice', text='你被 %s 击杀了%s' % (
                 victim.name if False else killer.name,
                 ('，魔气 −%d（现在 %d）' % (mqmod.KILLED_LOSS, victim.mq)) if counted
                 else '')))
         # ★★ 第 151 轮：夺取（方案 §5/§6 + 用户确认的 §14）★★
-        self._pvp_steal(killer, victim, counted)
+        self._pvp_steal(killer, victim, steal_ok)   # ★ 用夺取自己的锁 ✗ 不再用魔气的 ✓
 
     def _pvp_steal(self, killer, victim, counted):
         """夺取经验 / 物品（第 151 轮）
