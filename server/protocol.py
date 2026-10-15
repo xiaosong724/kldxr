@@ -63,6 +63,10 @@ C2S = {
         'req': ['id'], 'opt': [],
         'doc': '捡地上掉的（P2 第二刀）。★ 服务器会再判一次距离，客户端说捡到了不算数',
     },
+    'party': {
+        'req': ['op'], 'opt': ['cid', 'text'],
+        'doc': '队伍操作（op=invite/accept/decline/leave/kick/promote/disband/chat）',
+    },
     'equiparmor': {
         'req': ['itemId'], 'opt': [],
         'doc': '穿防具（itemId 是背包里那件的 id）',

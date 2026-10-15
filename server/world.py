@@ -42,6 +42,15 @@ SPAWN_SAFE = 20.0               # 出生点/安全区半径：这里不刷怪（
 
 REVIVE_INVULN = 1.5
 
+# ★★ 第 81 轮：组队（用户确认版）★★
+PARTY_MAX = 3                 # 队伍上限（用户定：3 人 ✓）
+PARTY_SHARE = 0.10            # 队友分到的经验比例（该僵尸经验的 10% ✓）
+PARTY_SHARE_DIST = 30.0       # 分经验的距离（防异地挂机蹭 ✗）
+PARTY_INVITE_DIST = 20.0      # 邀请的距离（防全图骚扰 ✗）
+PARTY_INVITE_TTL = 10.0       # 邀请有效期（没人理就作废 ✓）
+PARTY_INVITE_RATE = 3         # 10 秒最多发 3 次邀请 ✓
+PARTY_PUSH_INTERVAL = 1.0     # roster 每秒补推一次（血条要动 ✓）
+
 # ★★ 第 69 轮：箭（弓的投射物）★★
 ARROW_SPEED = 14.0        # 米/秒（比僵尸快得多，但不至于一帧穿过一片 ✓）
 ARROW_HIT_R = 0.75        # 命中半径（僵尸体积约 0.5 + 一点余量 ✓）
@@ -141,6 +150,13 @@ class World(object):
         self.mobs = {}
         # ★ 第 69 轮：在飞的箭（只在 tick 线程动 ✓）
         self.arrows = {}
+        # ★ 第 81 轮：组队状态（全在 tick 线程 ✓ 纯内存 ✓ 不加锁 ✓ 不入库 ✓）
+        self.parties = {}         # pid -> {'id','leader'(role_id),'members':[role_id...]}
+        self.party_of = {}        # role_id -> pid（反查 ✓）
+        self.party_inv = {}       # role_id -> [(from_role_id, ts), ...]
+        self.party_rate = {}      # role_id -> [ts, ...]（邀请限流 ✓）
+        self._party_seq = 0
+        self._party_acc = 0.0
         self._arrow_id = 0                  # mid -> mobs.Mob（P2：僵尸也归 tick 线程独占 ✓）
         self.mob_seq = 0
         self.loot = {}                  # lid -> {'x','z','item','ttl'}（P2 第二刀：地上掉的 ✓）
@@ -294,6 +310,11 @@ class World(object):
 
         # ③ 僵尸：刷怪 / 回收 / AI（P2 第一刀）
         #    ★ 和玩家一样【只在 tick 线程跑】→ 一张快照发出去时，世界是"冻结"的 ✓
+        self._party_acc += TICK_DT
+        if self._party_acc >= PARTY_PUSH_INTERVAL:
+            self._party_acc = 0.0
+            for pid in list(self.parties.keys()):
+                self._party_push(pid)        # ★ 每秒补推一次（血条要动 ✓）
         self._mob_tick(TICK_DT)
         self._arrow_tick(TICK_DT)   # ★ 第 69 轮：箭（要在僵尸移动之后算 ✓）
         self._loot_tick(TICK_DT)          # ★ 地上掉的也归 tick 线程管 ✓
@@ -418,6 +439,8 @@ class World(object):
                 (p.role_id, json.dumps(w, ensure_ascii=False), dbmod.now_ms()))
             self._send_cid(p.cid, P.pack('notice',
                                          text='调试：背包里多了一件【%s】—— 打开背包就能穿上 ✓' % w['name']))
+        elif t == 'party':
+            self._party_op(p, d)          # ★ 第 81 轮：组队 ✓
         elif t == 'armorset':
             # ★ 第 67 轮：穿/脱防具（网络线程已经查库校验完了 ✓）
             p.armor = d.get('armor') or None
@@ -931,6 +954,234 @@ class World(object):
         st = armormod.stats_of(p.armor)
         return max(1, int(round((base + st['hp']) * (1.0 + st['hp_pct'] / 100.0))))
 
+    def _gain_exp(self, q, amount):
+        """给某个玩家加经验 → 够就升级 → 推 me（第 81 轮抽出来的 ✓）
+
+        ★ 为什么抽成函数：队友分经验必须走【一模一样】的逻辑 ✗
+          不然会出现"队友升级了但界面没刷新""队友升级没提示"这种鬼问题 ✓
+        ★ 注意：me 是【单个对象】不是数组 —— 客户端读 d.me.lv / d.me.exp ✗
+          （这是第 39 轮踩过的坑，注释留着 ✓）
+        """
+        if q is None or amount <= 0:
+            return
+        role = q.role
+        role['exp'] = int(role.get('exp') or 0) + int(amount)
+        ups = 0
+        while ups < 100:
+            lv = int(role.get('level') or 1)
+            need = mobs.level_up_need(lv)
+            if int(role.get('exp') or 0) < need:
+                break
+            role['exp'] = int(role.get('exp') or 0) - need
+            role['level'] = lv + 1
+            ups += 1
+        level = int(role.get('level') or 1)
+        e = self._pend.get(q.cid)
+        if e is None:
+            e = self._pend[q.cid] = {}
+        e['me'] = {'lv': level, 'exp': int(role.get('exp') or 0),
+                   'need': mobs.level_up_need(level),
+                   'inv': round(q.invulnT, 2)}
+        if ups:
+            self._send_cid(q.cid, P.pack('notice', text='升到 %d 级！' % level, level=level))
+
+    # ================================================================ 组队（第 81 轮）
+
+    def _party_members(self, pid):
+        """这个队的在线玩家对象列表（离开的人自动跳过 ✓）"""
+        pt = self.parties.get(pid)
+        if not pt:
+            return []
+        out = []
+        for rid in pt['members']:
+            for q in self.players.values():
+                if getattr(q, 'role_id', None) == rid:
+                    out.append(q)
+                    break
+        return out
+
+    def _party_roster(self, pid):
+        """给客户端的一份队伍名单（紧凑数组 ✓ 只推必要的 ✓）"""
+        pt = self.parties.get(pid)
+        if not pt:
+            return None
+        out = []
+        for q in self._party_members(pid):
+            w = q.weapon or {}
+            out.append([q.role_id, q.name, int((q.role or {}).get('level') or 1),
+                        int(q.hp or 0), self._hp_max(q), int(q.qi or 0),
+                        int((q.role or {}).get('qiMax') or 100),
+                        w.get('look') or 'sword', int(w.get('tier') or 0),
+                        1 if int(q.hp or 0) <= 0 else 0,
+                        1 if q.role_id == pt['leader'] else 0])
+        return out
+
+    def _party_push(self, pid):
+        """队伍有变化 → 给每个在线成员推一份完整名单 ✓"""
+        pt = self.parties.get(pid)
+        if not pt:
+            return
+        ros = self._party_roster(pid)
+        for q in self._party_members(pid):
+            self._send_cid(q.cid, P.pack('party', roster=ros, pid=pid,
+                                         leader=pt['leader'], me=q.role_id))
+
+    def _party_leave(self, p, quiet=False):
+        """离队（退出/被踢/掉线都走这里 ✓）"""
+        rid = getattr(p, 'role_id', None)
+        pid = self.party_of.pop(rid, None)
+        if not pid:
+            return
+        pt = self.parties.get(pid)
+        if pt and rid in pt['members']:
+            pt['members'].remove(rid)
+        self._send_cid(p.cid, P.pack('party', roster=None, pid=None, me=rid))
+        if not pt or len(pt['members']) <= 1:
+            # ★ 只剩 1 个人就自动解散（用户方案 §3.1 ✓）
+            for rid2 in (pt['members'] if pt else []):
+                self.party_of.pop(rid2, None)
+                for q in self.players.values():
+                    if getattr(q, 'role_id', None) == rid2:
+                        self._send_cid(q.cid, P.pack('party', roster=None, pid=None, me=rid2))
+            self.parties.pop(pid, None)
+            return
+        if pt['leader'] == rid:
+            pt['leader'] = pt['members'][0]      # 队长走了 → 顺位给第一个 ✓
+        self._party_push(pid)
+
+    def _party_op(self, p, d):
+        """所有队伍操作（第 81 轮 ✓ 全部在 tick 线程 ✓）"""
+        op = (d or {}).get('op') or ''
+        rid = getattr(p, 'role_id', None)
+        if not rid:
+            return
+        now = now_s()
+
+        def find_q(role_id):
+            for q in self.players.values():
+                if getattr(q, 'role_id', None) == role_id:
+                    return q
+            return None
+
+        if op == 'invite':
+            tgt = find_q(int((d or {}).get('cid') or 0))
+            if tgt is None or tgt is p:
+                return self._send_cid(p.cid, P.pack('notice', text='找不到这个人'))
+            if int(tgt.hp or 0) <= 0:
+                return self._send_cid(p.cid, P.pack('notice', text='他倒着呢，等起来再说'))
+            # 限流 + 距离（防全图骚扰 ✗）
+            rl = [x for x in self.party_rate.get(rid, []) if now - x < 10.0]
+            if len(rl) >= PARTY_INVITE_RATE:
+                return self._send_cid(p.cid, P.pack('notice', text='邀请发太快了，缓一缓'))
+            if (tgt.x - p.x) ** 2 + (tgt.z - p.z) ** 2 > PARTY_INVITE_DIST ** 2:
+                return self._send_cid(p.cid, P.pack('notice', text='太远了，走近点再邀请'))
+            rl.append(now)
+            self.party_rate[rid] = rl
+            # 我这边先确保有个队（没有就建一个，我是队长 ✓）
+            mypid = self.party_of.get(rid)
+            if not mypid:
+                self._party_seq += 1
+                mypid = 'p%d' % self._party_seq
+                self.parties[mypid] = {'id': mypid, 'leader': rid, 'members': [rid]}
+                self.party_of[rid] = mypid
+                self._party_push(mypid)
+            if len(self.parties[mypid]['members']) >= PARTY_MAX:
+                return self._send_cid(p.cid, P.pack('notice', text='队伍满了（%d 人）' % PARTY_MAX))
+            if tgt.role_id in self.party_of:
+                return self._send_cid(p.cid, P.pack('notice', text='他已经在别的队里了'))
+            self.party_inv.setdefault(tgt.role_id, []).append((rid, now))
+            self._send_cid(tgt.cid, P.pack('partyinv', name=p.name, pid=mypid))
+            self._send_cid(p.cid, P.pack('notice', text='已邀请 %s' % tgt.name))
+
+        elif op == 'accept':
+            pid = (d or {}).get('pid') or None
+            lst = self.party_inv.get(rid, [])
+            lst = [x for x in lst if now - x[1] < PARTY_INVITE_TTL]
+            self.party_inv[rid] = lst
+            if not lst:
+                return self._send_cid(p.cid, P.pack('notice', text='邀请已经过期了'))
+            frm = int((d or {}).get('cid') or 0) or lst[-1][0]
+            pid = self.party_of.get(frm)
+            if not pid:
+                return self._send_cid(p.cid, P.pack('notice', text='那个队已经散了'))
+            pt = self.parties.get(pid)
+            if not pt or len(pt['members']) >= PARTY_MAX:
+                return self._send_cid(p.cid, P.pack('notice', text='队伍满了'))
+            if rid in self.party_of:
+                self._party_leave(p)
+            pt['members'].append(rid)
+            self.party_of[rid] = pid
+            self.party_inv[rid] = []
+            for q in self._party_members(pid):
+                self._send_cid(q.cid, P.pack('notice', text='%s 加入了队伍' % p.name))
+            self._party_push(pid)
+
+        elif op == 'decline':
+            frm = int((d or {}).get('cid') or 0)
+            self.party_inv[rid] = [x for x in self.party_inv.get(rid, []) if x[0] != frm]
+
+        elif op == 'leave':
+            self._party_leave(p)
+
+        elif op == 'kick':
+            pid = self.party_of.get(rid)
+            pt = self.parties.get(pid) if pid else None
+            if not pt or pt['leader'] != rid:
+                return self._send_cid(p.cid, P.pack('notice', text='只有队长能踢人'))
+            tgt = find_q(int((d or {}).get('cid') or 0))
+            if tgt is None or tgt.role_id == rid:
+                return
+            self._party_leave(tgt)
+            self._send_cid(p.cid, P.pack('notice', text='把 %s 请出了队伍' % tgt.name))
+
+        elif op == 'promote':
+            pid = self.party_of.get(rid)
+            pt = self.parties.get(pid) if pid else None
+            if not pt or pt['leader'] != rid:
+                return
+            tgt = find_q(int((d or {}).get('cid') or 0))
+            if tgt is None or tgt.role_id not in pt['members']:
+                return
+            pt['leader'] = tgt.role_id
+            self._party_push(pid)
+
+        elif op == 'disband':
+            pid = self.party_of.get(rid)
+            pt = self.parties.get(pid) if pid else None
+            if not pt or pt['leader'] != rid:
+                return
+            for q in self._party_members(pid):
+                self.party_of.pop(q.role_id, None)
+                self._send_cid(q.cid, P.pack('party', roster=None, pid=None, me=q.role_id))
+                self._send_cid(q.cid, P.pack('notice', text='队伍解散了'))
+            self.parties.pop(pid, None)
+
+        elif op == 'chat':
+            pid = self.party_of.get(rid)
+            if not pid:
+                return
+            txt = str((d or {}).get('text') or '')[:120]
+            if not txt:
+                return
+            for q in self._party_members(pid):
+                self._send_cid(q.cid, P.pack('partychat', name=p.name, text=txt))
+
+    def _party_share_exp(self, killer, m):
+        """队友分经验（用户确认：每个队友拿该僵尸的 10% ✓ 和人数无关 ✓）"""
+        pid = self.party_of.get(getattr(killer, 'role_id', None))
+        if not pid:
+            return
+        share = int(round(int(m.exp) * PARTY_SHARE))
+        if share <= 0:
+            return
+        d2 = PARTY_SHARE_DIST * PARTY_SHARE_DIST
+        for q in self._party_members(pid):
+            if q is killer or int(q.hp or 0) <= 0:
+                continue
+            if (q.x - m.x) ** 2 + (q.z - m.z) ** 2 > d2:
+                continue                      # ★ 30 米外不分享（防异地蹭 ✗）
+            self._gain_exp(q, share)
+
     def _break_weapon(self, p):
         """武器耐久归零 → 损坏消失（第 59 轮 用户要求 ✓）
 
@@ -1199,29 +1450,10 @@ class World(object):
                 p.qi = min(int((p.role or {}).get('qiMax') or 100), int(p.qi) + int(_qi))
         except Exception:
             pass
-        """僵尸死了 → 给击杀者经验 → 够就升级 → 落库"""
-        role = p.role
-        role['exp'] = int(role.get('exp') or 0) + int(m.exp)
-        ups = 0
-        while ups < 100:
-            lv = int(role.get('level') or 1)
-            need = mobs.level_up_need(lv)
-            if int(role.get('exp') or 0) < need:
-                break
-            role['exp'] = int(role.get('exp') or 0) - need
-            role['level'] = lv + 1
-            ups += 1
-        level = int(role.get('level') or 1)
-        # 注意：me 是【单个对象】，不是数组 —— 客户端读的是 d.me.lv / d.me.exp ✗
-        # （踩过：一开始用 _add_pend 存成了数组，客户端拿到 d.me.lv = undefined ✗）
-        e = self._pend.get(p.cid)
-        if e is None:
-            e = self._pend[p.cid] = {}
-        e['me'] = {'lv': level, 'exp': int(role.get('exp') or 0),
-                   'need': mobs.level_up_need(level),
-                   'inv': round(p.invulnT, 2)}      # ★ 无敌剩余（第 56 轮）
-        if ups:
-            self._send_cid(p.cid, P.pack('notice', text='升到 %d 级！' % level, level=level))
+        """僵尸死了 → 给击杀者经验 → 队友分 10% → 落库"""
+        self._gain_exp(p, int(m.exp))
+        # ★★ 第 81 轮：队友分经验（用户确认：每个队友拿该僵尸的 10% ✓）★★
+        self._party_share_exp(p, m)
         self._save_role(p)
         # ★ 掉落（第 38 轮）：地上生成一件，走过去自动捡 ✓
         self._roll_loot(p, m)
