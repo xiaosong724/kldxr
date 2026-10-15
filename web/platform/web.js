@@ -1466,6 +1466,14 @@ function tabScrollInit() {
       box.style.cursor = 'grabbing';
     }
   });
+  /* ★ 第 172 轮（用户：导航可以按着不松手滑动）：
+     补两个场景 —— 手指滑出屏幕/被系统打断时，拖动状态要清掉 ✗
+     不然会"卡在拖动中" ✓ 之后点页签全都不灵 ✓ */
+  window.addEventListener('pointercancel', function () {
+    _tabDrag = null;
+    box.style.cursor = '';
+  });
+  box.addEventListener('dragstart', function (e) { e.preventDefault(); });   /* 别触发浏览器原生拖拽 ✓ */
   window.addEventListener('pointerup', function () {
     if (_tabDrag && _tabDrag.moved > 5) {
       /* ★ 拖过就不能算"点击"✗ 否则想滑一下结果切到了别的页签 ✓ */

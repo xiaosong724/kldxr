@@ -1265,8 +1265,10 @@ async function register(name, pw) {
     console.log('        [背包] 悬停提示=' + bagQ.tipShow + ' "' + bagQ.tipTxt + '"');
     console.log('        [背包] 属性栏：' + bagQ.stat0);
     ok(bagQ.tab === 'bag', '★ 菜单停在背包页（SETCFG.setTab="bag" ✓）');
-    ok(bagQ.slots >= 16 && bagQ.slots % 8 === 0,
-      '★★ 背包是格子（' + bagQ.slots + ' 个槽，8 的倍数 —— 空槽也画出来才像格子 ✓）');
+    /* 第 172 轮：7 列 × 5 行 = 每页 35 格（原来断言 8 的倍数，列数改了要跟着改）*/
+    ok(bagQ.slots >= 16 && bagQ.slots % 7 === 0,
+      '★★ 背包是格子（' + bagQ.slots + ' 个槽 = 5×7 的倍数，'
+      + '空槽也画出来才像格子 ✓）');
     ok(bagQ.withIcon >= 1 && bagQ.withIcon === bagQ.weapons,
       '★★★ 每件武器都有【图标】（' + bagQ.withIcon + '/' + bagQ.weapons + ' 个槽画出了 SVG ✓）');
     ok(bagQ.tipShow === 'block' && bagQ.tipTxt.length > 2,
