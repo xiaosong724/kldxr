@@ -630,6 +630,41 @@ class Api(BaseHTTPRequestHandler):
 
     # ---------- 静态 ----------
 
+    # ★★★ 第 143 轮：给静态文件加"构建号"★★★
+    #   为什么（用户报："同一台电脑 Edge 正常，Chrome 就是不行"）：
+    #     Chrome 缓存里存着【旧版】的 game.js ✗（那是服务器加 no-store 之前存下的 ✓）
+    #     这类条目没有校验器（没 ETag / 没 Last-Modified）✗
+    #     → Chrome 有时直接拿本地那份，根本不问服务器 ✗✓
+    #     → 表现就是：我改了代码你看不到 ✗ 你看到的和我改的对不上 ✗
+    #       （我这几轮一直在这个坑里打转 ✓ 手机/Edge 正常是因为它们的缓存是干净的 ✓）
+    #   修法：把脚本 URL 变成 /core/game.js?v=构建号 ✓
+    #     URL 一变 → 浏览器的缓存键就变了 → 必须重新下载 ✓✓ 一劳永逸 ✓
+    #   ★ 构建号 = 几个关键前端文件的最后修改时间取最大 ✓ 一改就自动变 ✓ 不用手工维护 ✓
+    def _web_build(self):
+        try:
+            root = self.cfg.get('web_root') or '.'
+            newest = 0.0
+            for rel in ('index.html', 'core/game.js', 'platform/web.js',
+                        'lib/three.min.js', 'admin.html'):
+                fp = os.path.join(root, rel.replace('/', os.sep))
+                if os.path.isfile(fp):
+                    newest = max(newest, os.path.getmtime(fp))
+            if newest <= 0:
+                return '0'
+            return str(int(newest))
+        except Exception:
+            return '0'
+
+    def _bust(self, html):
+        """把 html 里的脚本/样式引用加上 ?v=构建号 ✓（幂等 ✓ 已经有 v 的不重复加 ✓）"""
+        v = self._web_build()
+        out = html
+        for rel in ('/ws-config.js', '/lib/three.min.js', '/platform/web.js',
+                    '/core/game.js'):
+            if rel in out and (rel + '?v=') not in out:
+                out = out.replace('"' + rel + '"', '"' + rel + '?v=' + v + '"')
+        return out
+
     def static(self, path):
         root = self.cfg['web_root']
         rel = path.lstrip('/')
@@ -659,6 +694,16 @@ class Api(BaseHTTPRequestHandler):
         #   所以"管理页没有防具选项"不是服务器发旧页 ✗
         #   而是【那个标签页还是改动之前打开的】✗ → 在管理页按一下 F5 就有了 ✓
         #   ★ 我一开始在这里又加了一遍 no-cache ✗ 属于重复 ✗ 删掉 ✓
+        # ★ 第 143 轮：网页文件发出前，把脚本引用加上 ?v=构建号 ✓
+        #   （只改 html ✗ 别的文件原样发 ✓）
+        if ctype and 'text/html' in str(ctype):
+            try:
+                _txt = data.decode('utf-8')
+                _new = self._bust(_txt)
+                if _new != _txt:
+                    data = _new.encode('utf-8')
+            except Exception:
+                pass
         return self._send(200, data, ctype)
 
 
