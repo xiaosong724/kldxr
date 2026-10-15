@@ -2381,6 +2381,13 @@ function wsOnMessage(raw) {
     TAL.live = d.live || [];
     TAL.perLevel = +d.perLevel || 3;
     TAL.ready = true;
+    /* ★★ 第 117 轮：血量天赋会改生命上限 → 服务器会一并带上 hpm ✓
+       这里必须接，不然加完血量界面不动 ✗（用户一定会问"生效了吗"✗）*/
+    if (typeof d.hpm === 'number' && d.hpm > 0) {
+      HPMAX = d.hpm;
+      if (HP > HPMAX) { HP = HPMAX; }
+      updHP();
+    }
     if ((SETCFG.setTab || '') === 'talent') { talRender(); }
     return;
   }

@@ -581,6 +581,9 @@ class World(object):
         st = _tal.pack_state(lv, p.tal)
         p.talRaw = _tal.raw_of(p.tal)
         p.talEff = _tal.effective(p.talRaw)
+        # ★ 第 117 轮：血量天赋会改生命上限 → 必须一起带上 ✓
+        #   不然加完血量，界面上的血量上限不动 ✗（用户一定会问"生效了吗"✗）
+        st['hpm'] = self._hp_max(p)
         self._send_cid(p.cid, P.pack('talents', **st))
 
     def _handle_intent(self, p, t, d):
@@ -1182,7 +1185,12 @@ class World(object):
         """
         base = int((p.role or {}).get('hpMax') or 200)
         st = armormod.stats_of(p.armor)
-        return max(1, int(round((base + st['hp']) * (1.0 + st['hp_pct'] / 100.0))))
+        v = (base + st['hp']) * (1.0 + st['hp_pct'] / 100.0)
+        # ★★ 第 117 轮（方案第 4 步）：天赋血量加进来 ★★
+        #   ★ 故意加在【百分比之后】✗ 免得被防具的 hp% 二次放大 ✓
+        #     （方案 §5 第 3 条特意写了这一句 ✓）
+        v += float((p.talRaw or {}).get('hp') or 0.0)
+        return max(1, int(round(v)))
 
     def _gain_exp(self, q, amount):
         """给某个玩家加经验 → 够就升级 → 推 me（第 81 轮抽出来的 ✓）
@@ -1603,6 +1611,15 @@ class World(object):
             #   → 不然高品阶防具能把伤害压到 1 点，等于无敌 ✓
             _floor = max(1, int(round(dv * 0.10)))
             dv = max(_floor, int(round(dv - _st['dr'])))
+        # ★★ 第 117 轮（方案第 4 步）：天赋减伤 ★★
+        #   和防具的【固定减伤】不是一回事 ✗
+        #     防具 dr = 固定点数（先扣掉这么多 ✓）
+        #     天赋 dr = 百分比（按剩下的伤害按比例减 ✓）
+        #   顺序：先扣固定的 → 再打百分比 → 再吃 10% 地板 ✓
+        _tdr = float((p.talEff or {}).get('dr') or 0.0)
+        if _tdr > 0:
+            _fl2 = max(1, int(round(dv * 0.10)))     # ★ 地板按【这一步之前】的伤害算 ✓
+            dv = max(_fl2, int(round(dv * (1.0 - _tdr / 100.0))))
         # ★ 受击回灵气（词条 ✓）
         if _st['qi_hurt'] > 0:
             p.qi = min(int((p.role or {}).get('qiMax') or 100), int(p.qi) + int(_st['qi_hurt']))
@@ -1627,7 +1644,10 @@ class World(object):
         return weapons.player_atk_with(inherent, w.get('look'), coeff,
                                        w.get('tier') or 0, int(w.get('itemLv') or 1),
                                        weapons.mastery_of(w, lv),
-                                       flat=weapons.flat_full(w),    # ★ 空手 flat=0 ✓
+                                       # ★ 第 117 轮：flat 里加上【天赋攻击】✓
+                                       #   武器/词条/天赋三者是相加关系 ✓ 走同一个 flat ✓
+                                       flat=(weapons.flat_full(w) +
+                                             float((p.talRaw or {}).get('atk') or 0.0)),
                                        aff_w=w)                      # ★ 第 60 轮：词条 ✓
 
     def _intent_atk(self, p, d):
