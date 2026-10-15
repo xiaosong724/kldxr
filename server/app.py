@@ -444,15 +444,24 @@ class Api(BaseHTTPRequestHandler):
         if look not in weapons.TYPES:
             look = 'sword'
         tier = max(0, min(11, int(d.get('tier') or 0)))
+        # ★★ 第 68 轮：管理页也能发【防具】（kind='armor' ✓）★★
+        #   ★ 这里不再自己写一遍入库，而是复用下面现成的"写 items + 通知"那段 ✓
+        #     （上次我在这里调了个不存在的 _admin_deliver ✗ 和 _equipped 一个毛病 ✗）
+        _is_armor = ((d.get('kind') or '') == 'armor') or ((d.get('slot') or '') == 'armor')
+        if _is_armor:
+            import armor as armormod2
+            w = armormod2.make_armor(tier, max(1, lvl // 4 + 1))
+        else:
         # ★ 第 64 轮：支持指定词条条数（管理页的详细菜单 ✓）
         #   不传就按品阶概率抽（和正常掉落一样 ✓）
-        w = weapons.make_weapon(look, tier, weapons.roll_coeff(look), max(1, lvl // 4 + 1))
+            w = weapons.make_weapon(look, tier, weapons.roll_coeff(look), max(1, lvl // 4 + 1))
         try:
             affn = d.get('affixCount')
             if affn is not None:
                 affn = max(0, min(5, int(affn)))
                 import affixes as afmod
-                w['affixes'] = afmod.roll_affixes(tier, ('weapon',))[:affn]
+                _sl = 'armor' if _is_armor else 'weapon'   # ★ 第 68 轮：按部位抽 ✓
+                w['affixes'] = afmod.roll_affixes(tier, (_sl,))[:affn]
         except Exception:
             pass
         # ★ 第 56 轮：不再强制 reqLevel=1 ✗ —— 那会让背包显示「建议 1 级」

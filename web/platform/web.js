@@ -707,8 +707,14 @@ var MAT_ICON_BY_NAME = {
   '碎玻璃': 'glass', '灵气结晶': 'crystal', '兽骨': 'bone', '电池': 'batt',
   '疫苗': 'vial', '铜线卷': 'gear'
 };
+/* ★ 第 68 轮：防具图标（一块胸甲 ✓ 简单但一眼认得出 ✓）*/
+var ARMOR_ICON = '<svg viewBox="0 0 24 24" width="100%" height="100%">' +
+  '<path d="M6 3 L10 1 h4 l4 2 v6 c0 5 -3.6 8.4 -8 10 -4.4 -1.6 -8 -5 -8 -10 z"' +
+  ' fill="currentColor" opacity="0.9"/></svg>';
+
 function iconOfItem(it) {
   if (!it) { return ITEM_ICON.box; }
+  if (it.slot === 'armor') { return ARMOR_ICON; }
   /* ★★ 武器图标 = 那把武器的【平面微缩版】★★（用户要求）
      它不是画出来的线条，而是把同一份零件数据投影成 SVG 矩形 ——
      所以它永远长得就像手上那把 ✓ 而且换武器/改模型图标自动跟着变 ✓ */
@@ -756,6 +762,8 @@ function bagFetch(cb) {
         BAG.items = j.items || [];
         BAG.weapon = j.weapon || null;
         BAG.weaponItemId = j.weaponItemId || null;
+        BAG.armor = j.armor || null;                 // ★ 第 68 轮：防具 ✓
+        BAG.armorItemId = j.armorItemId || null;
         BAG.msg = '';
         setWeapon(BAG.weapon);           // ★ 手上的武器 → 射程/攻击弧/冷却一起换 ✓
       }
@@ -973,7 +981,9 @@ function bagRender() {
     var it = e.item || {};
     var isW = (it.slot === 'weapon');
     var col = tierHex(it.tier || 0);
-    var cur = (BAG.weaponItemId && String(e.id) === String(BAG.weaponItemId)) ? ' cur' : '';
+    // ★ 第 68 轮：防具也要能标"已装备"（不然穿上之后格子上没有绿点 ✗）
+    var cur = ((BAG.weaponItemId && String(e.id) === String(BAG.weaponItemId)) ||
+               (BAG.armorItemId && String(e.id) === String(BAG.armorItemId))) ? ' cur' : '';
     var sel = (BAG.sel && String(BAG.sel) === String(e.id)) ? ' sel' : '';
     var lowm = isW ? (wMastery(it) < 1) : false;      // 发挥不满 → 黄标（不是锁 ✓）
     var n = (e.stack || 1);
@@ -1019,13 +1029,55 @@ function bagRender() {
     eqs.setAttribute('data-w', '1');
   }
 
+  /* ★★ 第 68 轮：防具槽（用户："只有武器穿戴格子"✗）★★ */
+  var ars = document.getElementById('bagEqArmor');
+  if (ars) {
+    var ar2 = BAG.armor;
+    if (!ar2) {
+      ars.className = 'slot eqslot eqarmor empty';
+      ars.innerHTML = '<span style="opacity:.35">' + ARMOR_ICON + '</span>';
+      ars.setAttribute('data-a', '0');
+      ars.title = '没穿防具（点背包里的防具 → 使用）';
+    } else {
+      ars.className = 'slot eqslot eqarmor';
+      ars.innerHTML = '<span style="color:' + tierHex(ar2.tier || 0) + '">' +
+        iconOfItem(ar2) + '</span>' +
+        '<span class="tg">' + ((ar2.tier || 0) + 1) + '</span>' +
+        '<span class="cnt" style="bottom:-1px">减伤 ' +
+        Math.round((+((ar2.base || {}).dr) || 0)) + '</span>';
+      ars.setAttribute('data-a', '1');
+      ars.title = (ar2.name || '防具') + ' —— 点一下脱下';
+    }
+  }
+
+  /* ★ 第 68 轮：防具槽的点击（脱下）+ 悬停（看属性 ✓）*/
+  var arsEl = document.getElementById('bagEqArmor');
+  if (arsEl) {
+    arsEl.onclick = function (e) {
+      if (e) { e.preventDefault(); }
+      if (arsEl.getAttribute('data-a') !== '1') { return; }
+      bagUnequipArmor();
+    };
+    arsEl.onmousemove = function (e) {
+      var box2 = document.getElementById('bagTipBox');
+      var a2 = BAG.armor;
+      if (!box2 || !a2) { bagTipHide(); return; }
+      box2.innerHTML = '<b style="color:' + tierHex(a2.tier || 0) + '">' + (a2.name || '?') +
+        '</b><i> · ' + ((a2.tier || 0) + 1) + ' 阶 · 已装备</i>' + wStatHtml(a2, true);
+      bagTipAt(e, box2);
+    };
+    arsEl.onmouseleave = function () { bagTipHide(); };
+  }
+
   /* ---- 数值：显示【当前选中】的那件（默认 = 已装备 ✓）---- */
   var selItem = null, selIsEquipped = false;
   for (var q = 0; q < BAG.items.length; q++) {
     if (BAG.sel && String(BAG.items[q].id) === String(BAG.sel)) {
       selItem = BAG.items[q].item;
-      selIsEquipped = !!(BAG.weaponItemId &&
-                         String(BAG.weaponItemId) === String(BAG.items[q].id));
+      selIsEquipped = !!((BAG.weaponItemId &&
+                          String(BAG.weaponItemId) === String(BAG.items[q].id)) ||
+                         (BAG.armorItemId &&
+                          String(BAG.armorItemId) === String(BAG.items[q].id)));
       break;
     }
   }
@@ -1147,6 +1199,19 @@ function bagEquip(id) {
   BAG.msg = (_slot === 'armor') ? '正在穿上防具…' : '正在穿上…';
   if (!wsSend(_mtype, { itemId: id })) { BAG.busy = false; BAG.msg = '没连上服务器'; bagRender(); return; }
   // ★ 服务器的回执走 ws（notice + weapon 消息）→ 这里稍等一下重新拉一次 ✓
+  setTimeout(function () { BAG.busy = false; bagFetch(bagRender); }, 420);
+}
+
+/* ★ 第 68 轮：点防具槽 = 脱下防具 ✓（和武器槽一个手感 ✓）*/
+function bagUnequipArmor() {
+  if (!NET.on || !WSC.ready || BAG.busy) { return; }
+  if (!BAG.armor) { return; }
+  BAG.busy = true;
+  BAG.msg = '正在脱下防具…';
+  bagRender();
+  if (!wsSend('unequiparmor', {})) {
+    BAG.busy = false; BAG.msg = '没连上服务器'; bagRender(); return;
+  }
   setTimeout(function () { BAG.busy = false; bagFetch(bagRender); }, 420);
 }
 
