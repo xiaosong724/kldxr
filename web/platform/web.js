@@ -219,6 +219,25 @@ function dmg(txt, x, y, z, big) {
 /* ---------- healNum（治疗数字：绿色 + 号 ✓ 第 46 轮）----------
    ★ 用户反馈"医生的治疗效果看不出关联" —— 所以被治的僵尸头顶要弹一个绿字 ✓
      和 dmg 一套做法（core 只说"在哪个像素、写什么字"，不碰 style ✓） */
+/* ★ 第 62 轮：指定颜色的飘字（dmg 的颜色写死了 ✗ 效果文字要区分颜色 ✓）*/
+function fxNum(txt, color, x, y, z) {
+  if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
+  var v = REUSE_V3.v.set(x, y, z).project(cam);
+  var el = document.createElement('div');
+  el.textContent = txt;
+  el.style.cssText = 'position:fixed;z-index:12;font-weight:800;pointer-events:none;' +
+    'text-shadow:0 2px 5px #000;font-size:15px;color:' + color + ';' +
+    'left:' + ((v.x * 0.5 + 0.5) * innerWidth) + 'px;top:' + ((-v.y * 0.5 + 0.5) * innerHeight) + 'px;';
+  document.body.appendChild(el);
+  var t = 0;
+  (function up() {
+    t += 1;
+    el.style.top = (parseFloat(el.style.top) - 1.1) + 'px';
+    el.style.opacity = String(1 - t / 40);
+    if (t < 40) { requestAnimationFrame(up); } else { el.remove(); }
+  })();
+}
+
 function healNum(txt, x, y, z) {
   if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
   var v = REUSE_V3.v.set(x, y, z).project(cam);
@@ -1314,6 +1333,23 @@ function wsOnMessage(raw) {
   }
   /* ★ 第 47 轮：服务器告诉我「手上的武器换了」（穿上/脱下之后它主动推 ✓）
      → 本地预测的射程/攻击弧/冷却跟着换 ✓ 背包页开着的话顺手刷一下 ✓ */
+  /* ★★ 第 62 轮：武器效果的飘字 ★★
+     服务器一直在发这些（背击在 mhits 里 ✓ 其余走 fx ✓）
+     但客户端【以前根本没处理 fx】✗ → 效果发生了玩家却看不到 ✓ */
+  if (t === 'fx') {
+    var FX_C = { bleed: ['流血', '#ff7a6a'], stun: ['眩晕', '#ffd83d'],
+                 knock: ['击退', '#8ee0ff'], parry: ['招架', '#8ee0ff'] };
+    var fc = FX_C[d.kind] || ['特效', '#cfc9bf'];
+    var fx = 0, fz = 0;
+    if (d.mid && NET.rmobs && NET.rmobs[d.mid]) {
+      var rm = NET.rmobs[d.mid];
+      fx = rm.x; fz = rm.z;
+    } else {
+      fx = P.x; fz = P.z;          // 招架这种是对着自己 ✓
+    }
+    fxNum(fc[0], fc[1], fx, 2.6, fz);
+    return;
+  }
   if (t === 'dur') {
     // ★ 第 59 轮：服务器定期推耐久（不推的话界面上的条子会停在旧值 ✗）
     if (BAG.weapon) { BAG.weapon.dur = d.d; BAG.weapon.durMax = d.m; }

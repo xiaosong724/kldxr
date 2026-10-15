@@ -928,6 +928,31 @@ ok(abs(_iv - WP.BASE_INTERVAL / WP.S_MAX) < 1e-6,
    '★★ 攻速词条再离谱也被夹回上限（间隔 %.3f 秒 = 0.62/%.1f ✓）' % (_iv, WP.S_MAX))
 
 print('')
+print('== ㉔ ★ 假死修复 + 效果显示（第 62 轮）==')
+# ★ 用户报的："半个六道陷入假死，怪都不打他"
+#   根因：DB 的 hp=0 约定是"按公式满值"✓ 但 Player 初始化直接用了 0 ✗
+#         → 服务器当他是死人 → 僵尸的 live 过滤（hp>0）把他排除 → 不打他 ✗
+_pz = W.Player('z1', {'id': 9, 'name': '假死甲', 'level': 5, 'hp': 0,
+                      'qi': 0, 'x': 0, 'z': 0, 'yaw': 0})
+ok(_pz.hp > 0,
+   '★★★ DB 里 hp=0 的角色，服务器血量按【满值】算（%.0f ✓ 不再是 0 ✗ 假死）' % _pz.hp)
+_pz2 = W.Player('z2', {'id': 10, 'name': '正常乙', 'level': 5, 'hp': 137,
+                       'qi': 0, 'x': 0, 'z': 0, 'yaw': 0})
+ok(_pz2.hp == 137, '★ 真有血量的角色保持原值（137 ✓ 没被覆盖）')
+# 活人过滤要真的把他算进去
+_w9, _p9 = mk_world(0.0, 0.0)
+_p9.hp = 0
+_live = [q for q in _w9.players.values() if int(q.hp or 0) > 0]
+ok(not _live, '（对照）hp 真的是 0 时确实不算活人（所以那个 bug 才致命 ✓）')
+_p9.hp = 200
+_live2 = [q for q in _w9.players.values() if int(q.hp or 0) > 0]
+ok(len(_live2) == 1, '★ 血量补上之后马上重新被僵尸盯上（%d 个活人 ✓）' % len(_live2))
+
+# 背击倍率要让客户端算得出"额外伤害" ✓
+_fxd = WP.fx_of('dagger', 11)
+ok(_fxd['value'] > 0, '★ 背击倍率可用（+%.0f%% → 客户端算"额外 +N" ✓）' % (_fxd['value'] * 100))
+
+print('')
 if fails:
     print('FAILED: %d 条 ✗' % len(fails))
     for f in fails:

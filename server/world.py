@@ -74,7 +74,15 @@ class Player(object):
         self.z = float(role.get('z') or 0.0)
         self.yaw = float(role.get('yaw') or 0.0)
         self.ct = 0.0
+        # ★★ 第 62 轮修的真 bug：这里以前直接写 role.hp ✗
+        #   DB 的约定是【hp = 0 表示按公式满值】（见 db.py 的列注释 ✓）
+        #   但 0 传进来就是 0 → 服务器当他是个死人 ✗
+        #   → 僵尸的活人过滤（hp>0）把他排除 → 不打他 ✗（用户报的"假死"✓）
+        #   ★ 第 57 轮我去掉"客户端上报 hp"之后才暴露：
+        #     以前客户端每个移动包都把 200 推上来，正好盖住了这个 0 ✓
         self.hp = int(role.get('hp') or 0)
+        if self.hp <= 0:
+            self.hp = int(role.get('hpMax') or 200)
         self.qi = int(role.get('qi') or 0)
         self.atk = 0
         self.atkT = 0.0          # ★ 挥刀冷却（服务器自己也算一份，防连点刷伤害）
@@ -920,6 +928,7 @@ class World(object):
 
             # ★ 匕首【背击】：从背后打 +X%（僵尸是背对着你 ✓）
             back = False
+            backMul = 1.0
             if fx and fx['name'] == '背击':
                 # 僵尸的朝向 vs 我从它哪边来：夹角 > 90° = 我在它背后 ✓
                 dx, dz = p.x - m.x, p.z - m.z
@@ -931,6 +940,7 @@ class World(object):
                 if abs(fa) > math.pi * 0.5:
                     atk *= (1.0 + fx['value'])
                     back = True
+                    backMul = 1.0 + fx['value']
 
             dv, crit = mobs.roll_damage(atk, crit_pt=_T.get('crit_pt', 0.0),
                                         crit_dmg=_T.get('crit_dmg', 0.0))
@@ -943,6 +953,8 @@ class World(object):
             m.hp -= dv
             self._add_pend(p.cid, 'mhits', {'mid': m.mid, 'dmg': dv, 'crit': bool(crit),
                                             'block': blocked, 'back': back,
+                                            # ★ 第 62 轮：背击倍率 → 客户端能算出"额外打了多少"✓
+                                            'mb': round(backMul, 2) if back else None,
                                             'x': round(m.x, 2), 'z': round(m.z, 2)})
 
             # ★★ 第 60 轮：吸血词条 —— 按造成的伤害回血 ✓

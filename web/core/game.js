@@ -1787,8 +1787,17 @@ function wsApplyWorld(d) {
     var edv = Math.round(+e2.dmg || 0);
     if (edv <= 0) { continue; }
     // ★ 保安格挡了会在数字后面标出来（第 40 轮）—— 玩家得知道为什么这一刀不疼 ✓
-    var etxt = String(edv) + (e2.crit ? ' 暴击' : '') + (e2.block ? ' 格挡' : '');
+    // ★★ 第 62 轮：武器效果也标出来（不然玩家不知道那一下为什么特别疼 ✓）★★
+    //   · 背击：还要单独飘一个【额外伤害】（用户要求"应该要显示额外伤害"✓）
+    //   · 溅射：标出来，玩家才知道这一刀顺带打了旁边的 ✓
+    var etxt = String(edv) + (e2.crit ? ' 暴击' : '') + (e2.block ? ' 格挡' : '') +
+               (e2.back ? ' 背击' : '') + (e2.splash ? ' 溅射' : '');
     dmg(etxt, +e2.x, 2.4, +e2.z, !!e2.crit);
+    if (e2.back && +e2.mb > 1.0) {
+      // 额外 = 总额 - 不背击时的那一份（服务器给了倍率 ✓ 客户端不用自己猜公式 ✓）
+      var extra = Math.max(1, Math.round(edv - edv / (+e2.mb)));
+      fxNum('额外 +' + extra, '#ffd83d', +e2.x, 2.9, +e2.z);
+    }
     if (q2 === 0) {
       sfx(e2.crit ? 'crit' : 'hit', 1.0);
       sfx('zhurt', 0.7);

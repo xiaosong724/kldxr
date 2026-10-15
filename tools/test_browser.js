@@ -1334,6 +1334,28 @@ async function register(name, pw) {
       's < 劈 ' + tmQ.chop + 's ✓ 匕首秒收、斧头收招慢 ✓）');
     await A.eval('heroAtkReset(H, P.x, P.z, P.yaw); return 1;');
 
+    /* ★★ 第 62 轮：武器效果的视觉反馈 ★★
+       用户："武器的效果也有加效果显示吗，例如背后攻击，应该要显示额外伤害"
+       ★ 以前服务器一直在发 fx，但客户端【根本没处理】✗ → 效果发生了却看不到 */
+    const fxQ = JSON.parse(await A.eval(
+      'var before = document.querySelectorAll("body > div").length;' +
+      'fxNum("背击", "#ffd83d", P.x, 2.4, P.z);' +
+      'fxNum("额外 +37", "#ffd83d", P.x, 2.9, P.z);' +
+      'fxNum("流血", "#ff7a6a", P.x, 2.6, P.z);' +
+      'var after = document.querySelectorAll("body > div").length;' +
+      'var found = 0;' +
+      'var all = document.querySelectorAll("body > div");' +
+      'for (var i = 0; i < all.length; i++) {' +
+      '  var tx2 = all[i].textContent || "";' +
+      '  if (tx2 === "背击" || tx2 === "额外 +37" || tx2 === "流血") { found++; } }' +
+      'return JSON.stringify({ fn: typeof fxNum, added: after - before, found: found });'
+    ) || '{}');
+    console.log('        [效果] fxNum=' + fxQ.fn + ' 飘字新增 ' + fxQ.added +
+      ' 个 · 找到 ' + fxQ.found + ' 个关键字');
+    ok(fxQ.fn === 'function', '★★ 有【带颜色的飘字】函数（fxNum ✓ 效果文字要能区分颜色）');
+    ok(fxQ.found >= 3, '★★★ 效果文字真的飘出来了（背击 / 额外 +N / 流血 ✓ ' +
+      '用户要的"显示额外伤害"✓）');
+
     /* ★★ 第 57 轮：其它玩家的倒地姿态 ★★
        用户报："死亡的动画没有做服务器同步，别的玩家看不到，别人看你死亡依旧是站立的"
        → 服务器快照加了 'd'（hp<=0 就是 1）✓ 客户端按 o.dead 摆成躺地 ✓
