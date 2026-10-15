@@ -28,6 +28,7 @@ import affixes
 import armor as armormod
 import drops
 import mobs
+import mq as mqmod      # ★ 第 149 轮：魔气规则中心 ✓
 import weapons
 import worldgen
 import protocol as P
@@ -98,7 +99,8 @@ class Player(object):
                  # ★ 第 114 轮：天赋（方案§6 → 内存字段 ✓）
                  #   tal=已投点数 talRaw=原始值 talEff=有效值（过完上限 ✓）
                  #   ★ tick 线程只读这三个 ✗ 从不碰 DB ✗（铁律 ✓）
-                 'tal', 'talRaw', 'talEff', 'talDirty', 'resetT')
+                 'tal', 'talRaw', 'talEff', 'talDirty', 'resetT',
+                 'mq', 'mqAt')   # ★ 第 149 轮：魔气值 ✓
 
     def __init__(self, cid, role):
         self.cid = cid
@@ -136,6 +138,9 @@ class Player(object):
         self.talEff = _tal2.effective(self.talRaw)
         self.talDirty = False
         self.resetT = 0.0
+        # ★ 第 149 轮：魔气值（登录时已经算过自然衰减了 ✓）
+        self.mq = int(role.get('mq') or 0)
+        self.mqAt = int(role.get('mqAt') or 0)
         _ar0 = self.armor or {}
         self.aDur = int(_ar0.get('dur') or 0)
         self.aDurMax = int(_ar0.get('durMax') or 0)
@@ -1834,7 +1839,12 @@ class World(object):
         coeff = float(base.get('coeff') or 1.0)
         # ★ 第 51 轮：用【物品自己的等级】算平伤加成 ✓（原来错用了玩家等级 ✗）
         # ★ 第 53 轮：等级不够不是"不能装"，而是【发挥度打折】✓
-        return weapons.player_atk_with(inherent, w.get('look'), coeff,
+        # ★★ 第 149 轮：魔气加成 —— 只加在这一处 ✗ 别处不动 ✓
+        #   最终攻击 = 原来的攻击 × (1 + 魔气加成)
+        #   ★ 意思是：固有 + 武器 + 词条 + 天赋 先加完 ✓ 最后乘魔气 ✗
+        #     → 魔气不会被别的加成二次放大 ✓（和方案 §4.1 一致 ✓）
+        #   ★ 打怪也算 ✓（用户确认 ✓）—— 因为打怪也走这个函数 ✓
+        _atk0 = weapons.player_atk_with(inherent, w.get('look'), coeff,
                                        w.get('tier') or 0, int(w.get('itemLv') or 1),
                                        weapons.mastery_of(w, lv),
                                        # ★ 第 117 轮：flat 里加上【天赋攻击】✓
@@ -1842,6 +1852,8 @@ class World(object):
                                        flat=(weapons.flat_full(w) +
                                              float((p.talRaw or {}).get('atk') or 0.0)),
                                        aff_w=w)                      # ★ 第 60 轮：词条 ✓
+        # ★ 注意是 p.mq ✗ 不是 self.mq ✓（self 是 World ✓ 玩家是 p ✓ 我第一版写成 self ✗ 已修 ✓）
+        return _atk0 * (1.0 + mqmod.dmg_bonus_pct(p.mq) / 100.0)
 
     def _intent_atk(self, p, d):
         """玩家挥了一刀 —— ★★ 服务器算伤害（客户端只报"我挥了"，不报打中谁）★★

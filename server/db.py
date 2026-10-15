@@ -13,7 +13,7 @@ import time
 
 # ============================================================ 版本与迁移
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3   # ★ 第 149 轮：魔气值（迁移 v3 在下面 MIGRATIONS 定义之后）
 
 # 每个版本一组 SQL。**新版本往后追加，不要改历史版本** ✓
 MIGRATIONS = {
@@ -50,6 +50,9 @@ MIGRATIONS = {
             z             REAL    NOT NULL DEFAULT 0,
             yaw           REAL    NOT NULL DEFAULT 0,
             talent_free   INTEGER NOT NULL DEFAULT 0,       -- 未分配天赋点
+            -- ★ 第 149 轮：魔气值（方案 docs/魔气与PVP夺取方案.md §8.1）
+            mq            INTEGER NOT NULL DEFAULT 0,       -- 魔气值
+            mq_at         INTEGER NOT NULL DEFAULT 0,       -- 上次自然衰减的结算时刻（毫秒）
             created_at    INTEGER NOT NULL,
             updated_at    INTEGER NOT NULL
         )""",
@@ -239,6 +242,19 @@ def db(cfg):
 
 def current_version(c):
     return int(c.execute('PRAGMA user_version').fetchone()[0])
+
+
+# ★ ★ 第 149 轮：魔气值——老库补两列 ★★
+#   ★ 为什么不能只改建表语句：
+#     CREATE TABLE IF NOT EXISTS 对【已经存在】的表什么都不做 ✗
+#     → 老库永远不会有 mq/mq_at → 一读就报 no such column ✗
+#   ★ SQLite 的 ALTER TABLE ADD COLUMN 重复执行会报错 ✗
+#     而迁移是按 user_version 走的 ✓ 只会跑一次 ✓ 所以直接 ALTER 是安全的 ✓
+#   ★ 我第一版把它插在 MIGRATIONS 定义之前 ✗ → NameError ✗（已修 ✓）
+MIGRATIONS[3] = [
+    "ALTER TABLE roles ADD COLUMN mq    INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE roles ADD COLUMN mq_at INTEGER NOT NULL DEFAULT 0",
+]
 
 
 def ensure_tables(cfg):

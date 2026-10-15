@@ -159,6 +159,23 @@ class Net(object):
                 role['armorItemId'] = _aid
             # ★ 第 114 轮：天赋也在这里装载 ✓（方案 §5 第 1 条 ✓）
             #   role['talents'] = {stat: points} ✓ role['talentFree'] = 推导值 ✓
+            # ★ 第 149 轮：魔气值 —— 登录时装载 + 算一次自然衰减 ✓
+            #   ★ 衰减就在这里算（用“上次结算时刻”现算 ✓）
+            #     离线 10 小时回来 → 自动掉 10 点 ✓ 不需要任何定时器 ✓
+            import mq as _mq
+            _mq_now = dbmod.now_ms()
+            _mq_v, _mq_at = _mq.settle(role.get('mq'), role.get('mq_at'), _mq_now)
+            role['mq'] = _mq_v
+            role['mqAt'] = _mq_at
+            if int(role.get('mq_at') or 0) != _mq_at:
+                # 衰减真的发生了 → 落库 ✓（没变就不写 ✗ 省一次 IO ✓）
+                try:
+                    with dbmod.db(self.cfg) as _c:
+                        _c.execute('UPDATE roles SET mq=?, mq_at=? WHERE id=?',
+                                   (_mq_v, _mq_at, role.get('id')))
+                        _c.commit()
+                except Exception:
+                    pass
             import talents as _tal
             _tp = authmod2.talents_of(self.cfg, role.get('id'))
             role['talents'] = _tp
