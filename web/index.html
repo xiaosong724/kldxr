@@ -284,6 +284,7 @@
    <div class="tab" data-tab="bag">背包</div>
    <div class="tab" data-tab="party">组队</div>
    <div class="tab" data-tab="stat">属性</div>
+   <div class="tab" data-tab="talent">天赋</div>
    <div class="tab on" data-tab="view">画面</div>
    <div class="tab" data-tab="ctrl">操作</div>
    <div class="tab" data-tab="audio">音效</div>
@@ -328,6 +329,19 @@
 
   <!-- ★★ 第 83 轮：组队（独立页）★★ 上：我的队伍 · 中：待处理 · 下：大厅 -->
   <!-- ★★ 第 113 轮：玩家属性页（用户要求）★★ -->
+  <!-- ★★ 第 116 轮：天赋页（方案 §8）★★ -->
+  <div class="tabpane" data-pane="talent">
+   <div class="ptLine" style="justify-content:space-between">
+     <span>天赋点 <b id="talFree" style="color:#ffd83d;font-size:15px">0</b>
+       <span class="bagTip">每级 +3 点 · 加点不要道具 · 不限地点</span></span>
+     <button class="bagB" id="talReset">洗 点</button>
+   </div>
+   <div id="talList"></div>
+   <div class="bagTip" style="margin-top:6px">
+     ★ 上限只管【有效值】，投入点数无上限 ✓ 标"待 PvP"的现在不生效，但能加能存 ✓
+   </div>
+  </div>
+
   <div class="tabpane" data-pane="stat">
    <div class="setLabel">人物</div>
    <div id="stSelf"></div>

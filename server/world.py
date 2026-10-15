@@ -186,6 +186,7 @@ class World(object):
         self.lobby_stat = {'players': [], 'parties': []}   # tick 发布 ✓ HTTP 只读 ✓
         self._lobby_acc = 0.0
         self._save_acc = 0.0   # ★ 第 109 轮：定时存盘用 ✓
+        self.talent_rate = {}   # ★ 第 116 轮：加点限流（长按会刷屏 ✗）
         self._arrow_id = 0                  # mid -> mobs.Mob（P2：僵尸也归 tick 线程独占 ✓）
         self.mob_seq = 0
         self.loot = {}                  # lid -> {'x','z','item','ttl'}（P2 第二刀：地上掉的 ✓）
@@ -301,6 +302,10 @@ class World(object):
             # ★★ 第 102 轮：进世界时主动告诉他【穿着的防具 + 有效血量上限】★★
             #   不然客户端登录后不知道上限（它那边原来是写死的 200 ✗）
             #   → 表现就是"穿了防具血量没变化"✓
+            try:
+                self._tal_send(_np)      # ★ 第 116 轮：进世界先把天赋状态告诉他 ✓
+            except Exception:
+                pass
             try:
                 if getattr(_np, 'armor', None):
                     self._send_cid(conn.cid, P.pack('armor', a=_np.armor,
@@ -504,6 +509,80 @@ class World(object):
             self._admin_acc = 0
             self._publish_admin()
 
+    def _talent_op(self, p, d):
+        """天赋加点 / 洗点（方案 §7.1 · 第 116 轮）
+
+        ★ 三个校验缺一不可（方案 §7 明写 ✓）：
+            ① stat 白名单   防刷不存在的属性
+            ② n 范围 1~50   防一次刷爆
+            ③ n ≤ 免费点数  防刷成负数
+        ★ 限流 10 次 / 10 秒：界面上是"按住连加"✗ 不挡会打满 tick ✗
+        ★ 落库用 post_save（saver 线程写 ✓）tick 线程不碰 DB ✓（铁律 ✓）
+        """
+        import talents as _tal
+        now = now_s()
+        op = str(d.get('op') or '')
+
+        # ---- 限流 ----
+        lst = self.talent_rate.get(p.role_id) or []
+        lst = [x for x in lst if now - x < 10.0]
+        if len(lst) >= 10:
+            self._send_cid(p.cid, P.pack('notice', text='点太快了，歇一下再点 ✓'))
+            return
+        lst.append(now)
+        self.talent_rate[p.role_id] = lst
+
+        lv = int((p.role or {}).get('level') or 1)
+
+        if op == 'reset':
+            # ---- 洗点（v1 免费 + 5 分钟冷却 ✓ 方案 §3.4）----
+            left = 300.0 - (now - float(p.resetT or 0.0))
+            if p.resetT and left > 0:
+                self._send_cid(p.cid, P.pack(
+                    'notice', text='洗点冷却中，还得等 %d 秒' % int(left + 0.9)))
+                return
+            p.resetT = now
+            p.tal = {}
+            p.talDirty = True
+            self.post_save('DELETE FROM talents WHERE role_id=?', (p.role_id,))
+            self._tal_send(p)
+            self._send_cid(p.cid, P.pack('notice', text='已洗点，天赋点全部返还 ✓'))
+            return
+
+        if op != 'add':
+            return
+
+        # ---- 加点 ----
+        stat = str(d.get('stat') or '')
+        if stat not in _tal.KEYS:                 # ① 白名单
+            return
+        try:
+            n = int(d.get('n') or 1)
+        except Exception:
+            n = 1
+        n = max(1, min(50, n))                    # ② 范围
+        free = _tal.free_points(lv, p.tal)
+        if n > free:                              # ③ 不许超
+            self._send_cid(p.cid, P.pack('notice', text='天赋点不够了 ✓'))
+            return
+
+        p.tal[stat] = int(p.tal.get(stat) or 0) + n
+        p.talDirty = True
+        cur = p.tal[stat]
+        self.post_save('INSERT INTO talents(role_id, stat, points) VALUES(?,?,?) '
+                       'ON CONFLICT(role_id, stat) DO UPDATE SET points=excluded.points',
+                       (p.role_id, stat, cur))
+        self._tal_send(p)
+
+    def _tal_send(self, p):
+        """把天赋状态推给客户端（加点/洗点/升级/进世界 都要发 ✓ 方案 §7.2）"""
+        import talents as _tal
+        lv = int((p.role or {}).get('level') or 1)
+        st = _tal.pack_state(lv, p.tal)
+        p.talRaw = _tal.raw_of(p.tal)
+        p.talEff = _tal.effective(p.talRaw)
+        self._send_cid(p.cid, P.pack('talents', **st))
+
     def _handle_intent(self, p, t, d):
         if t == 'move':
             p.x = _f(d.get('x'), p.x)
@@ -530,6 +609,8 @@ class World(object):
             if txt:
                 self._to_net(self._broadcast, P.pack_str(
                     'chat', {'from': p.name, 'text': txt, 'ch': d.get('ch') or 'world'}))
+        elif t == 'talent':
+            self._talent_op(p, d)          # ★ 第 116 轮：天赋加点 ✓
         elif t == 'atk':
             self._intent_atk(p, d)
         elif t == 'pick':
@@ -1128,6 +1209,10 @@ class World(object):
         e = self._pend.get(q.cid)
         if e is None:
             e = self._pend[q.cid] = {}
+        try:
+            self._tal_send(q)     # ★ 第 116 轮：升级了点数会变 → 必须重推 ✗（方案 §7.2）
+        except Exception:
+            pass
         e['me'] = {'lv': level, 'exp': int(role.get('exp') or 0),
                    'need': mobs.level_up_need(level),
                    'inv': round(q.invulnT, 2),

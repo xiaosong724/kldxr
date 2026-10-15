@@ -728,6 +728,91 @@ function stRow(k, v, note) {
     '</span><b style="color:#8ee0ff">' + v + '</b>' +
     (note ? '<span class="bagTip">' + note + '</span>' : '') + '</div>';
 }
+/* ★★ 第 116 轮：天赋页（方案 §7.2 + §8）★★
+   ★ 12 个属性表的【中文名和顺序】从服务器发来的 raw/pts 里推不出来 ✗
+     所以这里带一份"显示用"的对照表 ✓
+     （数值规则仍然只有服务器一份 ✓ 这里只管显示 ✓ 不参与计算 ✓）*/
+var TAL = { free: 0, pts: {}, raw: {}, eff: {}, live: [], perLevel: 3, ready: false };
+var TAL_META = [
+  ['hp', '血量', '点'], ['atk', '攻击力', '点'],
+  ['dr', '减伤', '%'], ['speed', '移速', '%'],
+  ['qi', '灵气', '点'], ['mana', '法力', '点'],
+  ['crit', '暴击', '%'], ['anticrit', '免爆', '%'],
+  ['dodge', '闪避', '%'], ['hit', '命中', '%'],
+  ['critdmg', '爆伤', '%'], ['pen', '穿透', '%']
+];
+function talRow(k, nm, unit) {
+  var pts = TAL.pts[k] || 0;
+  var raw = TAL.raw[k] || 0;
+  var eff = (typeof TAL.eff[k] === 'number') ? TAL.eff[k] : raw;
+  var live = TAL.live.indexOf(k) >= 0;
+  /* ★ 对抗类显示【原始值 → 有效值】✗
+     否则玩家堆到 40% 却看到 30%，会以为点数白花了 ✗（方案 §8.4）*/
+  var show = (unit === '%')
+    ? ((Math.abs(raw - eff) > 0.01)
+        ? (raw.toFixed(1) + '% → <b style="color:#ffd83d">' + eff.toFixed(1) + '%</b>')
+        : (eff.toFixed(1) + '%'))
+    : (Math.round(eff) + ' 点');
+  return '<div class="ptLine" style="justify-content:space-between">' +
+    '<span style="min-width:74px">' + nm + (live ? '' :
+      ' <span class="bagTip" style="color:#9aa4b2">待PvP</span>') + '</span>' +
+    '<span style="min-width:96px;text-align:right;color:#8ee0ff">' + show + '</span>' +
+    '<span class="bagTip" style="min-width:52px;text-align:right">' + pts + ' 点投</span>' +
+    '<button class="bagB talB" data-k="' + k + '" data-n="-1"' +
+      (pts > 0 ? '' : ' disabled') + '>−</button>' +
+    '<button class="bagB talB" data-k="' + k + '" data-n="1"' +
+      (TAL.free > 0 ? '' : ' disabled') + '>+</button>' +
+    '</div>';
+}
+function talRender() {
+  var el = document.getElementById('talList');
+  if (!el) { return; }
+  var free = document.getElementById('talFree');
+  if (free) {
+    free.textContent = TAL.free;
+    /* ★ 有未花点数时金色提醒 ✓（方案 §8.0 第二个入口）*/
+    free.style.color = TAL.free > 0 ? '#ffd83d' : '#9aa4b2';
+  }
+  var out = [];
+  for (var i = 0; i < TAL_META.length; i++) {
+    out.push(talRow(TAL_META[i][0], TAL_META[i][1], TAL_META[i][2]));
+  }
+  el.innerHTML = out.join('');
+}
+function talSend(op, stat, n) {
+  if (!NET.on || !WSC.ready) { return; }
+  wsSend('talent', { op: op, stat: stat, n: n || 1 });
+}
+function talBind() {
+  var el = document.getElementById('talList');
+  if (el && !el._b) {
+    el._b = true;
+    el.addEventListener('click', function (e) {
+      var b = e.target;
+      if (!b || !b.getAttribute || !b.getAttribute('data-k')) { return; }
+      var k = b.getAttribute('data-k');
+      var n = +b.getAttribute('data-n') || 1;
+      /* ★ 乐观更新 ✓ 先改数字再发协议 ✗
+         （点了没反应是玩家最恨的 ✗ 服务器回执到了会直接覆盖 ✓）*/
+      if (n > 0) { if (TAL.free <= 0) { return; } TAL.free -= 1; }
+      else { if ((TAL.pts[k] || 0) <= 0) { return; } TAL.pts[k] -= 1; }
+      talRender();
+      talSend('add', k, n);
+    });
+  }
+  var rb = document.getElementById('talReset');
+  if (rb && !rb._b) {
+    rb._b = true;
+    rb.addEventListener('click', function () { talSend('reset', '', 1); });
+  }
+  /* ★ 左上角那行"天赋点 N"可以点 ✓（方案 §8.0 第二个入口）*/
+  var u = document.getElementById('uStat');
+  if (u && !u._b) {
+    u._b = true;
+    u.style.cursor = 'pointer';
+    u.addEventListener('click', function () { openSet(); setTab('talent'); talRender(); });
+  }
+}
 function statRender() {
   var r = WSC.role || {};
   var lv = r.level || 1;
@@ -1177,7 +1262,8 @@ function openSet(wantTab) {
   if (wantTab) { setTab(wantTab); }
   ptBind();                                   // ★ 第 83 轮：组队页绑定 ✓
   if ((SETCFG.setTab || '') === 'party') { lobbyFetch(ptRender); }
-  if ((SETCFG.setTab || '') === 'stat') { statRender(); }   // ★ 第 113 轮：属性页 ✓
+  if ((SETCFG.setTab || '') === 'stat') { statRender(); }
+  if ((SETCFG.setTab || '') === 'talent') { talBind(); talRender(); }   // ★ 第 113 轮：属性页 ✓
   if ((SETCFG.setTab || '') === 'bag') { bagFetch(bagRender); }   // 打开时拉一次背包 ✓
   mkOpts('rowDpr', [{ v: 1.0, t: '1.0x', s: '省' }, { v: 1.5, t: '1.5x', s: '较快' },
                     { v: 2.0, t: '2.0x', s: '清晰' }, { v: 2.5, t: '2.5x', s: '很清晰' },
@@ -1322,6 +1408,7 @@ function openSet(wantTab) {
   tabScrollInit();   // ★ 第 115 轮：菜单导航可拖动/滚轮横滑 ✓
   setTab(SETCFG.setTab || 'view');
   if ((SETCFG.setTab || '') === 'stat') { statRender(); }
+  if ((SETCFG.setTab || '') === 'talent') { talBind(); talRender(); }
 }
 
 /* ============================================================
@@ -2284,6 +2371,17 @@ function wsOnMessage(raw) {
   }
   if (t === 'partychat') {
     fxNum('[队伍] ' + (d.name || '?') + '：' + (d.text || ''), '#8ee0ff', P.x, 2.8, P.z);
+    return;
+  }
+  if (t === 'talents') {          // ★ 第 116 轮：天赋状态 ✓
+    TAL.free = +d.free || 0;
+    TAL.pts = d.pts || {};
+    TAL.raw = d.raw || {};
+    TAL.eff = d.eff || {};
+    TAL.live = d.live || [];
+    TAL.perLevel = +d.perLevel || 3;
+    TAL.ready = true;
+    if ((SETCFG.setTab || '') === 'talent') { talRender(); }
     return;
   }
   if (t === 'armor') {

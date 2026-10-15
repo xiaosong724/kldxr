@@ -63,6 +63,11 @@ C2S = {
         'req': ['id'], 'opt': [],
         'doc': '捡地上掉的（P2 第二刀）。★ 服务器会再判一次距离，客户端说捡到了不算数',
     },
+    # ★ 第 116 轮：天赋加点（方案 docs/天赋方案.md §7.1）
+    'talent': {
+        'req': ['op'],              # 'add' | 'reset'
+        'opt': ['stat', 'n'],       # stat=12 个 key 之一 · n=1~50
+    },
     'party': {
         'req': ['op'], 'opt': ['cid', 'text'],
         'doc': '队伍操作（op=invite/accept/decline/leave/kick/promote/disband/chat）',
