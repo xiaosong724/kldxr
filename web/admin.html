@@ -341,6 +341,26 @@ function kpi(label, val) {
   return '<div class="kpi"><b>' + val + '</b><s>' + label + '</s></div>';
 }
 
+/* ★★★ 第 138 轮修的真问题（用户："玩家列表是不是在一直刷新，这样我没办法改"）★★★
+   病根：刷新定时器每 1.5 秒调一次 refresh() ✗
+        而 refresh() 是【整个重建列表的 innerHTML】✗
+        → 你正在选的下拉框、正在填的数字框，下一秒就被重建掉了 ✓✓
+        → 表现就是"根本改不了"✗（点了它又跳回去 ✓）
+   修：只要用户在跟列表交互，就【跳过这一轮刷新】✗
+     ① 焦点在列表里（正在点下拉/填数字）✓
+     ② 鼠标停在列表上 ✓（准备点、还在犹豫 ✓）
+   ★ 为什么不做成"只更新变化的那几行"✗
+     那是更彻底的改法 ✓ 但要动渲染逻辑 ✗ 现在这个改法改动最小、最不容易出新 bug ✓
+     （而且刷新频率 1.5 秒 → 保留 ✓ 别的地方还要靠它实时看状态 ✓）*/
+window._rowsHover = false;
+function busyInList() {
+  try {
+    var a = document.activeElement;
+    if (a && a.closest && a.closest('#rows')) { return true; }
+  } catch (e) { }
+  return !!window._rowsHover;
+}
+
 function refresh() {
   if (!TOKEN) { return; }
   api('/api/admin/status').then(function (r) {
@@ -445,6 +465,19 @@ $('rows').onclick = function (e) {
 $('pgPrev').onclick = function () { if (PAGE > 1) { PAGE--; refresh(); } };
 $('pgNext').onclick = function () { if (PAGE < PAGES) { PAGE++; refresh(); } };
 $('showTest').onchange = function () { SHOW_TEST = this.checked; PAGE = 1; refresh(); };
+
+/* ★ 第 138 轮：鼠标停在玩家列表上时，自动刷新让路 ✓ */
+(function () {
+  var rows = $('rows');
+  if (!rows) { return; }
+  rows.addEventListener('mouseenter', function () { window._rowsHover = true; });
+  rows.addEventListener('mouseleave', function () { window._rowsHover = false; });
+  /* ★ 触屏没有 hover ✗ 所以再补一条：手指按在列表上也算 ✓ */
+  rows.addEventListener('touchstart', function () { window._rowsHover = true; }, { passive: true });
+  rows.addEventListener('touchend', function () {
+    setTimeout(function () { window._rowsHover = false; }, 1200);
+  }, { passive: true });
+})();
 $('btnClean').onclick = function () {
   if (confirm('【不可恢复】删掉所有【离线】的测试账号？' + String.fromCharCode(10) +
               '（名字里含测试关键词的 ✓ 在线的一个都不动 ✓）')) { act('delTest', {}); }
@@ -501,6 +534,11 @@ function delPlayer(n) {
 
 /* 开局：有 token 就直接进面板（过期的话第一次刷新会踢回登录 ✓） */
 if (TOKEN) { showPanel(true); refresh(); }
-setInterval(function () { if (TOKEN && !document.hidden) { refresh(); } }, 1500);
+/* ★ 第 138 轮：① 用户在操作列表时不刷 ✗ ② 间隔 1.5 → 3 秒（少打扰 ✓）*/
+setInterval(function () {
+  if (!TOKEN || document.hidden) { return; }
+  if (busyInList()) { return; }        // ← 你正在改，就别重画 ✓
+  refresh();
+}, 3000);
 </script>
 </body></html>
