@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>防具图标候选 第二期</title>
+<style>
+  body{background:#141a22;color:#e8eef6;font:14px/1.6 -apple-system,"Microsoft YaHei",sans-serif;
+       margin:0;padding:16px}
+  h1{font-size:17px;margin:0 0 2px}
+  .tip{opacity:.7;font-size:12px;margin-bottom:12px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .card{background:#1b2430;border:1px solid #ffffff22;border-radius:12px;padding:12px;text-align:center}
+  .big{width:76px;height:76px;margin:0 auto 6px;display:block}
+  .slotrow{display:flex;align-items:center;justify-content:center;gap:14px;margin:6px 0}
+  .slot{position:relative;width:44px;height:44px;border-radius:8px;border:1px solid #ffffff33;
+        display:flex;align-items:center;justify-content:center}
+  .slot svg{width:32px;height:32px}
+  .tg{position:absolute;left:2px;top:0;font-size:11px;font-weight:700;color:#9aa4b2}
+  .nm{font-weight:700;font-size:13px}
+  .ds{opacity:.7;font-size:11px;line-height:1.45;margin-top:2px}
+  .c1{color:#9aa4b2} .c2{color:#c8b6ff} .c3{color:#8ee0ff} .c4{color:#ffd83d}
+  .c5{color:#7ee08a} .c6{color:#ff9a7a}
+</style>
+</head>
+<body>
+<h1>防具图标候选 · 第二期（6 款）</h1>
+<div class="tip">每款都画了两个格子：左边=低阶（灰）· 右边=高阶（品阶色 + 发光）✓ 挑编号告诉我就行</div>
+<div class="grid" id="grid"></div>
+<script>
+var C = {
+  A: { n: '① 反甲（荆棘向）', d: '板甲 + 全身倒刺。挨打就扎回去的那种气质', c: 'c1', svg:
+    '<path d="M8 3.4 h8 l4.6 2.2 -0.5 4.4 -2.5 -0.7 V20 H6.4 V9.3 l-2.5 0.7 -0.5 -4.4 z" fill="currentColor" opacity=".9"/>' +
+    '<path d="M4.2 3.6 l-2.6 -1.4 0.9 3.1 z M19.8 3.6 l2.6 -1.4 -0.9 3.1 z M12 7.6 l-1.4 2.4 1.4 2.2 1.4 -2.2 z"' +
+    ' fill="currentColor" opacity=".95"/>' +
+    '<path d="M6.6 13.6 l-1.8 1.2 1.8 1.2 z M17.4 13.6 l1.8 1.2 -1.8 1.2 z"' +
+    ' fill="currentColor" opacity=".95"/>' },
+  B: { n: '② 重装骑士', d: '宽肩甲 + 厚胸甲 + 腰带 + 铆钉。最"正规军"的一款', c: 'c2', svg:
+    '<path d="M8.2 2.6 h7.6 l4.4 2.4 -0.7 4.6 -2.5 -0.8 V20.4 H7 V8.8 l-2.5 0.8 -0.7 -4.6 z" fill="currentColor" opacity=".92"/>' +
+    '<path d="M6.8 14.6 h10.4 v2.2 H6.8 z" fill="#000" opacity=".25"/>' +
+    '<path d="M9.4 2.8 L12 6.4 L14.6 2.8" stroke="#000" stroke-opacity=".26" stroke-width="1.1" fill="none"/>' +
+    '<circle cx="12" cy="11" r="1.5" fill="#000" opacity=".26"/>' +
+    '<circle cx="6" cy="5" r="0.7" fill="#000" opacity=".3"/><circle cx="18" cy="5" r="0.7" fill="#000" opacity=".3"/>' +
+    '<circle cx="8.4" cy="17.4" r="0.6" fill="#000" opacity=".3"/><circle cx="15.6" cy="17.4" r="0.6" fill="#000" opacity=".3"/>' },
+  C: { n: '③ 灵纹甲', d: '胸甲 + 中央灵纹环 + 上下符线。修仙味最足', c: 'c3', svg:
+    '<path d="M8.4 3 h7.2 l4.4 2.2 -0.6 4.4 -2.4 -0.7 V20.2 H7 V8.9 l-2.4 0.7 -0.6 -4.4 z" fill="currentColor" opacity=".88"/>' +
+    '<circle cx="12" cy="11.2" r="3.4" fill="none" stroke="#000" stroke-opacity=".38" stroke-width="1.2"/>' +
+    '<circle cx="12" cy="11.2" r="1.3" fill="#000" opacity=".34"/>' +
+    '<path d="M12 3.6 v4 M12 14.8 v4.4" stroke="#000" stroke-opacity=".32" stroke-width="1.1"/>' +
+    '<path d="M7.6 6.4 l-2 0.8 M16.4 6.4 l2 0.8" stroke="#000" stroke-opacity=".3" stroke-width="1.1"/>' },
+  D: { n: '④ 披风 + 肩甲', d: '大氅罩身 + 两片肩甲。看着最"人"、不像一块铁', c: 'c5', svg:
+    '<path d="M12 2.4 c3.2 0 6 2.2 6 5.4 v9.6 c0 2.2 -2.6 3.8 -6 3.8 s-6 -1.6 -6 -3.8 V7.8 C6 4.6 8.8 2.4 12 2.4 z" fill="currentColor" opacity=".72"/>' +
+    '<path d="M6.4 4.6 L2.8 7 v3.6 l3.6 1.2 z M17.6 4.6 l3.6 2.4 v3.6 l-3.6 1.2 z" fill="currentColor" opacity=".95"/>' +
+    '<path d="M12 3.2 v18" stroke="#000" stroke-opacity=".28" stroke-width="1.1"/>' +
+    '<path d="M8.8 6.2 c1.9 1.7 4.5 1.7 6.4 0" stroke="#000" stroke-opacity=".3" stroke-width="1.1" fill="none"/>' },
+  E: { n: '⑤ 鳞甲', d: '一片片叠的甲片。最"厚实"的一款', c: 'c6', svg:
+    '<path d="M8 3 h8 l4.6 2.2 -0.6 4.4 -2.4 -0.7 V20.4 H6.4 V8.9 l-2.4 0.7 -0.6 -4.4 z" fill="currentColor" opacity=".85"/>' +
+    '<path d="M9 7.4 l3 1.8 3 -1.8 M9 10.6 l3 1.8 3 -1.8 M9 13.8 l3 1.8 3 -1.8 M9 17 l3 1.8 3 -1.8"' +
+    ' stroke="#000" stroke-opacity=".38" stroke-width="1.05" fill="none"/>' +
+    '<path d="M12 3.4 v3.4" stroke="#000" stroke-opacity=".3" stroke-width="1"/>' },
+  F: { n: '⑥ 中式符甲', d: '护心镜 + 交叉绑带 + 吞肩。最"东方"的一款', c: 'c4', svg:
+    '<path d="M8.4 3.2 h7.2 l4.2 2.2 -0.6 4.2 -2.2 -0.6 V20.4 H6.8 V9 l-2.2 0.6 -0.6 -4.2 z" fill="currentColor" opacity=".9"/>' +
+    '<circle cx="12" cy="11.4" r="2.8" fill="currentColor" opacity=".55"/>' +
+    '<circle cx="12" cy="11.4" r="2.8" fill="none" stroke="#000" stroke-opacity=".4" stroke-width="1.1"/>' +
+    '<path d="M6.8 9 l10.4 8.4 M17.2 9 L6.8 17.4" stroke="#000" stroke-opacity=".3" stroke-width="1.15"/>' +
+    '<path d="M9.6 3.4 L12 6 L14.4 3.4" stroke="#000" stroke-opacity=".3" stroke-width="1.1" fill="none"/>' }
+};
+(function () {
+  var out = [];
+  for (var k in C) {
+    var v = C[k];
+    out.push('<div class="card">' +
+      '<svg class="big ' + v.c + '" viewBox="0 0 24 24">' + v.svg + '</svg>' +
+      '<div class="slotrow">' +
+      '<div class="slot"><span class="tg">3</span>' +
+      '<svg class="' + v.c + '" style="opacity:.55" viewBox="0 0 24 24">' + v.svg + '</svg></div>' +
+      '<div class="slot" style="background:linear-gradient(180deg,#8a7a6655,#8a7a6622)">' +
+      '<span class="tg">12</span>' +
+      '<svg class="' + v.c + '" viewBox="0 0 24 24" style="filter:drop-shadow(0 0 4px currentColor)">' +
+      v.svg + '</svg></div></div>' +
+      '<div class="nm ' + v.c + '">' + v.n + '</div>' +
+      '<div class="ds">' + v.d + '</div></div>');
+  }
+  document.getElementById('grid').innerHTML = out.join('');
+})();
+</script>
+</body>
+</html>
