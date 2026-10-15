@@ -1738,8 +1738,17 @@ function bagTipHide() {
 
 /* ★ 第 67 轮：按【部位】决定发哪条装备消息（防具走 equiparmor ✓）*/
 function itemSlotOf(id) {
+  /* ★★★ 第 100 轮修的真 bug★★★
+     用户报：防具无法穿戴，提示“这不是武器”
+     根因：这里原来是【严格比较】：BAG.items[i].id === id ✗
+       服务器给的 id 是数字 ✓   DOM 上 data-id 拿来的是字符串 ✓
+       → 永远不相等 ✗ → 找不到部位 → 兜底返回 'weapon' ✗
+       → 于是防具也被当成武器发出去 → 服务器回“这不是武器”✗
+     修：两边都转字符串再比 ✓（数字/字符串混用是 JS 的经典坑 ✗）*/
   for (var i = 0; i < BAG.items.length; i++) {
-    if (BAG.items[i].id === id) { return (BAG.items[i].item || {}).slot || 'weapon'; }
+    if (String(BAG.items[i].id) === String(id)) {
+      return (BAG.items[i].item || {}).slot || 'weapon';
+    }
   }
   return 'weapon';
 }
