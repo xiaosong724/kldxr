@@ -835,7 +835,13 @@ function statRender() {
     stRow('经验', (r.exp || 0) + (need ? (' / ' + need) : ''), need ? '满了就升级' : '') +
     stRow('固有攻击', Math.round((typeof wInherent === 'function') ? wInherent() : 0),
           '只跟等级有关，和装备无关') +
+    /* ★★ 第 118 轾（方案第 5 步）：属性页里标出【天赋贡献】★★
+       不标的话，玩家只知道自己变强了，不知道是天赋带来的 ✗ */
+    (((typeof TAL !== 'undefined') && TAL.raw && TAL.raw.atk)
+      ? stRow('其中天赋', '+' + Math.round(TAL.raw.atk), '天赋里点的攻击') : '') +
     stRow('生命', Math.round(HP) + ' / ' + Math.round(HPMAX), '') +
+    (((typeof TAL !== 'undefined') && TAL.raw && TAL.raw.hp)
+      ? stRow('其中天赋', '+' + Math.round(TAL.raw.hp), '天赋里点的血量') : '') +
     stRow('灵气', '等技能系统做了一起展示', '现在灵气还没有用处');
 
   /* ---- 武器 ---- */
@@ -866,7 +872,7 @@ function statRender() {
     el3.innerHTML =
       stRow('防具', (ar.name || '?') + '（' + ((ar.tier || 0) + 1) + ' 阶）', '') +
       stRow('减伤', (Math.round((+b.dr || 0) * 10) / 10) + ' 点',
-            '挨打时先扣这么多（最多扣到只剩 10%）') +
+            '挨打时先扣这么多（最多扣到只剩 30%）') +   // ★ 第 118 轮：地板 30% ✓
       stRow('生命上限', '+' + Math.round(+b.hp || 0), '') +
       ((ar.affixes && ar.affixes.length) ? stRow('词条', ar.affixes.length + ' 条',
         ar.affixes.map(function (a) { return a.text; }).join(' · ')) : '') +
@@ -880,12 +886,16 @@ function statRender() {
   var mates = (typeof PARTY !== 'undefined' && PARTY.roster) ? PARTY.roster.length : 0;
   el4.innerHTML =
     stRow('生命上限', Math.round(HPMAX), '基础 + 防具 + 词条') +
-    stRow('减伤', (BAG.armor && BAG.armor.base)
-      ? (Math.round((+BAG.armor.base.dr || 0) * 10) / 10) + ' 点' : '0 点', '') +
+    stRow('减伤（固定）', (BAG.armor && BAG.armor.base)
+      ? (Math.round((+BAG.armor.base.dr || 0) * 10) / 10) + ' 点' : '0 点', '防具给的，先扣') +
+    stRow('减伤（百分比）',
+      ((typeof TAL !== 'undefined') && TAL.eff && TAL.eff.dr)
+        ? (TAL.eff.dr.toFixed(1) + '%') : '0.0%',
+      '天赋给的，后算（最多减到只剩 30%）') +
     stRow('队伍', mates ? (mates + ' 人（' + mates * 0 + '队友击杀你拿 10% 经验）') : '没组队',
           mates ? '' : '菜单 → 组队 里可以组队') +
     '<div class="bagTip" style="margin-top:6px">★ 敌人打你的伤害 = 它的攻击力 − 你的减伤，' +
-    '最后至少留 10% ✓</div>';
+    '最后至少留 30% ✓</div>';
 }
 
 function ptEsc(s) {

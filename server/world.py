@@ -45,6 +45,12 @@ REVIVE_INVULN = 1.5
 # ★★ 第 81 轮：组队（用户确认版）★★
 PARTY_MAX = 3                 # 队伍上限（用户定：3 人 ✓）
 PARTY_SHARE = 0.10            # 队友分到的经验比例（该僵尸经验的 10% ✓）
+# ★★ 第 118 轮（用户："基础减伤不能低于实际受到伤害的 10%，改成 30%"）★★
+#   含义：不管减伤堆多高，最后至少要挨【原来伤害的 30%】✗
+#   → 也就是减伤最多只能减掉 70% ✓（原来是 90% ✗ 太狠了 ✓）
+#   为什么抽成常量：原来这个 0.10 在两处各写了一遍 ✗（防具一处 / 天赋一处 ✓）
+#     改一个漏一个的坑等着呢 ✗ —— 现在只有这一个地方定义 ✓
+DMG_FLOOR = 0.30               # 减伤地板：至少吃原来伤害的 30%（第 118 轮 ✓）
 PARTY_SHARE_DIST = 30.0       # 分经验的距离（防异地挂机蹭 ✗）
 PARTY_INVITE_DIST = 20.0      # 邀请的距离（防全图骚扰 ✗）
 PARTY_INVITE_TTL = 60.0       # ★ 第 82 轮用户改：10 秒 → 1 分钟 ✓
@@ -1583,6 +1589,12 @@ class World(object):
         if getattr(p, 'invulnT', 0) > 0:
             return
         dv, crit = mobs.roll_damage(m.atk)
+        # ★★ 第 118 轮：记下【原始伤害】★★
+        #   这一行下面就开始各种减伤了 ✗（招架 / 防具固定 / 天赋百分比）
+        #   全局 30% 地板就拿这个值算 ✓
+        #   ★ 我前两版都插错了 ✗（一次插在招架分支里 ✗ 一次插在防具之前 ✗）
+        #     两次都是"看着像第一次赋值"✗ 实际不是 ✗
+        _dv0 = int(dv)
         # ★★ 第 59 轮：单手剑的【招架】—— 按手上武器的概率把这一口减半 ✓
         #   （意图写在武器文案里 ✓ 玩家看得到才不冤 ✓）
         # ★★ 第 67 轮：防具在这里生效（闪避 → 固定减伤 → 受击回灵气 ✓）
@@ -1603,13 +1615,16 @@ class World(object):
         _fx = weapons.fx_of(_w.get('look'), int(_w.get('tier') or 0))
         if _fx and _fx['name'] == '招架' and random.random() < _fx['chance']:
             dv = max(1, int(round(dv * (1.0 - _fx['value']))))
+            # ★★ 第 118 轮：记下【原始伤害】★★（这里是刚算出来、一步都没减过的时候 ✓）
+            #   全局 30% 地板就拿它算 ✗（拿后面的值会越算越低 → 地板跟着变低 ✗）
+            _dv0 = int(dv)
             self._send_cid(p.cid, P.pack('fx', kind='parry'))
         # ★ 固定减伤（防具的 dr ✓）：至少挨 1 点（不然穿了甲就无敌了 ✗）
         if _st['dr'] > 0:
             # ★★ 第 106 轮（用户要求）："基础减伤不能[把伤害]低于实际受到伤害的 10%" ★★
             #   也就是：不管减伤多高，最后至少还要吃【原来伤害的 10%】✗
             #   → 不然高品阶防具能把伤害压到 1 点，等于无敌 ✓
-            _floor = max(1, int(round(dv * 0.10)))
+            _floor = max(1, int(round(dv * DMG_FLOOR)))   # ★ 第 118 轮：30% 地板 ✓
             dv = max(_floor, int(round(dv - _st['dr'])))
         # ★★ 第 117 轮（方案第 4 步）：天赋减伤 ★★
         #   和防具的【固定减伤】不是一回事 ✗
@@ -1618,8 +1633,13 @@ class World(object):
         #   顺序：先扣固定的 → 再打百分比 → 再吃 10% 地板 ✓
         _tdr = float((p.talEff or {}).get('dr') or 0.0)
         if _tdr > 0:
-            _fl2 = max(1, int(round(dv * 0.10)))     # ★ 地板按【这一步之前】的伤害算 ✓
-            dv = max(_fl2, int(round(dv * (1.0 - _tdr / 100.0))))
+            dv = int(round(dv * (1.0 - _tdr / 100.0)))
+        # ★★ 第 118 轮：全局地板（所有减伤算完之后统一过 ✓）★★
+        #   至少吃【最初伤害的 30%】✓ 也就是减伤最多 70% ✓
+        #   ★ 只在这一处兜底 ✗ 前面几步各自的临时地板拦不住叠加 ✓
+        _global_floor = max(1, int(round(_dv0 * DMG_FLOOR)))
+        if dv < _global_floor:
+            dv = _global_floor
         # ★ 受击回灵气（词条 ✓）
         if _st['qi_hurt'] > 0:
             p.qi = min(int((p.role or {}).get('qiMax') or 100), int(p.qi) + int(_st['qi_hurt']))
