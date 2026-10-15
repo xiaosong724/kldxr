@@ -1056,8 +1056,15 @@ class World(object):
 
         ★ 每人上限（用户要求）：只在"周围还没到 8 只"的玩家附近刷 ✓
         """
+        # ★★★ 第 131 轮修的真 bug（用户："每人 8 只上限，但多个玩家时还是 8 只"）★★★
+        #   病根：原来是"数他 60 米内有几只"✗
+        #         两个人站得近时，两个 60 米圈【几乎完全重叠】✗
+        #         → A 周围 8 只，B 周围也是这 8 只 ✗
+        #         → 结果两个人加起来还是 8 只 ✓✓ 用户描述一字不差 ✓
+        #   修：改成【按归属算】—— 一只僵尸算谁的就看它离谁最近 ✓
+        #       （两个人站一起 → 各分一半 ✓ 于是每人能各刷到 8 ✓ 总共 16 ✓）
         cand = [q for q in ps
-                if self._near_count(q.x, q.z, mobs.MOB_NEAR_R) < mobs.MOB_PER_PLAYER]
+                if self._owned_count(q, ps) < mobs.MOB_PER_PLAYER]
         if not cand:
             return
         p = random.choice(cand)
@@ -1072,6 +1079,35 @@ class World(object):
         base = (random.choice(near) if near else p).role.get('level', 1) or 1
         self.mob_seq += 1
         self.mobs[str(self.mob_seq)] = mobs.Mob(self.mob_seq, mobs.roll_level(base), x, z)
+
+    def _owned_count(self, q, ps):
+        """数"归这只玩家管"的僵尸（第 131 轮）
+
+        ★ 为什么不能简单数"他 60 米内有几只"✗
+          组队/多人站一起时，大家的 60 米圈几乎重叠 ✗
+          → 会算成"每个人都只有那 8 只"✗ 于是总共还是 8 只 ✓
+        ★ 归属规则：一只僵尸算【离它最近的那个玩家】的 ✓
+          两人站一起时各分一半 → 每人能各刷到 8 只 ✓ 总共 16 ✓
+          两人离得远时自然互不影响 ✓
+        """
+        r2 = mobs.MOB_NEAR_R * mobs.MOB_NEAR_R
+        n = 0
+        for m in self.mobs.values():
+            if m.hp <= 0:
+                continue
+            d2 = (m.x - q.x) ** 2 + (m.z - q.z) ** 2
+            if d2 > r2:
+                continue
+            mine = True
+            for o in ps:
+                if o is q:
+                    continue
+                if (m.x - o.x) ** 2 + (m.z - o.z) ** 2 < d2:
+                    mine = False
+                    break
+            if mine:
+                n += 1
+        return n
 
     def _evt_near(self, x, z, mtype, d, exclude=None):
         """给【附近】的人发一个可见事件（第 63 轮）
