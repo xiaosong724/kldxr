@@ -487,6 +487,37 @@ class Api(BaseHTTPRequestHandler):
         #   为什么：发东西本质是【往背包表里插一条】，和"玩家在不在线"没关系 ✓
         #   放在 tick 线程做的话，离线玩家就发不进去（而且 tick 线程不许查库 ✗）
         #   踩过：管理员给还没上线的玩家发武器 → 静默什么也没发生 ✗
+        # ★★ 第 154 轮：mqset 的【落库】在这里做（和 give 一个道理 ✓）★★
+        #   ★ 为什么不让 tick 线程写：它是异步的 ✗ 而且 post_save 还要排队 ✓
+        #     结果就是"接口返回成功、值却没变"✗ 这种最难查 ✓
+        #   ★ 在线玩家的【内存】值还是要 tick 线程改 → 下面照旧 post_admin ✓
+        if act == 'mqset':
+            nm = str(payload.get('name') or '').strip()
+            if not nm:
+                return self._send(400, {'ok': False, 'error': '要填玩家名字'})
+            import mq as _mqm
+            cap = int(_mqm.cfg('mq_max', _mqm.MQ_MAX))
+            try:
+                with dbmod.db(self.cfg) as c:
+                    row = c.execute('SELECT id, mq FROM roles WHERE name=? LIMIT 1',
+                                    (nm,)).fetchone()
+                    if row is None:
+                        return self._send(404, {'ok': False, 'error': '没有这个角色'})
+                    rid, old = int(row[0]), int(row[1] or 0)
+                    if payload.get('clear'):
+                        new = 0
+                    elif payload.get('add') is not None:
+                        new = max(0, min(cap, old + int(payload.get('add') or 0)))
+                    else:
+                        new = max(0, min(cap, int(payload.get('v') or 0)))
+                    c.execute('UPDATE roles SET mq=?, mq_at=? WHERE id=?',
+                              (new, dbmod.now_ms(), rid))
+                    c.commit()
+            except Exception as e:
+                return self._send(500, {'ok': False, 'error': str(e)})
+            # 在线的话，让 tick 线程把内存里的值也改掉（并给本人一条提示 ✓）
+            self.world.post_admin('mqset', {'name': nm, 'v': new, 'exact': 1})
+            return self._send(200, {'ok': True, 'act': act, 'name': nm, 'mq': new})
         if act == 'give':
             return self._admin_give(payload)
         if act in ('delplayer', 'delTest'):

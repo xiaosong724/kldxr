@@ -1281,19 +1281,23 @@ class World(object):
             return
         # ★ 单人魔气调整（测试用：直接给 500 就能看头顶最深档 ✓）
         if act == 'mqset':
+            # ★ 第 154 轮：库已经由 HTTP 层写好了 ✓
+            #   这里只负责【改在线玩家的内存值】+ 推给他 ✓
+            #   （★ 千万别再写库 ✗ 两处都写就会出现"谁后写谁赢"✗ 最难查 ✓）
             q = self._find_player(str(d.get('name') or ''))
             if q is None:
-                return
-            if d.get('clear'):
+                return                        # 离线：库已经改了 ✓ 他下次登录就是新值 ✓
+            if d.get('exact'):
+                q.mq = max(0, min(int(mqmod.cfg('mq_max', mqmod.MQ_MAX)), int(d.get('v') or 0)))
+            elif d.get('clear'):
                 q.mq = 0
             elif d.get('add') is not None:
                 q.mq = max(0, min(int(mqmod.cfg('mq_max', mqmod.MQ_MAX)),
                                   int(q.mq or 0) + int(d.get('add') or 0)))
             else:
-                q.mq = max(0, min(int(mqmod.cfg('mq_max', mqmod.MQ_MAX)),
-                                  int(d.get('v') or 0)))
-            q.mqAt = dbmod.now_ms()          # 结算时刻也重置 ✓ 不然会被自然衰减立刻扣掉
-            self._mq_save(q)
+                q.mq = max(0, min(int(mqmod.cfg('mq_max', mqmod.MQ_MAX)), int(d.get('v') or 0)))
+            q.mqAt = dbmod.now_ms()
+            self._send_cid(q.cid, P.pack('mq', v=int(q.mq or 0)))   # ★ 客户端立刻刷新 ✓
             self._send_cid(q.cid, P.pack(
                 'notice', text='管理员把你的魔气值设成了 %d' % int(q.mq or 0)))
             return
