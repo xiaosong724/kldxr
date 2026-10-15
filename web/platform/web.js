@@ -1350,6 +1350,15 @@ function wsOnMessage(raw) {
     fxNum(fc[0], fc[1], fx, 2.6, fz);
     return;
   }
+  /* ★★ 第 63 轮：登场事件（复活 / 上线）★★
+     ★ 只发给【附近】的人（远处的人不关心 ✓ 服务器那边也是这么做的 ✓）*/
+  if (t === 'evt') {
+    spawnFx(+d.x || P.x, +d.z || P.z, d.kind || 'join', d.name || '');
+    var who = d.name || '有人';
+    fxNum(d.kind === 'revive' ? (who + ' 复活了') : (who + ' 上线了'),
+          d.kind === 'revive' ? '#8ee0ff' : '#ffe0a0', +d.x || P.x, 3.2, +d.z || P.z);
+    return;
+  }
   if (t === 'dur') {
     // ★ 第 59 轮：服务器定期推耐久（不推的话界面上的条子会停在旧值 ✗）
     if (BAG.weapon) { BAG.weapon.dur = d.d; BAG.weapon.durMax = d.m; }

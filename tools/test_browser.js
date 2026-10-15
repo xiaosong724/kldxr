@@ -326,6 +326,53 @@ async function register(name, pw) {
     ok(upQ.dead === false && Math.abs(upQ.rx) < 0.5,
       '★★ 复活之后甲看乙又站直了（dead=' + upQ.dead + ' rx=' + upQ.rx + ' ✓）');
 
+    /* ★★ 第 63 轮：别人要能看出"他复活了"，而不是凭空出现 ★★
+       用户原话："复活的效果没有做服务器同步，别人看不到复活后的无敌特效，
+                 要让别人能看出他是复活了，而不是凭空出现了"
+       ★ 走真链路：让【乙】发一次复活意图（服务器会给附近的人发 evt + 无敌 ✓）
+         → 甲那边应该：① 收到飘字/光柱 ② 乙脚下出现蓝色护盾环 ✓ */
+    // ★ 先在甲那边挂个钩子数 spawnFx 的调用 —— 比去 DOM 里捞飘字可靠得多
+    //   （飘字只活 0.67 秒 ✗ 等 800ms 再去查就已经收掉了，上一版就是这么假红的 ✗）
+    await A.eval('window.__fxHits = []; var _sf = spawnFx;' +
+                 'window.spawnFx = function (x, z, kind, name) {' +
+                 '  window.__fxHits.push((kind || "") + ":" + (name || ""));' +
+                 '  return _sf(x, z, kind, name); }; return 1;');
+    await B.eval('if (NET.on && WSC.ready) { wsSend("revive", {}); } return 1;');
+    await sleep(800);
+    const revQ = JSON.parse(await A.eval(
+      'var o = null;' +
+      'for (var uid in NET.others) {' +
+      '  if (NET.others[uid].name === "浏览器乙") { o = NET.others[uid]; break; } }' +
+      'if (!o) { return JSON.stringify({ found: false }); }' +
+      'var labels = 0;' +
+      'var all = document.querySelectorAll("body > div");' +
+      'for (var i = 0; i < all.length; i++) {' +
+      '  var tx3 = all[i].textContent || "";' +
+      '  if (tx3.indexOf("复活了") >= 0) { labels++; } }' +
+      'return JSON.stringify({ found: true, inv: o.inv, hasRing: !!o.ring,' +
+      '  ringVis: o.ring ? o.ring.visible : null,' +
+      '  ringOp: o.ring ? Math.round(o.ring.material.opacity * 100) / 100 : null,' +
+      '  fxCount: (typeof FX_LIST !== "undefined") ? FX_LIST.length : -1,' +
+      '  hits: (window.__fxHits || []).slice(),' +
+      '  labels: labels });'
+    ) || '{}');
+    console.log('        [复活同步] 甲看乙：inv=' + revQ.inv + ' 有环=' + revQ.hasRing +
+      ' 环可见=' + revQ.ringVis + ' 透明度=' + revQ.ringOp + ' 特效数=' + revQ.fxCount +
+      ' 飘字=' + revQ.labels);
+    ok(revQ.found === true && revQ.hasRing === true && revQ.ringVis === true,
+      '★★★ 甲看乙脚下有【蓝色护盾环】（复活的无敌特效 ✓ 别人看得出他刚复活 ✓）');
+    ok(revQ.inv > 0, '★★ 服务器把乙的无敌剩余同步给了甲（inv=' + revQ.inv + ' 秒 ✓）');
+    ok(revQ.hits && revQ.hits.some(function (s) { return s.indexOf('revive') === 0; }),
+      '★★★ 甲收到了【复活事件】并放了登场特效（' + JSON.stringify(revQ.hits) +
+      ' ✓ —— 不是一个凭空站起来的人 ✓ 用户原话）');
+    await A.eval('window.spawnFx = undefined; return 1;');
+    await sleep(1600);   // 等特效自己收掉
+    const cleanQ = JSON.parse(await A.eval(
+      'return JSON.stringify({ fxLeft: (typeof FX_LIST !== "undefined") ? FX_LIST.length : -1 });'
+    ) || '{}');
+    ok(cleanQ.fxLeft === 0, '★ 特效 1.1 秒后自己收干净了（不会越积越多 ✗ 现在剩 ' +
+      cleanQ.fxLeft + ' 个 ✓）');
+
     /* ③b ★ 玩家【移动】同步：甲按住 w 走一会儿，乙那边看到的位置必须跟着变
        （用户反馈过的真 bug：能看到人，但人钉在原地不动 ✗
          根因是 core 里的 `NET.on` 从来没被赋成 true —— netUpdate() 第一行就是

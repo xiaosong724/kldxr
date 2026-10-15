@@ -790,25 +790,72 @@ function nearMobs(x, z) {
    ★ core 层不许碰浏览器 API ✗ 所以不用 performance.now()，
      用 INVULN_T 自己算脉动（它本来就是 1.5 → 0 的倒计时 ✓）*/
 var _invRing = null;
+/* ★ 第 63 轮：做成工厂 —— 本地玩家和【队友】都要用（队友复活也得看得见 ✓）*/
+function makeInvRing() {
+  var m = new THREE.Mesh(
+    new THREE.RingGeometry(0.60, 0.88, 28),
+    new THREE.MeshBasicMaterial({ color: 0x8ee0ff, transparent: true, opacity: 0.7,
+                                  side: THREE.DoubleSide, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2;
+  scene.add(m);
+  return m;
+}
 function invRingUpdate() {
   if (INVULN_T <= 0) {
     if (_invRing) { _invRing.visible = false; }
     return;
   }
-  if (!_invRing) {
-    _invRing = new THREE.Mesh(
-      new THREE.RingGeometry(0.60, 0.88, 28),
-      new THREE.MeshBasicMaterial({ color: 0x8ee0ff, transparent: true, opacity: 0.7,
-                                    side: THREE.DoubleSide, depthWrite: false }));
-    _invRing.rotation.x = -Math.PI / 2;
-    scene.add(_invRing);
-  }
+  if (!_invRing) { _invRing = makeInvRing(); }
   _invRing.visible = true;
   _invRing.position.set(P.x, 0.07, P.z);
   var k = Math.max(0, Math.min(1, INVULN_T / 1.5));
   _invRing.material.opacity = 0.20 + 0.55 * k;                 // 快没了就变淡 ✓
   var pulse = 1 + 0.10 * Math.sin(INVULN_T * 14.0);            // 呼吸脉动
   _invRing.scale.set(pulse, pulse, pulse);
+}
+
+
+/* ★★ 第 63 轮：登场特效（复活 / 上线）★★
+   用户："要让别人能看出他是复活了，而不是凭空出现了"
+   ★ 纯表现，不参与任何判定 ✓（就一束光柱 + 一圈扩散的环，1.1 秒收掉 ✓）
+   ★ 用最简单的几何体：开口圆柱（光柱）+ 环（冲击波）✓ 都是 1 次 draw call ✓ */
+var FX_LIST = [];
+function spawnFx(x, z, kind, name) {
+  var col = (kind === 'revive') ? 0x8ee0ff : 0xffe0a0;
+  var beam = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.45, 0.62, 4.2, 12, 1, true),
+    new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.55,
+                                  side: THREE.DoubleSide, depthWrite: false }));
+  beam.position.set(x, 2.1, z);
+  scene.add(beam);
+  var ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.4, 0.62, 26),
+    new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.8,
+                                  side: THREE.DoubleSide, depthWrite: false }));
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(x, 0.08, z);
+  scene.add(ring);
+  FX_LIST.push({ t: 0, life: 1.1, beam: beam, ring: ring, kind: kind, name: name });
+}
+function fxTick(dt) {
+  for (var i = FX_LIST.length - 1; i >= 0; i--) {
+    var f = FX_LIST[i];
+    f.t += dt;
+    var k = Math.min(1, f.t / f.life);
+    // 光柱：淡出 + 稍微收细
+    f.beam.material.opacity = 0.55 * (1 - k);
+    f.beam.scale.set(1 - 0.35 * k, 1, 1 - 0.35 * k);
+    // 环：往外扩 + 淡出
+    var sc = 1 + 3.2 * k;
+    f.ring.scale.set(sc, sc, sc);
+    f.ring.material.opacity = 0.8 * (1 - k);
+    if (k >= 1) {
+      scene.remove(f.beam); scene.remove(f.ring);
+      f.beam.geometry.dispose(); f.beam.material.dispose();
+      f.ring.geometry.dispose(); f.ring.material.dispose();
+      FX_LIST.splice(i, 1);
+    }
+  }
 }
 
 
@@ -1743,6 +1790,7 @@ function wsApplyWorld(d) {
       x: w.x, z: w.z, yaw: w.y, hp: w.hp, hpm: 0,
       ct: w.t, atk: w.atk,
       wlook: w.w,            // ★ 第 61 轮：他手上是什么武器（动作原型要一致 ✓）
+      inv: +w.inv || 0,      // ★ 第 63 轮：他的无敌剩余（队友刚复活要看得见 ✓）
       dead: !!w.d            // ★ 第 57 轮：他倒下了没有（服务器同步给我的 ✓）
     }, t);
   }
@@ -2084,6 +2132,7 @@ function addOther(w, t) {
      已经存在的小人走的是下面这条更新分支 → dead 永远停在 false ✗
      所以两处都要写 ✓（不然"别人看你死亡还是站着"永远修不好 ✗）*/
   o.dead = !!w.dead;
+  o.inv = +w.inv || 0;       // ★ 第 63 轮：无敌剩余（每包都更新 ✓）
   // ★ 他的挥剑序号变了 → 我这边从头播一遍挥剑动画 ✓（动作和你自己看到的一致 ✓）
   var wk = (typeof w.atk === 'number') ? w.atk : 0;
   if (wk !== o.atkSeq) {
@@ -2112,6 +2161,11 @@ function addOther(w, t) {
 
 function removeOther(uid) {
   var o = NET.others[uid];
+  // ★ 第 63 轮：他走了，脚下的无敌环也要一起收 ✓（不然会留在原地 ✗）
+  if (o && o.ring) {
+    scene.remove(o.ring);
+    o.ring.geometry.dispose(); o.ring.material.dispose();
+  }
   if (!o) { return; }
   scene.remove(o.hh.g);
   UI.plate.remove(o.ui);
@@ -2598,6 +2652,19 @@ function netUpdate(dt) {
        → 复活之后人还是斜着的 ✗（走路动画只管四肢，不动身体角度 ✓）*/
     o.hh.g.rotation.x = 0;
     o.hh.g.rotation.z = 0;
+    /* ★★ 第 63 轮：队友的无敌环（他刚复活时脚下一圈蓝光 ✓）★★
+       ★ 不加的话，别人眼里的复活就是"凭空站起来"✗（用户原话）*/
+    if (o.inv > 0) {
+      if (!o.ring) { o.ring = makeInvRing(); }
+      o.ring.visible = true;
+      o.ring.position.set(px, 0.07, pz);
+      var oi = Math.max(0.2, Math.min(1, o.inv / 1.5));
+      o.ring.material.opacity = 0.20 + 0.55 * oi;
+      var op2 = 1 + 0.10 * Math.sin(o.inv * 14.0);
+      o.ring.scale.set(op2, op2, op2);
+    } else if (o.ring) {
+      o.ring.visible = false;
+    }
     // ★ 他的挥剑动画（抬剑 → 下砍 ✓ 和本地共用 heroAtkPose → 动作一模一样 ✓）
     if (o.atkT >= 0) {
       o.atkT += dt;
@@ -2961,6 +3028,7 @@ function frame(ts) {
        （这个坑第 28 轮在移动速度上踩过一次 ✓ 同一个道理 ✓）*/
   if (INVULN_T > 0) { INVULN_T = Math.max(0, INVULN_T - dt); }
   invRingUpdate();
+  fxTick(dt);                       // ★ 第 63 轮：登场特效（复活/上线 ✓）
   H.g.rotation.y = P.yaw;
   /* ★★ 第 56 轮：倒地时【不要】播走路姿势 ★★
      踩过：我那段倒地写在上面 ✓ 但这里 (rotation.x = 0) 又把它清零了 ✗

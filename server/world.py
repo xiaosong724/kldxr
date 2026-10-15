@@ -230,7 +230,13 @@ class World(object):
                 conn, role = self._joinq.get_nowait()
             except queue.Empty:
                 break
-            self.players[conn.cid] = Player(conn.cid, role)
+            _np = Player(conn.cid, role)
+            self.players[conn.cid] = _np
+            # ★ 第 63 轮：上线也让附近的人"看得见"✓（不是凭空冒出来 ✗）
+            self._evt_near(_np.x, _np.z, 'evt',
+                           {'kind': 'join', 'id': _np.role_id,
+                            'name': _np.name, 'x': round(_np.x, 2),
+                            'z': round(_np.z, 2)}, exclude=conn.cid)
 
         # ①·5 无敌时间递减（第 56 轮）
         for _q in self.players.values():
@@ -420,6 +426,13 @@ class World(object):
             self._send_cid(p.cid, P.pack('revived', invuln=REVIVE_INVULN, hp=p.hp, hpMax=hpmax))
             self._send_cid(p.cid, P.pack('notice',
                                          text='复活成功 —— %.1f 秒无敌，快跑！' % REVIVE_INVULN))
+            # ★★ 第 63 轮：让【附近的人】看出他是复活了 ★★
+            #   不然在队友眼里他就是"凭空站起来了"✗（用户原话）
+            self._evt_near(p.x, p.z, 'evt',
+                           {'kind': 'revive', 'id': p.role_id,
+                            'name': p.name, 'x': round(p.x, 2),
+                            'z': round(p.z, 2), 'inv': REVIVE_INVULN},
+                           exclude=p.cid)
         elif t in ('skill', 'team', 'dead', 'respawn'):
             # 这些要等 P3/P4 的世界规则。
             # ★ 只提示一次（不然每挥一刀都弹一句，把玩家烦死）
@@ -721,6 +734,24 @@ class World(object):
         base = (random.choice(near) if near else p).role.get('level', 1) or 1
         self.mob_seq += 1
         self.mobs[str(self.mob_seq)] = mobs.Mob(self.mob_seq, mobs.roll_level(base), x, z)
+
+    def _evt_near(self, x, z, mtype, d, exclude=None):
+        """给【附近】的人发一个可见事件（第 63 轮）
+
+        ★ 为什么要"附近"而不是全体广播：远处的人根本不关心 ✗
+          而且这样带宽也省 ✓（和兴趣管理一个思路 ✓）
+        ★ 踩过的坑：P.pack 的第一个参数叫【mtype】不是 t ✗
+          我一开始写成 P.pack(**{'t': 'evt', ...}) → TypeError → 事件根本没发出去 ✗
+          （表现就是"别人看不到复活特效"，而且不报错、只静默失败 ✗）
+        """
+        v2 = mobs.MOB_VIEW * mobs.MOB_VIEW
+        raw = P.pack(mtype, **d)
+        for q in self.players.values():
+            if q is exclude or q.cid == exclude:
+                continue
+            if (q.x - x) ** 2 + (q.z - z) ** 2 > v2:
+                continue
+            self._send_cid(q.cid, raw)
 
     def _find_player(self, name):
         """按名字找在线玩家（管理页用 ✓ 找不到返回 None）"""
@@ -1225,6 +1256,9 @@ class World(object):
                 # ★ 第 61 轮：手上的武器类型 —— 别的玩家要按它放对应的动作 ✓
                 #   （不然别人砍起来永远是同一套 ✗）
                 'w': (o.weapon or {}).get('look') or 'sword',
+                # ★★ 第 63 轮：他的无敌剩余 ★★
+                #   不然别人看不到"他刚复活"✗ 只能看到一个站着不挨打的人 ✗
+                'inv': round(o.invulnT, 2),
                 # ★★ 第 57 轮：他倒下了没有 ★★
                 #   以前只同步 hp，客户端没法知道"该不该躺下" ✗
                 #   → 别人看被围死的队友，永远是站着的 ✗（用户报的）
