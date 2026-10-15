@@ -518,6 +518,35 @@ class Api(BaseHTTPRequestHandler):
             # 在线的话，让 tick 线程把内存里的值也改掉（并给本人一条提示 ✓）
             self.world.post_admin('mqset', {'name': nm, 'v': new, 'exact': 1})
             return self._send(200, {'ok': True, 'act': act, 'name': nm, 'mq': new})
+        # ★★ 第 158 轮（用户："管理页面里面的设置会保存，而不是重启就恢复了"）★★
+        #   ★ 为什么写库放在 HTTP 层：第 154 轮的教训 ——
+        #     写库放 tick 线程那边会有"异步 + 异常被吞"的问题
+        #     表现就是"接口返回 200 但值没变"（那次是魔气值，这次是配置）
+        #   ★ tick 那边只广播一句提示，不再改 TUNE（单一写者）
+        if act == 'mqcfg':
+            import mq as _mqm
+            if payload.get('reset'):
+                _mqm.reset_tune()
+                saved = {}
+            else:
+                _n, bad = _mqm.apply_tune(payload)
+                if bad:
+                    return self._send(400, {'ok': False, 'error': '这些值不对：' + bad})
+                saved = _mqm.changed_tune()
+            try:
+                with dbmod.db(self.cfg) as c:
+                    if saved:
+                        # ★ 只存【和默认不一样】的项：以后改默认值时，老库不会把新默认顶回去
+                        c.execute("INSERT OR REPLACE INTO meta(k, v) VALUES('mq_tune', ?)",
+                                  (json.dumps(saved, ensure_ascii=False),))
+                    else:
+                        c.execute("DELETE FROM meta WHERE k='mq_tune'")
+                    c.commit()
+            except Exception as e:
+                return self._send(500, {'ok': False, 'error': '存库失败：' + str(e)})
+            if self.world:
+                self.world.post_admin('mqcfg', {'done': 1})
+            return self._send(200, {'ok': True, 'act': act, 'saved': saved})
         if act == 'give':
             return self._admin_give(payload)
         if act in ('delplayer', 'delTest'):
@@ -759,6 +788,19 @@ def start_ws(cfg, ready, world_box=None):
         import asyncio
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        # ★ 第 158 轮：启动时把存过的魔气配置读进来
+        #   ★ 放在创建 World 之前：tick 还没起来，所以碰库是安全的
+        try:
+            import mq as _mqm0
+            with dbmod.db(cfg) as _mc:
+                _row = _mc.execute("SELECT v FROM meta WHERE k='mq_tune'").fetchone()
+            if _row and _row[0]:
+                _n0, _bad0 = _mqm0.apply_tune(json.loads(_row[0]))
+                print('[mq] 已装载魔气配置 %d 项%s' % (_n0, ('（有问题：%s）' % _bad0) if _bad0 else ''))
+            else:
+                print('[mq] 魔气配置用默认值（没存过自定义）')
+        except Exception as _e0:
+            print('[mq] 装载魔气配置失败（用默认值继续）：%s' % _e0)
         world = World(cfg)
         net = Net(cfg, world)
         if world_box is not None:

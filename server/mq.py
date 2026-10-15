@@ -86,6 +86,74 @@ def cfg(k, dflt=None):
         return dflt
 
 
+def _doc_of(k):
+    for kk, doc, kind, lo, hi in TUNE_DOC:
+        if kk == k:
+            return doc, kind, lo, hi
+    return None, None, None, None
+
+
+def apply_tune(src):
+    """把一份配置套进去（校验 + 夹范围 ✓ 未知键忽略 ✓）
+
+    ★ 返回 (套用了几项, 报错说明) ✗ 不抛异常 ✓
+      （管理页传错东西不该把服务器带崩 ✓）
+    """
+    n = 0
+    bad = []
+    if not isinstance(src, dict):
+        return 0, 'not a dict'
+    for k, v in src.items():
+        if k == 'exp_tiers':
+            try:
+                tiers = [[int(a), float(b)] for a, b in v]
+                TUNE['exp_tiers'] = tiers
+                n += 1
+            except Exception:
+                bad.append(k)
+            continue
+        doc, kind, lo, hi = _doc_of(k)
+        if doc is None:
+            continue                       # 未知键：忽略 ✓（以后删过配置也不会炸 ✓）
+        try:
+            val = float(v) if kind == 'float' else int(float(v))
+        except Exception:
+            bad.append(k)
+            continue
+        val = max(lo, min(hi, val))
+        TUNE[k] = val
+        n += 1
+    return n, (','.join(bad) if bad else '')
+
+
+def changed_tune():
+    """只挑【和默认不一样】的项（存库用 ✓ 默认值不存 ✓）
+
+    ★ 为什么：以后改默认值，老库里的配置不会把新默认"顶回去"✗
+      （存全量的话，我改了默认值、老库还存着旧默认 ✓ 就永远生效不了 ✓）
+    """
+    dflt = {
+        'kill_gain': KILL_GAIN, 'killed_loss': KILLED_LOSS, 'decay_per_hour': DECAY_PER_HOUR,
+        'mq_max': MQ_MAX, 'dmg_per_point': DMG_PER_POINT, 'dmg_cap': DMG_CAP,
+        'steal_base': STEAL_BASE, 'steal_per_2': STEAL_PER_2, 'steal_cap': STEAL_CAP,
+        'worn_steal_pct': WORN_STEAL_PCT, 'gold_loss': GOLD_LOSS,
+        'pair_cooldown': PAIR_COOLDOWN, 'level_gap_max': LEVEL_GAP_MAX, 'safe_r': SAFE_R,
+        'exp_tiers': [[501, 0.15], [200, 0.10], [100, 0.08], [0, 0.05]],
+    }
+    out = {}
+    for k, dv in dflt.items():
+        cv = TUNE.get(k)
+        if cv is None:
+            continue
+        if isinstance(dv, float):
+            if abs(float(cv) - dv) > 1e-9:
+                out[k] = cv
+        else:
+            if cv != dv:
+                out[k] = cv
+    return out
+
+
 def reset_tune():
     """恢复默认（管理页的"恢复默认"按钮 ✓）"""
     TUNE.update({

@@ -1262,24 +1262,11 @@ class World(object):
         # ★★ 第 153 轮：魔气配置（用户要求"加到管理页面"）★★
         #   ★ 和 mobcap 一样：全局设置不需要名字 ✗ 所以放在"先找人"之前 ✓
         if act == 'mqcfg':
-            if d.get('reset'):
-                mqmod.reset_tune()
-                self._broadcast(P.pack('notice', text='[管理] 魔气配置已恢复默认'))
-                return
-            changed = []
-            for k, _doc, _kind, _lo, _hi in mqmod.TUNE_DOC:
-                if k not in d or d.get(k) is None:
-                    continue
-                try:
-                    v = float(d.get(k)) if _kind == 'float' else int(d.get(k))
-                except Exception:
-                    continue
-                v = max(_lo, min(_hi, v))
-                mqmod.TUNE[k] = v
-                changed.append(k)
-            if changed:
+            # ★ 第 158 轮：改配置 + 落库的活【全在 HTTP 层做完了】
+            #   这里只负责广播一句提示（只有 tick 线程能广播）
+            if d.get('done'):
                 self._broadcast(P.pack(
-                    'notice', text='[管理] 魔气配置已更新（%d 项）' % len(changed)))
+                    'notice', text='[管理] 魔气配置已更新并保存（重启也在）'))
             return
         # ★ 单人魔气调整（测试用：直接给 500 就能看头顶最深档 ✓）
         if act == 'mqset':
