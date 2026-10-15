@@ -700,7 +700,7 @@ function ptBanner(text, color) {
   if (!el) {
     el = document.createElement('div');
     el.id = 'ptBanner';
-    el.style.cssText = 'position:fixed;left:50%;top:12%;transform:translateX(-50%);' +
+    el.style.cssText = 'position:fixed;left:50%;top:24%;transform:translateX(-50%);' +
       'z-index:30;background:#000000cc;color:#fff;padding:8px 16px;border-radius:10px;' +
       'font-size:14px;font-weight:600;text-align:center;max-width:80vw;pointer-events:none;' +
       'box-shadow:0 2px 10px #0008;display:none';
@@ -1504,7 +1504,17 @@ function bagRender() {
       (!isW && n > 1 ? '<span class="cnt">' + n + '</span>' : '') +
       // ★ 第 60 轮：武器有几条词条，右上角点一个小圆点数字（一眼分得出极品 ✓）
       (isW && it.affixes && it.affixes.length
-        ? '<span class="affn">' + it.affixes.length + '</span>' : '') +
+        ? '<span class="affn" title="词条 ' + it.affixes.length + ' 条">' + it.affixes.length + '</span>' : '') +
+      /* ★ 第 91 轮（用户要求）：耐久直接显示在【格子下方】✓
+         条 + 数字；点开详情（悬停/选中）里还有完整的"剩多少 / 共多少" ✓ */
+      ((+it.durMax > 0) ? (function () {
+        var _dd = (typeof it.dur === 'number') ? it.dur : it.durMax;
+        var _k = Math.max(0, Math.min(1, _dd / it.durMax));
+        var _col = (_k > 0.5) ? '#7ee08a' : (_k > 0.2 ? '#ffd83d' : '#ff7a6a');
+        return '<span class="durbar"><i style="width:' + (_k * 100).toFixed(1) +
+          '%;background:' + _col + '"></i></span>' +
+          '<span class="durTxt" style="color:' + _col + '">' + Math.round(_dd) + '</span>';
+      })() : '') +
       (lowm ? '<span class="lvl">' + Math.round(wMastery(it) * 100) + '%</span>' : '') + '</div>';
   }
   var total = Math.max(16, Math.ceil((BAG.items.length + 1) / 8) * 8);
