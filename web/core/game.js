@@ -2728,6 +2728,41 @@ function markColor(o, isMate) {
   return MARK_COL;
 }
 
+/* ★★ 第 87 轮（用户要求）：自己头顶也显示一条血条 ★★
+   · 复用僵尸那套头顶 UI（mkMobUI ✓ 自带血条 + 一行字 ✓）
+   · 那行字就写"123 / 200" ✓ 位置正好压在血条上 → 就是你说的"血量文字内置"✓
+   · 每帧刷：宽度 + 颜色（绿→黄→红）+ 数字 ✓
+   · 血量没变就不写 DOM ✗（这是每帧都跑的代码 ✗ 能省就省 ✓）*/
+var _selfUI = null, _selfHp = -1;
+function updateSelfBar() {
+  if (dead) {
+    if (_selfUI) { UI.plate.show(_selfUI, false); }
+    return;
+  }
+  if (!_selfUI) { _selfUI = mkMobUI('', 1); }
+  if (!_selfUI) { return; }
+  var mx = Math.max(0, Math.round(HP));
+  var mm = Math.max(1, Math.round(HPMAX));
+  var pct = Math.max(0, Math.min(100, mx / mm * 100));
+  if (mx !== _selfHp) {
+    _selfHp = mx;
+    UI.plate.hpWidth(_selfUI, pct.toFixed(1) + '%');
+    UI.plate.hpColor(_selfUI, pct > 60 ? 'linear-gradient(180deg,#7ee08a,#3aa04a)'
+                    : (pct > 25 ? 'linear-gradient(180deg,#ffd83d,#c9a02a)'
+                                : 'linear-gradient(180deg,#ff7a6a,#c04030)'));
+    // ★ 第 88 轮（用户要求）：数字显示在【血条里面】✓ 不是条上面 ✓
+    UI.plate.barText(_selfUI, mx + ' / ' + mm, '#fff');
+  }
+  if (!_mark3) { _mark3 = new THREE.Vector3(); }
+  _mark3.set(P.x, 3.05, P.z).project(cam);
+  var on = (_mark3.z > -1 && _mark3.z < 1 && Math.abs(_mark3.x) < 1.3 && Math.abs(_mark3.y) < 1.6);
+  UI.plate.show(_selfUI, on);
+  if (on) {
+    UI.plate.move(_selfUI, (_mark3.x * 0.5 + 0.5) * innerWidth,
+                  (-_mark3.y * 0.5 + 0.5) * innerHeight);
+  }
+}
+
 function updateMarks() {
   var uid, m, k;
   if (!NET.on) {   // 离线 / 断线 → 全部收掉 ✓
@@ -3332,6 +3367,7 @@ function frame(ts) {
   netUpdate(dt);   // ★ 缓冲插值（别人走动平滑 ✓ 不再一卡一卡 ✓）
   netSeparate(dt); // ★ 和别人重叠时慢慢推开（碰撞箱不叠在一起 ✓ 也不会互相卡住 ✓）
   updateMarks();   // ★ 附近队友的屏幕方位箭头 ✓
+  updateSelfBar();   // ★ 第 87 轮：自己头顶的血条 ✓
   updateLoot(dt);  // ★ 地上掉的：转一下 + 走过去自动捡（第 38 轮）✓
   updateGlowLights();   // ★ 发光：把固定 2 盏灯派给最近的发光物（第 45 轮）✓
   updateHealFx(dt);     // ★ 治疗连线：缩粗细 + 到期回收（第 46 轮）✓

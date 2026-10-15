@@ -81,7 +81,38 @@ UI.plate = {
   },
   hpWidth: function (ui, pct) { if (ui && ui.bar) { ui.bar.style.width = pct; } },
   hpColor: function (ui, color) { if (ui && ui.bar) { ui.bar.style.background = color; } },
-  name: function (ui, s) { if (ui && ui.name) { ui.name.textContent = s; } },
+  /* ★ 第 87 轮：加颜色参数 ✓
+     ★ 踩过的坑：第 86 轮我插"带颜色的 name"时锚点是 remove: function (m) ✗
+       结果插进了【UI.mark】✗ 而 plate 这个两参数的没动 ✗
+       → 表现是"五角星有了、但颜色没变"✓（静默失效，最难查 ✗）*/
+  name: function (ui, s, color) {
+    if (!ui || !ui.name) { return; }
+    if (ui.name.textContent !== s) { ui.name.textContent = s; }
+    if (color && ui.name.style.color !== color) { ui.name.style.color = color; }
+  },
+  /* ★ 第 88 轮（用户要求）：把数字放到【血条里面】✗ 不是条上面 ✓
+     · 把血条那层加高到 13px（原来的 6px 放不下 9px 的字 ✗）
+     · 在条里叠一层居中的文字（绝对定位 ✓ 不占布局 ✓）
+     · 只建一次，之后只改 textContent ✓（这是每帧可能调用的 ✓ 不能每次建元素 ✗）*/
+  barText: function (ui, s, color) {
+    if (!ui || !ui.wrap || !ui.bar) { return; }
+    var w = ui.bar.parentElement;
+    if (!w) { return; }
+    if (!ui.bt) {
+      w.style.height = '13px';            // ★ 加高（原来 6px ✗ 字放不下）
+      w.style.position = 'relative';
+      var sp = document.createElement('span');
+      sp.style.cssText = 'position:absolute;left:0;right:0;top:0;bottom:0;display:flex;' +
+        'align-items:center;justify-content:center;font-size:9px;font-weight:700;' +
+        'color:#fff;text-shadow:0 1px 2px #000,0 0 3px #000;pointer-events:none;' +
+        'letter-spacing:0.2px';
+      w.appendChild(sp);
+      ui.bt = sp;
+      if (ui.name) { ui.name.style.display = 'none'; }   // ★ 名字那行藏掉（数字进条里了 ✓）
+    }
+    if (ui.bt.textContent !== s) { ui.bt.textContent = s; }
+    if (color && ui.bt.style.color !== color) { ui.bt.style.color = color; }
+  },
   remove: function (ui) {
     if (ui && ui.wrap && ui.wrap.parentNode) { ui.wrap.parentNode.removeChild(ui.wrap); }
   }
