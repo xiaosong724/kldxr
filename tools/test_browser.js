@@ -1047,8 +1047,16 @@ async function register(name, pw) {
       '#2 帧数和诊断合成一块两行（行数 ' + tidyQ.lines + '）');
     ok(tidyQ.diagTxt.indexOf('网格桶') < 0 && tidyQ.diagTxt.indexOf('音效') < 0,
       '#2 诊断里没有「网格桶」「音效」了');
-    ok(tidyQ.diagTxt.indexOf('玩家') >= 0 && tidyQ.diagTxt.indexOf('实体') >= 0 &&
-       tidyQ.diagTxt.indexOf('道友') >= 0, '#2 诊断还留着坐标/实体/道友（" ' + tidyQ.diagTxt + '"）');
+    /* ★ 第 126 轮：坐标格式改了（用户要求）——
+       去掉"玩家"两个字 ✗ 且不显示小数 ✗
+       → 断言跟着改成"有两个整数坐标 + 实体 + 道友，且没有小数点" ✓ */
+    ok(tidyQ.diagTxt.indexOf('玩家') < 0,
+      '★ 坐标前面没有"玩家"两个字了（"' + tidyQ.diagTxt + '"）');
+    ok(tidyQ.diagTxt.indexOf('.') < 0,
+      '★ 坐标不显示小数了（"' + tidyQ.diagTxt + '"）');
+    ok(/^-?\d+,\s*-?\d+/.test(String(tidyQ.diagTxt).trim()) &&
+       tidyQ.diagTxt.indexOf('实体') >= 0 && tidyQ.diagTxt.indexOf('道友') >= 0,
+      '#2 诊断里还是【坐标 + 实体 + 道友】（"' + tidyQ.diagTxt + '"）');
     ok(tidyQ.acctBtns >= 1 && /登录|登出/.test(tidyQ.acctTxt),
       '#3 设置 → 信息 里有账号入口（"' + tidyQ.acctTxt + '"）');
 

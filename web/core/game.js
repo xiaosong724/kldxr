@@ -3680,7 +3680,10 @@ function frame(ts) {
     /* ★ 第 32 轮：用户要求诊断里【去掉"网格桶"和"音效"】——
        音效进度本来还有个平台层的回调也在往这块写，那边也一起删了 ✓
        现在只留：坐标 · 实体数 · 道友数（正好一行，窄屏会自动换第二行 ✓）*/
-    UI.text('diag', '玩家 ' + P.x.toFixed(1) + ', ' + P.z.toFixed(1)
+    /* ★ 第 126 轮（用户）：
+       · "玩家"两个字不要了 ✗（反正就是你自己的坐标 ✓ 省字 ✓）
+       · 坐标不要小数 ✗（toFixed(1) → Math.round ✓ 粒度到米就够了 ✓）*/
+    UI.text('diag', Math.round(P.x) + ', ' + Math.round(P.z)
       + '   实体 ' + (NET.on ? Object.keys(NET.rmobs).length : mobs.length)
       + '   道友 ' + Object.keys(NET.others).length);
   }
