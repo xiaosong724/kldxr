@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>防具图标候选 第四期（轮廓拉开）</title>
+<style>
+  body{background:#141a22;color:#e8eef6;font:14px/1.6 -apple-system,"Microsoft YaHei",sans-serif;
+       margin:0;padding:16px}
+  h1{font-size:17px;margin:0 0 2px}
+  .tip{opacity:.72;font-size:12px;margin-bottom:12px}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+  .card{background:#1b2430;border:1px solid #ffffff22;border-radius:12px;padding:10px;text-align:center}
+  .big{width:74px;height:74px;margin:0 auto 6px;display:block}
+  .sil{width:74px;height:74px;margin:0 auto 4px;display:block;opacity:.28}
+  .slotrow{display:flex;align-items:center;justify-content:center;gap:12px;margin:6px 0}
+  .slot{position:relative;width:44px;height:44px;border-radius:8px;border:1px solid #ffffff33;
+        display:flex;align-items:center;justify-content:center}
+  .slot svg{width:32px;height:32px}
+  .tg{position:absolute;left:2px;top:0;font-size:11px;font-weight:700;color:#9aa4b2}
+  .nm{font-weight:700;font-size:12px}
+  .ds{opacity:.7;font-size:10.5px;line-height:1.4;margin-top:2px}
+  .c1{color:#c8b6ff} .c2{color:#8ee0ff} .c3{color:#ffd83d}
+  .c4{color:#7ee08a} .c5{color:#ff9a7a}
+</style>
+</head>
+<body>
+<h1>防具图标候选 · 第四期（轮廓完全拉开）</h1>
+<div class="tip">上排=大图 · 中排=纯轮廓剪影（看"缩到 32px 还认不认得出"）· 下排=背包格子里真实大小（低阶灰 / 高阶发光）</div>
+<div class="grid" id="grid"></div>
+<script>
+var C = {
+  /* ① 圆：一块大圆盾。轮廓 = 圆 ✓ 和别的都不一样 */
+  A: { n: '① 圆盾护心甲', c: 'c1', d: '大圆盘 + 两道横带。轮廓最"圆"', svg:
+    '<circle cx="12" cy="11.4" r="8.2" fill="currentColor" opacity=".9"/>' +
+    '<circle cx="12" cy="11.4" r="4.4" fill="none" stroke="#000" stroke-opacity=".34" stroke-width="1.3"/>' +
+    '<circle cx="12" cy="11.4" r="1.5" fill="#000" opacity=".3"/>' +
+    '<path d="M3.8 8.6 h16.4 v1.5 H3.8 z M3.8 13.2 h16.4 v1.5 H3.8 z" fill="#000" opacity=".2"/>' +
+    '<path d="M5.4 3.6 c-1.4 0.9 -2.3 2.3 -2.6 3.9 M18.6 3.6 c1.4 0.9 2.3 2.3 2.6 3.9"' +
+    ' stroke="currentColor" stroke-opacity=".8" stroke-width="1.7" fill="none"/>' },
+  /* ② 方：宽腰方甲。轮廓 = 梯形/方形 ✓ */
+  B: { n: '② 方肩重铠', c: 'c2', d: '又宽又方 + 下摆平直。轮廓最"方"', svg:
+    '<path d="M4.2 5 h15.6 l1.4 4.2 -1.6 0.4 v7.2 H4.4 V9.6 l-1.6 -0.4 z"' +
+    ' fill="currentColor" opacity=".92"/>' +
+    '<path d="M2.2 5 h3 v3.6 h-3 z M18.8 5 h3 v3.6 h-3 z" fill="currentColor" opacity=".75"/>' +
+    '<path d="M12 5.4 v11.4 M6.4 11 h11.2" stroke="#000" stroke-opacity=".26" stroke-width="1"/>' +
+    '<circle cx="9" cy="8.4" r="0.68" fill="#000" opacity=".3"/>' +
+    '<circle cx="15" cy="8.4" r="0.68" fill="#000" opacity=".3"/>' },
+  /* ③ 尖：两根大尖角。轮廓 = 尖刺 ✓ 缩小后最显眼 */
+  C: { n: '③ 双尖角铁甲', c: 'c3', d: '两根大尖角 + 窄身。轮廓最"凶"', svg:
+    '<path d="M12 2 L4.4 5.2 L1 0.6 l3.6 8.4 z M12 2 l7.6 3.2 L23 0.6 l-3.6 8.4 z"' +
+    ' fill="currentColor" opacity=".95"/>' +
+    '<path d="M9 6.6 h6 l0.8 10.2 H8.2 z" fill="currentColor" opacity=".92"/>' +
+    '<path d="M12 6.8 L12 16.6" stroke="#000" stroke-opacity=".3" stroke-width="1"/>' +
+    '<path d="M9.8 9.6 l4.4 2.4 M14.2 9.6 l-4.4 2.4" stroke="#000" stroke-opacity=".28" stroke-width="1"/>' },
+  /* ④ 袍：宽下摆、无肩甲。轮廓 = 钟形 ✓ */
+  D: { n: '④ 云纹法袍', c: 'c4', d: '窄肩宽摆、无肩甲。轮廓是"钟形"', svg:
+    '<path d="M10 3.6 h4 l1.2 3.2 c2.6 1.4 4.2 4.4 4.6 9.4 H4.2 c0.4 -5 2 -8 4.6 -9.4 z"' +
+    ' fill="currentColor" opacity=".86"/>' +
+    '<path d="M12 6.6 v9.6" stroke="#000" stroke-opacity=".24" stroke-width="1"/>' +
+    '<path d="M7.4 10.4 c1.9 0 2.7 1.4 4.6 1.4 s2.7 -1.4 4.6 -1.4' +
+    ' M6.6 13.6 c2.1 0 3 1.5 5.4 1.5 s3.3 -1.5 5.4 -1.5"' +
+    ' stroke="#000" stroke-opacity=".34" stroke-width="1.1" fill="none"/>' +
+    '<path d="M9.8 3.8 c0.6 1.3 3.8 1.3 4.4 0" stroke="#000" stroke-opacity=".3" stroke-width="1" fill="none"/>' },
+  /* ⑤ 骨：肋骨 + 脊柱。轮廓 = 中间镂空 ✓ 最特别 */
+  E: { n: '⑤ 骸骨胸甲', c: 'c5', d: '脊柱 + 肋骨，中间镂空。轮廓最特别', svg:
+    '<path d="M12 2.6 v18.8" stroke="currentColor" stroke-opacity=".95" stroke-width="1.9"/>' +
+    '<path d="M11.4 3.6 h1.2 v3.4 h-1.2 z" fill="currentColor" opacity=".9"/>' +
+    '<path d="M12 5.6 c-3.4 0 -6 1.6 -6.4 4 M12 5.6 c3.4 0 6 1.6 6.4 4"' +
+    ' M12 9 c-3.1 0 -5.6 1.5 -6 3.8 M12 9 c3.1 0 5.6 1.5 6 3.8' +
+    ' M12 12.4 c-2.8 0 -5 1.4 -5.4 3.5 M12 12.4 c2.8 0 5 1.4 5.4 3.5"' +
+    ' stroke="currentColor" stroke-opacity=".9" stroke-width="1.5" fill="none" stroke-linecap="round"/>' +
+    '<circle cx="12" cy="4.2" r="1.5" fill="currentColor" opacity=".9"/>' }
+};
+(function () {
+  var out = [];
+  for (var k in C) {
+    var v = C[k];
+    out.push('<div class="card">' +
+      '<svg class="big ' + v.c + '" viewBox="0 0 24 24">' + v.svg + '</svg>' +
+      '<svg class="sil" viewBox="0 0 24 24" style="color:#e8eef6">' + v.svg + '</svg>' +
+      '<div class="slotrow">' +
+      '<div class="slot"><span class="tg">3</span>' +
+      '<svg class="' + v.c + '" style="opacity:.55" viewBox="0 0 24 24">' + v.svg + '</svg></div>' +
+      '<div class="slot" style="background:linear-gradient(180deg,#8a7a6655,#8a7a6622)">' +
+      '<span class="tg">12</span>' +
+      '<svg class="' + v.c + '" viewBox="0 0 24 24" style="filter:drop-shadow(0 0 4px currentColor)">' +
+      v.svg + '</svg></div></div>' +
+      '<div class="nm ' + v.c + '">' + v.n + '</div>' +
+      '<div class="ds">' + v.d + '</div></div>');
+  }
+  document.getElementById('grid').innerHTML = out.join('');
+})();
+</script>
+</body>
+</html>
