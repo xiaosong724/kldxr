@@ -2768,7 +2768,7 @@ function updateSelfBar() {
                     : (pct > 25 ? 'linear-gradient(180deg,#ffd83d,#c9a02a)'
                                 : 'linear-gradient(180deg,#ff7a6a,#c04030)'));
     // ★ 第 88 轮（用户要求）：数字显示在【血条里面】✓ 不是条上面 ✓
-    UI.plate.barText(_selfUI, mx + ' / ' + mm, '#fff');
+    UI.plate.barText(_selfUI, String(mx), '#fff');   // ★ 第 111 轮：只显示剩余量 ✓
   }
   if (!_mark3) { _mark3 = new THREE.Vector3(); }
   _mark3.set(P.x, 3.05, P.z).project(cam);

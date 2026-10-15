@@ -348,7 +348,7 @@ function mkMobUI(name, hpMax) {
   nm.textContent = name;
   nm.style.cssText = 'font-size:10px;font-weight:700;color:#fff;text-shadow:0 1px 3px #000,0 0 6px #000;margin-bottom:1px;white-space:nowrap';
   var barW = document.createElement('div');
-  barW.style.cssText = 'width:54px;height:6px;background:#000000cc;border:1px solid #ffffff55;border-radius:4px;overflow:hidden;margin:0 auto';
+  barW.style.cssText = 'display:inline-block;min-width:54px;height:13px;background:#000000cc;border:1px solid #ffffff55;border-radius:4px;overflow:hidden;margin:0 auto;position:relative;padding:0 5px';
   var bar = document.createElement('div');
   bar.style.cssText = 'height:100%;width:100%;background:linear-gradient(180deg,#7ee08a,#3aa04a);border-radius:3px;transition:width .12s';
   barW.appendChild(bar);
@@ -596,7 +596,7 @@ function showRole(r) {
   if (!r) { return; }
   NET.myName = r.name || '';
   var e1 = document.getElementById('uName'); if (e1) { e1.textContent = r.name || '—'; }
-  var e2 = document.getElementById('uRealm'); if (e2) { e2.textContent = '炼气 ' + (r.level || 1) + ' 级'; }
+  var e2 = document.getElementById('uRealm'); if (e2) { e2.textContent = '炼气 ' + (r.level || 1) + ' 层'; }
   var e3 = document.getElementById('uStat');
   if (e3) { e3.textContent = '经验 ' + (r.exp || 0) + '　天赋点 ' + (r.talentFree || 0); }
   updExp(r);   // ★ 经验条（第 38 轮，用户要求）跟着角色数据一起刷 ✓
@@ -1147,7 +1147,7 @@ function openSet(wantTab) {
     who.className = 'opt';
     who.style.cssText = 'cursor:default;background:#1b2430';
     who.innerHTML = (WSC.ready && WSC.role)
-      ? ('已登录：' + (WSC.role.name || '?') + '（炼气 ' + (WSC.role.level || 1) + ' 级）')
+      ? ('已登录：' + (WSC.role.name || '?') + '（炼气 ' + (WSC.role.level || 1) + ' 层）')
       : (WSC.on ? '连接中…' : '未登录');
     acct.appendChild(who);
     var logged = !!(WSC.on || WSC.token);
@@ -2206,10 +2206,18 @@ function wsWelcome(d) {
     if (typeof d.role.hp === 'number' && d.role.hp > 0) {
       HP = d.role.hp;
     }
+    /* ★★ 第 111 轮修的真 bug（用户："血量只保存到了等级血量，防具加的血量没保存"）★★
+       病根：这里原来拿 role.hpMax 当上限 ✗
+            而 role.hpMax 是【角色基础】上限 ✗ 不含防具加成 ✗
+            紧接着 `if (HP > HPMAX) HP = HPMAX` 就把存档里的血【夹回了 200】✗✓✓
+            → 用户："退出时满血，进去只有 200 血"✓ 一字不差 ✓
+       修：
+         · role.hpMax 只当作【临时值】（防具消息马上就到 ✓）
+         · ★ 关键：不要在这里夹血量 ✗ 交给服务器下发的有效上限去夹 ✓
+           （服务器在进世界时会推一条 armor 消息，里面带 hpm = 有效上限 ✓）*/
     if (typeof d.role.hpMax === 'number' && d.role.hpMax > 0) {
-      HPMAX = d.role.hpMax;
+      HPMAX = Math.max(HPMAX, d.role.hpMax);
     }
-    if (HP > HPMAX) { HP = HPMAX; }
     updHP();
   }
   if (window.hideLogin) { hideLogin(); }
@@ -2217,7 +2225,7 @@ function wsWelcome(d) {
   var nm = (d.role && d.role.name) || '';
   var lv = (d.role && d.role.level) || 1;
   if (window.showRole) { showRole(d.role); }
-  toast('已进入世界：' + nm + '（炼气 ' + lv + ' 级）');
+  toast('已进入世界：' + nm + '（炼气 ' + lv + ' 层）');
 }
 
 /* ---------- netInit ---------- */
