@@ -605,7 +605,11 @@ function showRole(r) {
   var e1 = document.getElementById('uName'); if (e1) { e1.textContent = r.name || '—'; }
   var e2 = document.getElementById('uRealm'); if (e2) { e2.textContent = '炼气 ' + (r.level || 1) + ' 层'; }
   var e3 = document.getElementById('uStat');
-  if (e3) { e3.textContent = '经验 ' + (r.exp || 0) + '　天赋点 ' + (r.talentFree || 0); }
+  /* ★★ 第 125 轮（用户：左上角的经验和天赋点都不用显示了）★★
+     经验：左上角本来就有一条经验进度条 ✓ 重复了 ✗
+     天赋点：菜单里有专门的天赋页 ✓（而且带高亮提醒 ✓）也重复了 ✗
+     → 这行直接清空 ✗（不是隐藏 ✗ 是不写了 ✓ 省得占地方 ✓）*/
+  if (e3) { e3.textContent = ''; }
   updExp(r);   // ★ 经验条（第 38 轮，用户要求）跟着角色数据一起刷 ✓
 }
 

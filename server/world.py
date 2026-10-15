@@ -1615,9 +1615,8 @@ class World(object):
         _fx = weapons.fx_of(_w.get('look'), int(_w.get('tier') or 0))
         if _fx and _fx['name'] == '招架' and random.random() < _fx['chance']:
             dv = max(1, int(round(dv * (1.0 - _fx['value']))))
-            # ★★ 第 118 轮：记下【原始伤害】★★（这里是刚算出来、一步都没减过的时候 ✓）
-            #   全局 30% 地板就拿它算 ✗（拿后面的值会越算越低 → 地板跟着变低 ✗）
-            _dv0 = int(dv)
+            # ★ 第 125 轮：这里原本又把 _dv0 覆盖了一次 ✗
+            #   （招架后的值 ✗ → 地板跟着变低 ✗）已删✓
             self._send_cid(p.cid, P.pack('fx', kind='parry'))
         # ★ 固定减伤（防具的 dr ✓）：至少挨 1 点（不然穿了甲就无敌了 ✗）
         if _st['dr'] > 0:
@@ -1643,6 +1642,16 @@ class World(object):
         # ★ 受击回灵气（词条 ✓）
         if _st['qi_hurt'] > 0:
             p.qi = min(int((p.role or {}).get('qiMax') or 100), int(p.qi) + int(_st['qi_hurt']))
+        # ★★★ 第 125 轮：30% 地板放在【所有减伤之后、扣血之前】的最后一步 ★★★
+        #   为什么要放这么后：
+        #     前几版我把它放在"天赋减伤之后"✗
+        #     但后面其实还有别的减伤在跑 ✗
+        #     （词条里的"受到伤害 -X 点" / 减伤类武器技能 等等 ✗）
+        #     → 结果就是"说了 30% 其实没守住"✗（测出 10 阶 28% / 12 阶 25% ✗）
+        #   现在放在最后一步 ✓ 不管中间多少道减伤 ✗ 都兜得住 ✓
+        #   ★ 而且只用 _dv0（roll_damage 刚出来那个值 ✓）
+        #     不依赖中间任何一步 → 不会再出现"插错位置"✗
+        dv = max(dv, max(1, int(round(_dv0 * DMG_FLOOR))))
         p.hp = max(0, int(p.hp) - dv)
         self._add_pend(p.cid, 'hurts', {'dmg': dv, 'x': round(m.x, 2), 'z': round(m.z, 2),
                                         'by': m.kind, 'kind': 'mob', 'crit': bool(crit)})
