@@ -58,6 +58,15 @@
       · 大小仍由 --atk 驱动 → 设置里那档还照常生效 ✓
       · 冷却表现：.cd 这层用 conic-gradient 转一圈（--cd = 剩余比例，由 core 推过来）*/
  #atk{position:fixed;right:18px;bottom:56px;width:var(--atk,84px);height:var(--atk,84px);
+   box-sizing:border-box;border-radius:50%;display:flex;align-items:center;justify-content:center;
+   overflow:hidden;
+   background:radial-gradient(circle at 36% 30%,
+     #7d685963 0%,#5b483f57 38%,#3a2c2547 76%,#241b1638 100%);
+   border:2px solid #8e7a6899;
+   box-shadow:0 4px 12px #00000055,inset 0 1px 0 #ffffff22,inset 0 -9px 18px #0000002e;
+   backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
+   user-select:none;cursor:pointer;z-index:30;
+   transition:transform .07s ease,box-shadow .15s ease}
 /* ★★ 第 185 轮（用户）：传送回安全区 —— 常驻按钮，放底部中间 ★★
    为什么放中间：右下角是攻击键、左下角是摇杆 ✗ 只有中间是空的 ✓
    为什么常驻：原来塞在菜单里 ✗ 打起来根本来不及开菜单点 ✓
@@ -82,15 +91,6 @@
 #safeTpTxt{position:relative;z-index:1}
 /* 读条中：变黄、不能再点（服务器也不认重复请求 ✓ 这里只是视觉）*/
 #safeTp.casting{border-color:#ffd83d;color:#fff}
-   box-sizing:border-box;border-radius:50%;display:flex;align-items:center;justify-content:center;
-   overflow:hidden;
-   background:radial-gradient(circle at 36% 30%,
-     #7d685963 0%,#5b483f57 38%,#3a2c2547 76%,#241b1638 100%);
-   border:2px solid #8e7a6899;
-   box-shadow:0 4px 12px #00000055,inset 0 1px 0 #ffffff22,inset 0 -9px 18px #0000002e;
-   backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
-   user-select:none;cursor:pointer;z-index:30;
-   transition:transform .07s ease,box-shadow .15s ease}
  #atk .ic{position:relative;z-index:2;width:54%;height:54%;color:#eadcc6;opacity:.95;
    filter:drop-shadow(0 2px 3px #000000cc);transition:opacity .12s ease}
  /* ★ 冷却那一圈：原来是半透明【黑】，用户嫌闷 → 改成半透明【白】（第 33 轮）
