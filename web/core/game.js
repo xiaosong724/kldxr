@@ -1605,9 +1605,10 @@ function infoText() {
 /* ★ 妖兽头顶那行字：职业 + 等级 + 血（第 36 轮加了等级，用户要求"僵尸的等级要显示出来"）
    ★ 等级/职业是【服务器】给的（联机时）—— 单机那份自己摇一个，用同一套公式 ✓ */
 function mobPlate(m) {
+  /* ★ 第 90 轮（用户要求）：僵尸名字后面【不要血量文字】✓
+     血量已经显示在血条里了 ✓ 两边都写就重复了 ✗ */
   var nm = (m.kind ? m.kind : '僵尸');
-  return nm + (m.lv ? ' Lv.' + m.lv : '') + ' '
-    + Math.max(0, Math.round(m.hp)) + '/' + Math.round(m.hpMax || 30);
+  return nm + (m.lv ? ' Lv.' + m.lv : '');
 }
 
 /* ★ 单机用的妖兽数值（和服务器 server/mobs.py 同一套公式 —— 方案 §3.2）
@@ -1817,6 +1818,7 @@ function wsApplyWorld(d) {
       x: w.x, z: w.z, yaw: w.y, hp: w.hp, hpm: 0,
       ct: w.t,
       atk: (typeof w.atk === 'number') ? w.atk : -1,   // ★ 挥砍序号（服务器第 66 轮改的 ✓）
+      mate: !!w.mate,        // ★ 第 90 轮：服务器直接告诉我"他是不是我队友" ✓
       wlook: w.w,            // ★ 第 61 轮：他手上是什么武器（动作原型要一致 ✓）
       wtier: (typeof w.wt === 'number') ? w.wt : 0,   // ★ 第 65 轮：品阶（模型颜色/发光用 ✓）
       inv: +w.inv || 0,      // ★ 第 63 轮：他的无敌剩余（队友刚复活要看得见 ✓）
@@ -2239,6 +2241,7 @@ function addOther(w, t) {
      所以两处都要写 ✓（不然"别人看你死亡还是站着"永远修不好 ✗）*/
   o.dead = !!w.dead;
   o.inv = +w.inv || 0;       // ★ 第 63 轮：无敌剩余（每包都更新 ✓）
+  o.mate = !!w.mate;         // ★ 第 90 轮：队友标记（每包更新 ✓）
   /* ★★ 第 86 轮（用户要求）：队友名字前面加一个【蓝色五角星】★★
      ★ 走 UI.plate.name ✓ 不在 core 里碰 .style ✗（分层铁律 ✓）
      ★ 每包都刷 ✓ 所以组队/退队/踢人之后名字会立刻跟着变 ✓ */
@@ -2903,7 +2906,7 @@ function netUpdate(dt) {
            ★ 顺手修一个静默 bug：这行原来每帧覆盖名字 ✗
              而"队友蓝色五角星"是在 addOther 里设的 ✓ → 被这行刷掉了 ✗
              （所以你大概一直没看到那颗星 ✓ 现在这里也带上星 ✓）*/
-        var _mate3 = isPartyMate(uid);
+        var _mate3 = o.mate || isPartyMate(uid);   // ★ 第 90 轮：优先用服务器给的 ✓
         UI.plate.name(o.ui,
           (_mate3 ? '★ ' : '') + (o.name || '道友') + (o.realm ? ' ' + o.realm : ''),
           _mate3 ? '#5aa8ff' : '#fff');

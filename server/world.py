@@ -1800,6 +1800,12 @@ class World(object):
                 continue
             out.append({
                 'id': o.role_id,
+                # ★★ 第 90 轮：直接告诉你"他是不是你队友" ★★
+                #   为什么不让客户端自己比 role_id ✗
+                #   因为客户端要拿到名单、要判断时机、还可能因为消息没到而判断不出来 ✗
+                #   服务器这里一句话就说清了 ✓ 最可靠 ✓
+                'mate': 1 if (self.party_of.get(o.role_id) is not None and
+                              self.party_of.get(o.role_id) == self.party_of.get(p.role_id)) else 0,
                 'n': o.name,
                 'x': round(o.x, 3),
                 'z': round(o.z, 3),
