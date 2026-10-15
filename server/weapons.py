@@ -423,18 +423,63 @@ def make_weapon(look, tier, coeff, item_lv=1, rng=None):
     }
 
 
+# ★★★ 第 130 轮：品阶概率改成【幂律 + 等级调软】（方案 docs/掉落方案.md）★★★
+#   为什么改：原来是"品阶上限跟着怪等级硬卡"✗
+#     1 级怪掉 12 阶的概率是【严格 0】✗ 低级怪对高级玩家完全没价值 ✗
+#   现在：一条连续曲线 ✓
+#     1 级怪也能出 12 阶（1/25 万 ✓ 极低但非零 ✓）
+#     等级越高越容易 ✓ 120 级渐近饱和在 2.0000% ✓（用户定的上限 ✓）
+#   ★ 四个常量都放这里 ✗ 调平衡不用翻代码 ✓
+TIER_A0 = 5.0          # 低级时的衰减指数（越大 → 高阶越罕见）
+TIER_A1 = 1.1904       # 满级时的衰减指数
+                       #   ★ 这个值是【解出来的】✗ 不是拍的 ✓
+                       #     解的目标：满级时 12 阶正好 = 2.0000%（用户定的上限 ✓）
+                       #     想改上限就重解一次（二分 80 次就行 ✗ 别手拍 ✓）
+TIER_XP = 1.2          # 等级进度的幂次（控制"什么时候开始变多"）
+TIER_LV_CAP = 120      # 等级进度封顶（超过就饱和 ✓ 200 级和 120 级完全一样 ✓）
+
+
+def tier_weights(mob_lv, killer_lv):
+    """返回 12 个品阶的权重（品阶 0..11 → 1..12 阶 ✓）
+
+    方案 §2.1 三行公式：
+      x = min(怪等级, 击杀者等级+20) / 120      ← 保留"击杀者+20"防大号带小号 ✓
+      a = 5.0 − 3.8096 × x^1.2
+      w(t) = (1/t)^a
+    ★ 用幂律而不是高斯：高斯尾巴掉太快（10 的负几十次方 ≈ 0 ✗）
+      等于又变回硬上限 ✗ 幂律尾巴长 → 正好给出"极低但非零"✓
+    """
+    z = min(int(mob_lv or 1), int(killer_lv or 1) + 20)
+    x = min(float(z), float(TIER_LV_CAP)) / float(TIER_LV_CAP)
+    aa = TIER_A0 - (TIER_A0 - TIER_A1) * (x ** TIER_XP)
+    w = []
+    for t in range(1, 13):
+        w.append(1.0 / (t ** aa))
+    s = sum(w) or 1.0
+    return [v / s for v in w]
+
+
+def roll_tier(mob_lv, killer_lv, rng=None):
+    """按权重抽一个品阶，返回 0..11（= 1..12 阶 ✓）"""
+    r = rng or random
+    w = tier_weights(mob_lv, killer_lv)
+    pick = r.random()
+    acc = 0.0
+    for i, v in enumerate(w):
+        acc += v
+        if pick <= acc:
+            return i
+    return 0
+
+
 def roll_weapon(mob_lv, killer_lv, rng=None):
     """击杀掉一件武器（§7.8：类型按怪的等级/倾向，品阶按 §8.1 ③）"""
     r = rng or random
-    from drops import max_tier                      # ★ 品阶上限和材料走同一套 ✓
-    cap = max_tier(mob_lv)
-    # 品阶：在 [0, cap] 里按权重抽（越低越常见 ✓）
-    tier = 0
-    for t in range(cap + 1):
-        if r.random() < 0.62:                       # 每升一阶都要过一关 → 越低越常见 ✓
-            tier = t
-        else:
-            break
+    # ★★ 第 130 轮：品阶改用【幂律曲线】抽 ✗（方案§2.1）
+    #   旧写法：max_tier(mob_lv) 硬卡上限 + 0.62 连过关 ✗
+    #     → 1 级怪永远出不了 12 阶 ✗（用户要求改掉 ✓）
+    #   ★ 一句话就换完了 ✓ 别的什么都不用动 ✓
+    tier = roll_tier(mob_lv, killer_lv, r)
     keys = [k for k in TYPES if k not in RANGED]    # 远程这期不掉（还没有投射物 ✗）
     look = r.choice(keys)
     item_lv = max(1, int(mob_lv) // 4)
