@@ -354,9 +354,26 @@ def ensure_dur(w):
             → 客户端那条判断 (+it.durMax > 0) 不成立 → 耐久行直接不显示 ✗
       → 读到就补上（意思就是"以后按新规矩算" ✓ 不用迁移整库 ✗）
     """
+    # ★ 第 104 轮：假防具自愈 —— slot=armor 但没有 base 的，
+    #   其实是当年掉落拼错留下的【材料】✗ → 把 slot 去掉，让它回归材料 ✓
+    #   ★ 为什么必须放在这个早返回之前：材料没有 base ✗
+    #     放在后面的话根本走不到 ✗（我第一版就放错了 ✗）
+    if isinstance(w, dict) and w.get('slot') == 'armor' and not w.get('base'):
+        w.pop('slot', None)
+        w.pop('look', None)
+        return w
     if not isinstance(w, dict) or not w.get('base'):
         return w
+    # ★★ 第 104 轮修的真 bug：这里原来【跳过防具】✗
+    #   第 103 轮我给防具做了耐久 ✓ 但【老防具】的 JSON 里 durMax 是 0 ✗
+    #   → 客户端那条 (+it.durMax > 0) 不成立 → 耐久条根本不显示 ✗
+    #   → 用户："耐久也没有"✓ 就是这个 ✓
     if w.get('slot') == 'armor':
+        import armor as _armor
+        if not w.get('durMax'):
+            w['durMax'] = _armor.dur_max_of(w.get('tier') or 0)
+            if not w.get('dur'):
+                w['dur'] = w['durMax']
         return w
     if not w.get('durMax'):
         w['durMax'] = dur_max_of(w.get('tier') or 0)

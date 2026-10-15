@@ -1234,7 +1234,8 @@ var ARMOR_ICON = '<svg viewBox="0 0 24 24" width="100%" height="100%">' +
 
 function iconOfItem(it) {
   if (!it) { return ITEM_ICON.box; }
-  if (it.slot === 'armor') { return ARMOR_ICON; }
+  // ★ 第 104 轮：必须【有 base】才算防具 ✓（假防具按材料显示 ✓ 兜底 ✓）
+  if (it.slot === 'armor' && it.base) { return ARMOR_ICON; }
   /* ★★ 武器图标 = 那把武器的【平面微缩版】★★（用户要求）
      它不是画出来的线条，而是把同一份零件数据投影成 SVG 矩形 ——
      所以它永远长得就像手上那把 ✓ 而且换武器/改模型图标自动跟着变 ✓ */

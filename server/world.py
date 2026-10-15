@@ -1724,9 +1724,15 @@ class World(object):
         #   （不然防具永远拿不到 ✗ 只能靠管理页发 ✗）
         if it and random.random() < 0.25:
             _ta = max(0, min(11, int(it.get('tier') or 0)))
-            it = {'name': it.get('name'), 'tier': _ta, 'kind': 'armor',
-                  'slot': 'armor',
-                  'armor': armormod.make_armor(_ta, max(1, klv // 4 + 1))}
+            # ★★★ 第 104 轮修的真 bug ★★★
+            #   原来这里是包了一层：{'name':…, 'kind':'armor', 'slot':'armor',
+            #                        'armor': make_armor(...)}
+            #     外层【没有 base】✗ 而拾取时是把【外层】直接存进背包 ✗
+            #     → 捡起来的防具 = 一个"材料形状的假防具"✗
+            #       （名字对、图标是防具、但没有 base → 属性算不出来 ✓
+            #         20 件这样的假防具已经在库里了 ✓ 用户报的"材料图标像防具"就是它 ✓）
+            #   修：直接存【防具本体】✓ 它的字段本来就是齐的（name/tier/base/slot…）✓
+            it = armormod.make_armor(_ta, max(1, klv // 4 + 1))
         self._drop_one(p, m, it)
         eq = drops.roll_equip(m.lv, klv)          # ★ 装备类（独立 roll）
         self._drop_one(p, m, eq)
