@@ -1723,10 +1723,12 @@ function openSet(wantTab) {
 
   /* ★ 分类导航：按记住的那一页显示（第 31 轮）✓ */
   tabScrollInit();   // ★ 第 115 轮：菜单导航可拖动/滚轮横滑 ✓
-  /* 第 173 轮（用户 #6）：读条进度每 100ms 刷一次（只在读条时才真干活 ✓）*/
-  TPCAST.at = performance.now() / 1000;
-  setInterval(function () { if (TPCAST.left > 0) { tpBarRender(); } }, 100);
-  tpBind();
+  /* ★★ 第 190 轮：这三行【原来在这里（openSet 里）】是错的 ✗✗
+     后果：只有"打开过一次菜单"才会绑定传送按钮 ✓
+           而玩家根本不用进菜单点它 ✓ → 按钮永远没反应 ✓✓
+           （用户原话："我现在没有在菜单里看到按钮，而是直接在游戏界面看到的"✓
+             正好说明他从来没开过菜单 ✓）
+     → 已挪到【文件末尾的模块顶层】执行 ✓ 见文件最后那块 ✓ */
   setTab(SETCFG.setTab || 'view');
   /* ★ 第 119 轮：这两处钩子已经收进 setTab() 里了 ✗（不留两份 ✗）*/
 
@@ -2106,35 +2108,68 @@ function bagPageBind() {
 var TPCAST = { left: 0, at: 0 };
 
 function tpBarRender() {
-  /* ★ 第 185 轮：读条画在【常驻按钮】上（用户要求"在界面显示读秒进度"）*/
+  /* ★★ 第 189 轮：在这里【顺手确保绑定过】★★
+     为什么放这：这个函数被一个 100ms 的定时器一直调 ✓ 一定会跑到 ✓
+     而"初始化那一段"实测【根本没执行到】✗（按钮的 onclick 一直是空 ✓）
+     ★ tpBind 自己是幂等的（document._tpBound 挡着 ✓）→ 放心每帧调 ✓
+     ★ 这是"把初始化挂在一个必然会发生的事件上"✗ 比去追查初始化顺序稳得多 ✓ */
+  tpBind();
   var btn = document.getElementById('safeTp');
   var fill = document.getElementById('safeTpFill');
   var txt = document.getElementById('safeTpTxt');
   if (!btn || !fill || !txt) { return; }
-  var show = TPCAST.left > 0;
-  if (!show) {
+  var left = TPCAST.left - (performance.now() / 1000 - TPCAST.at);
+  if (left <= 0) {
     btn.classList.remove('casting');
     fill.style.width = '0%';
     txt.textContent = '回安全区';
     return;
   }
   btn.classList.add('casting');
-  var left = Math.max(0, TPCAST.left - (performance.now() / 1000 - TPCAST.at));
   var total = 6.0;
   fill.style.width = Math.min(100, (1 - left / total) * 100).toFixed(1) + '%';
   txt.textContent = '传送中 ' + left.toFixed(1) + 's';
 }
 
-function tpBind() {
+/* ★ 第 189 轮：改成事件委托（原来的写法依赖"绑定那一刻按钮已经存在"✗
+   实测就是栽在这上面：初始化跑在按钮解析出来之前 → getElementById 是 null
+   → 直接 return → 按钮永远没有 onclick ✓）
+   ★ 委托的好处：不管元素什么时候出现、被谁重建，都能点到 ✓ */
+/* ★ 第 190 轮：点击动作抽出来（委托和直接绑定共用一份 ✓ 不会两边不一致）*/
+function tpDo(e) {
+  if (e && e.preventDefault) { e.preventDefault(); }
   var btn = document.getElementById('safeTp');
-  if (!btn || btn._b) { return; }
-  btn._b = true;
-  btn.onclick = function () {
-    if (btn.classList.contains('casting')) { return; }   /* 已经在读条了 ✓ */
-    /* ★ 用户要求：点了之后【关掉菜单】✗ 免得读条时还挡着视线 ✓ */
-    try { if (typeof closeSet === 'function') { closeSet(); } } catch (e) { }
-    wsSend('safetp', {});                                 /* 只是请求 ✓ 服务器说了算 ✓ */
-  };
+  if (btn && btn.classList.contains('casting')) { return; }   /* 正在读条，忽略 ✓ */
+  /* 点了先关菜单（用户要求 ✓）*/
+  try { if (typeof closeSet === 'function') { closeSet(); } } catch (e2) { }
+  /* ★ 乐观反馈：先本地走秒 ✗ 服务器回了 tpcast 就以服务器为准 ✓
+     这样网络慢也不会像"没反应"✓ 服务器不同意时会给 notice 说明原因 ✓ */
+  TPCAST.left = 6.0;
+  TPCAST.at = performance.now() / 1000;
+  tpBarRender();
+  wsSend('safetp', {});                                /* 真正的请求 ✓ 服务器说了算 ✓ */
+}
+
+/* ★ 两条路一起挂（用户报过"点了没反应"✗ 一条路出问题还有另一条 ✓）
+   ① 事件委托（挂在 document 上 ✓ 不怕元素重建 ✓）
+   ② 直接挂 onclick（在 tpEnsureBtn 里每 100ms 检查一次 ✓ 挂上为止 ✓）*/
+function tpBind() {
+  if (window._tpBound) { return; }
+  window._tpBound = true;
+  document.addEventListener('click', function (e) {
+    var el = e.target, hit = null;
+    while (el && el !== document) {
+      if (el.id === 'safeTp') { hit = el; break; }
+      el = el.parentNode;
+    }
+    if (hit) { tpDo(e); }
+  });
+}
+
+/* 每 100ms 检查一次：按钮在不在、onclick 挂上没有 ✓ 挂上就什么都不做 ✓ */
+function tpEnsureBtn() {
+  var btn = document.getElementById('safeTp');
+  if (btn && btn.onclick !== tpDo) { btn.onclick = tpDo; }
 }
 
 function bagRender() {
@@ -2799,7 +2834,10 @@ function wsOnMessage(raw) {
      tpcast = 服务器说"开始读条 / 读条被打断"（t=秒数，0 表示断了）
      tp     = 服务器说"到了"（给最终坐标，客户端跟着摆 ✓）*/
   if (t === 'tpcast') {
+    /* ★ 第 189 轮：服务器说了算 —— 它说开始读条就重新计时 ✓
+       它说 t=0（被打断）就立刻收掉 ✓ 覆盖掉我们本地那次乐观显示 ✓ */
     TPCAST.left = +d.t || 0;
+    TPCAST.at = performance.now() / 1000;
     tpBarRender();
     return;
   }
@@ -3065,3 +3103,29 @@ function bindLogin() {
 })();
 
 
+
+
+/* ============================================================
+   ★★ 第 190 轮：传送按钮的启动代码 —— 【必须放在这里】★★
+   为什么单独放文件末尾、而不是塞进某个函数：
+     传送按钮是【常驻界面】的东西 ✗ 玩家不进菜单也要能用 ✓
+     之前我把绑定写进了 openSet() ✓ → 只有开过菜单才生效 ✓✓
+     （用户报的"点了没反应"就是这个 ✓）
+   ★ 这里用 DOMContentLoaded 兜一下 ✗ 保证按钮元素已经解析出来 ✓
+   ============================================================ */
+(function tpBoot() {
+  function go() {
+    if (window.TP_BOOT_DONE) { return; }
+    window.TP_BOOT_DONE = true;
+    try { tpBind(); } catch (e) { }
+    TPCAST.at = performance.now() / 1000;
+    setInterval(function () { tpEnsureBtn(); tpBarRender(); }, 100);   /* 100ms 一次 ✓ 便宜 ✓ 而且顺带保证按钮一定挂上 ✓ */
+    tpBarRender();                      /* 先画一次，把按钮恢复成正常样子 ✓ */
+  }
+  if (typeof document === 'undefined') { return; }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', go);
+  } else {
+    go();
+  }
+})();
