@@ -195,7 +195,11 @@ class Api(BaseHTTPRequestHandler):
         ★ 别把 8900 写死在 index.html 里 —— 改了配置客户端就连不上了。
           用 <script src="/ws-config.js"> 同步加载，不占一次往返 ✓
         """
-        js = 'window.WS_PORT=%d;\n' % int(self.cfg.get('ws_port', 8900))
+        # 第 160 轮：顺手把构建号也告诉客户端
+        #   为什么放这里：这个文件是服务器生成的，而且客户端第一个加载它
+        #   用途：玩家看一眼诊断行就知道自己跑的是不是最新代码
+        js = ('window.WS_PORT=%d;' 'window.BUILD="%s";' '\n') % (
+            int(self.cfg.get('ws_port', 8900)), self._web_build())
         return self._send(200, js.encode('utf-8'), 'application/javascript; charset=utf-8')
 
     def do_POST(self):
