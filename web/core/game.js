@@ -2628,7 +2628,15 @@ function hurtPlayer(dv, fx, fz, kind, byName) {
   sfx('zhurt', 0.9);
   if (!isFinite(fx)) { fx = P.x; }
   if (!isFinite(fz)) { fz = P.z; }
-  dmg('-' + dv, fx, 2.4, fz, false);
+  /* ★★ 第 146 轮（用户："把僵尸对自己造成的伤害改成红色方便分辨"）★★
+     之前所有伤害数字都是一个色（默认米白 #fff6e8 ✗ 暴击才是金黄✓）
+     → 打怪物的数字、自己挨打的数字、队友挨打的数字混在一起 ✗ 看不出谁挨了打 ✗
+     现在：
+       · ★ 僵尸打我 → 红色 #ff5a4a ✓（一眼就知道是自己在掉血 ✓）
+       · PVP 打我 → 橙红 #ff9a3c ✓（和僵尸区开 ✓ 方便以后做 PVP 时分辨 ✓）
+       · 我打怪物 → 保持原样 ✗（米白 / 暴击金黄 ✓）
+     ★ 用 fxNum（已有的带颜色版本 ✓）不新加函数 ✗ */
+  fxNum('-' + dv, kind === 'pvp' ? '#ff9a3c' : '#ff5a4a', fx, 2.4, fz);
   updHP();
   if (HP <= 0) { playerDie(byName); }              // ★ 不再自动满血复活 ✗ 要点复活 ✓
 }
