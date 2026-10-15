@@ -1742,6 +1742,7 @@ function wsApplyWorld(d) {
       uid: w.id, name: w.n, realm: '', lv: w.lv,
       x: w.x, z: w.z, yaw: w.y, hp: w.hp, hpm: 0,
       ct: w.t, atk: w.atk,
+      wlook: w.w,            // ★ 第 61 轮：他手上是什么武器（动作原型要一致 ✓）
       dead: !!w.d            // ★ 第 57 轮：他倒下了没有（服务器同步给我的 ✓）
     }, t);
   }
@@ -2591,7 +2592,7 @@ function netUpdate(dt) {
     // ★ 他的挥剑动画（抬剑 → 下砍 ✓ 和本地共用 heroAtkPose → 动作一模一样 ✓）
     if (o.atkT >= 0) {
       o.atkT += dt;
-      if (!heroAtkPose(o.hh, o.atkT, px, pz, o.cur.yaw)) {
+      if (!heroAtkPose(o.hh, o.atkT, px, pz, o.cur.yaw, o.wlook)) {
         o.atkT = -1;
         heroAtkReset(o.hh, px, pz, o.cur.yaw);
       }
@@ -2778,9 +2779,66 @@ function hurtMob(m, dv, fromX, fromZ, crit, quiet) {
    ★ 本地玩家和其他玩家共用这一套 → 别人看到的动作和你自己看到的一模一样 ✓
    heroObj = H 或 o.hh ✓ atkT = 已经播了多久 ✓ (bx,bz,byaw) = 身体基准位置/朝向 ✓
    返回 true = 还在播（调用方继续累加 atkT）✓ false = 该收尾了 ✓ */
-function heroAtkPose(heroObj, atkT, bx, bz, byaw) {
-  var TOTAL = 0.86;
-  var T1 = 0.26, T2 = 0.43, T3 = 0.52;
+/* ============================================================
+   ★★ 第 61 轮：三套挥砍动作（劈 / 扫 / 刺）★★
+   【符号约定】（沿用原注释里踩过坑的那套，别改 ✗）
+     手臂/腿朝 -Y（往下长）→ 负的 rotation.x = 往前，正 = 往后
+     剑刃朝 +Y（往上长） → 正的 rotation.x = 往前，负 = 往后
+       · swordX = +1.57 ≈ 剑水平朝前 ✓   -1.57 ≈ 朝后 ✓
+       · swordX ≈ -3.14 ≈ 剑朝下（劈到底 ✓）  0 = 朝上 ✓
+     躯干 g.rotation.x：正 = 前倾，负 = 后仰；g.rotation.y 的第 5 通道 = 转体
+   【通道】[armR.x, armR.y, armR.z, swordX, torsoX, bodyY, armL.x, legL.x, legR.x, step, rise]
+   ============================================================ */
+
+// 劈：抬手过顶 → 下砸 → 收招慢（斧、锤）
+var KF_CHOP = [
+  [ 0.00,  0.00,  0.15,  0.55,  0.00,  0.00, -0.15,  0.00,  0.00,  0.00,  0.00],
+  [ 2.85,  0.10,  0.14, -3.19, -0.10,  0.12, -0.55, -0.18,  0.18, -0.04, -0.06],
+  [-0.85, -0.10,  0.12, -3.23,  0.16, -0.18,  0.45, -0.22,  0.22,  0.10,  0.02],
+  [-0.93, -0.12,  0.12, -3.00,  0.18, -0.20,  0.50, -0.24,  0.24,  0.11,  0.01],
+  [ 0.00,  0.00,  0.15, -5.73,  0.00,  0.00, -0.15,  0.00,  0.00,  0.00,  0.00]
+];
+// 扫：身体带着转、剑横着划过去（单手剑、刀、长棍）
+var KF_SWEEP = [
+  [ 0.00,  0.00,  0.15,  0.55,  0.00,  0.00, -0.15,  0.00,  0.00,  0.00,  0.00],
+  [ 1.30, -0.55, -0.30, -1.60, -0.05, -0.55, -0.45, -0.10,  0.10, -0.03,  0.00],
+  [-0.75,  0.85,  0.35, -1.45,  0.10,  0.75,  0.55, -0.16,  0.16,  0.06,  0.01],
+  [-0.80,  1.00,  0.38, -1.40,  0.12,  0.85,  0.60, -0.18,  0.18,  0.07,  0.00],
+  [ 0.00,  0.00,  0.15, -3.14,  0.00,  0.00, -0.15,  0.00,  0.00,  0.00,  0.00]
+];
+// 刺：收手 → 直刺 → 秒收（匕首、长枪）★ 最快的一套
+var KF_THRUST = [
+  [ 0.00,  0.00,  0.15,  0.55,  0.00,  0.00, -0.15,  0.00,  0.00,  0.00,  0.00],
+  [ 0.95, -0.30,  0.10,  1.30, -0.05, -0.20, -0.30, -0.08,  0.08, -0.05,  0.00],
+  [-1.45,  0.05,  0.05,  1.62,  0.12,  0.08,  0.35, -0.16,  0.16,  0.24,  0.00],
+  [-1.52,  0.06,  0.05,  1.58,  0.14,  0.10,  0.38, -0.18,  0.18,  0.25,  0.00],
+  [ 0.00,  0.00,  0.15,  0.55,  0.00,  0.00, -0.15,  0.00,  0.00,  0.00,  0.00]
+];
+
+/* 武器类型 → 动作原型
+   ★ 这是一张【数据表】✓ 以后加武器只加一行、不用改代码 ✓ */
+var ATK_ARCH = {
+  axe: 'chop', hammer: 'chop',
+  sword: 'sweep', saber: 'sweep', staff: 'sweep',
+  dagger: 'thrust', spear: 'thrust',
+  bow: 'thrust'              // 弓先借"刺"（P3 做拉弓 ✓ 总比用劈像样 ✓）
+};
+var ATK_KF = { chop: KF_CHOP, sweep: KF_SWEEP, thrust: KF_THRUST };
+// 各自的节奏：劈最慢（收招重 ✓）· 扫居中 · 刺最快（秒收 ✓）
+var ATK_T = {
+  chop:   [0.26, 0.43, 0.52, 0.86],
+  sweep:  [0.20, 0.36, 0.46, 0.78],
+  thrust: [0.14, 0.24, 0.30, 0.58]
+};
+
+function atkArchOf(look) { return ATK_ARCH[look] || 'sweep'; }
+
+function heroAtkPose(heroObj, atkT, bx, bz, byaw, look) {
+  var arch = atkArchOf(look);
+  var KF = ATK_KF[arch];
+  var TT = ATK_T[arch];
+  var TOTAL = TT[3];
+  var T1 = TT[0], T2 = TT[1], T3 = TT[2];
   var f, e;
   if (atkT < T1) { f = 0; e = atkT / T1; }
   else if (atkT < T2) { f = 1; e = (atkT - T1) / (T2 - T1); }
@@ -2792,33 +2850,12 @@ function heroAtkPose(heroObj, atkT, bx, bz, byaw) {
   else if (f === 1) { ee = 1 - Math.pow(1 - e, 3); }
   else if (f === 2) { ee = e; }
   else { ee = e < 0.5 ? (2 * e * e) : (1 - Math.pow(-2 * e + 2, 2) / 2); }
-  /* 关键帧：[RarmX, RarmY, RarmZ, swordX, torsoX, bodyY, LarmX, LlegX, RlegX, step, bodyY_rise]
-     ★★ 符号约定（这里是之前错的地方，记牢 ✓）★★
-       手臂和腿都朝 -Y（往下长）→ **负的 rotation.x = 往前**，正 = 往后
-       剑刃朝 +Y（往上长）→ **正的 rotation.x = 往前**，负 = 往后
-       （同一个 +X 旋转，指向相反的两个子物体结果正好相反 ✗ 所以以前"抬手"变成往前伸、
-         "下砍"变成往后甩 ✓ 就是这里翻的）
-       躯干 g.rotation.x：正 = 前倾，负 = 后仰
-     数值是按"剑刃在世界里指向哪"反算出来的 ✓ 不是拍脑袋定的：
-       起手 前下 32° → 抬手 举过头顶偏后 -25° → 下砍 前下 135° → 定格 145° → 收回 32° */
-  var KF = [
-    // 0 起手（剑前下 32° 待战 ✓）
-    [ 0.00,  0.00,  0.15,  0.55,  0.00,  0.00, -0.15,  0.00,  0.00,  0.00,  0.00],
-    // 1 抬手末（★ 手举到 2.68 高、落在身后 z=-0.56 ✓ 剑后仰 -25° 举在脑后 ✓ 重心微沉）
-    [ 2.85,  0.10,  0.14, -3.19, -0.10,  0.12, -0.55, -0.18,  0.18, -0.04, -0.06],
-    // 2 下砍末（★ 手落到身前 z=+0.91 ✓ 剑前下 135° ✓ 躯干前倾 +0.16 ✓ 前冲只 0.10）
-    [-0.85, -0.10,  0.12, -3.23,  0.16, -0.18,  0.45, -0.22,  0.22,  0.10,  0.02],
-    // 3 冲击定格（再压一点点 ✓ 全身绷紧）
-    [-0.93, -0.12,  0.12, -3.00,  0.18, -0.20,  0.50, -0.24,  0.24,  0.11,  0.01],
-    // 4 收招（顺着力继续往前划回待战 ✓ swordX 正好差一整圈 → 不会突然翻 ✗）
-    [ 0.00,  0.00,  0.15, -5.73,  0.00,  0.00, -0.15,  0.00,  0.00,  0.00,  0.00]
-  ];
   var A = KF[f], B = KF[f + 1];
   var lp = function (i) { return A[i] + (B[i] - A[i]) * ee; };
   heroObj.armR.rotation.x = lp(0);
   heroObj.armR.rotation.y = lp(1);
   heroObj.armR.rotation.z = lp(2);
-  if (heroObj.sw) { heroObj.sw.rotation.x = lp(3); }   // ★ 现在是直接给角度 ✓（原来那套 0.55-k*x 太绕、还容易符号搞反 ✗）
+  if (heroObj.sw) { heroObj.sw.rotation.x = lp(3); }
   heroObj.g.rotation.x = lp(4);
   heroObj.g.rotation.y = byaw + lp(5);
   heroObj.armL.rotation.x = lp(6);
@@ -2826,9 +2863,11 @@ function heroAtkPose(heroObj, atkT, bx, bz, byaw) {
   heroObj.legR.rotation.x = lp(8);
   heroObj.g.position.x = bx + Math.sin(byaw) * lp(9);
   heroObj.g.position.z = bz + Math.cos(byaw) * lp(9);
-  heroObj.g.position.y = lp(10);                          // ★ 重心上下（下沉/抬起 ✓）
-  return atkT <= TOTAL;
+  heroObj.g.position.y = lp(10);
+  if (atkT >= TOTAL) { return false; }
+  return true;
 }
+
 function heroAtkReset(heroObj, bx, bz, byaw) {
   heroObj.armR.rotation.set(0, 0, 0);
   // ★ 收招后剑要回到"待战前下 32°"= 0.55（关键帧最后也是这个值 ✓ 这里显式钉一遍更保险 ✓）
@@ -2934,7 +2973,7 @@ function frame(ts) {
        关节：右臂 X/Y/Z 三轴 + 肩部 + 重心 + 左手 + 双腿 */
     atkT += dt;
     // ★ 直接调共用的挥剑动画（本地 / 别的玩家 同一套 → 动作一致 ✓）
-    if (!heroAtkPose(H, atkT, P.x, P.z, P.yaw)) {
+    if (!heroAtkPose(H, atkT, P.x, P.z, P.yaw, MY_WEAPON && MY_WEAPON.look)) {
       atkT = -1;
       heroAtkReset(H, P.x, P.z, P.yaw);
     }

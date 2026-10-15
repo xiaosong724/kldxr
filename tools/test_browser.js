@@ -1295,6 +1295,45 @@ async function register(name, pw) {
       bagQ.arc0 + '→' + eqQ.arc + ' 弧度 ✓）');
     await A.eval('closeSet(); return 1;');
 
+    /* ★★ 第 61 轮：三套挥砍动作（劈 / 扫 / 刺）★★
+       用户："现在 8 种武器挥起来还是一模一样" → 按类型分三套 ✓ */
+    const archQ = JSON.parse(await A.eval(
+      'var out = { map: {}, poses: {} };' +
+      'var looks = ["axe","hammer","sword","saber","staff","dagger","spear"];' +
+      'for (var i = 0; i < looks.length; i++) {' +
+      '  var lk = looks[i];' +
+      '  out.map[lk] = atkArchOf(lk);' +
+      '  var row = [];' +
+      '  for (var k = 0; k < 5; k++) {' +
+      '    heroAtkPose(H, 0.06 + k * 0.16, P.x, P.z, P.yaw, lk);' +
+      '    row.push(Math.round(H.armR.rotation.x * 100) / 100); }' +
+      '  out.poses[lk] = row.join();' +
+      '}' +
+      'return JSON.stringify(out);'
+    ) || '{}');
+    console.log('        [动作] 斧=' + archQ.map.axe + ' 剑=' + archQ.map.sword +
+      ' 匕首=' + archQ.map.dagger + ' 枪=' + archQ.map.spear);
+    ok(archQ.map.axe === 'chop' && archQ.map.hammer === 'chop',
+      '★★ 斧头/锤 = 劈（抬手过顶再砸 ✓）');
+    ok(archQ.map.sword === 'sweep' && archQ.map.saber === 'sweep' &&
+       archQ.map.staff === 'sweep', '★★ 单手剑/刀/长棍 = 扫（身体带着转 ✓）');
+    ok(archQ.map.dagger === 'thrust' && archQ.map.spear === 'thrust',
+      '★★ 匕首/长枪 = 刺（直捅、秒收 ✓）');
+    ok(archQ.poses.axe !== archQ.poses.saber &&
+       archQ.poses.saber !== archQ.poses.dagger &&
+       archQ.poses.axe !== archQ.poses.dagger,
+      '★★★ 三套动作的姿势【真的不同】（同一时刻的手臂角度不一样 ✓ ' +
+      '不再是八种武器一套动作 ✗）');
+    /* 时间轴也不同：刺最快、劈最慢 ✓ */
+    const tmQ = JSON.parse(await A.eval(
+      'return JSON.stringify({ chop: ATK_T.chop[3], sweep: ATK_T.sweep[3],' +
+      ' thrust: ATK_T.thrust[3] });'
+    ) || '{}');
+    ok(tmQ.thrust < tmQ.sweep && tmQ.sweep < tmQ.chop,
+      '★★ 三套的节奏也不同（刺 ' + tmQ.thrust + 's < 扫 ' + tmQ.sweep +
+      's < 劈 ' + tmQ.chop + 's ✓ 匕首秒收、斧头收招慢 ✓）');
+    await A.eval('heroAtkReset(H, P.x, P.z, P.yaw); return 1;');
+
     /* ★★ 第 57 轮：其它玩家的倒地姿态 ★★
        用户报："死亡的动画没有做服务器同步，别的玩家看不到，别人看你死亡依旧是站立的"
        → 服务器快照加了 'd'（hp<=0 就是 1）✓ 客户端按 o.dead 摆成躺地 ✓
