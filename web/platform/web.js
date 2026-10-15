@@ -129,7 +129,24 @@ function E(m) { var e = document.getElementById('err'); if (e) { e.textContent =
      · 并发上限 6 ✓ 超了丢（听不出来 ✓）
      · ★ 解码失败/不支持 → 自动退回老的 <audio> 路径 ✓ 不会没声音 ✓
 */
-var _actx = null, _aVoices = 0;
+var _actx = null, _aVoices = 0, _aGestured = false;
+/* ★ 第 83 轮：消掉 "AudioContext was not allowed to start" 警告 ✗
+   浏览器规矩：上下文必须在【用户手势】里 resume 才能出声 ✓
+   之前我只在播放那一刻 resume ✗ 而那时可能已经错过了手势窗口 ✗
+   → 现在监听【第一次】点击/触摸/按键 → 立即 resume ✓ 一次性 ✗不重复绑 ✗ */
+function _aGesture() {
+  if (_aGestured) { return; }
+  _aGestured = true;
+  try {
+    var ac = audioCtx();
+    if (ac && ac.state === 'suspended') { ac.resume(); }
+  } catch (e) { }
+}
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('pointerdown', _aGesture, { passive: true });
+  document.addEventListener('touchstart', _aGesture, { passive: true });
+  document.addEventListener('keydown', _aGesture, { passive: true });
+}
 var SFX_PITCH = 0.06;          // 音高随机幅度（±6% ✓）
 var SFX_MAX_VOICES = 6;        // 同时最多几个音
 function audioCtx() {

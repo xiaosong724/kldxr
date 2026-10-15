@@ -434,7 +434,13 @@ class Api(BaseHTTPRequestHandler):
         ok, r = authmod.check_token(self.cfg, self._token())
         if not ok:
             return self._send(401, {'ok': False, 'error': r})
-        me = (r.get('role') or {}).get('id')
+        # ★ 踩过的坑：check_token 返回的是 sqlite3.Row ✗
+        #   它【没有 .get()】✗ 只能用下标 ✓
+        #   （我写成 r.get('role') → AttributeError → 接口直接空响应 ✗）
+        try:
+            me = r['role']['id']
+        except Exception:
+            me = None
         st = None
         if self.world is not None:
             st = getattr(self.world, 'lobby_stat', None)
