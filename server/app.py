@@ -592,6 +592,11 @@ class Api(BaseHTTPRequestHandler):
                 data = f.read()
         except Exception as e:
             return self._send(500, {'error': str(e)})
+        # ★ 第 95 轮查证：_send() 里【本来就发了 Cache-Control: no-store】✓
+        #   （见 _send 的第 119 行）
+        #   所以"管理页没有防具选项"不是服务器发旧页 ✗
+        #   而是【那个标签页还是改动之前打开的】✗ → 在管理页按一下 F5 就有了 ✓
+        #   ★ 我一开始在这里又加了一遍 no-cache ✗ 属于重复 ✗ 删掉 ✓
         return self._send(200, data, ctype)
 
 
