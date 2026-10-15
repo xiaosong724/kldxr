@@ -425,6 +425,13 @@ class Api(BaseHTTPRequestHandler):
             return self._send(401, {'ok': False, 'error': '没登录或登录过期了'})
         act = (body.get('act') or '').strip()
         if act not in ('spawn', 'give', 'kick', 'heal', 'say', 'kill',
+                        # ★★ 第 135 轮补：前两轮新加的三个动作忘了进白名单 ✗✗
+                        # 表现就是【点了按钮报 400】✗ 而且静默不生效 ✗
+                        # （我自己测的时候才发现 ✗ 不然你会发现按钮点了没反应 ✗）
+                        # ★ 教训：加一个管理动作要改【两处】✗
+                        # app.py 的白名单 + world._handle_admin 的分支 ✗
+                        # 漏一处就是这个后果 ✗（按钮点了没反应 ✗）
+                        'mobcap', 'pvp', 'mobatk',
                        'delplayer', 'delTest'):
             return self._send(400, {'ok': False, 'error': '不认识的动作'})
         if self.world is None:
