@@ -2689,6 +2689,7 @@ function netRenderAt(o, localNow, dt) {
    50 米以内的其他玩家，如果【人不在画面里】，就在屏幕边缘贴一个箭头指向他，并标出距离。
    人在画面里时不画（看得见就没必要挡视线 ✓）*/
 var MARK_RANGE = 50;
+var MARK_RANGE_TEAM = 100.0;   // ★ 第 85 轮：队友的箭头距离（用户要求 100 米 ✓）
 var MARK_COL = '#7ee08a';        // 普通玩家（绿 ✓ 和头顶名牌一致 ✓）
 var MARK_COL_TEAM = '#8fc4ff';   // ★ 队友（蓝）—— 见下面 markColor() 的说明 ✓
 var MARK_COL_DEAD = '#e0776a';   // 倒下的人（红 ✓）
@@ -2699,9 +2700,22 @@ var _mark3 = null, _mark4 = null;
    P4 组队系统上线后，服务器会在玩家快照里带上队伍号，
    那时把下面那句的 `o.team !== undefined &&` 去掉就生效了 —— 现在没有队伍数据，
    所以这个分支永远走不到 ✓（这样以后只用改一行，不用再翻这段逻辑 ✓） */
-function markColor(o) {
+/* ★★ 第 85 轮：队友箭头（用户要求：加入队伍后 100 米内都显示【蓝色】箭头）★★
+   ★ 这段原来就留好了口子（注释写着"以后只用改一行"✓）
+     现在把那一行接上：队友数据来自平台层的 PARTY（跨文件全局 ✓ 和 setShadow 一样）*/
+function isPartyMate(uid) {
+  try {
+    if (typeof PARTY === 'undefined' || !PARTY || !PARTY.roster) { return false; }
+    for (var i = 0; i < PARTY.roster.length; i++) {
+      if (String(PARTY.roster[i][0]) === String(uid)) { return true; }
+    }
+  } catch (e) { }
+  return false;
+}
+
+function markColor(o, isMate) {
   if (typeof o.hp === 'number' && o.hp <= 0) { return MARK_COL_DEAD; }
-  if (o.team !== undefined && o.team === NET.myTeam) { return MARK_COL_TEAM; }
+  if (isMate) { return MARK_COL_TEAM; }      // ★ 队友 = 蓝色 ✓
   return MARK_COL;
 }
 
@@ -2717,7 +2731,10 @@ function updateMarks() {
     if (!o || !o.cur) { continue; }
     var dx = o.cur.x - P.x, dz = o.cur.z - P.z;
     var dist = Math.sqrt(dx * dx + dz * dz);
-    if (dist > MARK_RANGE) { continue; }          // 太远不管 ✓
+    /* ★ 第 85 轮：队友看得更远（100 米 ✓）路人还是原来的范围 ✓
+       —— 队伍的意义之一就是"知道队友在哪"✓ 看不到就没意义了 ✗ */
+    var _mate = isPartyMate(uid);
+    if (dist > (_mate ? MARK_RANGE_TEAM : MARK_RANGE)) { continue; }
     used[uid] = 1;
     if (!_marks[uid]) { _marks[uid] = UI.mark.make(); }
     m = _marks[uid];
@@ -2754,7 +2771,8 @@ function updateMarks() {
     var ax = Math.abs(Math.cos(ang)), ay = Math.abs(Math.sin(ang));
     var t = Math.min(hw / (ax || 1e-6), hh / (ay || 1e-6));
     UI.mark.at(m, innerWidth * 0.5 + Math.cos(ang) * t, innerHeight * 0.5 + Math.sin(ang) * t,
-      ang * 180 / Math.PI, Math.round(dist) + 'm', markColor(o));
+      ang * 180 / Math.PI,
+      (_mate ? '队友 ' : '') + Math.round(dist) + 'm', markColor(o, _mate));
     UI.mark.show(m, true);
   }
   for (k in _marks) {   // 走了 / 跑远了 / 断线的收掉 ✓

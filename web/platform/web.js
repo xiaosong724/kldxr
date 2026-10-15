@@ -440,7 +440,7 @@ function mkMark() {
     'transform:translate(-50%,-50%);text-align:center;will-change:transform';
   var ar = document.createElement('div');
   ar.textContent = '➤';   // 默认朝右（0°），core 给的屏幕角度直接转它 ✓
-  ar.style.cssText = 'font-size:17px;line-height:17px;color:#7ee08a;' +
+  ar.style.cssText = 'font-size:17px;line-height:17px;color:#5aa8ff;' +   // ★ 第 85 轮：队友箭头改蓝 ✓
     'text-shadow:0 1px 4px #000,0 0 6px #000;will-change:transform';
   var tx = document.createElement('div');
   tx.style.cssText = 'font-size:9px;line-height:11px;color:#cfe8d4;margin-top:-1px;' +
@@ -729,15 +729,15 @@ function ptRender() {
       var qim = m[6], lk = m[7], tr = m[8], down = m[9], lead = m[10];
       var isMe = (rid === PARTY.me);
       h.push('<div class="ptLine"' + (isMe ? ' style="background:#ffffff10"' : '') + '>' +
-        '<b>' + (lead ? '<span style="color:#ffd83d">队长 </span>' : '队员 ') +
+        /* ★ 第 85 轮：名字可点 → 弹小窗（踢出 / 给队长）*/
+        '<b class="ptName" data-pt="menu" data-id="' + rid + '"' +
+        (isMe ? '' : ' style="cursor:pointer;text-decoration:underline dotted #ffffff44"') +
+        '>' + (lead ? '<span style="color:#ffd83d">队长 </span>' : '队员 ') +
           ptEsc(nm) + '</b><span class="bagTip">Lv' + lv + '</span>' +
         (down ? ' <span style="color:#ff7a6a">倒地</span>' : '') +
         ptWeapon(lk, tr) +
         ptBar(hpm ? hp * 100 / hpm : 0, '#7ee08a') +
         ptBar(qim ? qi * 100 / qim : 0, '#8ee0ff') +
-        ((isMe || PARTY.leader !== PARTY.me) ? '' :
-          '<button class="bagB" data-pt="kick" data-id="' + rid + '">踢出</button>' +
-          '<button class="bagB" data-pt="promote" data-id="' + rid + '">给队长</button>') +
         '</div>');
     }
     h.push('<div class="ptRow" style="margin-top:6px">' +
@@ -810,6 +810,40 @@ function ptRender() {
   pts.innerHTML = pr.length ? pr.join('') : '<div class="bagTip">现在没有队伍在招募</div>';
 }
 
+/* ★ 第 85 轮：点名字弹的小窗（踢出 / 给队长）
+   用户要求：不要行内按钮 ✗ 改成点名字弹小窗 ✓
+   只有【我是队长 + 不是我自己】才有菜单 ✓ 点别处自动关 ✓ */
+function ptMenuClose() {
+  var old = document.getElementById('ptMenu');
+  if (old && old.parentNode) { old.parentNode.removeChild(old); }
+}
+function ptMenuOpen(rid, name, sx, sy) {
+  ptMenuClose();
+  var isMe = (String(rid) === String(PARTY.me));
+  var canLead = (PARTY.leader === PARTY.me) && !isMe;
+  var d = document.createElement('div');
+  d.id = 'ptMenu';
+  var inner = '<div style="font-weight:700;margin-bottom:6px">' + ptEsc(name) + '</div>';
+  if (canLead) {
+    inner += '<button class="bagB" data-pt="kick" data-id="' + rid + '">踢出队伍</button>' +
+             '<button class="bagB" data-pt="promote" data-id="' + rid + '">转让队长</button>';
+  } else {
+    inner += '<div class="bagTip">' + (isMe ? '这是你自己' : '只有队长能管理成员') + '</div>';
+  }
+  d.innerHTML = inner;
+  d.style.cssText = 'position:fixed;z-index:40;background:#1b2430f2;border:1px solid #ffffff33;' +
+    'border-radius:10px;padding:10px 12px;box-shadow:0 4px 16px #000a;display:flex;' +
+    'flex-direction:column;gap:6px;min-width:120px';
+  d.style.left = Math.max(8, Math.min(innerWidth - 150, (sx || 0) - 40)) + 'px';
+  d.style.top = Math.max(8, Math.min(innerHeight - 120, sy || 0)) + 'px';
+  document.body.appendChild(d);
+  setTimeout(function () {
+    document.addEventListener('pointerdown', function once(ev) {
+      if (!d.contains(ev.target)) { ptMenuClose(); document.removeEventListener('pointerdown', once); }
+    });
+  }, 0);
+}
+
 function ptBind() {
   var pane = document.querySelector('.tabpane[data-pane="party"]');
   if (!pane || pane.__ptBound) { return; }
@@ -821,6 +855,12 @@ function ptBind() {
     if (!op) { return; }
     e.preventDefault();
     var id = b.getAttribute('data-id');
+    if (op === 'menu') {          // ★ 点名字 → 开小窗 ✓
+      ptMenuOpen(id, (b.textContent || '').replace(/^\s*(队长|队员)\s*/, ''),
+                 e.clientX, e.clientY);
+      return;
+    }
+    ptMenuClose();                 // 干别的动作时顺手关掉 ✓
     /* ★ 第 84 轮：点了接受/拒绝 → 【本地立刻移除】✓ 不等服务器回包 ✗
        （用户：点击接受或拒绝后应该消失 ✓）*/
     if (op === 'acc' || op === 'dec') {
