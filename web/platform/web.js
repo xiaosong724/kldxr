@@ -650,6 +650,28 @@ var PARTY = { roster: null, pid: null, leader: null, me: null, inv: [], app: [] 
 var LOBBY = { players: [], parties: [], online: 0, err: '' };
 var _ptSearch = '';
 
+/* ★ 第 84 轮：屏幕正中的横幅（用户报"邀请提示字太大、不居中、看不完"✗）
+   原来往 3D 世界里飘一行大字 ✗ 那是世界坐标投影 → 当然不居中 ✓
+   现在改成顶部居中的 DOM 横幅：正常字号 ✓ 4 秒自动消失 ✓ */
+var _ptBanT = null;
+function ptBanner(text, color) {
+  var el = document.getElementById('ptBanner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'ptBanner';
+    el.style.cssText = 'position:fixed;left:50%;top:12%;transform:translateX(-50%);' +
+      'z-index:30;background:#000000cc;color:#fff;padding:8px 16px;border-radius:10px;' +
+      'font-size:14px;font-weight:600;text-align:center;max-width:80vw;pointer-events:none;' +
+      'box-shadow:0 2px 10px #0008;display:none';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.style.color = color || '#fff';
+  el.style.display = 'block';
+  if (_ptBanT) { clearTimeout(_ptBanT); }
+  _ptBanT = setTimeout(function () { el.style.display = 'none'; }, 4000);
+}
+
 function ptEsc(s) {
   return String(s === undefined || s === null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -707,8 +729,8 @@ function ptRender() {
       var qim = m[6], lk = m[7], tr = m[8], down = m[9], lead = m[10];
       var isMe = (rid === PARTY.me);
       h.push('<div class="ptLine"' + (isMe ? ' style="background:#ffffff10"' : '') + '>' +
-        '<b>' + ptEsc(nm) + '</b><span class="bagTip">Lv' + lv + '</span>' +
-        (lead ? ' <span style="color:#ffd83d">队长</span>' : '') +
+        '<b>' + (lead ? '<span style="color:#ffd83d">队长 </span>' : '队员 ') +
+          ptEsc(nm) + '</b><span class="bagTip">Lv' + lv + '</span>' +
         (down ? ' <span style="color:#ff7a6a">倒地</span>' : '') +
         ptWeapon(lk, tr) +
         ptBar(hpm ? hp * 100 / hpm : 0, '#7ee08a') +
@@ -729,17 +751,22 @@ function ptRender() {
 
   /* ② 待处理（★ 用户点名要的：界面里也要能同意/拒绝 ✓）*/
   var ph = [];
+  var _nowS = Date.now() / 1000;
   for (var a = 0; a < PARTY.inv.length; a++) {
     var iv = PARTY.inv[a];
+    var _left = Math.max(0, Math.round((+iv[2] || 0) - _nowS));
+    if (_left <= 0) { continue; }        // ★ 本地判断过期 → 不显示 ✓
     ph.push('<div class="ptLine"><b>' + ptEsc(iv[1]) + '</b>' +
-      '<span class="bagTip">邀请你组队（还剩 ' + iv[2] + ' 秒）</span>' +
+      '<span class="bagTip">邀请你组队（还剩 ' + _left + ' 秒）</span>' +
       '<button class="bagB" data-pt="acc" data-id="' + iv[0] + '">接受</button>' +
       '<button class="bagB" data-pt="dec" data-id="' + iv[0] + '">拒绝</button></div>');
   }
   for (var b = 0; b < PARTY.app.length; b++) {
     var ap = PARTY.app[b];
+    var _left2 = Math.max(0, Math.round((+ap[2] || 0) - _nowS));
+    if (_left2 <= 0) { continue; }
     ph.push('<div class="ptLine"><b>' + ptEsc(ap[1]) + '</b>' +
-      '<span class="bagTip">申请加入（还剩 ' + ap[2] + ' 秒）</span>' +
+      '<span class="bagTip">申请加入（还剩 ' + _left2 + ' 秒）</span>' +
       '<button class="bagB" data-pt="oka" data-id="' + ap[0] + '">同意</button>' +
       '<button class="bagB" data-pt="noa" data-id="' + ap[0] + '">拒绝</button></div>');
   }
@@ -794,6 +821,16 @@ function ptBind() {
     if (!op) { return; }
     e.preventDefault();
     var id = b.getAttribute('data-id');
+    /* ★ 第 84 轮：点了接受/拒绝 → 【本地立刻移除】✓ 不等服务器回包 ✗
+       （用户：点击接受或拒绝后应该消失 ✓）*/
+    if (op === 'acc' || op === 'dec') {
+      PARTY.inv = PARTY.inv.filter(function (x) { return String(x[0]) !== String(id); });
+      ptRender();
+    }
+    if (op === 'oka' || op === 'noa') {
+      PARTY.app = PARTY.app.filter(function (x) { return String(x[0]) !== String(id); });
+      ptRender();
+    }
     if (op === 'inv') { partySend('invite', { cid: +id }); }
     else if (op === 'acc') { partySend('accept', { cid: +id }); }
     else if (op === 'dec') { partySend('decline', { cid: +id }); }
@@ -815,6 +852,13 @@ function ptBind() {
 setInterval(function () {
   if ((SETCFG.setTab || '') === 'party' && NET.on) { lobbyFetch(); }
 }, 4000);
+/* ★ 第 84 轮：每秒本地重绘 → 倒计时自己走 ✓
+   （用户报"剩余时间不会动"✗ 因为原来只靠服务器每秒补推算 ✓
+     推送一丢就卡住 ✗ 现在拿绝对时刻本地算 ✓ 一定在动 ✓）*/
+setInterval(function () {
+  if ((SETCFG.setTab || '') === 'party' &&
+      (PARTY.inv.length || PARTY.app.length)) { ptRender(); }
+}, 1000);
 
 function mkOpts(rowId, items, key, cur) {
   var row = document.getElementById(rowId);
@@ -1854,15 +1898,34 @@ function wsOnMessage(raw) {
     return;
   }
   if (t === 'partyinv') {
-    // ★ 两种形态：一次性事件（有 name）+ 每秒补推的列表（有 list）✓
-    if (d.list) { PARTY.inv = d.list; }
-    else if (d.name) { PARTY.inv = PARTY.inv.concat([[d.pid, d.name, 60]]); }
+    /* ★ 第 84 轮：两种形态都要【去重】✓（用户：同一个人只显示一条 ✓）
+       d.list = 服务器补推的完整列表（第三项是【绝对到期时刻】✓）
+       d.name = 一次性事件（刚有人邀请我）→ 自己并进去，同源覆盖旧的 ✓ */
+    if (d.list) {
+      PARTY.inv = d.list;
+    } else if (d.name) {
+      var _keep = [], _hit = false;
+      for (var _i = 0; _i < PARTY.inv.length; _i++) {
+        if (PARTY.inv[_i][0] === d.pid) { _hit = true; } else { _keep.push(PARTY.inv[_i]); }
+      }
+      _keep.push([d.pid, d.name, (Date.now() / 1000) + 60]);
+      PARTY.inv = _keep;
+      ptBanner((d.name || '有人') + ' 邀请你组队 —— 菜单 → 组队 里同意', '#ffd83d');
+    }
     ptRender();
-    if (!d.list) { fxNum((d.name || '有人') + ' 邀请你组队（菜单→组队）', '#ffd83d', P.x, 3.0, P.z); }
     return;
   }
   if (t === 'partyapply') {
     if (d.list) { PARTY.app = d.list; }
+    else if (d.name) {
+      var _kp = [];
+      for (var _j = 0; _j < PARTY.app.length; _j++) {
+        if (PARTY.app[_j][0] !== d.cid) { _kp.push(PARTY.app[_j]); }
+      }
+      _kp.push([d.cid, d.name, (Date.now() / 1000) + 60]);
+      PARTY.app = _kp;
+      ptBanner((d.name || '有人') + ' 申请加入队伍 —— 组队页里同意', '#8ee0ff');
+    }
     ptRender();
     return;
   }

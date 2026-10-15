@@ -370,8 +370,10 @@ class World(object):
                         for _f3, _ts3 in _ok3:
                             for _q4 in self.players.values():
                                 if getattr(_q4, 'role_id', None) == _f3:
-                                    _out3.append([_f3, _q4.name,
-                                                  int(round(PARTY_INVITE_TTL - (_now2 - _ts3)))])
+                                    # ★ 第 84 轮：给【绝对到期时刻】✗ 不给剩余秒数
+                                    #   （剩余秒数靠每秒补推算 → 推送一丢就卡住 ✗
+                                    #    绝对时刻 + 客户端本地时钟 → 一定在动 ✓）
+                                    _out3.append([_f3, _q4.name, round(_ts3 + PARTY_INVITE_TTL, 2)])
                                     break
                         self._send_cid(_q3.cid, P.pack('partyinv', list=_out3))
                         break
@@ -388,8 +390,7 @@ class World(object):
                     for _r4, _ts4 in _ap4:
                         for _q6 in self.players.values():
                             if getattr(_q6, 'role_id', None) == _r4:
-                                _out4.append([_r4, _q6.name,
-                                              int(round(PARTY_APPLY_TTL - (_now2 - _ts4)))])
+                                _out4.append([_r4, _q6.name, round(_ts4 + PARTY_APPLY_TTL, 2)])
                                 break
                     self._send_cid(_q5.cid, P.pack('partyapply', pid=_pid4, list=_out4))
                     break
@@ -1174,7 +1175,10 @@ class World(object):
                 return self._send_cid(p.cid, P.pack('notice', text='队伍满了（%d 人）' % PARTY_MAX))
             if tgt.role_id in self.party_of:
                 return self._send_cid(p.cid, P.pack('notice', text='他已经在别的队里了'))
-            self.party_inv.setdefault(tgt.role_id, []).append((rid, now))
+            # ★ 第 84 轮用户要求：同一个人重复邀请【只留一条】✓ 只刷新时间 ✓
+            _lst = [x for x in self.party_inv.get(tgt.role_id, []) if x[0] != rid]
+            _lst.append((rid, now))
+            self.party_inv[tgt.role_id] = _lst
             self._send_cid(tgt.cid, P.pack('partyinv', name=p.name, pid=mypid))
             self._send_cid(p.cid, P.pack('notice', text='已邀请 %s' % tgt.name))
 

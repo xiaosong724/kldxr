@@ -462,10 +462,16 @@ class Api(BaseHTTPRequestHandler):
                         'look': p.get('look'), 'tier': p.get('tier'),
                         'hp': p.get('hp'), 'qi': p.get('qi'),
                         'party': bool(p.get('party')), 'dist': d})
+        # ★ 第 84 轮用户要求：最多随机显示 10 个 ✓ 点刷新换一批 ✓
+        import random as _rnd
         out.sort(key=lambda x: (99999 if x['dist'] is None else x['dist']))
+        _tot = len(out)
+        if _tot > 10:
+            out = _rnd.sample(out, 10)
         return self._send(200, {'ok': True, 'players': out,
                                 'parties': st.get('parties') or [],
-                                'online': len(st['players'])})
+                                'online': len(st['players']),
+                                'shown': len(out), 'total': _tot})
 
     def _admin_give(self, d):
         """给某个角色发一件武器（写库 ✓ 在线的话再顺手告诉他一声 ✓）"""
