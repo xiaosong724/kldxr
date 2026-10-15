@@ -1338,6 +1338,21 @@ class World(object):
             if (q.x - m.x) ** 2 + (q.z - m.z) ** 2 > d2:
                 continue                      # ★ 30 米外不分享（防异地蹭 ✗）
             self._gain_exp(q, share)
+            # ★★ 第 86 轮（用户报）："这个没有真的加上，一刷新就没有了" ★★
+            #   病根：分经验只改了内存里的 role['exp'] ✗
+            #         而落库是靠"本人做了什么事"触发的（击杀/拾取时才排队保存 ✓）
+            #         → 队友光在旁边蹭，什么都没做 → 他的 exp 一直没落库 ✗
+            #         → 一刷新（重新登录读库）就回到旧值 ✓ 用户说的一模一样 ✓
+            #   修：分经验时【替他也排一次存档】✓
+            try:
+                self._save_player(q)
+            except Exception:
+                pass
+            #   ★ 顺手给他飘一个（用户要求：获得经验时头上显示"队伍经验分享 +N"✓）
+            try:
+                self._send_cid(q.cid, P.pack('fx', kind='pexp', n=int(share)))
+            except Exception:
+                pass
 
     def _break_weapon(self, p):
         """武器耐久归零 → 损坏消失（第 59 轮 用户要求 ✓）

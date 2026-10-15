@@ -2239,6 +2239,15 @@ function addOther(w, t) {
      所以两处都要写 ✓（不然"别人看你死亡还是站着"永远修不好 ✗）*/
   o.dead = !!w.dead;
   o.inv = +w.inv || 0;       // ★ 第 63 轮：无敌剩余（每包都更新 ✓）
+  /* ★★ 第 86 轮（用户要求）：队友名字前面加一个【蓝色五角星】★★
+     ★ 走 UI.plate.name ✓ 不在 core 里碰 .style ✗（分层铁律 ✓）
+     ★ 每包都刷 ✓ 所以组队/退队/踢人之后名字会立刻跟着变 ✓ */
+  if (o.ui) {
+    var _mate2 = isPartyMate(w.uid);
+    UI.plate.name(o.ui,
+      (_mate2 ? '★ ' : '') + (w.name || '道友') + ' ' + (w.realm || ''),
+      _mate2 ? '#5aa8ff' : '#fff');
+  }
   /* ★ 第 65 轮：他换武器了 → 手里那把也要换 ✓（不然永远是刚看到他时的武器 ✗）*/
   var _wl = w.wlook || 'sword', _wt = (typeof w.wtier === 'number') ? w.wtier : 0;
   if (_wl !== o.wlook || _wt !== o.wtier) {

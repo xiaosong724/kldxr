@@ -463,6 +463,13 @@ UI.mark = {
     }
     if (m.tx && txt !== undefined && txt !== null) { m.tx.textContent = txt; }
   },
+  /* ★ 第 86 轮：改头顶名字（队伍成员前面要加蓝色五角星 ✓）
+     ★ 为什么放平台层：core 里不许碰 .style ✗（分层铁律 ✓）*/
+  name: function (m, text, color) {
+    if (!m || !m.name) { return; }
+    if (m.name.textContent !== text) { m.name.textContent = text; }
+    if (color && m.name.style.color !== color) { m.name.style.color = color; }
+  },
   remove: function (m) {
     if (m && m.wrap && m.wrap.parentNode) { m.wrap.parentNode.removeChild(m.wrap); }
   }
@@ -1935,6 +1942,13 @@ function wsOnMessage(raw) {
     PARTY.leader = d.leader || null;
     if (d.me !== undefined && d.me !== null) { PARTY.me = d.me; }
     ptRender();
+    return;
+  }
+  if (t === 'fx' && d.kind === 'pexp') {
+    // ★ 第 86 轮：队伍经验分享的飘字（用户要求 ✓）
+    if (typeof fxNum === 'function') {
+      fxNum('+' + (d.n || 0) + ' 队伍经验', '#7ee08a', P.x, 3.0, P.z);
+    }
     return;
   }
   if (t === 'partyinv') {
