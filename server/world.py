@@ -717,6 +717,19 @@ class World(object):
             #    （客户端那边照旧发这个字段，服务器只是不理它了 ✓）
         elif t == 'ping':
             self._send_cid(p.cid, P.pack('pong', t=d.get('t'), st=round(now_s(), 3)))
+        if t == 'safetp':            # 第 173 轮（用户 #6）：请求传送回安全区
+            #   ★ 服务器说了算：只是【开始读条】✗ 6 秒后才真挪人 ✓
+            #   ★ 已经在安全区里就不用传了 ✓ 读条中也不重复开 ✓
+            _in_safe = (abs(p.x) <= mqmod.SAFE_HALF and abs(p.z) <= mqmod.SAFE_HALF)
+            if _in_safe:
+                self._send_cid(p.cid, P.pack('notice', text='你已经在安全区里了'))
+            elif float(getattr(p, 'tpEnd', 0) or 0) > now_s():
+                pass                                   # 正在读条，忽略重复请求 ✓
+            else:
+                p.tpEnd = now_s() + float(TELEPORT_CAST)
+                self._send_cid(p.cid, P.pack('tpcast', t=TELEPORT_CAST))
+                self._send_cid(p.cid, P.pack(
+                    'notice', text='开始传送回安全区（%.0f 秒，期间受伤会中断）' % TELEPORT_CAST))
         elif t == 'chat':
             txt = str(d.get('text') or '')[:200]
             if txt:
@@ -1789,21 +1802,6 @@ class World(object):
             self._send_cid(p.cid, P.pack('notice',
                                          text=('已开启招募（大厅能看到你们队）'
                                                if self.party_open[pid] else '已关闭招募')))
-
-        elif op == 'safetp':
-            # 第 173 轮（用户 #6）：请求传送回安全区
-            #   ★ 服务器说了算：只是【开始读条】✗ 6 秒后才真挪人 ✓
-            #   ★ 已经在安全区里就不用传了 ✓ 读条中也不重复开 ✓
-            _in_safe = (abs(p.x) <= mqmod.SAFE_HALF and abs(p.z) <= mqmod.SAFE_HALF)
-            if _in_safe:
-                self._send_cid(p.cid, P.pack('notice', text='你已经在安全区里了'))
-            elif float(getattr(p, 'tpEnd', 0) or 0) > now_s():
-                pass                                   # 正在读条，忽略重复请求 ✓
-            else:
-                p.tpEnd = now_s() + float(TELEPORT_CAST)
-                self._send_cid(p.cid, P.pack('tpcast', t=TELEPORT_CAST))
-                self._send_cid(p.cid, P.pack(
-                    'notice', text='开始传送回安全区（%.0f 秒，期间受伤会中断）' % TELEPORT_CAST))
         elif op == 'chat':
             pid = self.party_of.get(rid)
             if not pid:

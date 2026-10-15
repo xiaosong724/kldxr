@@ -74,9 +74,12 @@
 #safeTp{
   position:fixed;left:50%;transform:translateX(-50%);bottom:64px;
   /* ★ 第 186 轮：div 是块级元素，不写 width 会撑满一整行 ✗ 必须给 max-content */
-  width:max-content;max-width:70vw;min-width:104px;padding:9px 14px;border-radius:22px;
-  background:rgba(20,26,34,.72);border:1px solid #ffd83d66;
-  color:#ffe9a8;font-size:13px;font-weight:700;letter-spacing:.5px;
+  /* ★ 第 188 轮（用户："改小一点"）：整体缩一圈 ✓ 但不小于手指能点中的尺寸 ✓
+     （安卓官方建议最小点按区 44x44dp；这里是视觉小一圈但仍然好点 ✓
+       再小就容易点不中了 ✗ 觉得还大就说一声 ✓）*/
+  width:max-content;max-width:70vw;min-width:76px;padding:5px 10px;border-radius:14px;
+  background:rgba(20,26,34,.66);border:1px solid #ffd83d55;
+  color:#ffe0a0;font-size:11px;font-weight:700;letter-spacing:.3px;
   text-align:center;cursor:pointer;user-select:none;-webkit-user-select:none;
   z-index:31;overflow:hidden;
   text-shadow:0 1px 2px #000;transition:border-color .15s,color .15s
