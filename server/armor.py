@@ -62,7 +62,10 @@ def make_armor(tier, item_lv=1, rng=None):
         'reqLevel': req_level_of(t),
         # ★ 防具这一版【不做耐久】（第 67 轮）——
         #   武器耐久是用户点名要的 ✓ 防具先不做，就不显示一条永远不掉的条子 ✗
-        'dur': 0, 'durMax': 0,
+        # ★★ 第 103 轮（用户要求：防具的耐久度也没有做补上）★★
+        #   现在真做了：每次【挨打】扣 1 ✓ 归零就损坏消失 ✓
+        #   上限 = 武器上限 × 1.4 ✓（挨打次数比挥刀少 ✓ 两者寿命才接近 ✓）
+        'dur': dur_max_of(t), 'durMax': dur_max_of(t),
         'fx': None,
     }
 

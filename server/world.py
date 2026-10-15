@@ -86,7 +86,8 @@ class Player(object):
                  'invulnT',   # ★ 复活无敌剩余时间（第 56 轮）
                  'wDur', 'wDurMax', 'wDurDirty',   # ★ 手上武器的耐久（第 59 轮）
                  'atkSeq',   # ★★ 第 66 轮：挥砍序号（别人靠它播动作 ✓）
-                 'armor', 'armorItemId')   # ★ 第 67 轮：防具 ✓
+                 'armor', 'armorItemId',   # ★ 第 67 轮：防具 ✓
+                 'aDur', 'aDurMax', 'aDurDirty')   # ★ 第 103 轮：防具耐久 ✓
 
     def __init__(self, cid, role):
         self.cid = cid
@@ -117,6 +118,10 @@ class Player(object):
         # ★ 第 67 轮：防具（穿着的那件 ✓）
         self.armor = role.get('armor') or None
         self.armorItemId = role.get('armorItemId')
+        _ar0 = self.armor or {}
+        self.aDur = int(_ar0.get('dur') or 0)
+        self.aDurMax = int(_ar0.get('durMax') or 0)
+        self.aDurDirty = 0
         self.atkT = 0.0          # ★ 挥刀冷却（服务器自己也算一份，防连点刷伤害）
         self.lastMe = None       # ★ 上次推给他的 exp/等级（变了才推，省带宽）
         self.intents = 0
@@ -539,8 +544,13 @@ class World(object):
             self._party_op(p, d)          # ★ 第 81 轮：组队 ✓
         elif t == 'armorset':
             # ★ 第 67 轮：穿/脱防具（网络线程已经查库校验完了 ✓）
+            self._flush_adur(p)                     # ★ 换防具前先把旧的落库 ✓
             p.armor = d.get('armor') or None
             p.armorItemId = d.get('itemId')
+            _ar = p.armor or {}
+            p.aDurMax = int(_ar.get('durMax') or 0)
+            p.aDur = int(_ar.get('dur') or p.aDurMax)
+            p.aDurDirty = 0
             nm = (p.armor or {}).get('name')
             self._send_cid(p.cid, P.pack('notice',
                                          text=('穿上：%s' % nm) if nm else '脱下防具'))
@@ -1406,6 +1416,32 @@ class World(object):
                                      text='⚠ %s 耐久耗尽，已经损坏消失了' % nm))
         self._send_cid(p.cid, P.pack('weapon', w=None))
 
+    def _break_armor(self, p):
+        """防具耐久归零 → 损坏消失（第 103 轮 ✓ 和武器一个规矩 ✓）"""
+        import json
+        nm = (p.armor or {}).get('name') or '防具'
+        old_id = p.armorItemId
+        p.armor = None
+        p.armorItemId = None
+        p.aDur = p.aDurMax = 0
+        p.aDurDirty = 0
+        if old_id:
+            self.post_save('DELETE FROM items WHERE id=? AND role_id=?', (old_id, p.role_id))
+        self._send_cid(p.cid, P.pack('notice',
+                                     text='⚠ %s 耐久耗尽，已经损坏消失了' % nm))
+        self._send_cid(p.cid, P.pack('armor', a=None, hpm=self._hp_max(p)))
+
+    def _flush_adur(self, p):
+        """防具耐久写回数据库（和武器一个套路：攒够次数才写 ✓）"""
+        if p.aDurDirty and p.armorItemId and p.aDurMax > 0:
+            import json
+            a2 = dict(p.armor or {})
+            a2['dur'] = p.aDur
+            a2['durMax'] = p.aDurMax
+            self.post_save('UPDATE items SET item_json=? WHERE id=? AND role_id=?',
+                           (json.dumps(a2, ensure_ascii=False), p.armorItemId, p.role_id))
+            p.aDurDirty = 0
+
     def _flush_dur(self, p):
         """把内存里的耐久写回数据库（攒够次数才写 ✓ 不然磁盘受不了 ✗）"""
         if p.wDurDirty and p.weaponItemId and p.wDurMax > 0:
@@ -1435,6 +1471,14 @@ class World(object):
             # 闪开了：这一口完全没打到 ✓ 但也不回灵气（没被打到 ✓）
             self._send_cid(p.cid, P.pack('fx', kind='dodge'))
             return
+        # ★ 第 103 轮：挨到了就扣【防具耐久】1 点 ✓（闪避那条已经 return 了 ✓）
+        if p.aDurMax > 0:
+            p.aDur -= 1
+            p.aDurDirty += 1
+            if p.aDurDirty >= 50:
+                self._flush_adur(p)
+            if p.aDur <= 0:
+                self._break_armor(p)
         _w = p.weapon or {}
         _fx = weapons.fx_of(_w.get('look'), int(_w.get('tier') or 0))
         if _fx and _fx['name'] == '招架' and random.random() < _fx['chance']:
@@ -1501,6 +1545,10 @@ class World(object):
             p.wDurDirty += 1
             if p.wDurDirty >= 50:
                 self._flush_dur(p)                   # ★ 攒 50 次写一次盘 ✓ 不炸磁盘 ✓
+            # ★ 第 103 轮：防具耐久也定期推 ✓
+            if p.aDurMax > 0 and p.aDurDirty % 10 == 0:
+                self._send_cid(p.cid, P.pack('dur', d=p.wDur, m=p.wDurMax,
+                                             ad=p.aDur, am=p.aDurMax))
             if p.wDurDirty % 10 == 0:
                 # ★ 每 10 次推一次耐久给客户端 ✓（不然界面上的条子会停在旧值 ✗）
                 self._send_cid(p.cid, P.pack('dur', d=p.wDur, m=p.wDurMax))

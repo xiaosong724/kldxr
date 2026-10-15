@@ -2102,6 +2102,11 @@ function wsOnMessage(raw) {
   if (t === 'dur') {
     // ★ 第 59 轮：服务器定期推耐久（不推的话界面上的条子会停在旧值 ✗）
     if (BAG.weapon) { BAG.weapon.dur = d.d; BAG.weapon.durMax = d.m; }
+    /* ★ 第 103 轮：防具耐久也一起更新 ✓（用户要求：防具的耐久度也补上 ✓）*/
+    if (BAG.armor && typeof d.ad === 'number') {
+      BAG.armor.dur = d.ad;
+      BAG.armor.durMax = d.am;
+    }
     BAG.dur = d.d; BAG.durMax = d.m;
     if ((SETCFG.setTab || '') === 'bag') { bagRender(); }
     return;
