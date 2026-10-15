@@ -1253,6 +1253,8 @@ class World(object):
                               'cap': rid in self.mob_cap_of},
                 'talents': dict(self.tal.get(q.role_id, {}) or {}) if False else dict(getattr(q, 'tal', {}) or {}),
                 'armor': (q.armor or {}).get('name'),
+                # ★ 第 155 轮：排障用 —— 魔气在【内存里】到底是多少 ✓
+                'mq': int(q.mq or 0), 'mqAt': int(q.mqAt or 0),
                 'weapon': (q.weapon or {}).get('name'),
                 'last_hurt_at': round(float(getattr(q, 'lastHurtT', 0) or 0), 1),
             }
