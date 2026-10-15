@@ -373,6 +373,37 @@ async function register(name, pw) {
     ok(cleanQ.fxLeft === 0, '★ 特效 1.1 秒后自己收干净了（不会越积越多 ✗ 现在剩 ' +
       cleanQ.fxLeft + ' 个 ✓）');
 
+    /* ★★★ 第 65 轮回归：别人手里必须是【他自己的】武器 ★★★
+       用户报："我拿弓箭，别的玩家手里也显示弓箭" → 已修 ✓
+       然后我修的时候又踩了一脚：addOther 里读 w.w（快照原始字段名）✗
+       而映射后的名字是 wlook ✗ → 永远 undefined → 兜底成 'sword'
+       → 所有队友都被画成普通单手剑 + 用"扫"的动作 ✗（用户又发现了 ✓）
+       ★ 所以这条要【端到端】钉住：给乙一把长枪 → 甲眼里必须是长枪 ✓ */
+    await ADMIN_ACT('give', { name: '浏览器乙', kind: 'spear', tier: 8 });
+    await sleep(700);
+    await B.eval('bagFetch(function () { if (BAG.items.length) { bagEquip(BAG.items[0].id); } }); return 1;');
+    await sleep(1400);
+    const ownQ = JSON.parse(await B.eval(
+      'return JSON.stringify({ name: (MY_WEAPON || {}).name || "",' +
+      ' kids: (H && H.sw && H.sw.children[0]) ? H.sw.children[0].children.length : -1 });'
+    ) || '{}');
+    const seeQ = JSON.parse(await A.eval(
+      'var o = null;' +
+      'for (var uid in NET.others) { if (NET.others[uid].name === "浏览器乙") { o = NET.others[uid]; break; } }' +
+      'if (!o) { return JSON.stringify({ found: false }); }' +
+      'return JSON.stringify({ found: true, wlook: o.wlook, wtier: o.wtier, arch: atkArchOf(o.wlook),' +
+      ' kids: (o.hh && o.hh.sw && o.hh.sw.children[0]) ? o.hh.sw.children[0].children.length : -1 });'
+    ) || '{}');
+    console.log('        [武器同步] 乙自己=' + ownQ.name + '（' + ownQ.kids + ' 个部件）· 甲看乙=' +
+      seeQ.wlook + '/' + seeQ.wtier + ' 阶（' + seeQ.kids + ' 个部件 · ' + seeQ.arch + '）');
+    ok(seeQ.found === true && seeQ.wlook === 'spear' && seeQ.wtier === 8,
+      '★★★ 甲看乙拿的是【长枪 8 阶】（不是"我的武器"✗ 也不是兜底的单手剑 ✗）');
+    ok(seeQ.kids === ownQ.kids && seeQ.kids > 0,
+      '★★ 甲眼里乙的武器模型和乙自己的一模一样（都是 ' + ownQ.kids + ' 个部件 ✓）');
+    ok(seeQ.arch === 'thrust',
+      '★★ 而且动作也对（长枪=刺 ✓ 不是兜底成"扫"✗）');
+
+
     /* ③b ★ 玩家【移动】同步：甲按住 w 走一会儿，乙那边看到的位置必须跟着变
        （用户反馈过的真 bug：能看到人，但人钉在原地不动 ✗
          根因是 core 里的 `NET.on` 从来没被赋成 true —— netUpdate() 第一行就是
@@ -1347,6 +1378,8 @@ async function register(name, pw) {
     ok(eqQ.reach > bagQ.reach0 - 0.01 && eqQ.arc > bagQ.arc0 + 0.05,
       '★★★ 射程/攻击弧也跟着换了（' + bagQ.reach0 + '→' + eqQ.reach + ' 米 · ' +
       bagQ.arc0 + '→' + eqQ.arc + ' 弧度 ✓）');
+    await A.eval('closeSet(); return 1;');
+
     await A.eval('closeSet(); return 1;');
 
     /* ★★ 第 61 轮：三套挥砍动作（劈 / 扫 / 刺）★★

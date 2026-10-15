@@ -2114,7 +2114,11 @@ function addOther(w, t) {
   if (!o) {
     var hh = hero();                       // 复用玩家模型 ✓
     // ★ 第 65 轮：拿【他】的武器，不是我的 ✗
-    fillHeldWeapon(hh.sw, w.w || 'sword', (typeof w.wt === 'number') ? w.wt : 0);
+    // ★ 踩过的坑：这里必须读【映射后】的 wlook/wtier ✗
+    //   写成 w.w / w.wt（那是快照的原始字段名）→ 永远 undefined
+    //   → 兜底成 'sword' → 所有队友都被画成一把普通单手剑 + 用"扫"的动作 ✗
+    fillHeldWeapon(hh.sw, w.wlook || 'sword',
+                   (typeof w.wtier === 'number') ? w.wtier : 0);
     hh.g.scale.set(G.HERO_SCALE, G.HERO_SCALE, G.HERO_SCALE);
     hh.g.position.set(w.x, 0, w.z);
     scene.add(hh.g);
@@ -2143,7 +2147,7 @@ function addOther(w, t) {
   o.dead = !!w.dead;
   o.inv = +w.inv || 0;       // ★ 第 63 轮：无敌剩余（每包都更新 ✓）
   /* ★ 第 65 轮：他换武器了 → 手里那把也要换 ✓（不然永远是刚看到他时的武器 ✗）*/
-  var _wl = w.w || 'sword', _wt = (typeof w.wt === 'number') ? w.wt : 0;
+  var _wl = w.wlook || 'sword', _wt = (typeof w.wtier === 'number') ? w.wtier : 0;
   if (_wl !== o.wlook || _wt !== o.wtier) {
     o.wlook = _wl; o.wtier = _wt;
     fillHeldWeapon(o.hh.sw, _wl, _wt);
