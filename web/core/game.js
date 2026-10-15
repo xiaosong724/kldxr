@@ -2511,10 +2511,27 @@ function lootMat(tier) {
   return hit;
 }
 
-var _lootGeo = null, _lootShellGeo = null;
+var _lootGeo = null, _lootShellGeo = null, _lootArmorGeo = null;
 function lootGeo() {
   if (!_lootGeo) { _lootGeo = new THREE.BoxGeometry(0.30, 0.30, 0.30); }
   return _lootGeo;
+}
+/* 第 171 轮（用户 #9）：地上的防具不再是一个方块。
+   用户原话：「地上防具是个方块（武器是缩小版模型）」
+
+   做法：用 mergeBoxes 拼一个迷你胸甲 —— 躯干 + 左右肩甲 + 一条腰带。
+   为什么照旧用 mergeBoxes：它把多个盒子合并成一个网格，
+   只多 1 次 draw call（掉落物一多，不能每件拆成几十个网格）。 */
+function lootArmorGeo() {
+  if (!_lootArmorGeo) {
+    _lootArmorGeo = mergeBoxes([
+      [0.26, 0.22, 0.12, 0xffffff, 0, 0.02, 0],       /* 躯干 */
+      [0.10, 0.09, 0.11, 0xffffff, -0.16, 0.09, 0],   /* 左肩 */
+      [0.10, 0.09, 0.11, 0xffffff, 0.16, 0.09, 0],    /* 右肩 */
+      [0.22, 0.05, 0.11, 0xffffff, 0, -0.11, 0]       /* 腰带 */
+    ]);
+  }
+  return _lootArmorGeo;
 }
 function lootShellGeo() {
   /* ★ 轮廓壳 = 同一个形状放大一圈 ✓ 合并成【一个】网格 → 只多 1 次 draw call ✓ */
@@ -2568,7 +2585,10 @@ function addWorldLoot(arr) {
       g.position.set(x, 0.45, z);
       g.castShadow = true;
     } else {
-      g = new THREE.Mesh(lootGeo(), lootMat(tier));   // ★ 几何体/材质共享（第 45 轮）
+      /* 第 171 轮（用户 #9）：防具用胸甲模型，其余仍是原来的方块。
+         （arr[6] 是服务器给的物品大类：'armor' / 'mat' 等） */
+      var _isArmor = String(arr[6] || '') === 'armor';
+      g = new THREE.Mesh(_isArmor ? lootArmorGeo() : lootGeo(), lootMat(tier));   // ★ 几何体/材质共享（第 45 轮）
       g.position.set(x, 0.5, z);
       g.castShadow = true;
     }

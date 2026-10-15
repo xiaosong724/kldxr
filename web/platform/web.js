@@ -2042,6 +2042,43 @@ function wStatHtml(it, dim) {
        · 数量 → 材料【右下角】（武器永不堆叠 ✓）
        · 点格子 = 选中；面板显示【选中那件】的数值；下面出现【使用】/【脱下】
    ============================================================ */
+/* ★★ 第 171 轮（用户 #4）：背包分页 ★★
+   每页 35 格 = 5 行 × 7 列 ✓（宽 7 ✓）
+   ★ 为什么在客户端分页而不是服务器分批取：
+     背包本来就只有几十件 ✗ 客户端一次拿全 ✓ 翻页只是"少画一些格子"✓
+     服务器那边一个字都不用改 ✓（也不用改协议 ✓）
+   ★ 空位也要画满 35 个 ✓ 不然最后一页会"越画越小"✗ 看着不像格子 ✓ */
+var BAG_PAGE_SIZE = 35;
+var BAG_PAGE = 0;
+
+function bagPageCount() {
+  var n = (BAG.items || []).length;
+  return Math.max(1, Math.ceil(n / BAG_PAGE_SIZE));
+}
+function bagPagerUpd() {
+  var box = document.getElementById('bagPager');
+  var txt = document.getElementById('bagPageTxt');
+  if (!box) { return; }
+  var n = bagPageCount();
+  if (BAG_PAGE > n - 1) { BAG_PAGE = n - 1; }
+  if (BAG_PAGE < 0) { BAG_PAGE = 0; }
+  /* 只有一页就不显示翻页行 ✓（不然多一行没用的东西 ✗）*/
+  box.style.display = (n > 1) ? 'flex' : 'none';
+  if (txt) { txt.textContent = (BAG_PAGE + 1) + ' / ' + n + ' 页'; }
+}
+function bagPageBind() {
+  var pv = document.getElementById('bagPrev');
+  var nx = document.getElementById('bagNext');
+  if (pv && !pv._b) {
+    pv._b = true;
+    pv.onclick = function () { BAG_PAGE = Math.max(0, BAG_PAGE - 1); bagRender(); };
+  }
+  if (nx && !nx._b) {
+    nx._b = true;
+    nx.onclick = function () { BAG_PAGE = Math.min(bagPageCount() - 1, BAG_PAGE + 1); bagRender(); };
+  }
+}
+
 function bagRender() {
   var grid = document.getElementById('bagGrid');
   var eqs = document.getElementById('bagEqSlot');
@@ -2050,9 +2087,13 @@ function bagRender() {
   var cnt = document.getElementById('bagCount');
   if (!grid || !eqs || !st) { return; }
 
-  /* ---- 背包格子（8 列，空位也画出来 → 才像格子而不是列表 ✓）---- */
+  /* ---- 背包格子（7 列 ✓ 每页 35 格 ✓ 空位也画出来 → 才像格子而不是列表 ✓）---- */
+  bagPagerUpd();
+  bagPageBind();
   var html = '';
-  for (var i = 0; i < BAG.items.length; i++) {
+  var _from = BAG_PAGE * BAG_PAGE_SIZE;
+  var _to = Math.min((BAG.items || []).length, _from + BAG_PAGE_SIZE);
+  for (var i = _from; i < _to; i++) {
     var e = BAG.items[i];
     var it = e.item || {};
     /* ★★ 第 97 轮修的 bug：这里原来只认 weapon ✗
@@ -2093,7 +2134,10 @@ function bagRender() {
       (lowm ? '<span class="lvl">' + Math.round(wMastery(it) * 100) + '%</span>' : '') + '</div>';
   }
   var total = Math.max(16, Math.ceil((BAG.items.length + 1) / 8) * 8);
-  for (var p = BAG.items.length; p < total; p++) { html += '<div class="slot empty"></div>'; }
+  /* 第 171 轮（用户 #4）：空位要按【每页 35 格】补。
+     不能按背包总容量补 —— 不然第二页开头一个空位都没有，页面长短不一。 */
+  var _filled = (_to - _from);
+  for (var p = _filled; p < BAG_PAGE_SIZE; p++) { html += '<div class="slot empty"></div>'; }
   grid.innerHTML = html;
   if (cnt) { cnt.textContent = BAG.items.length ? (BAG.items.length + ' 件') : ''; }
 

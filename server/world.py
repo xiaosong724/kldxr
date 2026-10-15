@@ -2486,8 +2486,12 @@ class World(object):
             cand.sort(key=lambda it: it[0])
             cand = cand[:drops.LOOT_SEND_CAP]
         # ★ 第 70 轮：多带一个 look（客户端要在地上摆【缩小版模型】✓）
+        # ★ 第 171 轮（用户 #9）：再追加一位【大类】= slot
+        #   客户端要按它选形状（防具用胸甲模型 ✓ 武器用缩小版武器 ✓ 其余方块 ✓）
+        #   ★ 只能往后追加 ✗ 前面的下标一个都不能动 ✓（客户端按下标读 ✓）
         return [[lid, round(e['x'], 2), round(e['z'], 2), e['item']['name'],
-                 e['item']['tier'], e['item'].get('look') or '']
+                 e['item']['tier'], e['item'].get('look') or '',
+                 e['item'].get('slot') or 'mat']
                 for _, lid, e in cand]
 
     def _intent_pick(self, p, d):
