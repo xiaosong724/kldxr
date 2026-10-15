@@ -720,6 +720,89 @@ function ptBanner(text, color) {
   _ptBanT = setTimeout(function () { el.style.display = 'none'; }, 4000);
 }
 
+/* ★★ 第 113 轮（用户要求）：玩家属性页 ★★
+   把散在各处的数值集中到一页：人物 / 武器 / 防具 / 合计 ✓
+   ★ 数据来源都是现成的（WSC.role ✓ MY_WEAPON ✓ BAG.armor ✓）不新加协议 ✓ */
+function stRow(k, v, note) {
+  return '<div class="ptLine"><span style="min-width:88px;opacity:.85">' + k +
+    '</span><b style="color:#8ee0ff">' + v + '</b>' +
+    (note ? '<span class="bagTip">' + note + '</span>' : '') + '</div>';
+}
+function statRender() {
+  var r = WSC.role || {};
+  var lv = r.level || 1;
+  var el1 = document.getElementById('stSelf');
+  var el2 = document.getElementById('stWeapon');
+  var el3 = document.getElementById('stArmor');
+  var el4 = document.getElementById('stTotal');
+  if (!el1) { return; }
+
+  /* ---- 人物 ---- */
+  /* ★ 升级所需：和服务器 mobs.level_up_need 同一个公式 ✓
+     （core 里没有现成函数 ✗ 直接算 ✓ 不新加依赖 ✗）*/
+  var need = Math.round(60 + 24 * lv + 2.4 * lv * lv);
+  if (WSC.role && typeof WSC.role.needExp === 'number' && WSC.role.needExp > 0) {
+    need = WSC.role.needExp;
+  }
+  el1.innerHTML =
+    stRow('名字', (r.name || '?'), '') +
+    stRow('境界', '炼气 ' + lv + ' 层', '') +
+    stRow('经验', (r.exp || 0) + (need ? (' / ' + need) : ''), need ? '满了就升级' : '') +
+    stRow('固有攻击', Math.round((typeof wInherent === 'function') ? wInherent() : 0),
+          '只跟等级有关，和装备无关') +
+    stRow('生命', Math.round(HP) + ' / ' + Math.round(HPMAX), '') +
+    stRow('灵气', '等技能系统做了一起展示', '现在灵气还没有用处');
+
+  /* ---- 武器 ---- */
+  var w = MY_WEAPON;
+  if (w && w.slot === 'weapon') {
+    var s = wStatsOf(w);
+    var m = wMastery(w);
+    el2.innerHTML =
+      stRow('武器', (w.name || '?') + '（' + ((w.tier || 0) + 1) + ' 阶）', '') +
+      stRow('发挥度', Math.round(m * 100) + '%',
+            m < 1 ? ('建议 ' + (w.reqLevel || 1) + ' 级，你现在 ' + lv + ' 级') : '已满') +
+      stRow('实际每击', Math.round(wRealHit(w)), '含发挥度和封顶') +
+      stRow('每秒伤害', Math.round(wRealDps(w)), '含暴击期望') +
+      stRow('攻速', '×' + s.spd.toFixed(2) + '（' + wInterval(w).toFixed(2) + ' 秒一刀）', '') +
+      stRow('范围', s.reach.toFixed(1) + ' 米 · ' + rangeWord(s.reach), arcWord(s.arc)) +
+      ((w.affixes && w.affixes.length) ? stRow('词条', w.affixes.length + ' 条',
+        w.affixes.map(function (a) { return a.text; }).join(' · ')) : '') +
+      ((+w.durMax > 0) ? stRow('耐久', ((typeof w.dur === 'number') ? w.dur : w.durMax) +
+        ' / ' + w.durMax, '还能挥这么多次') : '');
+  } else {
+    el2.innerHTML = '<div class="bagTip">空手（捡到武器后在背包里点【使用】）</div>';
+  }
+
+  /* ---- 防具 ---- */
+  var ar = BAG.armor;
+  if (ar && ar.base) {
+    var b = ar.base || {};
+    el3.innerHTML =
+      stRow('防具', (ar.name || '?') + '（' + ((ar.tier || 0) + 1) + ' 阶）', '') +
+      stRow('减伤', (Math.round((+b.dr || 0) * 10) / 10) + ' 点',
+            '挨打时先扣这么多（最多扣到只剩 10%）') +
+      stRow('生命上限', '+' + Math.round(+b.hp || 0), '') +
+      ((ar.affixes && ar.affixes.length) ? stRow('词条', ar.affixes.length + ' 条',
+        ar.affixes.map(function (a) { return a.text; }).join(' · ')) : '') +
+      ((+ar.durMax > 0) ? stRow('耐久', ((typeof ar.dur === 'number') ? ar.dur : ar.durMax) +
+        ' / ' + ar.durMax, '还能挨这么多次') : '');
+  } else {
+    el3.innerHTML = '<div class="bagTip">没穿防具（背包里点防具 → 使用 → 会穿到武器槽右边）</div>';
+  }
+
+  /* ---- 合计 ---- */
+  var mates = (typeof PARTY !== 'undefined' && PARTY.roster) ? PARTY.roster.length : 0;
+  el4.innerHTML =
+    stRow('生命上限', Math.round(HPMAX), '基础 + 防具 + 词条') +
+    stRow('减伤', (BAG.armor && BAG.armor.base)
+      ? (Math.round((+BAG.armor.base.dr || 0) * 10) / 10) + ' 点' : '0 点', '') +
+    stRow('队伍', mates ? (mates + ' 人（' + mates * 0 + '队友击杀你拿 10% 经验）') : '没组队',
+          mates ? '' : '菜单 → 组队 里可以组队') +
+    '<div class="bagTip" style="margin-top:6px">★ 敌人打你的伤害 = 它的攻击力 − 你的减伤，' +
+    '最后至少留 10% ✓</div>';
+}
+
 function ptEsc(s) {
   return String(s === undefined || s === null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -1040,6 +1123,7 @@ function openSet(wantTab) {
   if (wantTab) { setTab(wantTab); }
   ptBind();                                   // ★ 第 83 轮：组队页绑定 ✓
   if ((SETCFG.setTab || '') === 'party') { lobbyFetch(ptRender); }
+  if ((SETCFG.setTab || '') === 'stat') { statRender(); }   // ★ 第 113 轮：属性页 ✓
   if ((SETCFG.setTab || '') === 'bag') { bagFetch(bagRender); }   // 打开时拉一次背包 ✓
   mkOpts('rowDpr', [{ v: 1.0, t: '1.0x', s: '省' }, { v: 1.5, t: '1.5x', s: '较快' },
                     { v: 2.0, t: '2.0x', s: '清晰' }, { v: 2.5, t: '2.5x', s: '很清晰' },
@@ -1182,6 +1266,7 @@ function openSet(wantTab) {
 
   /* ★ 分类导航：按记住的那一页显示（第 31 轮）✓ */
   setTab(SETCFG.setTab || 'view');
+  if ((SETCFG.setTab || '') === 'stat') { statRender(); }
 }
 
 /* ============================================================
@@ -1227,18 +1312,24 @@ var MAT_ICON_BY_NAME = {
      · 两侧肩甲（半透明 ✓ 一眼看出是"穿在身上的甲"✓）
      · 中缝（深色线 ✓ 不管品阶是什么颜色都看得清 ✓）*/
 var ARMOR_ICON = '<svg viewBox="0 0 24 24" width="100%" height="100%">' +
-  /* ★★ 第 110 轮（用户："衣服短一点太长了，这六个都可以"）★★
-     用第一款【反甲（荆棘向）】✓ 并把身体收短：
-       下摆从 y=21 收到 y=16.8 ✓（只盖胸背 ✗ 不拖到腿 ✓）
-       肩甲也收紧一圈 ✓
-     纯 SVG + currentColor ✓ 品阶色/发光自动跟着变 ✓ */
-  '<path d="M8 4 h8 l4.4 2.1 -0.5 4 -2.3 -0.6 V16.8 H6.4 V9.5 l-2.3 0.6 -0.5 -4 z"' +
-  ' fill="currentColor" opacity="0.9"/>' +
-  '<path d="M4.4 4.2 l-2.5 -1.4 0.9 3 z M19.6 4.2 l2.5 -1.4 -0.9 3 z"' +
-  ' fill="currentColor" opacity="0.95"/>' +
-  '<path d="M12 7.4 l-1.3 2.1 1.3 2 1.3 -2 z" fill="currentColor" opacity="0.95"/>' +
-  '<path d="M6.6 11.6 l-1.6 1.1 1.6 1.1 z M17.4 11.6 l1.6 1.1 -1.6 1.1 z"' +
-  ' fill="currentColor" opacity="0.95"/>' +
+  /* ★★ 第 113 轮（用户："防具的图标样式不好看再重新做一个"）★★
+     改进点（对照前两版）：
+       · 前两版像"T 恤"✗ —— 因为肩太圆、腰没收
+       · 这版做成【梯形胸甲】：肩宽腰窄 ✓ 一眼是"甲"不是"衣服"✓
+       · 肩甲【分离】出来（留一道缝 ✓）比连在一起更像盔甲 ✓
+       · 尖刺全去掉（之前太碎、缩小后糊成一团 ✗）
+       · 只有：领口 V + 中缝 + 两颗铆钉 + 腰线 ✓ 缩小到 32px 也清楚 ✓ */
+  '<path d="M9 2.6 h6 l2.6 1.8 -0.5 2.4 H6.9 l-0.5 -2.4 z" fill="currentColor" opacity="0.65"/>' +
+  '<path d="M7.6 7.2 h8.8 l-0.9 9.6 H8.5 z" fill="currentColor" opacity="0.95"/>' +
+  '<path d="M4.6 4.4 c-1.4 0.2 -2.4 1.2 -2.6 2.6 v3.2 c0 1.2 0.8 2 2 2.1 z"' +
+  ' fill="currentColor" opacity="0.8"/>' +
+  '<path d="M19.4 4.4 c1.4 0.2 2.4 1.2 2.6 2.6 v3.2 c0 1.2 -0.8 2 -2 2.1 z"' +
+  ' fill="currentColor" opacity="0.8"/>' +
+  '<path d="M10.2 7.4 L12 9.6 L13.8 7.4" stroke="#000" stroke-opacity="0.3"' +
+  ' stroke-width="1" fill="none"/>' +
+  '<path d="M12 9.8 V16.6" stroke="#000" stroke-opacity="0.22" stroke-width="0.9"/>' +
+  '<circle cx="10" cy="12.4" r="0.62" fill="#000" opacity="0.3"/>' +
+  '<circle cx="14" cy="12.4" r="0.62" fill="#000" opacity="0.3"/>' +
   '</svg>';
 
 function iconOfItem(it) {
