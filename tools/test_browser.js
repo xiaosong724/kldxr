@@ -1409,6 +1409,29 @@ async function register(name, pw) {
       bagQ.arc0 + '→' + eqQ.arc + ' 弧度 ✓）');
     await A.eval('closeSet(); return 1;');
 
+    /* ★★★ 第 105 轮：钉住“收到防具消息要更新血量上限” ★★★
+       用户报：“穿戴防具后血量还是没有变化”
+       根因：这段代码第 102 轮加过，被后面的补丁【冲掉了】✗（静默消失 ✗）
+       → 光修不够 ✗ 得有条断言钉着 ✓（不然下次还会被冲掉 ✗）*/
+    const hpQ = JSON.parse(await A.eval(
+      'var before = HPMAX;' +
+      'var shown0 = (document.getElementById("hpTxt") || {}).textContent;' +
+      'wsOnMessage(JSON.stringify({ t: "armor", d: { a: null, hpm: 9999 } }));' +
+      'var after = HPMAX;' +
+      'var shown = (document.getElementById("hpTxt") || {}).textContent;' +
+      'wsOnMessage(JSON.stringify({ t: "armor", d: { a: null, hpm: before } }));' +
+      'return JSON.stringify({ before: before, after: after, shown: shown,' +
+      ' shown0: shown0, restored: HPMAX });'
+    ) || '{}');
+    console.log('        [防具血量] hpm=9999 前 ' + hpQ.before + ' → 后 ' +
+      hpQ.after + ' · 血条 "' + hpQ.shown0 + '" → "' + hpQ.shown +
+      '" · 还原 ' + hpQ.restored);
+    ok(hpQ.after === 9999,
+      '★★★ 收到防具消息里的 hpm → 客户端血量上限立刻跟着变（' +
+      hpQ.before + ' → ' + hpQ.after + ' ✓）');
+    ok(String(hpQ.shown || '').indexOf('9999') >= 0,
+      '★★ 血条文字也刷了（"' + hpQ.shown + '" ✓）');
+    ok(hpQ.restored === hpQ.before, '★ 测完还原了（' + hpQ.restored + ' ✓）');
     await A.eval('closeSet(); return 1;');
 
     /* ★★ 第 61 轮：三套挥砍动作（劈 / 扫 / 刺）★★

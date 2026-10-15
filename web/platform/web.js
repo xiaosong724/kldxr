@@ -2097,6 +2097,19 @@ function wsOnMessage(raw) {
   }
   if (t === 'armor') {
     BAG.armor = d.a || null;
+    /* ★★★ 第 105 轮：这段我第 102 轮加过，但被后面的补丁冲掉了 ✗ 现在补回来 ★★★
+       用户报："穿戴防具后血量还是没有变化"
+       根因：客户端的 HPMAX 只在 core 里由 me 通道赋过值 ✗
+            而【换防具】走的是这条 armor 消息 ✗ 这里没更新 → 上限当然不动 ✗
+       （挨打其实已经变少了 ✓ 服务器算得没错 ✓ 只是显示的上限没跟上 ✗）
+       ★ 又一次"同一处代码被多次改写、前一次的有效改动被冲掉"✗
+         这已经是第 4 次了（弓朝向/五角星/continue 跳过/这次）✗
+         → 以后我改这些 UI 处理块，改完会【立刻回头读一遍】✗ 别只信"脚本说 OK"✓ */
+    if (typeof d.hpm === 'number' && d.hpm > 0) {
+      HPMAX = d.hpm;
+      if (HP > HPMAX) { HP = HPMAX; }
+      updHP();
+    }
     if ((SETCFG.setTab || '') === 'bag') { bagRender(); }
     return;
   }
