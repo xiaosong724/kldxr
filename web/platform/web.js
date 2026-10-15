@@ -1736,6 +1736,30 @@ function bagTipAt(e, el) {
       '范围 <b>' + s.reach.toFixed(1) + '</b> 米（' + rangeWord(s.reach) + '）<br>' +
       '打击面：' + arcWord(s.arc) + '<br>' +
       '攻速 ×' + s.spd.toFixed(2) + '（' + wInterval(it).toFixed(2) + ' 秒一刀）<br>';
+  } else if (it.slot === 'armor' && it.base) {
+    /* ★★ 第 107 轮（用户选的 B：悬停那个浮窗信息太少）★★
+       根因：这段"详细信息"原来【只给武器拼】✗（if slot === 'weapon' ✓）
+            防具进来是空的 → 浮窗只剩名字和品阶 ✓ 用户："提示信息太简单了"✓
+       用户要求：不用补得特别完整，重要的有就行 ✓
+       → 只放四样：减伤 / 生命上限 / 词条条数 / 耐久 ✓ */
+    var bA = it.base || {};
+    var afA = it.affixes || [];
+    extra += '减伤 <b>' + (Math.round((+bA.dr || 0) * 10) / 10) + '</b> 点 · ' +
+      '生命上限 <b>+' + Math.round(+bA.hp || 0) + '</b><br>';
+    if (afA.length) {
+      var afTxt = [];
+      for (var ia = 0; ia < afA.length; ia++) { afTxt.push(afA[ia].text || ''); }
+      extra += '<span style="color:#8ee0ff">词条 ' + afA.length + ' 条：' +
+        afTxt.join(' · ') + '</span><br>';
+    }
+    if (+it.durMax > 0) {
+      var ddA = (typeof it.dur === 'number') ? it.dur : it.durMax;
+      var kA = ddA / it.durMax;
+      extra += '耐久 <b style="color:' + (kA > 0.5 ? '#7ee08a'
+        : (kA > 0.2 ? '#ffd83d' : '#ff7a6a')) + '">' + ddA + '</b> / ' +
+        it.durMax + ' 次挨打<br>';
+    }
+    extra += '<span style="opacity:.7">穿在武器槽右边那个槽 · 点【使用】穿上</span><br>';
   }
   /* ★★ 第 55 轮：等级需求 + 发挥度【写进文案】★★
      用户要求："武器等级需求还是没有显示，把它改到文案里吧，以及发挥度"
