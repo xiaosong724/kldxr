@@ -31,6 +31,15 @@
  #msg{color:#ffb4a0;font-size:12px;min-height:16px;margin-top:6px}
  .hide{display:none}
  .tip{color:#8f8570;font-size:11px}
+  /* ★ 第 136 轮：状态标签 + 玩家行里的单人控件 */
+  .sw{display:inline-block;padding:2px 10px;border-radius:10px;font-weight:700;margin:0 8px}
+  .sw.on{background:#1d3a24;color:#7ee08a;border:1px solid #7ee08a66}
+  .sw.off{background:#3a1d1d;color:#ff8a7a;border:1px solid #ff8a7a66}
+  .ov{display:inline-flex;align-items:center;gap:3px;margin-right:8px;
+      padding:1px 6px;border-radius:8px;background:#ffffff0d}
+  .ov s{text-decoration:none;opacity:.7;font-size:11px}
+  .ov select,.ov input{font-size:11px;padding:1px 3px}
+  .ov button{padding:1px 6px;font-size:11px}
 </style></head>
 <body>
 <div class="wrap">
@@ -98,12 +107,8 @@
         <span class="tip">每人上限（默认 8）</span>
         <button id="btnMobPer">应用给所有人</button>
       </div>
-      <div style="margin:6px 0">
-        <b>单人</b>
-        <input id="mobWho" placeholder="玩家名字" style="width:140px">
-        <input id="mobOne" type="number" min="1" max="30" value="8" style="width:70px">
-        <button id="btnMobOne">只给这个人设成</button>
-        <button id="btnMobClear">取消他的单独设置</button>
+      <div class="tip" style="margin:4px 0">
+        ★ 单人设置请到下面【玩家列表】里改 ✓（每行都有 PVP / 伤害 / 上限 三个控件）
       </div>
       <div style="margin:6px 0">
         <b>其它</b>
@@ -116,22 +121,16 @@
       <hr style="border-color:#ffffff18;margin:10px 0">
       <div style="margin:6px 0">
         <b>PVP</b>
+        <span id="pvpState" class="sw">状态…</span>
         <button id="btnPvpAll">全服开启</button>
         <button id="btnPvpAllOff">全服关闭</button>
-        <input id="pvpWho" placeholder="玩家名字" style="width:130px">
-        <button id="btnPvpOneOn">给他开</button>
-        <button id="btnPvpOneOff">给他关</button>
-        <button id="btnPvpClear">取消单独设置</button>
         <span class="tip">★ 现在是【闸门】：真正的 PvP 伤害还没做 ✓ 状态已经存下来了 ✓</span>
       </div>
       <div style="margin:6px 0">
         <b>妖兽伤害</b>
+        <span id="atkState" class="sw">状态…</span>
         <button id="btnAtkAllOn">全服开启</button>
         <button id="btnAtkAllOff">全服关闭</button>
-        <input id="atkWho" placeholder="玩家名字" style="width:130px">
-        <button id="btnAtkOneOn">给他开</button>
-        <button id="btnAtkOneOff">给他关</button>
-        <button id="btnAtkClear">取消单独设置</button>
         <span class="tip">★ 关掉后僵尸照样刷、照样围着你，但咬不动你（方便看风景/截图）✓</span>
       </div>
       <div id="mobNow" class="tip" style="margin-top:4px"></div>
@@ -267,39 +266,57 @@ function mobCapBind() {
 /* ★ 第 134 轮：两组开关的界面逻辑 ✓ */
 function swBind() {
   var g = function (id) { return document.getElementById(id); };
-  var on = function (act_, body) {
-    act(act_, body);
-  };
-  var one = function (act_, whoId, on_) {
-    var who = (g(whoId).value || '').trim();
-    if (!who) { return msg('先填玩家名字', '#ff7a6a'); }
-    act(act_, { name: who, on: on_ });
-  };
-  var clr = function (act_, whoId) {
-    var who = (g(whoId).value || '').trim();
-    if (!who) { return msg('先填玩家名字', '#ff7a6a'); }
-    act(act_, { name: who, clear: 1 });
-  };
   if (!g('btnPvpAll')) { return; }
-  g('btnPvpAll').onclick = function () { on('pvp', { on: 1 }); };
-  g('btnPvpAllOff').onclick = function () { on('pvp', { on: 0 }); };
-  g('btnPvpOneOn').onclick = function () { one('pvp', 'pvpWho', 1); };
-  g('btnPvpOneOff').onclick = function () { one('pvp', 'pvpWho', 0); };
-  g('btnPvpClear').onclick = function () { clr('pvp', 'pvpWho'); };
-  g('btnAtkAllOn').onclick = function () { on('mobatk', { on: 1 }); };
-  g('btnAtkAllOff').onclick = function () { on('mobatk', { on: 0 }); };
-  g('btnAtkOneOn').onclick = function () { one('mobatk', 'atkWho', 1); };
-  g('btnAtkOneOff').onclick = function () { one('mobatk', 'atkWho', 0); };
-  g('btnAtkClear').onclick = function () { clr('mobatk', 'atkWho'); };
-  if (typeof mobCaps === 'object' && mobCaps) {
-    var el = g('swNow');
-    if (el) {
-      el.textContent = '当前：PVP 全服' + (mobCaps.pvpAll ? '开' : '关') +
-        '（单独设置 ' + Object.keys(mobCaps.pvpOnes || {}).length + ' 人）· ' +
-        '妖兽伤害 全服' + (mobCaps.atkAll ? '开' : '关') +
-        '（单独设置 ' + Object.keys(mobCaps.atkOnes || {}).length + ' 人）';
-    }
+  /* ★ 第 136 轮（用户："要加一下状态不然怎么判断是开了还是关了"）★
+     全服开关那边只留两个按钮 ✓ 单人挪到玩家列表里了 ✓
+     这里负责：① 绑全服按钮 ② 把当前状态用颜色写出来 ✓ */
+  g('btnPvpAll').onclick = function () { act('pvp', { on: 1 }); };
+  g('btnPvpAllOff').onclick = function () { act('pvp', { on: 0 }); };
+  g('btnAtkAllOn').onclick = function () { act('mobatk', { on: 1 }); };
+  g('btnAtkAllOff').onclick = function () { act('mobatk', { on: 0 }); };
+  var mc = (typeof mobCaps === 'object' && mobCaps) ? mobCaps : null;
+  var set = function (id, on, extra) {
+    var el = g(id);
+    if (!el) { return; }
+    el.textContent = (on ? '已开启' : '已关闭') + (extra || '');
+    el.className = 'sw ' + (on ? 'on' : 'off');
+  };
+  if (mc) {
+    set('pvpState', !!mc.pvpAll,
+        '（' + Object.keys(mc.pvpOnes || {}).length + ' 人有单独设置）');
+    set('atkState', !!mc.atkAll,
+        '（' + Object.keys(mc.atkOnes || {}).length + ' 人有单独设置）');
   }
+}
+
+/* ★ 第 136 轮：玩家列表里的单人控件（事件委托 ✓ 一行一个委托就够 ✗ 别每行绑一次 ✓）*/
+function ovBind() {
+  var rows = $('rows');
+  if (!rows || rows._ovb) { return; }
+  rows._ovb = true;
+  rows.addEventListener('change', function (e) {
+    var el = e.target;
+    if (!el || !el.getAttribute) { return; }
+    var k = el.getAttribute('data-ov');
+    if (!k) { return; }
+    var nm = el.getAttribute('data-n');
+    var v = el.value;
+    if (v === '') { return act(k, { name: nm, clear: 1 }); }   // 默认 = 取消覆盖 ✓
+    act(k, { name: nm, on: (v === '1') ? 1 : 0 });
+  });
+  rows.addEventListener('click', function (e) {
+    var el = e.target;
+    if (!el || !el.getAttribute) { return; }
+    var s = el.getAttribute('data-capset');
+    if (s) {
+      var inp = rows.querySelector('[data-cap="' + s + '"]');
+      var v = inp ? (+inp.value || 0) : 0;
+      if (v < 1) { return msg('先填个上限（1~30）', '#ff7a6a'); }
+      return act('mobcap', { name: s, per: v });
+    }
+    var c = el.getAttribute('data-capclr');
+    if (c) { return act('mobcap', { name: c, clearOne: 1 }); }
+  });
 }
 
 function act(name, body) {
@@ -351,6 +368,7 @@ function refresh() {
     mobCaps = r.mobCaps || null;
     if (typeof mobCapBind === 'function') { mobCapBind(); }
     if (typeof swBind === 'function') { swBind(); }
+    if (typeof ovBind === 'function') { ovBind(); }
     $('testInfo').textContent = r.testHidden
       ? ('（已隐藏 ' + r.testHidden + ' 个测试账号）') : '';
     $('pgInfo').textContent = '第 ' + PAGE + ' / ' + PAGES + ' 页 · 共 ' +
@@ -363,6 +381,25 @@ function refresh() {
         '</td><td>' + p.level + '</td><td>' + p.exp + '</td>' +
         '<td>' + p.x + ', ' + p.z + '</td>' +
         '<td>' +
+        /* ★★ 第 136 轮（用户："单独设置改到下面的玩家列表中去"）★★
+           每行三个控件：PVP / 妖兽伤害（默认·开·关）+ 僵尸上限（数字 + 设/清）✓
+           ★ 用 <select> 而不是 6 个按钮 ✗ 一行里塞得下 ✓ 而且一眼看得出当前是什么 ✓
+           ★ 当前值从 p.ov 读（服务器在玩家列表里一起报回来的 ✓）*/
+        '<span class="ov"><s>PVP</s><select data-ov="pvp" data-n="' + nm + '">' +
+          '<option value="">默认</option>' +
+          '<option value="1"' + ((p.ov && p.ov.pvp === true) ? ' selected' : '') + '>开</option>' +
+          '<option value="0"' + ((p.ov && p.ov.pvp === false) ? ' selected' : '') + '>关</option>' +
+        '</select></span>' +
+        '<span class="ov"><s>伤害</s><select data-ov="mobatk" data-n="' + nm + '">' +
+          '<option value="">默认</option>' +
+          '<option value="1"' + ((p.ov && p.ov.mobatk === true) ? ' selected' : '') + '>开</option>' +
+          '<option value="0"' + ((p.ov && p.ov.mobatk === false) ? ' selected' : '') + '>关</option>' +
+        '</select></span>' +
+        '<span class="ov"><s>上限</s>' +
+          '<input type="number" min="1" max="30" style="width:46px" data-cap="' + nm + '" value="' +
+            ((p.ov && p.ov.cap) ? p.ov.cap : '') + '" placeholder="默认">' +
+          '<button data-capset="' + nm + '">设</button>' +
+          '<button data-capclr="' + nm + '">清</button></span>' +
         '<button data-a="spawn" data-n="' + nm + '">刷 5 只</button>' +
         '<button data-a="give" data-n="' + nm + '">给装备</button>' +
         '<button data-a="heal" data-n="' + nm + '">治疗</button>' +

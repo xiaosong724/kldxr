@@ -384,10 +384,26 @@ class Api(BaseHTTPRequestHandler):
                         test_n += 1
                         if not show_test:
                             continue
+                    # ★★ 第 136 轮：每个人的"单人覆盖"也一起报回去 ★★
+                    #   （用户："单独设置改到下面的玩家列表中去"✗
+                    #     列表里要显示每个人当前是什么 ✓ 所以必须报回来 ✓）
+                    #   ov = {pvp: True/False/None, mobatk: ..., cap: N/None}
+                    _ov = {}
+                    try:
+                        _w = self.world
+                        if _w is not None:
+                            if r[0] in (getattr(_w, 'pvp_of', {}) or {}):
+                                _ov['pvp'] = bool(_w.pvp_of[r[0]])
+                            if r[0] in (getattr(_w, 'mob_atk_of', {}) or {}):
+                                _ov['mobatk'] = bool(_w.mob_atk_of[r[0]])
+                            if r[0] in (getattr(_w, 'mob_cap_of', {}) or {}):
+                                _ov['cap'] = int(_w.mob_cap_of[r[0]])
+                    except Exception:
+                        _ov = {}
                     rows.append({'id': r[0], 'name': nm, 'level': r[2], 'exp': r[3],
                                  'hp': r[4], 'x': round(float(r[5] or 0), 1),
                                  'z': round(float(r[6] or 0), 1),
-                                 'online': nm in online, 'test': is_test(nm)})
+                                 'online': nm in online, 'test': is_test(nm), 'ov': _ov})
         except Exception:
             pass
         # ★ 在线的排前面 ✓（其余保持"等级降序"✓）
