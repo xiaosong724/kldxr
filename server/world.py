@@ -1217,6 +1217,40 @@ class World(object):
                 self._broadcast(P.pack('notice',
                     text='[管理] 【%s】已全服%s' % (gname, '开启' if on else '关闭')))
             return
+        # ★ 第 139 轮：管理员"看某人实时状态"（只读 ✓ 不改任何东西 ✓）
+        #   为什么需要：用户报"只有某个角色打不到/被打死卡住"✗
+        #     光看数据库看不出问题 ✗（数据库的 hp 和内存里的不是一回事 ✓）
+        #     必须能看到【tick 线程里那个 Player 的真实状态】✓
+        if act == 'who':
+            q = self._find_player(str(d.get('name') or ''))
+            if q is None:
+                self._send_cid_who = None
+                return
+            near = 0
+            for m in self.mobs.values():
+                if m.hp <= 0:
+                    continue
+                if (m.x - q.x) ** 2 + (m.z - q.z) ** 2 <= 60.0 * 60.0:
+                    near += 1
+            rid = getattr(q, 'role_id', None)
+            self.lobby_stat = self.lobby_stat or {}
+            self.who_dump = {
+                'name': q.name, 'role_id': rid,
+                'hp': int(q.hp or 0), 'hp_max': self._hp_max(q),
+                'invulnT': round(float(getattr(q, 'invulnT', 0) or 0), 2),
+                'is_dead_in_world': int(q.hp or 0) <= 0,
+                'x': round(q.x, 1), 'z': round(q.z, 1),
+                'pvp': self._pvp_on(q), 'mob_atk': self._mob_atk_on(q),
+                'mob_cap': self._cap_of(q),
+                'owned_mobs': self._owned_count(q), 'near_mobs_60m': near,
+                'overrides': {'pvp': rid in self.pvp_of, 'mobatk': rid in self.mob_atk_of,
+                              'cap': rid in self.mob_cap_of},
+                'talents': dict(self.tal.get(q.role_id, {}) or {}) if False else dict(getattr(q, 'tal', {}) or {}),
+                'armor': (q.armor or {}).get('name'),
+                'weapon': (q.weapon or {}).get('name'),
+                'last_hurt_at': round(float(getattr(q, 'lastHurtT', 0) or 0), 1),
+            }
+            return
         if act == 'mobcap':
             who = str(d.get('name') or '').strip()
             if 'per' in d and d.get('per') is not None:

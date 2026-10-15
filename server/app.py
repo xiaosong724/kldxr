@@ -181,6 +181,8 @@ class Api(BaseHTTPRequestHandler):
             return self.api_admin_status()
         if path == '/api/admin/players':
             return self.api_admin_players()
+        if path == '/api/admin/who':
+            return self.api_admin_who()
         if path == '/ws-config.js':
             return self.ws_config()
         if path.startswith('/api/'):
@@ -339,6 +341,27 @@ class Api(BaseHTTPRequestHandler):
         return self._send(200, {'ok': True, 'act': 'delTest' if all_test else 'delplayer',
                                 'deleted': gone, 'skipped': skipped})
 
+    def api_admin_who(self):
+        """看某人的【实时状态】（只读 ✓ 第 139 轮）—— 排障用
+
+        ★ 为什么需要：用户报"只有某个角色被打死卡住"✗
+          光看数据库看不出来 ✗（数据库的 hp 和内存里的 Player.hp 不是一回事 ✓）
+          必须能看到 tick 线程里那个 Player 的真实状态 ✓
+        """
+        if not self._admin_ok():
+            return self._send(401, {'ok': False, 'error': '没登录'})
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        nm = (qs.get('name') or [''])[0]
+        if self.world is None:
+            return self._send(503, {'ok': False, 'error': '世界没起来'})
+        self.world.who_dump = None
+        self.world.post_admin('who', {'name': nm})
+        # ★ 第 139 轮：这里本来写的是 time.sleep ✗ 但本文件是 from time import time ✓
+        #   → NameError ✓（我靠错误日志一眼看到的 ✓ 排障接口自己也需要排障 ✓）
+        import time as _t
+        _t.sleep(0.35)                   # 等 tick 线程处理（排障用 ✗ 不在乎这点延迟 ✓）
+        return self._send(200, {'ok': True, 'who': getattr(self.world, 'who_dump', None)})
+
     def api_admin_players(self):
         """玩家列表（第 64 轮：在线优先 + 分页 + 测试账号过滤）
 
@@ -447,7 +470,7 @@ class Api(BaseHTTPRequestHandler):
                         # ★ 教训：加一个管理动作要改【两处】✗
                         # app.py 的白名单 + world._handle_admin 的分支 ✗
                         # 漏一处就是这个后果 ✗（按钮点了没反应 ✗）
-                        'mobcap', 'pvp', 'mobatk',
+                        'mobcap', 'pvp', 'mobatk', 'who',
                        'delplayer', 'delTest'):
             return self._send(400, {'ok': False, 'error': '不认识的动作'})
         if self.world is None:
