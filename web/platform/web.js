@@ -100,9 +100,19 @@ UI.plate = {
          原因：这个 div 是块级元素（占满一行）✗
                而 SVG 是行内元素 → 只靠父级的 text-align 不一定靠调✗
          修：自己也声明一次居中 + 用 flex 再保险一层 ✓ */
-      el.style.cssText = 'font-size:11px;font-weight:700;line-height:1.25;'
-        + 'text-align:center;display:flex;justify-content:center;align-items:center;'
-        + 'text-shadow:0 1px 2px #000,0 0 3px #000;white-space:nowrap';
+      /* ★★ 第 165 轮（用户：恶魔头没居中，要相对【血条】居中）★★
+         前两版我都用“块级元素撑满 + flex 居中”✗
+         这种写法受【宽度由谁决定】影响 ✗
+           名牌是 shrink-to-fit（谁宽就跟谁 ✗）
+           而名字、血条、恶魔头三个宽度各不相同 ✗
+           → 就算 flex 居中，也只是“在它自己那个宽度里居中” ✗
+         ★ 修法：【绝对定位】钉死 ✓
+             left:50% + translateX(-50%) → 中心永远在名牌正中央 ✓
+             bottom:100% → 正好贴在名牌上方（不挤压名字/血条 ✓）
+         ★ 兼得：它不占布局了 → 名牌不会被恶魔头顶得往上跑 ✗（之前会 ✗）*/
+      el.style.cssText = 'position:absolute;left:50%;transform:translateX(-50%);bottom:100%;'
+        + 'font-size:11px;font-weight:700;line-height:1.15;white-space:nowrap;'
+        + 'text-shadow:0 1px 2px #000,0 0 3px #000';
       ui.wrap.insertBefore(el, ui.wrap.firstChild);   // ★ 插到最前面 = 名字上面那行 ✓
       ui.mqEl = el;
     }
