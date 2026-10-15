@@ -386,7 +386,7 @@ initGlowLights();          // ★ 第 45 轮：2 盏发光灯在启动时就建�
     m.shadow = new THREE.Mesh(new THREE.CircleGeometry(0.54, 14),
       new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.24, depthWrite: false }));
     m.shadow.rotation.x = -Math.PI / 2; scene.add(m.shadow);
-    m.ui = mkMobUI('僵尸', 30);   // ★ 血条 + 名字 ✓
+    m.ui = mkMobUI('僵尸', 30, 0.8);   // ★ 血条 + 名字 ✓
     scene.add(m.g); mobs.push(m);
   }
   /* ★ 压力测试模式：?stress=N 生成 N 只僵尸（?stress=N&grow=1 每秒再增 5 只 ✓）*/
@@ -1640,7 +1640,7 @@ function spawnMobAt(x, z) {
   sm.g.scale.setScalar(mobScaleAt(sm.lv));          // ★ 体型随等级（第 37 轮）
   sm.hp = sm.hpMax; sm.cd = 1.5; sm.alive = true; sm.atkT = -1; sm.dying = -1; sm.dead = 0;
   sm.kbT = 0; sm.kbx = 0; sm.kbz = 0; sm.kbUp = 0; sm.ready = -1;
-  sm.ui = mkMobUI('僵尸', sm.hpMax);
+  sm.ui = mkMobUI('僵尸', sm.hpMax, 0.8);
   scene.add(sm.g); mobs.push(sm);
   return sm;
 }
@@ -2334,7 +2334,7 @@ function addWorldMob(arr, t) {
     sh.scale.setScalar(mobScaleAt(mlv) / G.MOB_SCALE);   // ★ 影子跟着体型一起放大 ✓
     scene.add(sh);
     rm = NET.rmobs[mid] = {
-      mid: mid, g: m.g, hh: m, shadow: sh, ui: mkMobUI('僵尸', hpm),
+      mid: mid, g: m.g, hh: m, shadow: sh, ui: mkMobUI('僵尸', hpm, 0.8),
       hp: hp, hpMax: hpm, alive: alive, atkT: atkT, dying: -1, dead: 0, walkT: 0,
       lv: mlv, kind: mkind, sk: mobScaleAt(mlv) / G.MOB_SCALE,
       last: { x: x, z: z }, buf: [], cur: { x: x, z: z, yaw: yaw }

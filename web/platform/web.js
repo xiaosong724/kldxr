@@ -341,16 +341,23 @@ function mkLootUI(name, colorHex) {
   return { wrap: wrap, name: nm, bar: null };
 }
 
-function mkMobUI(name, hpMax) {
+function mkMobUI(name, hpMax, alpha) {   // ★ 第 112 轮：第三个参数 = 透明度（僵尸用 0.8 ✓）
   var wrap = document.createElement('div');
-  wrap.style.cssText = 'position:absolute;transform:translate(-50%,-100%);pointer-events:none;text-align:center;will-change:transform';
+  wrap.style.cssText = 'position:absolute;transform:translate(-50%,-100%);pointer-events:none;'
+    + 'text-align:center;will-change:transform'
+    + (alpha ? (';opacity:' + alpha) : '');   // ★ 第 112 轮：僵尸那套改成半透明 ✓
   var nm = document.createElement('div');
   nm.textContent = name;
   nm.style.cssText = 'font-size:10px;font-weight:700;color:#fff;text-shadow:0 1px 3px #000,0 0 6px #000;margin-bottom:1px;white-space:nowrap';
   var barW = document.createElement('div');
   barW.style.cssText = 'display:inline-block;min-width:54px;height:13px;background:#000000cc;border:1px solid #ffffff55;border-radius:4px;overflow:hidden;margin:0 auto;position:relative;padding:0 5px';
   var bar = document.createElement('div');
-  bar.style.cssText = 'height:100%;width:100%;background:linear-gradient(180deg,#7ee08a,#3aa04a);border-radius:3px;transition:width .12s';
+  /* ★ 第 112 轮：填充条改成【绝对定位】✗
+   上一轮把容器改成自适应宽度 + 内边距了 ✓
+   但填充条是普通块级元素 → width% 只算【内容区】✗
+   → 表现就是"条子变长了，里面的进度没跟着变"✗✓
+   改成 absolute + 四边贴齐 → 填充条始终铺满整个容器 ✓ */
+  bar.style.cssText = 'position:absolute;left:0;top:0;height:100%;width:100%;background:linear-gradient(180deg,#7ee08a,#3aa04a);border-radius:3px;transition:width .12s';
   barW.appendChild(bar);
   wrap.appendChild(nm); wrap.appendChild(barW);
   var host = document.getElementById('mobui');
