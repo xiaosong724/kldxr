@@ -1261,6 +1261,14 @@ function fillHeldWeapon(sw, look, tier) {
   }
   var w = MY_WEAPON;
   var useLook = look || (w ? w.look : 'sword');
+  /* ★★ 第 70 轮 用户报：“弓箭拿反了” ★★
+     弓是竖着握的（弓臂在上下 ✓）不是像刀剑那样“刃朝前” ✗
+     → 单独转一套：绕 Z 转 90° 把弓立起来 ✓ 再绕 X 稍微前倾 ✓ */
+  if (useLook === 'bow') {
+    g.rotation.set(0.18, 0, Math.PI * 0.5);
+    sw.add(g);
+    return;
+  }
   var useTier = (tier === undefined || tier === null) ? (w ? (w.tier || 0) : 0) : tier;
   var g = buildWeaponMesh(useLook, useTier);
   /* ★★ 第 54 轮：刀刃朝向修正（用户报的"拿着斧头时刀刃不是朝下"）★★
@@ -1814,8 +1822,26 @@ function wsApplyWorld(d) {
     seenAr[aid] = 1;
     var am = NET.arrows[aid];
     if (!am) {
-      am = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.8),
-        new THREE.MeshBasicMaterial({ color: 0xffe9a8 }));
+      /* ★★ 第 70 轮 用户报：“一点也不像箭” ★★
+         以前是一个光秃秃的黄方块 ✗
+         现在拼一支真的：细杆 + 尖头（锥）+ 尾羽（两片）✓ */
+      am = new THREE.Group();
+      var _shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.85, 6),
+        new THREE.MeshBasicMaterial({ color: 0xc9a86a }));
+      _shaft.rotation.x = Math.PI / 2;
+      am.add(_shaft);
+      var _tip = new THREE.Mesh(new THREE.ConeGeometry(0.055, 0.18, 6),
+        new THREE.MeshBasicMaterial({ color: 0xe8f4ff }));
+      _tip.rotation.x = Math.PI / 2;
+      _tip.position.z = 0.50;
+      am.add(_tip);
+      var _fl = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.13, 0.18),
+        new THREE.MeshBasicMaterial({ color: 0xd85a4a }));
+      _fl.position.z = -0.40;
+      am.add(_fl);
+      var _fl2 = _fl.clone();
+      _fl2.rotation.z = Math.PI / 2;
+      am.add(_fl2);
       am.position.y = 1.45;
       scene.add(am);
       NET.arrows[aid] = am;
@@ -1827,8 +1853,8 @@ function wsApplyWorld(d) {
   for (var aq2 in NET.arrows) {
     if (!seenAr[aq2]) {
       scene.remove(NET.arrows[aq2]);
-      NET.arrows[aq2].geometry.dispose();
-      NET.arrows[aq2].material.dispose();
+      // ★ 第 70 轮：箭现在是个 Group ✗ 没有 .geometry 了
+      //   直接 dispose 会报错 ✗ 而且几何体是每支独立 new 的（共享的才能 dispose ✗）
       delete NET.arrows[aq2];
     }
   }
@@ -2440,17 +2466,33 @@ function addWorldLoot(arr) {
   var x = +arr[1], z = +arr[2];
   var name = String(arr[3] || '？');
   var tier = Math.max(0, Math.min(11, Math.round(+arr[4] || 0)));
+  var look = String(arr[5] || '');                      // ★ 第 70 轮：武器类型 ✓
   var e = NET.rloot[lid];
   if (!e) {
-    var g = new THREE.Mesh(lootGeo(), lootMat(tier));   // ★ 几何体/材质共享（第 45 轮）
-    g.position.set(x, 0.5, z);
-    g.castShadow = true;
+    /* ★★ 第 70 轮 用户要求：武器掉落物 = 【缩小版模型】★★
+       （以前所有掉落物都是一个方块 ✗ 看不出是把剑还是破布 ✗）
+       ★ 直接复用 buildWeaponMesh → 和手上那把、背包图标【同一份数据】✓
+         所以地上那把永远和拿到手的一模一样 ✓ 而且品阶颜色自带 ✓ */
+    var g;
+    if (look && (ATK_ARCH[look] || look === 'bow')) {
+      g = buildWeaponMesh(look, tier);
+      g.scale.set(0.42, 0.42, 0.42);
+      g.position.set(x, 0.45, z);
+      g.castShadow = true;
+    } else {
+      g = new THREE.Mesh(lootGeo(), lootMat(tier));   // ★ 几何体/材质共享（第 45 轮）
+      g.position.set(x, 0.5, z);
+      g.castShadow = true;
+    }
     var gt = GLOW_TIER[tier];
     if (gt && gt.shell) {                               // ★ 高阶才有轮廓光（只多 1 次 draw call ✓）
       g.add(new THREE.Mesh(lootShellGeo(), glowShellMat(tier)));
     }
     scene.add(g);
-    e = NET.rloot[lid] = { g: g, x: x, z: z, name: name, tier: tier, asked: 0 };
+    e = NET.rloot[lid] = { g: g, x: x, z: z, name: name, tier: tier, asked: 0, look: look,
+                           /* ★ 第 70 轮：地上显示名字 ✓（复用僵尸那套头顶 UI ✓
+                              血条那条藏掉 —— 掉落物没有血 ✗）*/
+                           ui: mkLootUI(name, tierHex(tier)) };
   }
   e.x = x; e.z = z; e.name = name; e.tier = tier;
   if (e.g) { e.g.position.x = x; e.g.position.z = z; }
@@ -2465,6 +2507,8 @@ function removeWorldLoot(lid) {
     /* ★ 第 45 轮：几何体/材质现在都是【全品阶共享】的 ✗ 绝对不能 dispose
        （dispose 一次，后面所有同类掉落物就都画不出来了 ✗）*/
   }
+  // ★ 第 70 轮：名字牌也要一起收掉 ✗（不然留一堆孤儿 div ✗）
+  if (e.ui && e.ui.wrap && e.ui.wrap.remove) { e.ui.wrap.remove(); }
   delete NET.rloot[lid];
 }
 
@@ -2482,7 +2526,19 @@ function updateLoot(dt) {
     var e = NET.rloot[lid];
     if (e.g) {
       e.g.rotation.y += dt * 2.4;
-      e.g.position.y = 0.5 + Math.sin(_lootT * 3 + e.x) * 0.07;   // 轻微上下浮 ✓
+      var _bz = (e.look && (ATK_ARCH[e.look] || e.look === 'bow')) ? 0.45 : 0.5;
+      e.g.position.y = _bz + Math.sin(_lootT * 3 + e.x) * 0.07;   // 轻微上下浮 ✓
+    }
+    /* ★ 第 70 轮：名字牌跟着投影到屏幕（和僵尸血条同一套 ✓）*/
+    if (e.ui) {
+      if (!_mv3) { _mv3 = new THREE.Vector3(); }
+      _mv3.set(e.x, 1.15, e.z).project(cam);
+      var _on = (_mv3.z > -1 && _mv3.z < 1 && Math.abs(_mv3.x) < 1.2 && Math.abs(_mv3.y) < 1.4);
+      UI.plate.show(e.ui, _on);
+      if (_on) {
+        UI.plate.move(e.ui, (_mv3.x * 0.5 + 0.5) * innerWidth,
+                      (-_mv3.y * 0.5 + 0.5) * innerHeight);
+      }
     }
     if (e.asked > 0) { e.asked -= dt; }
     var dx = e.x - P.x, dz = e.z - P.z;
@@ -2942,18 +2998,27 @@ var KF_THRUST = [
 
 /* 武器类型 → 动作原型
    ★ 这是一张【数据表】✓ 以后加武器只加一行、不用改代码 ✓ */
+// 拉弓：举弓 → 拉满 → 撒放（手弹出去）→ 收回（第 70 轮 用户要求 ✓）
+var KF_DRAW = [
+  [ 0.00,  0.00,  0.15,  0.55,  0.00,  0.00, -0.15,  0.00,  0.00,  0.00,  0.00],
+  [ 1.35,  0.10,  0.30,  0.20, -0.06, -0.10, -1.25, -0.06,  0.06, -0.02,  0.00],
+  [ 1.10,  0.04,  0.26,  0.10,  0.02, -0.06, -1.05, -0.04,  0.04,  0.00,  0.00],
+  [-0.15, -0.10,  0.18,  0.30,  0.08,  0.02, -0.55, -0.10,  0.10,  0.04,  0.00],
+  [ 0.00,  0.00,  0.15,  0.55,  0.00,  0.00, -0.15,  0.00,  0.00,  0.00,  0.00]
+];
 var ATK_ARCH = {
   axe: 'chop', hammer: 'chop',
   sword: 'sweep', saber: 'sweep', staff: 'sweep',
   dagger: 'thrust', spear: 'thrust',
-  bow: 'thrust'              // 弓先借"刺"（P3 做拉弓 ✓ 总比用劈像样 ✓）
+  bow: 'draw'                // ★ 第 70 轮：弓有自己的“拉弓”了 ✓
 };
-var ATK_KF = { chop: KF_CHOP, sweep: KF_SWEEP, thrust: KF_THRUST };
+var ATK_KF = { chop: KF_CHOP, sweep: KF_SWEEP, thrust: KF_THRUST, draw: KF_DRAW };
 // 各自的节奏：劈最慢（收招重 ✓）· 扫居中 · 刺最快（秒收 ✓）
 var ATK_T = {
   chop:   [0.26, 0.43, 0.52, 0.86],
   sweep:  [0.20, 0.36, 0.46, 0.78],
-  thrust: [0.14, 0.24, 0.30, 0.58]
+  thrust: [0.14, 0.24, 0.30, 0.58],
+  draw:   [0.22, 0.42, 0.52, 0.90]     // ★ 拉弓要慢一点（举弓 → 拉满 → 撒放 ✓）
 };
 
 function atkArchOf(look) { return ATK_ARCH[look] || 'sweep'; }

@@ -180,6 +180,23 @@ function sfx(name, volScale) {
 }
 
 /* ---------- mkMobUI ---------- */
+/* ★ 第 70 轮：掉落物的名字牌（没有血条 ✗ 颜色按品阶 ✓）
+   ★ 为什么单独写一个：core 里不允许碰 .style ✗（分层铁律 ✓）
+     上一版我在 core 里直接改了 ui.bar.style → 闸门直接拦下 ✗ */
+function mkLootUI(name, colorHex) {
+  var wrap = document.createElement('div');
+  wrap.style.cssText = 'position:absolute;transform:translate(-50%,-100%);pointer-events:none;' +
+    'text-align:center;will-change:transform';
+  var nm = document.createElement('div');
+  nm.textContent = name;
+  nm.style.cssText = 'font-size:11px;font-weight:700;text-shadow:0 1px 3px #000,0 0 6px #000;' +
+    'white-space:nowrap;color:' + (colorHex || '#fff');
+  wrap.appendChild(nm);
+  var host = document.getElementById('mobui');
+  if (host) { host.appendChild(wrap); }
+  return { wrap: wrap, name: nm, bar: null };
+}
+
 function mkMobUI(name, hpMax) {
   var wrap = document.createElement('div');
   wrap.style.cssText = 'position:absolute;transform:translate(-50%,-100%);pointer-events:none;text-align:center;will-change:transform';

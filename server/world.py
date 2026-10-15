@@ -43,7 +43,7 @@ SPAWN_SAFE = 20.0               # 出生点/安全区半径：这里不刷怪（
 REVIVE_INVULN = 1.5
 
 # ★★ 第 69 轮：箭（弓的投射物）★★
-ARROW_SPEED = 26.0        # 米/秒（比僵尸快得多，但不至于一帧穿过一片 ✓）
+ARROW_SPEED = 14.0        # 米/秒（比僵尸快得多，但不至于一帧穿过一片 ✓）
 ARROW_HIT_R = 0.75        # 命中半径（僵尸体积约 0.5 + 一点余量 ✓）
 ARROW_MAX = 60            # 同时在飞的箭上限（防刷 ✗）        # ★ 复活无敌时长（秒）—— 用户指定 ✓
 
@@ -1284,7 +1284,9 @@ class World(object):
         if len(cand) > drops.LOOT_SEND_CAP:
             cand.sort(key=lambda it: it[0])
             cand = cand[:drops.LOOT_SEND_CAP]
-        return [[lid, round(e['x'], 2), round(e['z'], 2), e['item']['name'], e['item']['tier']]
+        # ★ 第 70 轮：多带一个 look（客户端要在地上摆【缩小版模型】✓）
+        return [[lid, round(e['x'], 2), round(e['z'], 2), e['item']['name'],
+                 e['item']['tier'], e['item'].get('look') or '']
                 for _, lid, e in cand]
 
     def _intent_pick(self, p, d):
