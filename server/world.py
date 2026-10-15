@@ -101,7 +101,7 @@ class Player(object):
                  #   ★ tick 线程只读这三个 ✗ 从不碰 DB ✗（铁律 ✓）
                  'tal', 'talRaw', 'talEff', 'talDirty', 'resetT',
                  'mq', 'mqAt',
-                 'ghostAt')      # ★ 第 168 轮（用户 #5）：离线宽限的时刻 ✓
+                 'ghostAt', 'tpEnd')   # 第 173 轮：传送读条结束时刻（0 = 没在读条）      # ★ 第 168 轮（用户 #5）：离线宽限的时刻 ✓
 
     def __init__(self, cid, role):
         self.cid = cid
@@ -142,7 +142,8 @@ class Player(object):
         # ★ 第 149 轮：魔气值（登录时已经算过自然衰减了 ✓）
         self.mq = int(role.get('mq') or 0)
         self.mqAt = int(role.get('mqAt') or 0)
-        self.ghostAt = None     # ★ 第 168 轮：不是 None 就表示“断线幽灵”✓
+        self.ghostAt = None
+        self.tpEnd = 0.0        # 第 173 轮（用户 #6）：传送读条（0 = 没在读）     # ★ 第 168 轮：不是 None 就表示“断线幽灵”✓
         _ar0 = self.armor or {}
         self.aDur = int(_ar0.get('dur') or 0)
         self.aDurMax = int(_ar0.get('durMax') or 0)
@@ -275,6 +276,29 @@ class World(object):
         ★ 和玩家意图走同一个 inbox ✓ 所以照样是【只有 tick 线程改世界状态】✓
         """
         self.inbox.put(('admin', None, (act, payload or {})))
+
+    def _tp_break(self, p):
+        # 第 173 轮（用户 #6）：打断传送读条（受伤就断）
+        if float(getattr(p, 'tpEnd', 0) or 0) > 0:
+            p.tpEnd = 0.0
+            self._send_cid(p.cid, P.pack('tpcast', t=0))     # 告诉客户端收掉进度条 ✓
+            self._send_cid(p.cid, P.pack('notice', text='受到攻击，传送被中断'))
+
+    def _tp_tick(self):
+        # 第 173 轮（用户 #6）：传送读条 —— 时间到就真的把人挪进安全区
+        #   ★ 打断不在这里判 ✗ 在受伤那两处判（_mob_bite / _pvp_hit）✓
+        now = now_s()
+        for cid, p in list(self.players.items()):
+            e = float(getattr(p, 'tpEnd', 0) or 0)
+            if e <= 0 or now < e:
+                continue
+            p.tpEnd = 0.0
+            # 挪到安全区中心附近（±3 随机一点，免得所有人叠在一起）
+            p.x = round(random.uniform(-3, 3), 2)
+            p.z = round(random.uniform(-3, 3), 2)
+            p.invulnT = max(float(getattr(p, 'invulnT', 0) or 0), 1.5)   # 落地给 1.5 秒无敌 ✓
+            self._send_cid(p.cid, P.pack('tp', x=p.x, z=p.z))
+            self._send_cid(p.cid, P.pack('notice', text='已传送回安全区'))
 
     def _ghost_tick(self):
         """★ 第 168 轮（用户 #5）：收回超时的幽灵玩家
@@ -589,6 +613,7 @@ class World(object):
             self._admin_acc = 0
             self._publish_admin()
             self._ghost_tick()   # ★ 第 168 轮（用户 #5）：收回超时的幽灵 ✓
+            self._tp_tick()      # 第 173 轮（用户 #6）：推进传送读条 ✓
 
     def _talent_op(self, p, d):
         """天赋加点 / 洗点（方案 §7.1 · 第 116 轮）
@@ -876,7 +901,13 @@ class World(object):
         #   ★★ 死掉的玩家不算目标（第 37 轮，用户反馈"玩家死后僵尸还在攻击"）★★
         #      hp<=0 就当他不存在 → 僵尸立刻失去目标，转去漫游散开 ✓
         #      但"消失计时"仍然用【所有】玩家算距离（尸体旁边也算有人，怪不该凭空消失 ✓）
-        live = [q for q in ps if int(q.hp or 0) > 0]
+        # 第 174 轮（用户）：★ 在安全区里的玩家【不算目标】
+        #   效果就是"玩家一进安全区，僵尸立刻丢失目标"（②）
+        #   ★ 只影响【选目标】✗ "消失计时"那边仍然用所有玩家算距离 ✓
+        #     （不然站在安全区里的人旁边，怪会凭空消失 ✓）
+        live = [q for q in ps
+                if int(q.hp or 0) > 0
+                and not (abs(q.x) <= mqmod.SAFE_HALF and abs(q.z) <= mqmod.SAFE_HALF)]
         away2 = mobs.AWAY_DIST * mobs.AWAY_DIST
         agg2 = mobs.AGGRO * mobs.AGGRO
         for m in list(self.mobs.values()):
@@ -1037,8 +1068,19 @@ class World(object):
           所以改包说"我这边没有墙"没用 ✓
         """
         if m.kind == '工人':
-            m.x += dx
-            m.z += dz
+            # 第 174 轮（用户）：★ 僵尸不能踏进安全区（①）
+            #   做法：先算新位置，如果会进去就不动（贴着边界停下 ✓）
+            #   ★ 为什么不"推出去"✗ 那样会出现怪在边界上抖 ✓
+            _nx = m.x + dx
+            _nz = m.z + dz
+            if (abs(_nx) <= mqmod.SAFE_HALF and abs(_nz) <= mqmod.SAFE_HALF):
+                if not (abs(m.x) <= mqmod.SAFE_HALF and abs(m.z) <= mqmod.SAFE_HALF):
+                    pass          # 本来就在外面 → 这一步就别走了 ✓（停在门外）
+                else:
+                    m.x, m.z = _nx, _nz    # 万一已经在里面（老存档/被击退进去）→ 允许它走出去 ✓
+            else:
+                m.x = _nx
+                m.z = _nz
             return
         hw = mobs.MOB_BODY / 2.0
         nx = m.x + dx
@@ -1744,6 +1786,20 @@ class World(object):
                                          text=('已开启招募（大厅能看到你们队）'
                                                if self.party_open[pid] else '已关闭招募')))
 
+        elif op == 'safetp':
+            # 第 173 轮（用户 #6）：请求传送回安全区
+            #   ★ 服务器说了算：只是【开始读条】✗ 6 秒后才真挪人 ✓
+            #   ★ 已经在安全区里就不用传了 ✓ 读条中也不重复开 ✓
+            _in_safe = (abs(p.x) <= mqmod.SAFE_HALF and abs(p.z) <= mqmod.SAFE_HALF)
+            if _in_safe:
+                self._send_cid(p.cid, P.pack('notice', text='你已经在安全区里了'))
+            elif float(getattr(p, 'tpEnd', 0) or 0) > now_s():
+                pass                                   # 正在读条，忽略重复请求 ✓
+            else:
+                p.tpEnd = now_s() + float(TELEPORT_CAST)
+                self._send_cid(p.cid, P.pack('tpcast', t=TELEPORT_CAST))
+                self._send_cid(p.cid, P.pack(
+                    'notice', text='开始传送回安全区（%.0f 秒，期间受伤会中断）' % TELEPORT_CAST))
         elif op == 'chat':
             pid = self.party_of.get(rid)
             if not pid:
@@ -1921,6 +1977,7 @@ class World(object):
         #   ★ 而且只用 _dv0（roll_damage 刚出来那个值 ✓）
         #     不依赖中间任何一步 → 不会再出现"插错位置"✗
         dv = max(dv, max(1, int(round(_dv0 * DMG_FLOOR))))
+        self._tp_break(p)      # 第 173 轮（用户 #6）：受伤打断传送读条
         _was_alive = int(p.hp) > 0                      # ★ 第 166 轮：记下“刚才还活着”✓
         p.hp = max(0, int(p.hp) - dv)
         self._add_pend(p.cid, 'hurts', {'dmg': dv, 'x': round(m.x, 2), 'z': round(m.z, 2),
@@ -1966,7 +2023,8 @@ class World(object):
         if (a_.role or {}).get('account_id') and            (a_.role or {}).get('account_id') == (b_.role or {}).get('account_id'):
             return False, 'same_account'
         # ★ 安全区内不夺取、也不算魔气（出生点 20 米内 ✓）
-        if (b_.x * b_.x + b_.z * b_.z) < mqmod.SAFE_R * mqmod.SAFE_R:
+        # 第 173 轮（用户 #6）：安全区是【正方形 30×30】（半边长 15）
+        if abs(b_.x) <= mqmod.SAFE_HALF and abs(b_.z) <= mqmod.SAFE_HALF:
             return False, 'safe_zone'
         # ★ 等级差太大不算（防大号刷小号 ✓）
         la = int((a_.role or {}).get('level') or 1)
@@ -2022,6 +2080,7 @@ class World(object):
         dv = max(dv, max(1, int(round(_dv0 * DMG_FLOOR))))
         if dv <= 0:
             return 0
+        self._tp_break(q)      # 第 173 轮：被打也打断传送 ✓
         q.hp = max(0, int(q.hp) - dv)
         # ---- 告诉被打的人（红色数字 + 谁打的 ✓ 客户端已有 ✓）----
         self._add_pend(q.cid, 'hurts', {'dmg': dv, 'x': round(p.x, 2), 'z': round(p.z, 2),
@@ -2225,6 +2284,11 @@ class World(object):
         ★ 协议里还留着 mid / uid 字段，但这里【故意不看】—— 一律以服务器的扇形为准 ✓
           （客户端传什么都改变不了打中谁，最多只是"我挥了"这个事实）
         """
+        # 第 174 轮（用户）：★ 玩家在安全区内不能攻击（③）
+        #   ★ 放在最前面：连耐久都不该扣 ✗（挥空也不给 ✓）
+        if abs(p.x) <= mqmod.SAFE_HALF and abs(p.z) <= mqmod.SAFE_HALF:
+            self._send_cid(p.cid, P.pack('notice', text='安全区内不能攻击'))
+            return
         if p.atkT > 0:
             return
         # ★★ 第 47 轮：冷却 / 射程 / 攻击弧 全部按【手上那把武器】算（方案 §5.1 / §7.4）★★

@@ -94,6 +94,37 @@ var P = { x: 0, z: 0, yaw: 0 };
 var jx = 0, jy = 0, joyId = null, jox = 0, joy0 = 0;
 var keys = {}, atkHeld = false;
 var solids = [], propSolids = [], mobs = [], PROP_MESHES = [], GROUNDMESH = null;
+
+/* 第 173 轮（用户 #6）：安全区 = 正方形 30×30（半边长 15）
+   和服务器 mq.SAFE_HALF 必须一致 —— 不一致就会出现
+   "看着在圈里却被打" 或者 "看着在外面其实安全" 这种鬼问题 */
+var SAFE_HALF = 15.0;
+function inSafeZone(x, z) {
+  return (Math.abs(x) <= SAFE_HALF) && (Math.abs(z) <= SAFE_HALF);
+}
+
+/* 第 173 轮（用户 #6）：安全区地板 —— 单独一块平面，精确 30×30
+   为什么不给地形顶点上色：地形是【按块】上色的（一块 20 世界单位）
+   那样只能画出 20 或 40 的方块，做不到精确 30 —— 看着就不对
+   单独一块平面：精确 ✓ 只多 1 次 draw call ✓ 而且明显更好认 ✓ */
+var SAFE_MESH = null, SAFE_EDGE = null;
+function buildSafeZone() {
+  if (SAFE_MESH) { return; }
+  var S = SAFE_HALF * 2;
+  /* 石板地面：比周围的干裂泥土【亮且偏冷】→ 一眼看出不一样 ✓ */
+  var g = new THREE.PlaneGeometry(S, S);
+  var m = new THREE.MeshBasicMaterial({ color: 0x9aa0a6, transparent: true, opacity: 0.55 });
+  SAFE_MESH = new THREE.Mesh(g, m);
+  SAFE_MESH.rotation.x = -Math.PI / 2;
+  SAFE_MESH.position.set(0, 0.03, 0);      /* 抬 3 厘米，压在地面之上不打架 ✓ */
+  scene.add(SAFE_MESH);
+  /* 一圈边线：远远就能看出"这里有块不一样的地方" ✓ */
+  var eg = new THREE.EdgesGeometry(new THREE.PlaneGeometry(S, S));
+  SAFE_EDGE = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: 0xffd83d }));
+  SAFE_EDGE.rotation.x = -Math.PI / 2;
+  SAFE_EDGE.position.set(0, 0.05, 0);
+  scene.add(SAFE_EDGE);
+}
 var occupied = {}, GEO_CACHE = {};
 var HP = 200, HPMAX = 200, ATK = 12;
 var dead = false;                    // ★ 倒下状态（血空 → 必须点复活才起来 ✓）
@@ -519,6 +550,7 @@ function groundMaterial() {
 }
 
 function refreshGround() {
+  buildSafeZone();   /* 第 173 轮：安全区地板（第一次刷新地面时建一次 ✓）*/
   var BLOCK = GROUND_BLOCK, R = GROUND_R;
   var W = G.GRID_WORLD * BLOCK;
   var bx = Math.round(P.x / W), bz = Math.round(P.z / W);

@@ -916,10 +916,13 @@ var WIKI = [
   ]},
   { k: 'safe', t: '安全区 / 离线', h: [
     ['安全区', [
-      '出生点周围 <b>30×30</b> 的地块是安全区（地面颜色不一样）',
-      '里面不会被打（PVP 不生效），也不会刷怪',
-      '菜单里可以传送回安全区：点一下要读条 6 秒',
-      '★ 读条期间受到伤害就会打断（想跑得先脱离战斗）'
+      '出生点周围 <b>30×30</b> 的方块是安全区（地面是浅色石板 + 金色边线，一眼认得出）',
+      '★ <b>僵尸进不来</b>：它们会在边界外面停下',
+      '★ 你一进去，追你的僵尸就 <b>丢失目标</b>',
+      '★ 在里面<b>不能攻击</b>（也不会被玩家打）—— 这里是完全的和平区',
+      '菜单 → 操作 里可以<b>传送回安全区</b>：读条 <b>6 秒</b>',
+      '★ 读条期间<b>受到任何伤害都会中断</b>（想跑得先脱离战斗）',
+      '传送到达后会给 <b>1.5 秒无敌</b>（防止一落地就被围）'
     ]],
     ['离线宽限 6 秒', [
       '你退出游戏后，角色会在世界里再留 6 秒',
@@ -1714,6 +1717,10 @@ function openSet(wantTab) {
 
   /* ★ 分类导航：按记住的那一页显示（第 31 轮）✓ */
   tabScrollInit();   // ★ 第 115 轮：菜单导航可拖动/滚轮横滑 ✓
+  /* 第 173 轮（用户 #6）：读条进度每 100ms 刷一次（只在读条时才真干活 ✓）*/
+  TPCAST.at = performance.now() / 1000;
+  setInterval(function () { if (TPCAST.left > 0) { tpBarRender(); } }, 100);
+  tpBind();
   setTab(SETCFG.setTab || 'view');
   /* ★ 第 119 轮：这两处钩子已经收进 setTab() 里了 ✗（不留两份 ✗）*/
 
@@ -2085,6 +2092,37 @@ function bagPageBind() {
     nx._b = true;
     nx.onclick = function () { BAG_PAGE = Math.min(bagPageCount() - 1, BAG_PAGE + 1); bagRender(); };
   }
+}
+
+/* 第 173 轮（用户 #6）：传送读条的界面部分
+   ★ 计时以【服务器给的秒数】为准 ✗ 客户端只用本地时间做平滑显示 ✓
+     断线或者被打断时服务器会再发一条 tpcast（t=0）→ 立刻收掉进度条 ✓ */
+var TPCAST = { left: 0, at: 0 };
+
+function tpBarRender() {
+  var bar = document.getElementById('tpBar');
+  var fill = document.getElementById('tpFill');
+  var txt = document.getElementById('tpTxt');
+  if (!bar || !fill || !txt) { return; }
+  var show = TPCAST.left > 0;
+  bar.style.display = show ? 'block' : 'none';
+  txt.style.display = show ? 'block' : 'none';
+  if (!show) { fill.style.width = '0%'; return; }
+  var left = Math.max(0, TPCAST.left - (performance.now() / 1000 - TPCAST.at));
+  var total = 6.0;
+  fill.style.width = Math.min(100, (1 - left / total) * 100).toFixed(1) + '%';
+  txt.textContent = '传送中… 还剩 ' + left.toFixed(1) + ' 秒（受伤会中断）';
+}
+
+function tpBind() {
+  var btn = document.getElementById('btnSafeTp');
+  if (!btn || btn._b) { return; }
+  btn._b = true;
+  btn.onclick = function () {
+    var bar = document.getElementById('tpBar');
+    if (bar && bar.style.display !== 'none') { return; }   /* 已经在读条了 ✓ */
+    wsSend('safetp', {});                                   /* 只是请求 ✗ 服务器说了算 ✓ */
+  };
 }
 
 function bagRender() {
@@ -2717,6 +2755,22 @@ function wsOnMessage(raw) {
   }
   if (t === 'partychat') {
     fxNum('[队伍] ' + (d.name || '?') + '：' + (d.text || ''), '#8ee0ff', P.x, 2.8, P.z);
+    return;
+  }
+  /* 第 173 轮（用户 #6）：传送相关
+     tpcast = 服务器说"开始读条 / 读条被打断"（t=秒数，0 表示断了）
+     tp     = 服务器说"到了"（给最终坐标，客户端跟着摆 ✓）*/
+  if (t === 'tpcast') {
+    TPCAST.left = +d.t || 0;
+    tpBarRender();
+    return;
+  }
+  if (t === 'tp') {
+    TPCAST.left = 0;
+    tpBarRender();
+    if (typeof d.x === 'number' && typeof d.z === 'number') {
+      P.x = d.x; P.z = d.z;          /* 位置由服务器说了算（传送这一下）✓ */
+    }
     return;
   }
   if (t === 'mq') {              // ★ 第 152 轮：服务器告诉我魔气变了 ✓

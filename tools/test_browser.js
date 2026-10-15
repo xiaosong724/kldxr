@@ -423,6 +423,12 @@ async function register(name, pw) {
       'var o = null;' +
       'for (var uid in NET.others) { if (NET.others[uid].name === "浏览器乙") { o = NET.others[uid]; break; } }' +
       'return JSON.stringify({ seq: o ? o.atkSeq : null, atkT: o ? o.atkT : null });') || '{}');
+    /* 第 174 轮：安全区（出生点 30x30 方块）里不能攻击，挥砍会被服务器拦掉。
+       这个测试的客户端就在出生点附近 -> 先把乙挪到安全区外，再挥刀。 */
+    /* x=30：出了安全区（半边长 15），又还在甲的视野内（VIEW=60）。
+   上一版我写 300 —— 直接跑出视野，甲就看不到乙了（seq 变 null）。 */
+    await B.eval('P.x = 30; P.z = 0; return 1;');
+    await sleep(500);
     await B.eval('if (NET.on && WSC.ready) {' +
                  ' wsSend("atk", { x: P.x + Math.sin(P.yaw), z: P.z + Math.cos(P.yaw) }); } return 1;');
     await sleep(350);

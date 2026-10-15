@@ -436,6 +436,19 @@
   </div>
 
   <div class="tabpane" data-pane="ctrl">
+   <!-- 第 173 轮（用户 #6）：传送回安全区（读条 6 秒，受伤会中断）-->
+   <div class="setLabel">安全区</div>
+   <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+     <button class="bagB" id="btnSafeTp">传送到安全区</button>
+     <span class="tip" style="opacity:.8">读条 6 秒，期间受到攻击会中断</span>
+   </div>
+   <div id="tpBar" style="display:none;position:relative;height:10px;margin-top:6px;
+        border-radius:5px;background:#000000a8;border:1px solid #ffffff33;overflow:hidden">
+     <i id="tpFill" style="position:absolute;left:0;top:0;height:100%;width:0%;
+        background:linear-gradient(90deg,#ffd83d,#ffa53d)"></i>
+   </div>
+   <div id="tpTxt" style="display:none;font-size:11px;opacity:.9;margin-top:3px">传送中…</div>
+
    <div class="setLabel">攻击键大小</div>
    <div id="rowAtk"></div>
    <div style="font-size:11px;color:#7b8794;margin-top:14px;line-height:1.9">
