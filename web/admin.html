@@ -31,15 +31,6 @@
  #msg{color:#ffb4a0;font-size:12px;min-height:16px;margin-top:6px}
  .hide{display:none}
  .tip{color:#8f8570;font-size:11px}
-  /* ★ 第 136 轮：状态标签 + 玩家行里的单人控件 */
-  .sw{display:inline-block;padding:2px 10px;border-radius:10px;font-weight:700;margin:0 8px}
-  .sw.on{background:#1d3a24;color:#7ee08a;border:1px solid #7ee08a66}
-  .sw.off{background:#3a1d1d;color:#ff8a7a;border:1px solid #ff8a7a66}
-  .ov{display:inline-flex;align-items:center;gap:3px;margin-right:8px;
-      padding:1px 6px;border-radius:8px;background:#ffffff0d}
-  .ov s{text-decoration:none;opacity:.7;font-size:11px}
-  .ov select,.ov input{font-size:11px;padding:1px 3px}
-  .ov button{padding:1px 6px;font-size:11px}
 </style></head>
 <body>
 <div class="wrap">
@@ -94,47 +85,6 @@
       <h2>喊话</h2>
       <input id="say" placeholder="给所有人发一条公告" style="width:60%">
       <button id="btnSay">发送</button>
-    </div>
-
-    <!-- ★★ 第 133 轮（用户："在管理里可以调整单人上限的功能"）★★
-         三组：全局 · 单人 · 其它限制 ✓
-         ★ 单人那组要填名字（只对那个人生效 ✓ 清空就是取消单独设置 ✓） -->
-    <div class="card">
-      <h2>刷怪上限 <span class="tip">（改完立刻生效 ✓ 不用重启 ✓ 玩家会收到提示 ✓）</span></h2>
-      <div style="margin:6px 0">
-        <b>所有人</b>
-        <input id="mobPer" type="number" min="1" max="30" value="8" style="width:70px">
-        <span class="tip">每人上限（默认 8）</span>
-        <button id="btnMobPer">应用给所有人</button>
-      </div>
-      <div class="tip" style="margin:4px 0">
-        ★ 单人设置请到下面【玩家列表】里改 ✓（每行都有 PVP / 伤害 / 上限 三个控件）
-      </div>
-      <div style="margin:6px 0">
-        <b>其它</b>
-        <span class="tip">全服上限</span>
-        <input id="mobCap" type="number" min="1" max="300" value="60" style="width:70px">
-        <span class="tip">补怪间隔（秒）</span>
-        <input id="mobInt" type="number" min="0.2" max="30" step="0.5" value="2" style="width:70px">
-        <button id="btnMobOther">应用</button>
-      </div>
-      <hr style="border-color:#ffffff18;margin:10px 0">
-      <div style="margin:6px 0">
-        <b>PVP</b>
-        <span id="pvpState" class="sw">状态…</span>
-        <button id="btnPvpAll">全服开启</button>
-        <button id="btnPvpAllOff">全服关闭</button>
-        <span class="tip">★ 现在是【闸门】：真正的 PvP 伤害还没做 ✓ 状态已经存下来了 ✓</span>
-      </div>
-      <div style="margin:6px 0">
-        <b>妖兽伤害</b>
-        <span id="atkState" class="sw">状态…</span>
-        <button id="btnAtkAllOn">全服开启</button>
-        <button id="btnAtkAllOff">全服关闭</button>
-        <span class="tip">★ 关掉后僵尸照样刷、照样围着你，但咬不动你（方便看风景/截图）✓</span>
-      </div>
-      <div id="mobNow" class="tip" style="margin-top:4px"></div>
-      <div id="swNow" class="tip" style="margin-top:2px"></div>
     </div>
 
     <div class="card">
@@ -217,7 +167,6 @@ function doLogin() {
       try { localStorage.setItem('adminToken', TOKEN); } catch (e) { }
       msg('登录成功 ✓', '#7ee08a');
       showPanel(true);
-      mobCapBind();
       refresh();
     });
 }
@@ -228,101 +177,6 @@ function doLogout() {
     try { localStorage.removeItem('adminToken'); } catch (e) { }
     showPanel(false);
     msg('已退出');
-  });
-}
-
-/* ★ 第 133 轮：刷怪上限的界面逻辑 */
-var mobCaps = null;   // 服务器报回来的当前值 ✓
-function mobCapBind() {
-  var g = function (id) { return document.getElementById(id); };
-  /* ★★★ 第 137 轮修的真回归（自检抓到的 ✗）★★★
-     第 136 轮我把"单人"那几个按钮删掉、挪进玩家列表 ✗
-     但这里还在给 btnMobOne / btnMobClear 绑 onclick ✗
-     → 元素不存在 → 【抛异常】✗
-     → 而这个函数是在 refresh() 的回调里调的 ✗
-     → 异常一抛，refresh 后半段全部中断 ✗
-     → ★ 后果：玩家列表根本渲染不出来（打开管理页看到的是空列表 ✓）
-     ★ 教训两条：
-       ① 删界面元素时，必须全局搜一遍【谁在引用它】✗（这次只搜了名字里的按钮 ✓）
-       ② 绑事件一律【先判空】✗（on(g('id'), fn) 这种写法 ✓ 缺元素就跳过 ✓
-          而不是让一个缺失的元素把整页逻辑带崩 ✗）
-  */
-  var on = function (id, fn) {
-    var el = g(id);
-    if (el) { el.onclick = fn; }
-  };
-  if (!g('btnMobPer')) { return; }
-  on('btnMobPer', function () { act('mobcap', { per: +g('mobPer').value || 8 }); });
-  on('btnMobOther', function () {
-    act('mobcap', { cap: +g('mobCap').value || 60, interval: +g('mobInt').value || 2 });
-  });
-  /* ★ 单人那几个按钮已经挪到玩家列表里了 ✗ 这里不再绑 ✓（它们由 ovBind 的委托处理 ✓）*/
-  if (typeof mobCaps === 'object' && mobCaps) {
-    var now = g('mobNow');
-    if (now) {
-      now.textContent = '当前：每人 ' + mobCaps.per + ' 只 · 全服 ' + mobCaps.cap +
-        ' 只 · 每 ' + mobCaps.interval + ' 秒补一只' +
-        (mobCaps.ones && Object.keys(mobCaps.ones).length
-          ? ' · 单独设置 ' + JSON.stringify(mobCaps.ones) : '');
-    }
-    if (g('mobPer')) { g('mobPer').value = mobCaps.per; }
-    if (g('mobCap')) { g('mobCap').value = mobCaps.cap; }
-    if (g('mobInt')) { g('mobInt').value = mobCaps.interval; }
-  }
-}
-
-function swBind() {
-  var g = function (id) { return document.getElementById(id); };
-  if (!g('btnPvpAll')) { return; }
-  /* ★ 第 136 轮（用户："要加一下状态不然怎么判断是开了还是关了"）★
-     全服开关那边只留两个按钮 ✓ 单人挪到玩家列表里了 ✓
-     这里负责：① 绑全服按钮 ② 把当前状态用颜色写出来 ✓ */
-  g('btnPvpAll').onclick = function () { act('pvp', { on: 1 }); };
-  g('btnPvpAllOff').onclick = function () { act('pvp', { on: 0 }); };
-  g('btnAtkAllOn').onclick = function () { act('mobatk', { on: 1 }); };
-  g('btnAtkAllOff').onclick = function () { act('mobatk', { on: 0 }); };
-  var mc = (typeof mobCaps === 'object' && mobCaps) ? mobCaps : null;
-  var set = function (id, on, extra) {
-    var el = g(id);
-    if (!el) { return; }
-    el.textContent = (on ? '已开启' : '已关闭') + (extra || '');
-    el.className = 'sw ' + (on ? 'on' : 'off');
-  };
-  if (mc) {
-    set('pvpState', !!mc.pvpAll,
-        '（' + Object.keys(mc.pvpOnes || {}).length + ' 人有单独设置）');
-    set('atkState', !!mc.atkAll,
-        '（' + Object.keys(mc.atkOnes || {}).length + ' 人有单独设置）');
-  }
-}
-
-/* ★ 第 136 轮：玩家列表里的单人控件（事件委托 ✓ 一行一个委托就够 ✗ 别每行绑一次 ✓）*/
-function ovBind() {
-  var rows = $('rows');
-  if (!rows || rows._ovb) { return; }
-  rows._ovb = true;
-  rows.addEventListener('change', function (e) {
-    var el = e.target;
-    if (!el || !el.getAttribute) { return; }
-    var k = el.getAttribute('data-ov');
-    if (!k) { return; }
-    var nm = el.getAttribute('data-n');
-    var v = el.value;
-    if (v === '') { return act(k, { name: nm, clear: 1 }); }   // 默认 = 取消覆盖 ✓
-    act(k, { name: nm, on: (v === '1') ? 1 : 0 });
-  });
-  rows.addEventListener('click', function (e) {
-    var el = e.target;
-    if (!el || !el.getAttribute) { return; }
-    var s = el.getAttribute('data-capset');
-    if (s) {
-      var inp = rows.querySelector('[data-cap="' + s + '"]');
-      var v = inp ? (+inp.value || 0) : 0;
-      if (v < 1) { return msg('先填个上限（1~30）', '#ff7a6a'); }
-      return act('mobcap', { name: s, per: v });
-    }
-    var c = el.getAttribute('data-capclr');
-    if (c) { return act('mobcap', { name: c, clearOne: 1 }); }
   });
 }
 
@@ -339,26 +193,6 @@ function act(name, body) {
 
 function kpi(label, val) {
   return '<div class="kpi"><b>' + val + '</b><s>' + label + '</s></div>';
-}
-
-/* ★★★ 第 138 轮修的真问题（用户："玩家列表是不是在一直刷新，这样我没办法改"）★★★
-   病根：刷新定时器每 1.5 秒调一次 refresh() ✗
-        而 refresh() 是【整个重建列表的 innerHTML】✗
-        → 你正在选的下拉框、正在填的数字框，下一秒就被重建掉了 ✓✓
-        → 表现就是"根本改不了"✗（点了它又跳回去 ✓）
-   修：只要用户在跟列表交互，就【跳过这一轮刷新】✗
-     ① 焦点在列表里（正在点下拉/填数字）✓
-     ② 鼠标停在列表上 ✓（准备点、还在犹豫 ✓）
-   ★ 为什么不做成"只更新变化的那几行"✗
-     那是更彻底的改法 ✓ 但要动渲染逻辑 ✗ 现在这个改法改动最小、最不容易出新 bug ✓
-     （而且刷新频率 1.5 秒 → 保留 ✓ 别的地方还要靠它实时看状态 ✓）*/
-window._rowsHover = false;
-function busyInList() {
-  try {
-    var a = document.activeElement;
-    if (a && a.closest && a.closest('#rows')) { return true; }
-  } catch (e) { }
-  return !!window._rowsHover;
 }
 
 function refresh() {
@@ -390,12 +224,6 @@ function refresh() {
     .then(function (r) {
     if (!r.ok) { return; }
     PAGE = r.page || 1; PAGES = r.pages || 1; TOTAL = r.total || 0;
-    /* ★ 第 133 轮：顺手收下"当前刷怪设置"✓（管理页要显示"当前：每人 8 只…"）
-       ★ 注意别插错地方 ✗ 我第一次插进了 doLogin 里 ✗（那边根本没有这个字段 ✗）*/
-    mobCaps = r.mobCaps || null;
-    if (typeof mobCapBind === 'function') { mobCapBind(); }
-    if (typeof swBind === 'function') { swBind(); }
-    if (typeof ovBind === 'function') { ovBind(); }
     $('testInfo').textContent = r.testHidden
       ? ('（已隐藏 ' + r.testHidden + ' 个测试账号）') : '';
     $('pgInfo').textContent = '第 ' + PAGE + ' / ' + PAGES + ' 页 · 共 ' +
@@ -408,25 +236,6 @@ function refresh() {
         '</td><td>' + p.level + '</td><td>' + p.exp + '</td>' +
         '<td>' + p.x + ', ' + p.z + '</td>' +
         '<td>' +
-        /* ★★ 第 136 轮（用户："单独设置改到下面的玩家列表中去"）★★
-           每行三个控件：PVP / 妖兽伤害（默认·开·关）+ 僵尸上限（数字 + 设/清）✓
-           ★ 用 <select> 而不是 6 个按钮 ✗ 一行里塞得下 ✓ 而且一眼看得出当前是什么 ✓
-           ★ 当前值从 p.ov 读（服务器在玩家列表里一起报回来的 ✓）*/
-        '<span class="ov"><s>PVP</s><select data-ov="pvp" data-n="' + nm + '">' +
-          '<option value="">默认</option>' +
-          '<option value="1"' + ((p.ov && p.ov.pvp === true) ? ' selected' : '') + '>开</option>' +
-          '<option value="0"' + ((p.ov && p.ov.pvp === false) ? ' selected' : '') + '>关</option>' +
-        '</select></span>' +
-        '<span class="ov"><s>伤害</s><select data-ov="mobatk" data-n="' + nm + '">' +
-          '<option value="">默认</option>' +
-          '<option value="1"' + ((p.ov && p.ov.mobatk === true) ? ' selected' : '') + '>开</option>' +
-          '<option value="0"' + ((p.ov && p.ov.mobatk === false) ? ' selected' : '') + '>关</option>' +
-        '</select></span>' +
-        '<span class="ov"><s>上限</s>' +
-          '<input type="number" min="1" max="30" style="width:46px" data-cap="' + nm + '" value="' +
-            ((p.ov && p.ov.cap) ? p.ov.cap : '') + '" placeholder="默认">' +
-          '<button data-capset="' + nm + '">设</button>' +
-          '<button data-capclr="' + nm + '">清</button></span>' +
         '<button data-a="spawn" data-n="' + nm + '">刷 5 只</button>' +
         '<button data-a="give" data-n="' + nm + '">给装备</button>' +
         '<button data-a="heal" data-n="' + nm + '">治疗</button>' +
@@ -465,19 +274,6 @@ $('rows').onclick = function (e) {
 $('pgPrev').onclick = function () { if (PAGE > 1) { PAGE--; refresh(); } };
 $('pgNext').onclick = function () { if (PAGE < PAGES) { PAGE++; refresh(); } };
 $('showTest').onchange = function () { SHOW_TEST = this.checked; PAGE = 1; refresh(); };
-
-/* ★ 第 138 轮：鼠标停在玩家列表上时，自动刷新让路 ✓ */
-(function () {
-  var rows = $('rows');
-  if (!rows) { return; }
-  rows.addEventListener('mouseenter', function () { window._rowsHover = true; });
-  rows.addEventListener('mouseleave', function () { window._rowsHover = false; });
-  /* ★ 触屏没有 hover ✗ 所以再补一条：手指按在列表上也算 ✓ */
-  rows.addEventListener('touchstart', function () { window._rowsHover = true; }, { passive: true });
-  rows.addEventListener('touchend', function () {
-    setTimeout(function () { window._rowsHover = false; }, 1200);
-  }, { passive: true });
-})();
 $('btnClean').onclick = function () {
   if (confirm('【不可恢复】删掉所有【离线】的测试账号？' + String.fromCharCode(10) +
               '（名字里含测试关键词的 ✓ 在线的一个都不动 ✓）')) { act('delTest', {}); }
@@ -534,11 +330,6 @@ function delPlayer(n) {
 
 /* 开局：有 token 就直接进面板（过期的话第一次刷新会踢回登录 ✓） */
 if (TOKEN) { showPanel(true); refresh(); }
-/* ★ 第 138 轮：① 用户在操作列表时不刷 ✗ ② 间隔 1.5 → 3 秒（少打扰 ✓）*/
-setInterval(function () {
-  if (!TOKEN || document.hidden) { return; }
-  if (busyInList()) { return; }        // ← 你正在改，就别重画 ✓
-  refresh();
-}, 3000);
+setInterval(function () { if (TOKEN && !document.hidden) { refresh(); } }, 1500);
 </script>
 </body></html>
