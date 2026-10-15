@@ -2522,7 +2522,15 @@ function addWorldLoot(arr) {
       g.castShadow = true;
     }
     var gt = GLOW_TIER[tier];
-    if (gt && gt.shell) {                               // ★ 高阶才有轮廓光（只多 1 次 draw call ✓）
+    /* ★★ 第 73 轮修的 bug：武器掉落物会同时显示【两个】★★
+       病根：这个 "轮廓光壳" 是一个【方块】✗
+             以前所有掉落物都是方块 → 壳套在外面正合适 ✓
+             但第 70 轮武器改成了【缩小版模型】✓
+             而壳还是个方块 ✗ → 就看到"两个掉落物"✗✗
+       修：只有【方块型】的才套壳 ✓
+             武器模型本身就带品阶颜色/发光 ✓ 不需要壳 ✗ */
+    var _isBoxLoot = !(look && (ATK_ARCH[look] || look === 'bow'));
+    if (_isBoxLoot && gt && gt.shell) {                 // ★ 高阶才有轮廓光（只多 1 次 draw call ✓）
       g.add(new THREE.Mesh(lootShellGeo(), glowShellMat(tier)));
     }
     scene.add(g);
