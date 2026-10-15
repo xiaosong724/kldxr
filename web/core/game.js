@@ -309,14 +309,7 @@ initGlowLights();          // ★ 第 45 轮：2 盏发光灯在启动时就建�
   sun = new THREE.DirectionalLight(0xf5c98a, 0.72);                 // 低垂的脏太阳（暖橙但发闷）
   sun.position.set(38, 70, 26);
   sun.castShadow = true;
-  /* ★★ 第 78 轮：阴影贴图在移动端降一档 ★★
-     2048² 的 PCFSoft 阴影 = 每次重算都要把场景重画一遍到深度图 ✗
-     iPad 上这是最大的一块开销 ✗✗
-     ★ 手机/平板降到 1024（实测肉眼几乎看不出差别 ✓） */
-  var _isTouchDev = (typeof navigator !== 'undefined') &&
-    (/iPad|iPhone|Android|Mobile/i.test(navigator.userAgent || '') ||
-     (navigator.maxTouchPoints || 0) > 1);
-  sun.shadow.mapSize.set(_isTouchDev ? 1024 : 2048, _isTouchDev ? 1024 : 2048);
+  sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.camera.left = -45; sun.shadow.camera.right = 45;
   sun.shadow.camera.top = 45; sun.shadow.camera.bottom = -45;
   sun.shadow.camera.near = 1; sun.shadow.camera.far = 220;
@@ -3159,10 +3152,7 @@ function frame(ts) {
   if (!loadedOk) { return; }
     /* ★ 第 44 轮：阴影隔帧更新（见渲染器那里的注释）*/
     _shadowTick = (_shadowTick + 1) & 1;
-    /* ★ 第 78 轮：隔 2 帧 → 隔 4 帧（移动端隔 6 帧）✓
-       阴影变 15Hz/10Hz（方块影子肉眼看不出来 ✓）但开销直接降到 1/3 ✓ */
-    var _shEvery = _isTouchDev ? 6 : 4;
-    if (_shadowTick % _shEvery === 0) { rd.shadowMap.needsUpdate = true; }
+    if (_shadowTick === 0) { rd.shadowMap.needsUpdate = true; }
   if (lastTs && ts - lastTs < G.FRAME_MS) { return; }
   /* ★★ dt 必须用【真实帧间隔】，不能写死 1/60（第 28 轮修的真 bug）★★
      原来这里是 `var dt = 1 / 60;` —— 不管这一帧实际过了多久，位移都按 1/60 秒算 ✗
