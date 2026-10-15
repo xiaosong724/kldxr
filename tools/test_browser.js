@@ -1457,6 +1457,32 @@ async function register(name, pw) {
     ok(nav.ok && nav.ox === 'auto', '★★ 菜单导航横向可滑（overflow-x=' + nav.ox + ' ✓）');
     ok(nav.inited === true, '★★ 拖动/滚轮横滑已初始化（_dragOk ✓ 用户报的就是这个✗）');
     ok(nav.wrapEl === true, '★ 右侧渐变提示层在（能看出右边还有页签 ✓）');
+    /* ★★★ 第 119 轮："点开属性/天赋页就应该有内容"★★★
+       用户报："点开不会第一时间显示，需要关闭重新点击后才会显示"
+       根因：setTab() 里只有背包页挂了刷新钩子 ✗
+       → 这条断言盯住"切过去就要有内容"✓（不能只信手测 ✗）*/
+    const tabShow = JSON.parse(await A.eval(
+      'function txt(id) { var e = document.getElementById(id);' +
+      '  return e ? (e.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40) : "(没这个元素)"; }' +
+      'function paneOn(k) { var p = document.querySelector(".tabpane[data-pane=\\"" + k + "\\"]");' +
+      '  return p ? (p.className.indexOf("on") >= 0) : false; }' +
+      'openSet();' +
+      'setTab("stat");' +
+      'var statOn = paneOn("stat"), statTxt = txt("stSelf");' +
+      'setTab("talent");' +
+      'var talOn = paneOn("talent"), talTxt = txt("talFree"), talRows = document.querySelectorAll("#talList .ptLine").length;' +
+      'setTab("view"); closeSet();' +
+      'return JSON.stringify({ statOn: statOn, statTxt: statTxt, talOn: talOn,' +
+      ' talFree: talTxt, talRows: talRows });'
+    ) || '{}');
+    console.log('        [页签内容] 属性页显示="' + tabShow.statTxt +
+      '" · 天赋页点数="' + tabShow.talFree + '" 行数=' + tabShow.talRows);
+    ok(tabShow.statOn === true, '★★ 切到属性页，面板真的显示了');
+    ok((tabShow.statTxt || '').length > 4 && tabShow.statTxt.indexOf('载入') < 0,
+      '★★★ 属性页【第一次点开就有内容】（用户报的就是这个 ✗ 实测="' +
+      tabShow.statTxt + '"）');
+    ok(tabShow.talOn === true && tabShow.talRows >= 10,
+      '★★ 天赋页一点开就画出了 12 行（实测 ' + tabShow.talRows + ' 行 ✓）');
     await A.eval('closeSet(); return 1;');
 
     /* ★★ 第 61 轮：三套挥砍动作（劈 / 扫 / 刺）★★

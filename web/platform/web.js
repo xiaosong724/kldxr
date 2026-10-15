@@ -1230,7 +1230,20 @@ function setTab(name) {
   }
   if (!hit) { return setTab('view'); }   // 存了个不存在的分类 → 退回第一页 ✓
   SETCFG.setTab = name;
+  /* ★★★ 第 119 轮修的真 bug（用户："属性和天赋点开不会第一时间显示，
+     需要关闭重新点击后才会显示"）★★★
+     病根：这里【只有背包页】挂了"切过来就刷新"的钩子 ✗
+           属性页 / 天赋页都是数据驱动的 ✓ 但切过来时没人调渲染 ✗
+           → 第一次点开是空的 ✓ 关闭菜单再进才显示 ✓（那时走的是另一条初始化路径 ✓）
+           → 用户描述一字不差 ✓
+     ★ 修在 setTab() 里 ✗ 不是修在"点击那一刻"✗
+       因为切页签有好几条路（点页签 / 快捷键 / 恢复上次停留 / 代码里直接调 ✓）
+       修在点击处 = 只修了一条路 ✗ 迟早又漏 ✗
+       —— setTab 是【唯一收口】✓ 所有路都经过它 ✓ */
   if (name === 'bag') { bagFetch(bagRender); }   // ★ 切到背包页就拉一次（只读接口 ✓ 很便宜）
+  if (name === 'stat') { statRender(); }         // ★ 第 119 轮：属性页
+  if (name === 'talent') { talBind(); talRender(); }   // ★ 第 119 轮：天赋页
+  if (name === 'party') { ptRender(); }          // ★ 第 119 轮：组队页（一个毛病 ✓ 一起修）
   return name;
 }
 
@@ -1272,8 +1285,8 @@ function openSet(wantTab) {
   if (wantTab) { setTab(wantTab); }
   ptBind();                                   // ★ 第 83 轮：组队页绑定 ✓
   if ((SETCFG.setTab || '') === 'party') { lobbyFetch(ptRender); }
-  if ((SETCFG.setTab || '') === 'stat') { statRender(); }
-  if ((SETCFG.setTab || '') === 'talent') { talBind(); talRender(); }   // ★ 第 113 轮：属性页 ✓
+  /* ★ 第 119 轮：这两处钩子已经收进 setTab() 里了 ✗（不留两份 ✗）*/
+   // ★ 第 113 轮：属性页 ✓
   if ((SETCFG.setTab || '') === 'bag') { bagFetch(bagRender); }   // 打开时拉一次背包 ✓
   mkOpts('rowDpr', [{ v: 1.0, t: '1.0x', s: '省' }, { v: 1.5, t: '1.5x', s: '较快' },
                     { v: 2.0, t: '2.0x', s: '清晰' }, { v: 2.5, t: '2.5x', s: '很清晰' },
@@ -1417,8 +1430,8 @@ function openSet(wantTab) {
   /* ★ 分类导航：按记住的那一页显示（第 31 轮）✓ */
   tabScrollInit();   // ★ 第 115 轮：菜单导航可拖动/滚轮横滑 ✓
   setTab(SETCFG.setTab || 'view');
-  if ((SETCFG.setTab || '') === 'stat') { statRender(); }
-  if ((SETCFG.setTab || '') === 'talent') { talBind(); talRender(); }
+  /* ★ 第 119 轮：这两处钩子已经收进 setTab() 里了 ✗（不留两份 ✗）*/
+
 }
 
 /* ============================================================
