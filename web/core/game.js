@@ -1261,16 +1261,17 @@ function fillHeldWeapon(sw, look, tier) {
   }
   var w = MY_WEAPON;
   var useLook = look || (w ? w.look : 'sword');
-  /* ★★ 第 70 轮 用户报：“弓箭拿反了” ★★
-     弓是竖着握的（弓臂在上下 ✓）不是像刀剑那样“刃朝前” ✗
-     → 单独转一套：绕 Z 转 90° 把弓立起来 ✓ 再绕 X 稍微前倾 ✓ */
-  if (useLook === 'bow') {
-    g.rotation.set(0.18, 0, Math.PI * 0.5);
-    sw.add(g);
-    return;
-  }
   var useTier = (tier === undefined || tier === null) ? (w ? (w.tier || 0) : 0) : tier;
   var g = buildWeaponMesh(useLook, useTier);
+  /* ★★ 第 70 轮：弓单独一套握法（用户报“拿反了”）★★
+     弓是竖着握的（弓臂在上下 ✓），不是像刀剑那样“刃朝前” ✗
+     → 绕 Z 转 90° 立起来 + 绕 X 程微前倾 ✓
+     ★ 踩过的坑：我一开始把这段插在上面 ✗
+       那时 g 还没定义 → 一持弓就 ReferenceError → 整个渲染循环挂掉 ✗✗
+       （表现是“进世界后报错”+所有快照字段 undefined ✗）*/
+  if (useLook === 'bow') {
+    g.rotation.set(0.18, 0, Math.PI * 0.5);
+  }
   /* ★★ 第 54 轮：刀刃朝向修正（用户报的"拿着斧头时刀刃不是朝下"）★★
      病根：零件数据是"宽在 X、薄在 Z"——
            也就是【正面看是刀的平面】（示意图就是这么画的 ✓ 所以图标也好看 ✓）
