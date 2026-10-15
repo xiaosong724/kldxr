@@ -1,0 +1,40 @@
+# 块来修仙 —— 游戏服务器（systemd 托管）
+#
+# ★ 装法：
+#     sudo cp deploy/xiuxian.service /etc/systemd/system/
+#     sudo systemctl daemon-reload
+#     sudo systemctl enable --now xiuxian
+#   看状态：  systemctl status xiuxian
+#   看日志：  journalctl -u xiuxian -f
+#   重启：    sudo systemctl restart xiuxian
+#
+# ★ Restart=always 是关键：崩了自动拉起来 ✓ 服务器重启后也自动开 ✓
+[Unit]
+Description=xiuxian2d game server (块来修仙)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=xiuxian
+Group=xiuxian
+WorkingDirectory=/opt/xiuxian2d/server
+# ★ 用绝对路径的 python3 ✗ 别依赖 PATH ✓
+ExecStart=/usr/bin/python3 app.py
+# ★ 崩了 3 秒后自动重启 ✗ 无限次 ✓
+Restart=always
+RestartSec=3
+# 让日志直接进 journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=xiuxian
+
+# 安全收敛：这个进程只需要自己的目录
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/xiuxian2d/server
+
+[Install]
+WantedBy=multi-user.target

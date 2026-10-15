@@ -1,14 +1,16 @@
 {
   "_说明": "末日丧尸 × 组队修仙 · 独立版后端配置。${HERE} = 本文件所在目录，可移植 ✓",
+  "_路径说明": "★ 路径一律用【正斜杠】✗ 不要用反斜杠 ✓ Windows 和 Linux 都认正斜杠 ✓ 反斜杠到 Linux 上会把路径弄坏 ✓",
   "host": "0.0.0.0",
   "http_port": 8899,
   "ws_port": 8900,
-  "db": "${HERE}\\game.db",
-  "web_root": "${HERE}\\..\\web",
+  "db": "${HERE}/game.db",
+  "web_root": "${HERE}/../web",
   "version": "0.1.0",
   "admin_password": "xiuxian-admin",
   "allow_player_debug": false,
   "_管理员说明": "管理页在 /admin；密码就是上面的 admin_password，★ 对外开服前一定要改掉 ✗；allow_player_debug=true 会把\"刷怪/发武器\"还给玩家（只该在本地调试时开 ✓）",
+  "_端口说明": "云服务器上要放行【两个】端口：http_port（网页 + 接口）和 ws_port（游戏通道）✗ 只开一个会出现\"能进游戏但打怪没反应\"✓",
   "test_name_keys": [
     "TestCase",
     "浏览器",
