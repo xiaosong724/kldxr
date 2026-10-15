@@ -1476,26 +1476,18 @@ var MAT_ICON_BY_NAME = {
      · 胸甲主体（圆肩 + 收腰 ✓）
      · 两侧肩甲（半透明 ✓ 一眼看出是"穿在身上的甲"✓）
      · 中缝（深色线 ✓ 不管品阶是什么颜色都看得清 ✓）*/
+/* ★★★ 第 125 轮：用户从预览页里挑定了【第三期 ② 龙鳞胸甲】★★★
+   （页面 web/preview_armor3.html ✓ 以后想换回来照着挑就行 ✓）
+   为什么是这款：用户要的是【像衣服】的那种 ✓
+     有领口 ✓ 有下摆 ✓ 一片片叠的鳞有层次 ✓ 不是硬板甲 ✓
+   ★ 这段 SVG 是从预览页里【原样搬过来的】✗ 没有二次手改 ✗
+     预览页看到什么样，游戏里就是什么样 ✓ 不会出现"预览好看实装变样"✗ */
 var ARMOR_ICON = '<svg viewBox="0 0 24 24" width="100%" height="100%">' +
-  /* ★★ 第 113 轮（用户："防具的图标样式不好看再重新做一个"）★★
-     改进点（对照前两版）：
-       · 前两版像"T 恤"✗ —— 因为肩太圆、腰没收
-       · 这版做成【梯形胸甲】：肩宽腰窄 ✓ 一眼是"甲"不是"衣服"✓
-       · 肩甲【分离】出来（留一道缝 ✓）比连在一起更像盔甲 ✓
-       · 尖刺全去掉（之前太碎、缩小后糊成一团 ✗）
-       · 只有：领口 V + 中缝 + 两颗铆钉 + 腰线 ✓ 缩小到 32px 也清楚 ✓ */
-  '<path d="M9 2.6 h6 l2.6 1.8 -0.5 2.4 H6.9 l-0.5 -2.4 z" fill="currentColor" opacity="0.65"/>' +
-  '<path d="M7.6 7.2 h8.8 l-0.9 9.6 H8.5 z" fill="currentColor" opacity="0.95"/>' +
-  '<path d="M4.6 4.4 c-1.4 0.2 -2.4 1.2 -2.6 2.6 v3.2 c0 1.2 0.8 2 2 2.1 z"' +
-  ' fill="currentColor" opacity="0.8"/>' +
-  '<path d="M19.4 4.4 c1.4 0.2 2.4 1.2 2.6 2.6 v3.2 c0 1.2 -0.8 2 -2 2.1 z"' +
-  ' fill="currentColor" opacity="0.8"/>' +
-  '<path d="M10.2 7.4 L12 9.6 L13.8 7.4" stroke="#000" stroke-opacity="0.3"' +
-  ' stroke-width="1" fill="none"/>' +
-  '<path d="M12 9.8 V16.6" stroke="#000" stroke-opacity="0.22" stroke-width="0.9"/>' +
-  '<circle cx="10" cy="12.4" r="0.62" fill="#000" opacity="0.3"/>' +
-  '<circle cx="14" cy="12.4" r="0.62" fill="#000" opacity="0.3"/>' +
-  '</svg>';
+'<path d="M8.4 3 h7.2 l4.2 2 -0.5 4 -2.2 -0.6 V16.8 H6.9 V8.4 l-2.2 0.6 -0.5 -4 z"' +
+    ' fill="currentColor" opacity=".85"/>' +
+    '<path d="M8.8 7.2 l3.2 1.7 3.2 -1.7 M8.8 10.3 l3.2 1.7 3.2 -1.7 M8.8 13.4 l3.2 1.7 3.2 -1.7"' +
+    ' stroke="#000" stroke-opacity=".4" stroke-width="1.05" fill="none"/>' +
+    '<path d="M10 3.2 c0.6 1.2 3.4 1.2 4 0" stroke="#000" stroke-opacity=".3" stroke-width="1" fill="none"/>';
 
 function iconOfItem(it) {
   if (!it) { return ITEM_ICON.box; }
