@@ -235,35 +235,42 @@ function doLogout() {
 var mobCaps = null;   // 服务器报回来的当前值 ✓
 function mobCapBind() {
   var g = function (id) { return document.getElementById(id); };
+  /* ★★★ 第 137 轮修的真回归（自检抓到的 ✗）★★★
+     第 136 轮我把"单人"那几个按钮删掉、挪进玩家列表 ✗
+     但这里还在给 btnMobOne / btnMobClear 绑 onclick ✗
+     → 元素不存在 → 【抛异常】✗
+     → 而这个函数是在 refresh() 的回调里调的 ✗
+     → 异常一抛，refresh 后半段全部中断 ✗
+     → ★ 后果：玩家列表根本渲染不出来（打开管理页看到的是空列表 ✓）
+     ★ 教训两条：
+       ① 删界面元素时，必须全局搜一遍【谁在引用它】✗（这次只搜了名字里的按钮 ✓）
+       ② 绑事件一律【先判空】✗（on(g('id'), fn) 这种写法 ✓ 缺元素就跳过 ✓
+          而不是让一个缺失的元素把整页逻辑带崩 ✗）
+  */
+  var on = function (id, fn) {
+    var el = g(id);
+    if (el) { el.onclick = fn; }
+  };
   if (!g('btnMobPer')) { return; }
-  g('btnMobPer').onclick = function () {
-    act('mobcap', { per: +g('mobPer').value || 8 });
-  };
-  g('btnMobOne').onclick = function () {
-    var who = (g('mobWho').value || '').trim();
-    if (!who) { return msg('先填玩家名字', '#ff7a6a'); }
-    act('mobcap', { per: +g('mobOne').value || 8, name: who });
-  };
-  g('btnMobClear').onclick = function () {
-    var who = (g('mobWho').value || '').trim();
-    if (!who) { return msg('先填玩家名字', '#ff7a6a'); }
-    act('mobcap', { clearOne: 1, name: who });
-  };
-  g('btnMobOther').onclick = function () {
+  on('btnMobPer', function () { act('mobcap', { per: +g('mobPer').value || 8 }); });
+  on('btnMobOther', function () {
     act('mobcap', { cap: +g('mobCap').value || 60, interval: +g('mobInt').value || 2 });
-  };
+  });
+  /* ★ 单人那几个按钮已经挪到玩家列表里了 ✗ 这里不再绑 ✓（它们由 ovBind 的委托处理 ✓）*/
   if (typeof mobCaps === 'object' && mobCaps) {
-    g('mobNow').textContent = '当前：每人 ' + mobCaps.per + ' 只 · 全服 ' + mobCaps.cap +
-      ' 只 · 每 ' + mobCaps.interval + ' 秒补一只' +
-      (mobCaps.ones && Object.keys(mobCaps.ones).length
-        ? ' · 单独设置 ' + JSON.stringify(mobCaps.ones) : '');
-    g('mobPer').value = mobCaps.per;
-    g('mobCap').value = mobCaps.cap;
-    g('mobInt').value = mobCaps.interval;
+    var now = g('mobNow');
+    if (now) {
+      now.textContent = '当前：每人 ' + mobCaps.per + ' 只 · 全服 ' + mobCaps.cap +
+        ' 只 · 每 ' + mobCaps.interval + ' 秒补一只' +
+        (mobCaps.ones && Object.keys(mobCaps.ones).length
+          ? ' · 单独设置 ' + JSON.stringify(mobCaps.ones) : '');
+    }
+    if (g('mobPer')) { g('mobPer').value = mobCaps.per; }
+    if (g('mobCap')) { g('mobCap').value = mobCaps.cap; }
+    if (g('mobInt')) { g('mobInt').value = mobCaps.interval; }
   }
 }
 
-/* ★ 第 134 轮：两组开关的界面逻辑 ✓ */
 function swBind() {
   var g = function (id) { return document.getElementById(id); };
   if (!g('btnPvpAll')) { return; }
