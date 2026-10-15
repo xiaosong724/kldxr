@@ -333,7 +333,7 @@ async function register(name, pw) {
          → 甲那边应该：① 收到飘字/光柱 ② 乙脚下出现蓝色护盾环 ✓ */
     // ★ 先在甲那边挂个钩子数 spawnFx 的调用 —— 比去 DOM 里捞飘字可靠得多
     //   （飘字只活 0.67 秒 ✗ 等 800ms 再去查就已经收掉了，上一版就是这么假红的 ✗）
-    await A.eval('window.__fxHits = []; var _sf = spawnFx;' +
+    await A.eval('window.__fxHits = []; window.__sf0 = window.__sf0 || spawnFx; var _sf = spawnFx;' +
                  'window.spawnFx = function (x, z, kind, name) {' +
                  '  window.__fxHits.push((kind || "") + ":" + (name || ""));' +
                  '  return _sf(x, z, kind, name); }; return 1;');
@@ -365,7 +365,11 @@ async function register(name, pw) {
     ok(revQ.hits && revQ.hits.some(function (s) { return s.indexOf('revive') === 0; }),
       '★★★ 甲收到了【复活事件】并放了登场特效（' + JSON.stringify(revQ.hits) +
       ' ✓ —— 不是一个凭空站起来的人 ✓ 用户原话）');
-    await A.eval('window.spawnFx = undefined; return 1;');
+    // ★★ 踩过的坑：这里原来写 window.spawnFx = undefined ✗
+    //   那不是"卸掉 hook"，而是把客户端的 spawnFx 【永久打掉】✗
+    //   → 后面 11 条 UI/背包断言全崩，报 Uncaught TypeError: spawnFx is not a function ✗
+    //   → 必须【恢复原函数】✓
+    await A.eval('if (window.__sf0) { window.spawnFx = window.__sf0; } return 1;');
     await sleep(1600);   // 等特效自己收掉
     const cleanQ = JSON.parse(await A.eval(
       'return JSON.stringify({ fxLeft: (typeof FX_LIST !== "undefined") ? FX_LIST.length : -1 });'

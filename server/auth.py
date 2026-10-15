@@ -298,8 +298,31 @@ def weapon_of(cfg, role_id):
 
 
 def armor_of(cfg, role_id):
-    """当前穿的防具（没有就 None ✓）"""
-    return _equipped(cfg, role_id, 'armor')
+    """读出这个角色【已装备的防具】→ (armor 字典 或 None, item_id 或 None)
+
+    ★ 踩过的坑：我一开始写成 _equipped(cfg, role_id, 'armor') ✗
+      可 _equipped() 这个函数【根本不存在】✗（凭印象写的 ✗）
+      → /api/bag 直接抛异常 → 空响应 ERR_EMPTY_RESPONSE
+      → 背包永远是空的 → 一次崩掉 11 条 UI 断言 ✗
+    ★ 照 weapon_of 的写法重写（结构完全一样 ✓ 只是 slot 不同 ✓）
+    """
+    import json
+    try:
+        with dbmod.db(cfg) as c:
+            row = c.execute(
+                'SELECT i.id, i.item_json FROM equipment e JOIN items i ON i.id = e.item_id'
+                ' WHERE e.role_id=? AND e.slot=?', (role_id, 'armor')).fetchone()
+    except Exception:
+        return None, None
+    if not row:
+        return None, None
+    try:
+        ar = json.loads(row[1])
+    except Exception:
+        return None, None
+    if not isinstance(ar, dict) or ar.get('slot') != 'armor':
+        return None, None
+    return ar, row[0]
 
 
 def equip_armor(cfg, role_id, item_id):
