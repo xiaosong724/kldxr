@@ -1433,7 +1433,22 @@ UI.atkCool = function (p) {
    ★ 注意用 window 上挂 move/up ✗ 不是元素上 ✗
      否则鼠标拖出元素范围就断了 ✓（手感会一卡一卡的 ✗）*/
 var _tabDrag = null;
+/* ★ 第 169 轮（用户 #3）：滚动提示的开关
+   能往右滚 → 显示渐隐 + 箭头 ✓
+   已经滚到尾或者根本不用滚 → 收掉 ✗（不然一直闪很烦 ✗）*/
+function setTabsHintUpd() {
+  var wrap = document.getElementById('setTabsWrap');
+  var box = document.getElementById('setTabs');
+  if (!wrap || !box) { return; }
+  var can = (box.scrollWidth - box.clientWidth) > 6;
+  var atEnd = (box.scrollLeft + box.clientWidth) >= (box.scrollWidth - 6);
+  if (can && !atEnd) { wrap.classList.remove('on'); } else { wrap.classList.add('on'); }
+}
 function tabScrollInit() {
+  var _sb = document.getElementById('setTabs');
+  if (_sb && !_sb._hint) { _sb._hint = true; _sb.addEventListener('scroll', setTabsHintUpd); }
+  if (!window._hintRz) { window._hintRz = true; addEventListener('resize', setTabsHintUpd); }
+  setTabsHintUpd();                                     // ★ 第 169 轮：初始化时先算一次 ✓
   var box = document.getElementById('setTabs');
   if (!box || box._dragOk) { return; }
   box._dragOk = true;
@@ -1504,6 +1519,7 @@ function setTab(name) {
   if (name === 'stat') { statRender(); }         // ★ 第 119 轮：属性页
   if (name === 'talent') { talBind(); talRender(); }   // ★ 第 119 轮：天赋页
   if (name === 'wiki') { wikiBind(); wikiRender(); }   // ★ 第 148 轮：百科页
+  setTimeout(setTabsHintUpd, 0);   // ★ 第 169 轮：切页后重算滚动提示 ✓
   if (name === 'party') { ptRender(); }          // ★ 第 119 轮：组队页（一个毛病 ✓ 一起修）
   return name;
 }

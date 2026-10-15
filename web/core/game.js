@@ -105,6 +105,14 @@ var INVULN_T = 0;/* ★ 血条配色：妖兽一律红 ✓ 玩家一律绿 ✓�
 var BAR_MOB = 'linear-gradient(180deg,#ff6a5a,#c02a1a)';
 var BAR_PLR = 'linear-gradient(180deg,#7ee08a,#3aa04a)';
 var walkT = 0, atkT = -1, atkCd = 0, shake = 0, hitStop = 0, mobT = 0, lastTs = 0;
+
+/* ★★ 第 169 轮（用户 #2）：挥砍动画速度倍率 ★★
+   ★ 只影响【动画快慢】✗ 完全不影响攻速 ✓
+     攻速是服务器 weapons.interval_of 算的（多久能砍一刀）✓ 这里碰不到 ✓
+   ★ 为什么僵尸不动：僵尸的 atkT 是服务器发过来的 ✗
+     客户端改它的速度会和服务器错位 ✓（打中时机看着就不对了 ✓）
+   ★ 自己和别人都是客户端本地累加的 ✓ 所以一起加速 ✓（看起来才一致 ✓）*/
+var ATK_ANIM_SPD = 1.2;
 var _shadowTick = 0;   // ★ 第 44 轮：阴影隔帧更新的计数器（★ 必须在顶层 —— 放 init() 里 frame() 看不到 ✗）
 var ATK_CD = 0.62;      // ★ 挥剑冷却（秒）—— 界面上的冷却表现也按这个算 ✓
 var _atkCdP = -1;       // ★ 上次推给界面的冷却比例（只在变化超过 4% 时才写 DOM ✓）
@@ -2936,7 +2944,7 @@ function netUpdate(dt) {
     }
     // ★ 他的挥剑动画（抬剑 → 下砍 ✓ 和本地共用 heroAtkPose → 动作一模一样 ✓）
     if (o.atkT >= 0) {
-      o.atkT += dt;
+      o.atkT += dt * ATK_ANIM_SPD;   // ★ 第 169 轮：他们的动画也一起加速 ✓（看着才一致 ✓）
       if (!heroAtkPose(o.hh, o.atkT, px, pz, o.cur.yaw, o.wlook)) {
         o.atkT = -1;
         heroAtkReset(o.hh, px, pz, o.cur.yaw);
@@ -3384,7 +3392,7 @@ function frame(ts) {
        ③ 冲击 10%：定格绷紧（顿帧 ✓）
        ④ 收招 40%：继续划 + 前倾 + 慢回正 ✓
        关节：右臂 X/Y/Z 三轴 + 肩部 + 重心 + 左手 + 双腿 */
-    atkT += dt;
+    atkT += dt * ATK_ANIM_SPD;   // ★ 第 169 轮：动画快 20%（攻速不变 ✓）
     // ★ 直接调共用的挥剑动画（本地 / 别的玩家 同一套 → 动作一致 ✓）
     if (!heroAtkPose(H, atkT, P.x, P.z, P.yaw, MY_WEAPON && MY_WEAPON.look)) {
       atkT = -1;
