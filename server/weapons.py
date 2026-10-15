@@ -192,6 +192,8 @@ FIST = {
     'base': {'coeff': 0.75, 'atkSpeed': 1.15, 'reach': 2.4, 'arc': 1.05, 'critPt': 0},
     'affixes': [], 'effect': None, 'look': 'sword', 'reqLevel': 1,
     'flat0': True,          # ★ 标记：这件东西【没有】平伤那一份（只有空手有 ✓）
+    'dur': 0, 'durMax': 0,  # ★ 空手没有耐久（不会坏 ✓）
+    'fx': None,             # ★ 空手没有机制 ✓
     'ext': {},
 }
 
@@ -234,6 +236,82 @@ def dps_of(w):
     return weapon_damage(w) * 1.1 / max(0.05, interval)
 
 
+# ================================================================ 武器机制（第 59 轮）
+#   ★ 用户要求：触发概率和效果【随品阶增强一点点】✓
+#   ★ 每一项都要能写进文案（不然玩家不知道 ✓）
+#
+#   格式：look -> (效果名, 触发率基准, 触发率每阶, 效果值基准, 效果值每阶, 文案模板)
+#     概率上限 75%（再高就变必定了 ✗）
+#
+#   ★ 三条设计原则（第 58 轮定的）：
+#     ① 能被【连续施加】的效果必须"概率 + 免疫窗口"（眩晕/击退/流血 ✓）
+#     ② 场合本身就是门槛的可以必定触发（背击/溅射 ✓）
+#     ③ 期望收益算进 DPS 预算，不偷偷超模 ✓
+#   格式：look -> (效果名, 触发率基准, 触发率每阶, 效果值基准, 效果值每阶, 单位, 文案模板)
+#     单位：pct=百分比 · flat=小数（米/秒）· int=整数（个数）
+#     ★ 单位必须显式写 ✗ 靠"值小于 1 就当百分比"猜的话 ——
+#       锤的 0.4 秒会被当成 40% ✗（实测踩过：文案写成"眩晕 62 秒"✗）
+#     ★ 触发率 1.00 表示【必定触发】（靠场合门槛限制，不套 75% 上限 ✓）
+WEAPON_FX = {
+    'dagger': ('背击',   1.00, 0.000, 0.25, 0.015, 'pct',  '背后攻击 +{v}% 伤害'),
+    'sword':  ('招架',   0.10, 0.010, 0.50, 0.000, 'pct',  '{p}% 概率招架 · 受到伤害减半'),
+    'saber':  ('流血',   0.35, 0.020, 0.25, 0.015, 'pct',  '{p}% 概率流血 · 3 秒共 {v}% 武器伤害'),
+    'staff':  ('击退',   0.30, 0.020, 1.00, 0.050, 'flat', '{p}% 概率推开 {v} 米'),
+    'spear':  ('贯穿',   0.45, 0.020, 2,    0.000, 'int',  '{p}% 概率贯穿 · 最多打中 {v} 个'),
+    'axe':    ('溅射',   1.00, 0.000, 0.35, 0.020, 'pct',  '命中时溅射 1.5 米内最多 2 个 · 各 {v}% 伤害'),
+    'hammer': ('眩晕',   0.20, 0.015, 0.40, 0.020, 'flat', '{p}% 概率眩晕 {v} 秒（同一只 3 秒免疫）'),
+}
+
+FX_MAX_CHANCE = 0.75          # 触发率上限（再高就变必定了 ✗）
+STUN_IMMUNE = 3.0             # 眩晕免疫窗口（秒）—— 防"无限锁死" ✓
+KNOCK_IMMUNE = 1.5            # 击退免疫窗口（秒）—— 防"永久风筝" ✓
+BLEED_TIME = 3.0              # 流血持续（秒）
+SPLASH_R = 1.5                # 溅射半径（米）
+SPLASH_MAX = 2                # 溅射最多几个
+
+
+def fx_of(look, tier):
+    """取某把武器的机制数值（按品阶加成 ✓）
+
+    返回 dict：name / chance(0~1) / value / text（写进文案 ✓）
+    没有机制的武器（弓）返回 None
+    """
+    fx = WEAPON_FX.get(look)
+    if not fx:
+        return None
+    t = max(0, min(11, int(tier)))
+    name, cb, ci, vb, vi, unit, tpl = fx
+    # ★ 只有"概率触发"的才套 75% 上限 ✓ 必定触发的保持 1.0（那种靠场合门槛限制 ✓）
+    chance = (cb if cb >= 1.0 else min(FX_MAX_CHANCE, cb + ci * t))
+    value = vb + vi * t
+    if unit == 'pct':
+        vshow = round(value * 100)
+    elif unit == 'int':
+        vshow = int(round(value))
+    else:
+        vshow = round(value, 2) if value < 1 else round(value, 1)
+    pshow = round(chance * 100)
+    return {'name': name, 'chance': chance, 'value': value, 'tier': t,
+            'text': tpl.format(p=pshow, v=vshow), 'pct': pshow, 'vshow': vshow}
+
+
+# ================================================================ 耐久（第 59 轮）
+#   ★ 用户要求：高强度用 5 天损坏消失、耐久可见 ✓
+#   ★ 每次【挥砍】扣 1 点（打空也算 ✓ 更真实）→ 归零武器消失 ✓
+#
+#   5 天是怎么算出来的：
+#     平均挥砍间隔 0.62 秒 → 每小时 5806 次
+#     高强度 = 每天 4 小时 × 5 天 = 20 小时
+#     战斗不会一直挥（跑位/捡东西/打空）→ 按 25% 占比算
+#     → 20h × 5806 × 25% ≈ 29,000 次 → 顶阶定 28,000 ✓
+DUR_MAX = (800, 1200, 1800, 2600, 3600, 5000, 6800, 9000, 12000, 16000, 21000, 28000)
+
+
+def dur_max_of(tier):
+    """按品阶的耐久上限"""
+    return DUR_MAX[max(0, min(11, int(tier)))]
+
+
 def make_weapon(look, tier, coeff, item_lv=1, rng=None):
     """造一件武器（字段照方案 §7.1 的接口，base 里放 §7.4/§7.5 要用的东西 ✓）
 
@@ -263,6 +341,11 @@ def make_weapon(look, tier, coeff, item_lv=1, rng=None):
         'effect': None,
         'look': look,
         'reqLevel': req_level_of(t),               # ★ 第 56 轮：改成平缓曲线（见 req_level_of）
+        # ★ 第 59 轮：耐久（写进物品 JSON ✓ 每次挥砍扣 1 ✓ 归零消失）
+        'dur': dur_max_of(t), 'durMax': dur_max_of(t),
+        # ★ 第 59 轮：把机制也写进物品（客户端直接显示 ✓ 不用在 JS 里再抄一份表 ✗）
+        #   踩过的坑：表在两边各写一份 → 改一边忘一边 → 文案和实际不符 ✗
+        'fx': fx_of(look, t),
         'ext': {},
     }
 

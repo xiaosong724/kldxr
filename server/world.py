@@ -61,7 +61,8 @@ class Player(object):
     __slots__ = ('cid', 'role', 'x', 'z', 'yaw', 'ct', 'hp', 'qi', 'atk',
                  'intents', 'joined', 'name', 'role_id', 'warned', 'atkT', 'lastMe',
                  'weapon', 'weaponItemId',
-                 'invulnT')   # ★ 复活无敌剩余时间（第 56 轮）
+                 'invulnT',   # ★ 复活无敌剩余时间（第 56 轮）
+                 'wDur', 'wDurMax', 'wDurDirty')   # ★ 手上武器的耐久（第 59 轮）
 
     def __init__(self, cid, role):
         self.cid = cid
@@ -89,6 +90,13 @@ class Player(object):
         self.weaponItemId = role.get('weaponItemId')     # 背包里的那件（默认武器是 None ✓）
         # ★ 第 56 轮：复活无敌（秒）—— 无敌期间僵尸咬不动 ✓ 客户端也会穿怪 ✓
         self.invulnT = 0.0
+        # ★★ 第 59 轮：手上武器的耐久 ★★
+        #   为什么放内存里、不每次挥砍写库：一次挥砍一次写盘 = 磁盘要炸 ✗
+        #   → 内存里扣，攒够了（或卸下/下线时）再落一次库 ✓
+        _w = self.weapon or {}
+        self.wDur = int(_w.get('dur') or 0)
+        self.wDurMax = int(_w.get('durMax') or 0)
+        self.wDurDirty = 0        # 攒了多少次没落库
 
 
 class World(object):
@@ -368,15 +376,25 @@ class World(object):
             # ★ 第 47 轮：网络线程已经查库 + 校验完了，这里只换内存里的引用 ✓
             #   （tick 线程不许碰磁盘 ✗ 所以查库那步在 net.py 做）
             w = d.get('weapon')
+            self._flush_dur(p)                       # ★ 换武器前先把旧的耐久落库 ✓
             p.weapon = w or dict(weapons.FIST)   # ★ 第 58 轮：空手 ✓
             p.weaponItemId = d.get('itemId')
+            # ★★ 第 59 轮：读出手上这把的耐久（没记录就从上限开始 ✓）
+            p.wDurMax = int((w or {}).get('durMax') or 0)
+            p.wDur = int((w or {}).get('dur') or p.wDurMax)
+            p.wDurDirty = 0
             bb = (w or {}).get('base') or {}
             self._send_cid(p.cid, P.pack('notice', text=(
                 '装上：%s（%d 阶）攻速 ×%.2f 射程 %.1f 米'
                 % (w.get('name'), tier_no(w.get('tier')), bb.get('atkSpeed') or 1.0,
                    bb.get('reach') or 2.4)) if w else '卸下武器（换回默认单手剑）'))
             # ★ 把新的武器告诉客户端 —— 客户端的挥刀冷却/射程预测要跟着换 ✓
-            self._send_cid(p.cid, P.pack('weapon', w=w or None))
+            #   ★ 第 59 轮：顺带把耐久带上（不然换完武器条子就空了 ✗）
+            ww = dict(w) if w else None
+            if ww:
+                ww['dur'] = p.wDur
+                ww['durMax'] = p.wDurMax
+            self._send_cid(p.cid, P.pack('weapon', w=ww))
         elif t == 'pvp':
             self.pvp = bool(d.get('on')) if 'on' in d else self.pvp
             self._broadcast(P.pack('notice', text='PvP 已%s' % ('开' if self.pvp else '关')))
@@ -427,6 +445,19 @@ class World(object):
         away2 = mobs.AWAY_DIST * mobs.AWAY_DIST
         agg2 = mobs.AGGRO * mobs.AGGRO
         for m in list(self.mobs.values()):
+            # ★ 第 59 轮：武器机制的状态衰减（先衰减再判断行为 ✓）
+            if m.stunImmune > 0:
+                m.stunImmune = max(0.0, m.stunImmune - dt)
+            if m.knockImmune > 0:
+                m.knockImmune = max(0.0, m.knockImmune - dt)
+            if m.bleedT > 0:
+                # 流血：每秒扣一次（按 dt 连续扣 ✓ 结算到整数就用累加器 ✗ 太绕 → 直接浮点扣 ✓）
+                m.bleedT = max(0.0, m.bleedT - dt)
+                m.hp -= m.bleedDmg * dt
+                if m.hp <= 0:
+                    m.hp = 0
+                    self._mob_died(m.bleedFrom or ps[0] if ps else None, m)
+                    continue
             if m.hp <= 0:
                 m.deadT += dt
                 if m.deadT >= mobs.MOB_KEEP_DEAD:
@@ -463,6 +494,12 @@ class World(object):
                     m.atkAnim = -1.0
             if m.healCd > 0:                 # ★ 被治疗冷却（第 46 轮）—— 衰减到 0 才能再被治 ✓
                 m.healCd -= dt
+            # ★★ 第 59 轮：被锤砸【晕住】了 —— 不能动、不能咬、也不蓄力 ✓
+            #   拦在"有目标"判断之前 ✓ 晕着就是彻底停下（这才叫眩晕 ✓）
+            if m.stunT > 0:
+                m.stunT = max(0.0, m.stunT - dt)
+                m.windT = 0.0                 # 蓄力也取消 → 醒来要重新起手 ✓
+                continue                      # 跳过后面所有追击/咬人逻辑 ✓
             if near is not None and nd2 <= agg2:
                 # ---- 有目标：追 / 咬（外卖残血时改成逃，见下）----
                 m.tgt = near.cid
@@ -751,6 +788,38 @@ class World(object):
                 self.mob_seq, _lv, p.x + math.sin(ang) * dist, p.z + math.cos(ang) * dist,
                 kind=kind)
 
+    def _break_weapon(self, p):
+        """武器耐久归零 → 损坏消失（第 59 轮 用户要求 ✓）
+
+        · 卸下（换回空手 ✓）
+        · 删掉数据库里那一行（真的消失 ✓）
+        · 告诉他一声（不然会以为丢了 ✗）
+        """
+        import json
+        import db as dbmod
+        nm = (p.weapon or {}).get('name') or '武器'
+        old_id = p.weaponItemId
+        p.weapon = dict(weapons.FIST)
+        p.weaponItemId = None
+        p.wDur = p.wDurMax = 0
+        p.wDurDirty = 0
+        if old_id:
+            self.post_save('DELETE FROM items WHERE id=? AND role_id=?', (old_id, p.role_id))
+        self._send_cid(p.cid, P.pack('notice',
+                                     text='⚠ %s 耐久耗尽，已经损坏消失了' % nm))
+        self._send_cid(p.cid, P.pack('weapon', w=None))
+
+    def _flush_dur(self, p):
+        """把内存里的耐久写回数据库（攒够次数才写 ✓ 不然磁盘受不了 ✗）"""
+        if p.wDurDirty and p.weaponItemId and p.wDurMax > 0:
+            import json
+            w2 = dict(p.weapon or {})
+            w2['dur'] = p.wDur
+            w2['durMax'] = p.wDurMax
+            self.post_save('UPDATE items SET item_json=? WHERE id=? AND role_id=?',
+                           (json.dumps(w2, ensure_ascii=False), p.weaponItemId, p.role_id))
+            p.wDurDirty = 0
+
     def _mob_bite(self, m, p):
         """僵尸咬玩家 —— 伤害由服务器算（§5：僵尸和人走同一套公式）
 
@@ -761,6 +830,13 @@ class World(object):
         if getattr(p, 'invulnT', 0) > 0:
             return
         dv, crit = mobs.roll_damage(m.atk)
+        # ★★ 第 59 轮：单手剑的【招架】—— 按手上武器的概率把这一口减半 ✓
+        #   （意图写在武器文案里 ✓ 玩家看得到才不冤 ✓）
+        _w = p.weapon or {}
+        _fx = weapons.fx_of(_w.get('look'), int(_w.get('tier') or 0))
+        if _fx and _fx['name'] == '招架' and random.random() < _fx['chance']:
+            dv = max(1, int(round(dv * (1.0 - _fx['value']))))
+            self._send_cid(p.cid, P.pack('fx', kind='parry'))
         p.hp = max(0, int(p.hp) - dv)
         self._add_pend(p.cid, 'hurts', {'dmg': dv, 'x': round(m.x, 2), 'z': round(m.z, 2),
                                         'by': m.kind, 'kind': 'mob', 'crit': bool(crit)})
@@ -798,27 +874,75 @@ class World(object):
             return
         # ★★ 第 47 轮：冷却 / 射程 / 攻击弧 全部按【手上那把武器】算（方案 §5.1 / §7.4）★★
         #   以前这三个是写死的常量（= 单手剑）—— 现在匕首就快而短、长枪就慢而长 ✓
-        wlook = (p.weapon or {}).get('look') or weapons.DEFAULT_TYPE
+        w = p.weapon or {}
+        wlook = w.get('look') or weapons.DEFAULT_TYPE
+        wtier = int(w.get('tier') or 0)
         p.atkT = weapons.interval_of(wlook)
         reach = weapons.reach_of(wlook)
         arc = weapons.arc_of(wlook)
-        # ① 僵尸：扇形里的全打（一刀扫一片 ✓）
+
+        # ★★ 第 59 轮：耐久 —— 每次挥砍扣 1（打空也算 ✓ 更真实）
+        #   ★ 归零 → 武器消失（卸下 + 删库 + 告诉他 ✓）
+        #   ★ 空手不扣（durMax=0 ✓）
+        if p.wDurMax > 0:
+            p.wDur -= 1
+            p.wDurDirty += 1
+            if p.wDurDirty >= 50:
+                self._flush_dur(p)                   # ★ 攒 50 次写一次盘 ✓ 不炸磁盘 ✓
+            if p.wDurDirty % 10 == 0:
+                # ★ 每 10 次推一次耐久给客户端 ✓（不然界面上的条子会停在旧值 ✗）
+                self._send_cid(p.cid, P.pack('dur', d=p.wDur, m=p.wDurMax))
+            if p.wDur <= 0:
+                self._break_weapon(p)
+                return
+
+        # ★ 这把武器的机制（按品阶加成 ✓）
+        fx = weapons.fx_of(wlook, wtier)
+        # ① 僵尸：扇形里按武器机制结算（第 59 轮 ✓）
+        rng = random.random
+        _hits = 0
+        _pierce = 1
+        if fx and fx['name'] == '贯穿' and rng() < fx['chance']:
+            _pierce = int(fx['value'])          # 这一刀最多打几个 ✓
         for m in list(self.mobs.values()):
             if m.hp <= 0:
                 continue
             if not mobs.in_front(p.x, p.z, p.yaw, m.x, m.z, reach, arc):
                 continue
-            dv, crit = mobs.roll_damage(self._atk_of(p))
+            if _hits >= _pierce:
+                break                                # 贯穿次数用完 → 后面的打不到 ✓
+            _hits += 1
+            atk = self._atk_of(p)
+
+            # ★ 匕首【背击】：从背后打 +X%（僵尸是背对着你 ✓）
+            back = False
+            if fx and fx['name'] == '背击':
+                # 僵尸的朝向 vs 我从它哪边来：夹角 > 90° = 我在它背后 ✓
+                dx, dz = p.x - m.x, p.z - m.z
+                fa = math.atan2(dx, dz) - m.yaw
+                while fa > math.pi:
+                    fa -= math.pi * 2
+                while fa < -math.pi:
+                    fa += math.pi * 2
+                if abs(fa) > math.pi * 0.5:
+                    atk *= (1.0 + fx['value'])
+                    back = True
+
+            dv, crit = mobs.roll_damage(atk)
             # ★ 保安会格挡（方案 §3.3"高防、会格挡"）—— 防御属性已被砍（§4.5），
             #   所以这里用"减伤"实现，和方案 §5"减伤是唯一的减伤属性"一致 ✓
             blocked = False
-            if m.kind == '保安' and random.random() < mobs.BLOCK_CHANCE:
+            if m.kind == '保安' and rng() < mobs.BLOCK_CHANCE:
                 dv = max(1, int(round(dv * mobs.BLOCK_MUL)))
                 blocked = True
             m.hp -= dv
             self._add_pend(p.cid, 'mhits', {'mid': m.mid, 'dmg': dv, 'crit': bool(crit),
-                                            'block': blocked,
+                                            'block': blocked, 'back': back,
                                             'x': round(m.x, 2), 'z': round(m.z, 2)})
+
+            # ★★ 命中后按武器类型触发机制 ★★
+            self._weapon_fx(p, m, fx, dv)
+
             if m.hp <= 0:
                 m.hp = 0
                 self._mob_died(p, m)
@@ -832,6 +956,51 @@ class World(object):
                 dv, _ = mobs.roll_damage(self._atk_of(p))
                 self._add_pend(q.cid, 'hurts', {'dmg': dv, 'x': round(p.x, 2),
                                                 'z': round(p.z, 2), 'by': p.name, 'pvp': 1})
+
+    def _weapon_fx(self, p, m, fx, dv):
+        """命中后触发武器机制（第 59 轮 ✓ 全部由服务器算 ✓）"""
+        if not fx or m.hp <= 0:
+            return
+        nm = fx['name']
+        if nm == '流血':
+            if random.random() < fx['chance']:
+                m.bleedT = weapons.BLEED_TIME
+                m.bleedDmg = max(0.5, dv * fx['value'] / weapons.BLEED_TIME)
+                m.bleedFrom = p
+                self._send_cid(p.cid, P.pack('fx', kind='bleed', mid=m.mid))
+        elif nm == '击退':
+            if m.knockImmune <= 0 and random.random() < fx['chance']:
+                m.knockImmune = weapons.KNOCK_IMMUNE
+                # 顺着"我→他"的方向推出去 ✓
+                dx, dz = m.x - p.x, m.z - p.z
+                d = max(0.01, (dx * dx + dz * dz) ** 0.5)
+                m.x += dx / d * fx['value']
+                m.z += dz / d * fx['value']
+                self._send_cid(p.cid, P.pack('fx', kind='knock', mid=m.mid))
+        elif nm == '眩晕':
+            if m.stunImmune <= 0 and random.random() < fx['chance']:
+                m.stunT = fx['value']
+                m.stunImmune = weapons.STUN_IMMUNE
+                self._send_cid(p.cid, P.pack('fx', kind='stun', mid=m.mid))
+        elif nm == '溅射':
+            # 对主目标 1.5 米内最多 2 个再各打一份 ✓（不触发二次溅射 ✓ 防递归）
+            n, r2 = 0, weapons.SPLASH_R * weapons.SPLASH_R
+            for o in list(self.mobs.values()):
+                if n >= weapons.SPLASH_MAX:
+                    break
+                if o is m or o.hp <= 0:
+                    continue
+                if (o.x - m.x) ** 2 + (o.z - m.z) ** 2 > r2:
+                    continue
+                sdv = max(1, int(round(dv * fx['value'])))
+                o.hp -= sdv
+                self._add_pend(p.cid, 'mhits', {'mid': o.mid, 'dmg': sdv, 'crit': False,
+                                                'splash': True,
+                                                'x': round(o.x, 2), 'z': round(o.z, 2)})
+                n += 1
+                if o.hp <= 0:
+                    o.hp = 0
+                    self._mob_died(p, o)
 
     def _mob_died(self, p, m):
         """僵尸死了 → 给击杀者经验 → 够就升级 → 落库"""
@@ -1039,6 +1208,7 @@ class World(object):
     def _save_player(self, p):
         """只入队，不写盘 —— 写盘交给存档线程"""
         import db as dbmod
+        self._flush_dur(p)                       # ★ 下线时把耐久落一次 ✓
         self.post_save(
             'UPDATE roles SET x=?, z=?, yaw=?, hp=?, qi=?, updated_at=? WHERE id=?',
             (p.x, p.z, p.yaw, p.hp, p.qi, dbmod.now_ms(), p.role_id))

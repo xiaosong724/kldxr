@@ -782,6 +782,83 @@ ok(_before - _after == 3,
    '★ 一共删掉 3 行重复（%d → %d ✓ 只删材料、不碰装备 ✓）' % (_before, _after), (_before, _after))
 
 print('')
+print('== ㉒ ★ 武器机制 + 耐久（第 59 轮）==')
+import weapons as WP
+
+# ---- 机制按品阶递增（纯函数，好测 ✓）----
+_f0 = WP.fx_of('hammer', 0)
+_f11 = WP.fx_of('hammer', 11)
+ok(_f11['chance'] > _f0['chance'] and _f11['value'] > _f0['value'],
+   '★ 锤的眩晕【概率和时长都随品阶涨】（%.0f%%→%.0f%% · %.2f→%.2f 秒 ✓）'
+   % (_f0['pct'], _f11['pct'], _f0['value'], _f11['value']))
+ok('眩晕 62' not in _f11['text'] and '0.62 秒' in _f11['text'],
+   '★★ 锤的时长显示成【秒】不是百分比（%s ✓ 踩过：写成"眩晕 62 秒"✗）' % _f11['text'])
+# 必定触发的两条不能被 75% 上限裁掉
+_a0 = WP.fx_of('dagger', 0)
+_x11 = WP.fx_of('axe', 11)
+ok(_a0['chance'] >= 0.999 and _x11['chance'] >= 0.999,
+   '★★ 必定触发的（匕首背击/斧溅射）没被 75%% 上限裁掉（%.2f / %.2f ✓）'
+   % (_a0['chance'], _x11['chance']))
+ok(WP.fx_of('bow', 5) is None, '弓没有机制（P3 做投射物 ✓）')
+
+# ---- 耐久：挥砍扣 1 ----
+_w, _p = mk_world(0.0, 0.0)
+_wp = WP.make_weapon('sword', 3, 1.0, 1)
+_p.weapon = _wp
+_p.wDurMax = _wp['durMax']
+_p.wDur = _wp['dur']
+_p.wDurDirty = 0
+_before = _p.wDur
+_p.atkT = 0
+_w._intent_atk(_p, {})
+ok(_p.wDur == _before - 1,
+   '★★ 挥砍一次扣 1 点耐久（%d → %d ✓）' % (_before, _p.wDur))
+# 空手不扣
+_p.weapon = dict(WP.FIST); _p.wDurMax = 0; _p.wDur = 0
+_p.atkT = 0
+_w._intent_atk(_p, {})
+ok(_p.wDur == 0 and _p.wDurMax == 0, '★ 空手不消耗耐久（不会"手也会坏"✗）')
+
+# ---- 耐久归零 → 武器消失 ----
+_p.wDurMax = 50; _p.wDur = 1; _p.wDurDirty = 0
+_p.weapon = WP.make_weapon('axe', 5, 1.4, 1)
+_p.weaponItemId = 4242
+_p.atkT = 0
+_w._intent_atk(_p, {})
+ok(_p.wDur == 0 and _p.weapon.get('name') == '空手' and _p.weaponItemId is None,
+   '★★★ 耐久耗尽 → 武器损坏消失、换回空手 ✓（现在拿的是 %s）' % _p.weapon.get('name'))
+ok(_w.saves.qsize() > 0, '★★ 并且入队了"删掉那一行"（真的从库里消失 ✓）')
+
+# ---- 溅射：主目标旁边的僵尸也会掉血 ----
+_w2, _q = mk_world(0.0, 0.0)
+_w2.mobs.clear()
+_w2.loot.clear()
+_a = mobs.Mob(801, 5, 0.0, 1.2); _a.hp = _a.mhp = 9999
+_c = mobs.Mob(802, 5, 0.6, 1.2); _c.hp = _c.mhp = 9999    # 就在主目标旁边 ✓
+_w2.mobs[_a.mid] = _a
+_w2.mobs[_c.mid] = _c
+_q.weapon = WP.make_weapon('axe', 5, 1.4, 1)   # 斧 = 必定溅射 ✓
+_q.wDurMax = 9999; _q.wDur = 9999; _q.atkT = 0
+_w2._intent_atk(_q, {})
+ok(_a.hp < 9999 and _c.hp < 9999,
+   '★★ 双手斧【溅射】：主目标掉 %d，旁边的也掉了 %d ✓' % (9999 - _a.hp, 9999 - _c.hp))
+ok(_c.hp > _a.hp, '★ 溅射的伤害比主目标低（不是各打一份满的 ✓）')
+
+# ---- 眩晕：晕住之后不移动 ----
+_w3, _r = mk_world(0.0, 0.0)
+_w3.mobs.clear()
+_m = mobs.Mob(803, 1, 2.0, 0.0)
+_m.hp = _m.mhp = 9999
+_m.stunT = 1.0
+_w3.mobs[_m.mid] = _m
+_x0, _z0 = _m.x, _m.z
+for _i in range(20):
+    _w3._mob_tick(0.05)
+ok(abs(_m.x - _x0) < 0.05 and abs(_m.z - _z0) < 0.05,
+   '★★ 被眩晕的僵尸【原地不动】（挪了 %.2f 米 ✓）' % math.hypot(_m.x - _x0, _m.z - _z0))
+ok(_m.stunT <= 0, '★ 眩晕时间会走完（%.2f 秒 ✓ 不会永久晕 ✗）' % _m.stunT)
+
+print('')
 if fails:
     print('FAILED: %d 条 ✗' % len(fails))
     for f in fails:

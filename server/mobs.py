@@ -197,7 +197,9 @@ class Mob(object):
 
     __slots__ = ('mid', 'kind', 'lv', 'x', 'z', 'yaw', 'hp', 'mhp', 'atk', 'exp',
                  'spd', 'atkT', 'atkAnim', 'windT', 'tgt', 'awayT', 'deadT', 'wx', 'wz', 'wT',
-                 'healT', 'healCd', 'fleeT')
+                 'healT', 'healCd', 'fleeT',
+                 # ★ 第 59 轮：武器机制造成的状态
+                 'stunT', 'stunImmune', 'knockImmune', 'bleedT', 'bleedDmg', 'bleedFrom')
 
     def __init__(self, mid, lv, x, z, kind=None):
         self.mid = str(mid)
@@ -222,6 +224,13 @@ class Mob(object):
         self.healT = 0.0         # 医生：下次回血的倒计时
         self.healCd = 0.0        # ★ 被治疗冷却（第 46 轮）：>0 时任何医生都不能再奶它 ✓
         self.fleeT = 0.0         # 外卖：还要逃多久
+        # ★ 第 59 轮：武器机制的状态（只在 tick 线程动 ✓）
+        self.stunT = 0.0        # 被锤砸晕的剩余时间（秒）—— 晕着不能动、不能咬
+        self.stunImmune = 0.0   # 眩晕免疫窗口（防无限锁死 ✓）
+        self.knockImmune = 0.0  # 击退免疫窗口（防永久风筝 ✓）
+        self.bleedT = 0.0       # 流血剩余时间
+        self.bleedDmg = 0.0     # 流血每秒伤害
+        self.bleedFrom = None   # 谁放的（死了要给他记功 ✓）
         # ★ 漫游方向（没目标时用）：wx/wz 是单位方向，wT 是"还有多久换方向" ✓
         self.wT = 0.0
         self.wx = 0.0

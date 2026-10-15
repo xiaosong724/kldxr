@@ -880,7 +880,16 @@ function wStatHtml(it, dim) {
     '<span>范围 <s>' + s.reach.toFixed(1) + '</s> 米 · ' + rangeWord(s.reach) + '</span>' +
     '<span>打击面 ' + arcWord(s.arc) + '（正前方 ' +
       Math.round(s.arc * 2 * 180 / Math.PI) + '°）</span>' +
-    '<span>攻速 <s>×' + s.spd.toFixed(2) + '</s>（' + wInterval(it).toFixed(2) + ' 秒一刀）</span>';
+    '<span>攻速 <s>×' + s.spd.toFixed(2) + '</s>（' + wInterval(it).toFixed(2) + ' 秒一刀）</span>' +
+    /* ★★ 第 59 轮：机制 + 耐久【必须写进文案】★★
+       （用户原话："这些效果也要写到文案里，不然玩家不知道" ✓）
+       ★ 机制文案来自服务器（物品数据里的 fx ✓）—— 不在 JS 里再抄一份表 ✗ */
+    (it.fx ? '<span style="color:#8ee0ff">特效：' + it.fx.text + '</span>' : '') +
+    ((+it.durMax > 0) ? ('<span>耐久 <s>' + ((typeof it.dur === 'number') ? it.dur : it.durMax) +
+      '</s> / ' + it.durMax + ' 次挥砍' +
+      (function () { var k = ((typeof it.dur === 'number') ? it.dur : it.durMax) / it.durMax;
+        return k <= 0.2 ? ' <i style="color:#ff7a6a;font-style:normal">⚠ 快坏了</i>' : ''; })() +
+      '</span>') : '');
 }
 
 /* ============================================================
@@ -935,7 +944,17 @@ function bagRender() {
   } else {
     eqs.className = 'slot eqslot';
     eqs.innerHTML = '<span style="color:' + tierHex(w.tier || 0) + '">' + iconOfItem(w) + '</span>' +
-      '<span class="tg">' + ((w.tier || 0) + 1) + '</span>';       // ★ 显示 1~12 ✓
+      '<span class="tg">' + ((w.tier || 0) + 1) + '</span>' +       // ★ 显示 1~12 ✓
+      // ★ 第 59 轮：耐久条（绿→黄→红 ✓ 一眼看得见还有多少寿命）
+      (function () {
+        var dm = +w.durMax || 0;
+        if (!dm) { return ''; }
+        var dd = (typeof w.dur === 'number') ? w.dur : dm;
+        var k = Math.max(0, Math.min(1, dd / dm));
+        var col = (k > 0.5) ? '#7ee08a' : (k > 0.2 ? '#ffd83d' : '#ff7a6a');
+        return '<span class="durbar"><i style="width:' + (k * 100).toFixed(1) +
+          '%;background:' + col + '"></i></span>';
+      })();
     eqs.setAttribute('data-w', '1');
   }
 
@@ -1275,6 +1294,13 @@ function wsOnMessage(raw) {
   }
   /* ★ 第 47 轮：服务器告诉我「手上的武器换了」（穿上/脱下之后它主动推 ✓）
      → 本地预测的射程/攻击弧/冷却跟着换 ✓ 背包页开着的话顺手刷一下 ✓ */
+  if (t === 'dur') {
+    // ★ 第 59 轮：服务器定期推耐久（不推的话界面上的条子会停在旧值 ✗）
+    if (BAG.weapon) { BAG.weapon.dur = d.d; BAG.weapon.durMax = d.m; }
+    BAG.dur = d.d; BAG.durMax = d.m;
+    if ((SETCFG.setTab || '') === 'bag') { bagRender(); }
+    return;
+  }
   if (t === 'weapon') {
     setWeapon(d.w || null);
     BAG.weapon = d.w || null;
