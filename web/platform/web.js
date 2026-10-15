@@ -2317,8 +2317,16 @@ function wsOnMessage(raw) {
      服务器一直在发这些（背击在 mhits 里 ✓ 其余走 fx ✓）
      但客户端【以前根本没处理 fx】✗ → 效果发生了玩家却看不到 ✓ */
   if (t === 'fx') {
+    /* ★★ 第 127 轮修的真 bug（用户："组队后获得队友经验显示【特效】两个字"）★★
+       病根：第 86 轮我给队伍经验发的是 {t:'fx', kind:'pexp'} ✓
+             但处理写在下面【通用 fx】之后 ✗
+             通用那个先跑 ✓ 查不到 pexp → 走兜底 ['特效'] ✗✓
+             → 玩家看到的就是【特效】两个字 ✗ 而不是加了多少经验 ✗
+       修：直接加进 FX_C ✓（并且带上数字 ✓）*/
     var FX_C = { bleed: ['流血', '#ff7a6a'], stun: ['眩晕', '#ffd83d'],
-                 knock: ['击退', '#8ee0ff'], parry: ['招架', '#8ee0ff'] };
+                 knock: ['击退', '#8ee0ff'], parry: ['招架', '#8ee0ff'],
+                 dodge: ['闪避', '#8ee0ff'],
+                 pexp: ['+' + (d.n || 0) + ' 队伍经验', '#7ee08a'] };
     var fc = FX_C[d.kind] || ['特效', '#cfc9bf'];
     var fx = 0, fz = 0;
     if (d.mid && NET.rmobs && NET.rmobs[d.mid]) {
@@ -2349,13 +2357,7 @@ function wsOnMessage(raw) {
     ptRender();
     return;
   }
-  if (t === 'fx' && d.kind === 'pexp') {
-    // ★ 第 86 轮：队伍经验分享的飘字（用户要求 ✓）
-    if (typeof fxNum === 'function') {
-      fxNum('+' + (d.n || 0) + ' 队伍经验', '#7ee08a', P.x, 3.0, P.z);
-    }
-    return;
-  }
+  /* ★ 第 127 轮：pexp 已经并进上面的 FX_C 了 ✗（不留两份 ✗）*/
   if (t === 'partyinv') {
     /* ★ 第 84 轮：两种形态都要【去重】✓（用户：同一个人只显示一条 ✓）
        d.list = 服务器补推的完整列表（第三项是【绝对到期时刻】✓）

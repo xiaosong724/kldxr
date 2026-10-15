@@ -2931,8 +2931,10 @@ function netUpdate(dt) {
         UI.plate.name(o.ui,
           (_mate3 ? '★ ' : '') + (o.name || '道友') + (o.realm ? ' ' + o.realm : ''),
           _mate3 ? '#5aa8ff' : '#fff');
-        UI.plate.barText(o.ui, Math.max(0, Math.round(o.hp)) + '/' +
-          Math.round(o.hpMax || 100), '#fff', 10);
+        // ★ 第 127 轮：只显示剩余量 ✗（用户报：看别人血条里有个 "/100" ✗）
+        //   ★ 第 111 轮我就想改这里 ✗ 但当时用的是字串替换且【没加断言】✗
+        //     缩进对不上 → 静默失败 ✗ 所以一直没生效 ✗（这次加了断言 ✓）
+        UI.plate.barText(o.ui, String(Math.max(0, Math.round(o.hp))), '#fff', 10);
       }
     }
   }
@@ -3024,8 +3026,8 @@ function netUpdate(dt) {
       UI.plate.hpColor(rm.ui, BAR_MOB);   // ★ 妖兽一律红 ✓
       UI.plate.name(rm.ui, mobPlate(rm));   // ★ 职业 + 等级 + 血（第 36 轮）
       /* ★ 第 89 轮（用户要求）：僵尸的血量数字也放进血条里 ✓（小一号 ✓）*/
-      UI.plate.barText(rm.ui, Math.max(0, Math.round(rm.hp)) + '/' +
-        Math.round(rm.hpMax || rm.mhp || 1), '#fff', 10);
+      // ★ 第 127 轮：僵尸也只显示剩余量 ✓
+      UI.plate.barText(rm.ui, String(Math.max(0, Math.round(rm.hp))), '#fff', 10);
       if (!_ov3) { _ov3 = new THREE.Vector3(); }
       _ov3.set(rx, (3.2 + MOB_FEET) * (rm.sk || 1), rz).project(cam);   // ★ 体型大了名牌也要抬高 ✓（+MOB_FEET 才不会陷进头顶 ✗）
       var vis2 = rm.alive && (_ov3.z > -1 && _ov3.z < 1 && Math.abs(_ov3.x) < 1.35 && Math.abs(_ov3.y) < 1.5);
@@ -3511,8 +3513,8 @@ function frame(ts) {
         UI.plate.hpWidth(m2.ui, pct.toFixed(0) + '%');
         UI.plate.hpColor(m2.ui, BAR_MOB);   // ★ 妖兽一律红 ✓
         UI.plate.name(m2.ui, mobPlate(m2));   // ★ 同上（单机的本地妖兽）
-        UI.plate.barText(m2.ui, Math.max(0, Math.round(m2.hp)) + '/' +
-          Math.round(m2.hpMax || m2.mhp || 1), '#fff', 10);
+        // ★ 第 127 轮：同上（单机妖兽 ✓）
+        UI.plate.barText(m2.ui, String(Math.max(0, Math.round(m2.hp))), '#fff', 10);
       }
     }
     if (m2.atkT >= 0) {
