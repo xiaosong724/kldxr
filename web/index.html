@@ -161,6 +161,15 @@
   text-shadow:0 1px 2px #000,0 0 3px #000}
 /* ★ 第 55 轮：数量用【灰色】细字（用户要求）—— 白字太抢眼，会压住品阶底色 ✗ */
 /* ★ 第 59 轮：耐久条（贴在格子底部 ✓ 绿→黄→红）*/
+/* ★ 第 83 轮：组队页的样式 */
+.ptLine{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px;font-size:13px}
+.ptLine:nth-child(odd){background:#ffffff08}
+.ptRow{display:flex;align-items:center;gap:8px;margin:6px 0}
+.ptInput{flex:1;min-width:80px;background:#1b2430;border:1px solid #ffffff33;color:#eee;
+  border-radius:6px;padding:5px 8px;font-size:13px;outline:none}
+.ptBar{display:inline-block;width:56px;height:6px;background:#000000cc;border:1px solid #ffffff44;
+  border-radius:4px;overflow:hidden;vertical-align:1px}
+.ptBar i{display:block;height:100%}
 .durbar{position:absolute;left:3px;right:3px;bottom:2px;height:3px;border-radius:2px;
   background:rgba(0,0,0,.55);overflow:hidden}
 .durbar i{display:block;height:100%;border-radius:2px}
@@ -247,6 +256,7 @@
   <!-- ★ 分类导航：点不同分类切不同面板（第 31 轮）-->
   <div id="setTabs">
    <div class="tab" data-tab="bag">背包</div>
+   <div class="tab" data-tab="party">组队</div>
    <div class="tab on" data-tab="view">画面</div>
    <div class="tab" data-tab="ctrl">操作</div>
    <div class="tab" data-tab="audio">音效</div>
@@ -287,6 +297,24 @@
    </div>
    <div class="bagEmpty" id="bagMsg"></div>
    <div id="bagTipBox" class="bagTipBox"></div>
+  </div>
+
+  <!-- ★★ 第 83 轮：组队（独立页）★★ 上：我的队伍 · 中：待处理 · 下：大厅 -->
+  <div class="tabpane" data-pane="party">
+   <div class="setLabel">我的队伍</div>
+   <div id="ptMine"></div>
+   <div class="setLabel">待处理 <small style="opacity:.6">（邀请和申请都能在这里同意/拒绝 ✓ 1 分钟过期）</small></div>
+   <div id="ptPend"></div>
+   <div class="setLabel">组队大厅 <small style="opacity:.6">（点邀请拉人 · 点申请入队 · 支持搜名字）</small></div>
+   <div class="ptRow">
+     <input id="ptSearch" class="ptInput" placeholder="搜索名字…">
+     <button id="ptRefresh" class="bagB">刷新</button>
+     <span class="bagTip" id="ptInfo"></span>
+   </div>
+   <div style="opacity:.75;font-size:12px;margin:4px 0">在线玩家</div>
+   <div id="ptPlayers"></div>
+   <div style="opacity:.75;font-size:12px;margin:10px 0 4px">招募中的队伍</div>
+   <div id="ptParties"></div>
   </div>
 
   <div class="tabpane on" data-pane="view">

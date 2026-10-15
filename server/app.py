@@ -168,6 +168,8 @@ class Api(BaseHTTPRequestHandler):
             return self.api_health()
         if path == '/api/profile':
             return self.api_profile()
+        if path == '/api/lobby':               # ★ 第 83 轮：组队大厅
+            return self.api_lobby()
         if path == '/api/bag':                 # ★ 第 47 轮：背包 + 已装备的武器
             return self.api_bag()
         # ★★ 第 48 轮：后台管理 ★★
@@ -422,6 +424,42 @@ class Api(BaseHTTPRequestHandler):
             return self._admin_del(payload, all_test=(act == 'delTest'))
         self.world.post_admin(act, payload)
         return self._send(200, {'ok': True, 'act': act})
+
+    def api_lobby(self):
+        """在线大厅名单（第 83 轮 ✓ 要玩家登录态 ✓）
+
+        ★ 只给【距离】不给坐标 ✗（隐私 ✓ 距离在服务器算 ✓）
+        ★ 数据来源：tick 线程每秒发布的 world.lobby_stat（只读 ✓ 不加锁 ✓）
+        """
+        ok, r = authmod.check_token(self.cfg, self._token())
+        if not ok:
+            return self._send(401, {'ok': False, 'error': r})
+        me = (r.get('role') or {}).get('id')
+        st = None
+        if self.world is not None:
+            st = getattr(self.world, 'lobby_stat', None)
+        if not st:
+            st = {'players': [], 'parties': []}
+        mx = mz = None
+        for p in st['players']:
+            if p.get('id') == me:
+                mx, mz = p.get('x'), p.get('z')
+                break
+        out = []
+        for p in st['players']:
+            if p.get('id') == me:
+                continue
+            d = None
+            if mx is not None and p.get('x') is not None:
+                d = int(round((((p['x'] - mx) ** 2 + (p['z'] - mz) ** 2)) ** 0.5))
+            out.append({'id': p.get('id'), 'name': p.get('name'), 'lv': p.get('lv'),
+                        'look': p.get('look'), 'tier': p.get('tier'),
+                        'hp': p.get('hp'), 'qi': p.get('qi'),
+                        'party': bool(p.get('party')), 'dist': d})
+        out.sort(key=lambda x: (99999 if x['dist'] is None else x['dist']))
+        return self._send(200, {'ok': True, 'players': out,
+                                'parties': st.get('parties') or [],
+                                'online': len(st['players'])})
 
     def _admin_give(self, d):
         """给某个角色发一件武器（写库 ✓ 在线的话再顺手告诉他一声 ✓）"""

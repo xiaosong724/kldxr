@@ -619,6 +619,186 @@ function applySet() {
 }
 
 /* ---------- mkOpts ---------- */
+
+/* ★★★ 第 83 轮：组队（独立页）★★★
+   用户要求：大厅独立成页 · 看在线玩家 + 简单信息 + 点邀请 + 搜名字
+             队长可以邀请 · 玩家可以申请加入
+             ★ 不仅有弹窗，界面里也要有同意/拒绝的地方（所以"待处理"区 ✓）
+   数据来源：
+     队伍 / 待处理 → 走 WS（服务器每秒补推 ✓ 刷新不丢 ✓）
+     大厅          → 走 HTTP /api/lobby（4 秒拉一次就够 ✓ 不用 30Hz ✗）
+   分层：全部在平台层 ✓ core 里不碰 DOM ✗
+*/
+var PARTY = { roster: null, pid: null, leader: null, me: null, inv: [], app: [] };
+var LOBBY = { players: [], parties: [], online: 0, err: '' };
+var _ptSearch = '';
+
+function ptEsc(s) {
+  return String(s === undefined || s === null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+function partySend(op, d) {
+  if (!NET.on || !WSC.ready) { return false; }
+  var body = { op: op };
+  for (var k in (d || {})) { body[k] = d[k]; }
+  return wsSend('party', body);
+}
+function lobbyFetch(cb) {
+  fetch('/api/lobby', { headers: { 'X-Token': bagToken() } })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (j && j.ok) {
+        LOBBY.players = j.players || [];
+        LOBBY.parties = j.parties || [];
+        LOBBY.online = j.online || 0;
+        LOBBY.err = '';
+      } else { LOBBY.err = (j && j.error) || '读大厅失败'; }
+      if (cb) { cb(); }
+      ptRender();
+    })
+    .catch(function () { LOBBY.err = '连不上服务器'; if (cb) { cb(); } ptRender(); });
+}
+function ptBar(pct, col) {
+  var k = Math.max(0, Math.min(100, pct || 0));
+  return '<span class="ptBar"><i style="width:' + k + '%;background:' + col + '"></i></span>';
+}
+function ptWeapon(look, tier) {
+  try {
+    return '<span style="color:' + tierHex(tier || 0) + ';vertical-align:-3px">' +
+      weaponIconSvg(look || 'sword', tier || 0) + '</span>';
+  } catch (e) { return ''; }
+}
+
+function ptRender() {
+  var mine = document.getElementById('ptMine');
+  var pend = document.getElementById('ptPend');
+  var pls = document.getElementById('ptPlayers');
+  var pts = document.getElementById('ptParties');
+  var inf = document.getElementById('ptInfo');
+  if (!mine || !pend || !pls || !pts) { return; }
+
+  /* ① 我的队伍 */
+  if (!PARTY.roster || !PARTY.roster.length) {
+    mine.innerHTML = '<div class="bagTip">还没有队伍 —— 在下面大厅点【邀请】拉人，' +
+      '或者申请加入别人的队伍 ✓</div>';
+  } else {
+    var h = [];
+    for (var i = 0; i < PARTY.roster.length; i++) {
+      var m = PARTY.roster[i];
+      var rid = m[0], nm = m[1], lv = m[2], hp = m[3], hpm = m[4], qi = m[5];
+      var qim = m[6], lk = m[7], tr = m[8], down = m[9], lead = m[10];
+      var isMe = (rid === PARTY.me);
+      h.push('<div class="ptLine"' + (isMe ? ' style="background:#ffffff10"' : '') + '>' +
+        '<b>' + ptEsc(nm) + '</b><span class="bagTip">Lv' + lv + '</span>' +
+        (lead ? ' <span style="color:#ffd83d">队长</span>' : '') +
+        (down ? ' <span style="color:#ff7a6a">倒地</span>' : '') +
+        ptWeapon(lk, tr) +
+        ptBar(hpm ? hp * 100 / hpm : 0, '#7ee08a') +
+        ptBar(qim ? qi * 100 / qim : 0, '#8ee0ff') +
+        ((isMe || PARTY.leader !== PARTY.me) ? '' :
+          '<button class="bagB" data-pt="kick" data-id="' + rid + '">踢出</button>' +
+          '<button class="bagB" data-pt="promote" data-id="' + rid + '">给队长</button>') +
+        '</div>');
+    }
+    h.push('<div class="ptRow" style="margin-top:6px">' +
+      '<button class="bagB" data-pt="leave">退队</button>' +
+      (PARTY.leader === PARTY.me
+        ? '<button class="bagB" data-pt="recruit">招募：开/关</button>' +
+          '<button class="bagB" data-pt="disband">解散队伍</button>' : '') +
+      '</div>');
+    mine.innerHTML = h.join('');
+  }
+
+  /* ② 待处理（★ 用户点名要的：界面里也要能同意/拒绝 ✓）*/
+  var ph = [];
+  for (var a = 0; a < PARTY.inv.length; a++) {
+    var iv = PARTY.inv[a];
+    ph.push('<div class="ptLine"><b>' + ptEsc(iv[1]) + '</b>' +
+      '<span class="bagTip">邀请你组队（还剩 ' + iv[2] + ' 秒）</span>' +
+      '<button class="bagB" data-pt="acc" data-id="' + iv[0] + '">接受</button>' +
+      '<button class="bagB" data-pt="dec" data-id="' + iv[0] + '">拒绝</button></div>');
+  }
+  for (var b = 0; b < PARTY.app.length; b++) {
+    var ap = PARTY.app[b];
+    ph.push('<div class="ptLine"><b>' + ptEsc(ap[1]) + '</b>' +
+      '<span class="bagTip">申请加入（还剩 ' + ap[2] + ' 秒）</span>' +
+      '<button class="bagB" data-pt="oka" data-id="' + ap[0] + '">同意</button>' +
+      '<button class="bagB" data-pt="noa" data-id="' + ap[0] + '">拒绝</button></div>');
+  }
+  pend.innerHTML = ph.length ? ph.join('') :
+    '<div class="bagTip">没有待处理的邀请或申请 ✓</div>';
+
+  /* ③ 大厅 */
+  var kw = (_ptSearch || '').trim().toLowerCase();
+  if (inf) {
+    inf.textContent = '在线 ' + LOBBY.online + ' 人 · 招募中 ' + LOBBY.parties.length +
+      ' 队' + (LOBBY.err ? (' · ' + LOBBY.err) : '');
+  }
+  var rows = [];
+  for (var c = 0; c < LOBBY.players.length; c++) {
+    var p = LOBBY.players[c];
+    if (kw && String(p.name || '').toLowerCase().indexOf(kw) < 0) { continue; }
+    var canInv = !p.party && (!PARTY.roster || PARTY.roster.length < 3);
+    rows.push('<div class="ptLine"><b>' + ptEsc(p.name) + '</b>' +
+      '<span class="bagTip">Lv' + (p.lv || 1) + '</span>' + ptWeapon(p.look, p.tier) +
+      ptBar(p.hp, '#7ee08a') +
+      '<span class="bagTip">' + ((p.dist === null || p.dist === undefined)
+        ? '?米' : (p.dist + ' 米')) + '</span>' +
+      (p.party ? '<span class="bagTip">已组队</span>' : '') +
+      (canInv ? '<button class="bagB" data-pt="inv" data-id="' + p.id + '">邀请</button>'
+              : '') + '</div>');
+  }
+  pls.innerHTML = rows.length ? rows.join('') : '<div class="bagTip">没有匹配的玩家</div>';
+
+  var pr = [];
+  for (var d2 = 0; d2 < LOBBY.parties.length; d2++) {
+    var q = LOBBY.parties[d2];
+    var blob = (String(q.leader || '') + ' ' + (q.names || []).join(' ')).toLowerCase();
+    if (kw && blob.indexOf(kw) < 0) { continue; }
+    pr.push('<div class="ptLine"><b>' + ptEsc(q.leader) + ' 的队伍</b>' +
+      '<span class="bagTip">' + q.n + '/' + q.max + '</span>' +
+      '<span class="bagTip">' + ptEsc((q.names || []).join('、')) + '</span>' +
+      (PARTY.roster ? '<span class="bagTip">你已有队伍</span>'
+                    : '<button class="bagB" data-pt="apply" data-pid="' + q.pid +
+                      '">申请加入</button>') + '</div>');
+  }
+  pts.innerHTML = pr.length ? pr.join('') : '<div class="bagTip">现在没有队伍在招募</div>';
+}
+
+function ptBind() {
+  var pane = document.querySelector('.tabpane[data-pane="party"]');
+  if (!pane || pane.__ptBound) { return; }
+  pane.__ptBound = true;
+  pane.addEventListener('click', function (e) {
+    var b = e.target;
+    if (!b || b.tagName !== 'BUTTON') { return; }
+    var op = b.getAttribute('data-pt');
+    if (!op) { return; }
+    e.preventDefault();
+    var id = b.getAttribute('data-id');
+    if (op === 'inv') { partySend('invite', { cid: +id }); }
+    else if (op === 'acc') { partySend('accept', { cid: +id }); }
+    else if (op === 'dec') { partySend('decline', { cid: +id }); }
+    else if (op === 'oka') { partySend('okapply', { cid: +id }); }
+    else if (op === 'noa') { partySend('noapply', { cid: +id }); }
+    else if (op === 'kick') { partySend('kick', { cid: +id }); }
+    else if (op === 'promote') { partySend('promote', { cid: +id }); }
+    else if (op === 'apply') { partySend('apply', { pid: b.getAttribute('data-pid') }); }
+    else if (op === 'leave') { partySend('leave', {}); }
+    else if (op === 'disband') { partySend('disband', {}); }
+    else if (op === 'recruit') { partySend('recruit', { on: true }); }
+    lobbyFetch();
+  });
+  var si = document.getElementById('ptSearch');
+  if (si) { si.addEventListener('input', function () { _ptSearch = si.value || ''; ptRender(); }); }
+  var rf = document.getElementById('ptRefresh');
+  if (rf) { rf.addEventListener('click', function (e) { e.preventDefault(); lobbyFetch(); }); }
+}
+setInterval(function () {
+  if ((SETCFG.setTab || '') === 'party' && NET.on) { lobbyFetch(); }
+}, 4000);
+
 function mkOpts(rowId, items, key, cur) {
   var row = document.getElementById(rowId);
   if (!row) { return; }
@@ -709,6 +889,8 @@ function openSet(wantTab) {
   p.style.display = 'block';
   // ★ 第 48 轮：openSet('bag') 可以直接停在背包页（快捷键 B 用 ✓）
   if (wantTab) { setTab(wantTab); }
+  ptBind();                                   // ★ 第 83 轮：组队页绑定 ✓
+  if ((SETCFG.setTab || '') === 'party') { lobbyFetch(ptRender); }
   if ((SETCFG.setTab || '') === 'bag') { bagFetch(bagRender); }   // 打开时拉一次背包 ✓
   mkOpts('rowDpr', [{ v: 1.0, t: '1.0x', s: '省' }, { v: 1.5, t: '1.5x', s: '较快' },
                     { v: 2.0, t: '2.0x', s: '清晰' }, { v: 2.5, t: '2.5x', s: '很清晰' },
@@ -1645,6 +1827,32 @@ function wsOnMessage(raw) {
     return;
   }
   /* ★ 第 67 轮：防具穿上/脱下 */
+  /* ★★ 第 83 轮：组队 ★★ */
+  if (t === 'party') {
+    PARTY.roster = d.roster || null;
+    PARTY.pid = d.pid || null;
+    PARTY.leader = d.leader || null;
+    if (d.me !== undefined && d.me !== null) { PARTY.me = d.me; }
+    ptRender();
+    return;
+  }
+  if (t === 'partyinv') {
+    // ★ 两种形态：一次性事件（有 name）+ 每秒补推的列表（有 list）✓
+    if (d.list) { PARTY.inv = d.list; }
+    else if (d.name) { PARTY.inv = PARTY.inv.concat([[d.pid, d.name, 60]]); }
+    ptRender();
+    if (!d.list) { fxNum((d.name || '有人') + ' 邀请你组队（菜单→组队）', '#ffd83d', P.x, 3.0, P.z); }
+    return;
+  }
+  if (t === 'partyapply') {
+    if (d.list) { PARTY.app = d.list; }
+    ptRender();
+    return;
+  }
+  if (t === 'partychat') {
+    fxNum('[队伍] ' + (d.name || '?') + '：' + (d.text || ''), '#8ee0ff', P.x, 2.8, P.z);
+    return;
+  }
   if (t === 'armor') {
     BAG.armor = d.a || null;
     if ((SETCFG.setTab || '') === 'bag') { bagRender(); }
