@@ -207,6 +207,7 @@ class World(object):
         self.mob_cap = int(mobs.MOB_CAP)
         self.spawn_interval = float(mobs.SPAWN_INTERVAL)
         self.mob_cap_of = {}      # {role_id: 该人的上限} ✓ 没记录就用全局值
+        self.pvp_pair = {}        # ★ 第 150 轮：{(killer,victim): 上次算数时刻} —— 同一对 10 分钟只算一次 ✓
         # ★★ 第 134 轮（用户要求）：两组开关（全人 / 单人）★★
         #   PVP：开了才能互相打 ✓（现在是【闸门】：PvP 功能还没做 ✗
         #         但状态已经存下来了 ✓ 将来那段代码直接读 _pvp_on() 就行 ✓）
@@ -1825,6 +1826,128 @@ class World(object):
         self._add_pend(p.cid, 'hurts', {'dmg': dv, 'x': round(m.x, 2), 'z': round(m.z, 2),
                                         'by': m.kind, 'kind': 'mob', 'crit': bool(crit)})
 
+    # ================================================================
+    #  ★★★ 第 150 轮：PVP（用户确认的规则，方案 §15）★★★
+    #    谁能打谁：只要不是队友就能打 ✓ 不需要宣战 ✓
+    #              队友之间永远打不到 ✗
+    #              总闸门 = 管理页的 PVP 开关（关了全世界都打不到 ✓）
+    #    怎么打：普通攻击就能打到 ✓ 以后的技能也按同一套筛选 ✓
+    #    伤害：和打怪完全一样 ✓
+    #  ================================================================
+    def _pvp_ok(self, a_, b_):
+        """a 能不能打 b（返回 True/False + 原因，原因只用来排障 ✓）"""
+        if a_ is None or b_ is None or a_ is b_:
+            return False, 'self'
+        if int(b_.hp or 0) <= 0:
+            return False, 'dead'                      # 已经倒下的不再打 ✓
+        if getattr(b_, 'invulnT', 0) > 0:
+            return False, 'invuln'                    # 复活无敌期 ✓
+        if not self._pvp_on(a_):
+            return False, 'a_off'                     # 自己关了 PVP（双向 ✓ 用户确认 ✓）
+        if not self._pvp_on(b_):
+            return False, 'b_off'                     # 对方关了 ✓
+        # ★ 队友之间永远打不到（硬规则 ✓）
+        pa = self.party_of.get(getattr(a_, 'role_id', None))
+        pb = self.party_of.get(getattr(b_, 'role_id', None))
+        if pa is not None and pa == pb:
+            return False, 'teammate'
+        # ★ 同一个账号的多个角色不算（防自己杀自己 ✓）
+        if (a_.role or {}).get('account_id') and            (a_.role or {}).get('account_id') == (b_.role or {}).get('account_id'):
+            return False, 'same_account'
+        # ★ 安全区内不夺取、也不算魔气（出生点 20 米内 ✓）
+        if (b_.x * b_.x + b_.z * b_.z) < mqmod.SAFE_R * mqmod.SAFE_R:
+            return False, 'safe_zone'
+        # ★ 等级差太大不算（防大号刷小号 ✓）
+        la = int((a_.role or {}).get('level') or 1)
+        lb = int((b_.role or {}).get('level') or 1)
+        if abs(la - lb) > mqmod.LEVEL_GAP_MAX:
+            return False, 'level_gap'
+        return True, 'ok'
+
+    def _pvp_pair_ok(self, a_, b_):
+        """防刷：同一对玩家 10 分钟只算一次（用户确认：不设击杀上限 ✓ 靠这条 ✓）"""
+        ka = getattr(a_, 'role_id', None)
+        kb = getattr(b_, 'role_id', None)
+        now = now_s()
+        ts = self.pvp_pair.get((ka, kb))
+        if ts is not None and now - ts < mqmod.PAIR_COOLDOWN:
+            return False
+        self.pvp_pair[(ka, kb)] = now
+        return True
+
+    def _pvp_hit(self, p, q, reach, arc):
+        """p 打 q 一下（伤害算法和打怪完全一样 ✓ 用户确认 ✓）
+
+        返回打中了几次（0 或 1 ✓）
+        """
+        if not mobs.in_front(p.x, p.z, p.yaw, q.x, q.z, reach, arc):
+            return 0
+        ok, why = self._pvp_ok(p, q)
+        if not ok:
+            return 0
+        # ---- 伤害：走和打怪一样的口径（攻击力 → 随武器系数 → 暴击 ✓）----
+        _w = p.weapon or {}
+        _T = affixes.totals(_w.get('affixes'))
+        atk = self._atk_of(p)
+        dv, crit = mobs.roll_damage(atk, crit_pt=_T.get('crit_pt', 0.0),
+                                    crit_dmg=_T.get('crit_dmg', 0.0))
+        dv = int(dv)
+        # ---- 对方的减伤：固定（防具）+ 百分比（天赋）✓ 最后吃 30% 地板 ✓
+        _st = armormod.stats_of(q.armor)
+        _dv0 = dv
+        if _st['dr'] > 0:
+            dv = max(max(1, int(round(_dv0 * DMG_FLOOR))), int(round(dv - _st['dr'])))
+        _tdr = float((q.talEff or {}).get('dr') or 0.0)
+        if _tdr > 0:
+            dv = int(round(dv * (1.0 - _tdr / 100.0)))
+        dv = max(dv, max(1, int(round(_dv0 * DMG_FLOOR))))
+        if dv <= 0:
+            return 0
+        q.hp = max(0, int(q.hp) - dv)
+        # ---- 告诉被打的人（红色数字 + 谁打的 ✓ 客户端已有 ✓）----
+        self._add_pend(q.cid, 'hurts', {'dmg': dv, 'x': round(p.x, 2), 'z': round(p.z, 2),
+                                       'by': p.name, 'kind': 'mob', 'pvp': True,
+                                       'crit': bool(crit)})
+        # ---- 打人的人的反馈（和打怪一样弹数字 ✓）----
+        self._add_pend(p.cid, 'mhits', {'mid': 'p:' + str(getattr(q, 'cid', '')),
+                                        'dmg': dv, 'crit': bool(crit),
+                                        'x': round(q.x, 2), 'z': round(q.z, 2)})
+        # ---- 打死了 → 魔气 + 击杀播报 ----
+        if int(q.hp or 0) <= 0:
+            self._pvp_killed(p, q)
+        return 1
+
+    def _pvp_killed(self, killer, victim):
+        """玩家击杀玩家：魔气 +2 / 被杀 −1（用户确认 ✓）+ 防刷判定 ✓"""
+        # ★ 防刷：这一对 10 分钟内只算一次 ✗（不然开小号互刷 ✓）
+        counted = self._pvp_pair_ok(killer, victim)
+        if counted:
+            killer.mq = min(mqmod.MQ_MAX, int(killer.mq or 0) + mqmod.KILL_GAIN)
+            victim.mq = max(0, int(victim.mq or 0) - mqmod.KILLED_LOSS)
+            self._mq_save(killer)
+            self._mq_save(victim)
+        # 播报（附近的人看得到 ✓）
+        self._evt_near(victim.x, victim.z, 'notice',
+                       {'text': '%s 击杀了 %s' % (killer.name, victim.name)})
+        self._send_cid(killer.cid, P.pack(
+            'notice', text='你击杀了 %s%s' % (
+                victim.name,
+                ('，魔气 +%d（现在 %d）' % (mqmod.KILL_GAIN, killer.mq)) if counted
+                else '（同一对手 10 分钟内只算一次，魔气没变）')))
+        self._send_cid(victim.cid, P.pack(
+            'notice', text='你被 %s 击杀了%s' % (
+                victim.name if False else killer.name,
+                ('，魔气 −%d（现在 %d）' % (mqmod.KILLED_LOSS, victim.mq)) if counted
+                else '')))
+        # ★ 第 5 步（夺取）下一轮接在这里 ✓ 现在先只做魔气 ✓
+
+    def _mq_save(self, p):
+        """魔气变了 → 落库（tick 线程只排队 ✗ saver 线程真写 ✓）"""
+        self.post_save('UPDATE roles SET mq=?, mq_at=? WHERE id=?',
+                       (int(p.mq or 0), int(p.mqAt or 0), p.role_id))
+        # 顺手推给本人（以后属性页/头顶要显示 ✓）
+        self._send_cid(p.cid, P.pack('mq', v=int(p.mq or 0)))
+
     def _atk_of(self, p):
         """玩家的攻击力 —— ★★ 服务器算，不看客户端报什么（第 39 轮 + 第 47 轮接武器）★★
 
@@ -1919,6 +2042,17 @@ class World(object):
 
         # ★ 这把武器的机制（按品阶加成 ✓）
         fx = weapons.fx_of(wlook, wtier)
+        # ①-★ 第 150 轮：先打人✗（PVP ✓一次挥砍两者都能打到 ✓ 用户确认 ✓）
+        #   放在前面是为了让 PVP 先结算 ✗（不影响僵尸那边 ✓ 两边各算各的 ✓）
+        try:
+            for _q in list(self.players.values()):
+                if _q is p:
+                    continue
+                if (abs(_q.x - p.x) > reach + 1.0) or (abs(_q.z - p.z) > reach + 1.0):
+                    continue
+                self._pvp_hit(p, _q, reach, arc)
+        except Exception:
+            pass
         # ① 僵尸：扇形里按武器机制结算（第 59 轮 ✓）
         rng = random.random
         _hits = 0
