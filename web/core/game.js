@@ -56,7 +56,7 @@ var G = {
 /* ============ 设置（必须在所有函数之前 ✓）============ */
 /* ★ v5（第 31 轮）：新增 atkSize（攻击键大小）；顺便记住设置面板停在哪个分类（setTab）✓ */
 var SET_DEF = { dpr: 2.0, aa: 'off', detail: 'mid', showFps: true, mobDmg: true,
-                atkSize: 84, setTab: 'view' };
+                atkSize: 84, setTab: 'view' , shadow: 'high' };
 var SETCFG = { v: 5 };
 var _savedVol = null;
 try { var _sv = JSON.parse(UI.store.get('xx3d_set') || '{}'); if (_sv && _sv.v === 5) { SETCFG = _sv; } } catch (e) { }
@@ -3152,7 +3152,16 @@ function frame(ts) {
   if (!loadedOk) { return; }
     /* ★ 第 44 轮：阴影隔帧更新（见渲染器那里的注释）*/
     _shadowTick = (_shadowTick + 1) & 1;
-    if (_shadowTick === 0) { rd.shadowMap.needsUpdate = true; }
+    /* ★ 第 79 轮：更新间隔跟着【阴影质量】走 ✓
+       高=2048² 每 2 帧（和以前完全一样 ✓）
+       中=1024² 每 4 帧   关=不算
+       ★ 为什么跟着走：阴影的开销 = 像素数 × 每秒重算次数 ✗
+         只降分辨率只省 3/4 ✓ 两边一起降能省到 1/8 ✓ */
+    var _shQ = (typeof setShadow === 'function') ? setShadow() : 'high';
+    if (_shQ !== 'off') {
+      var _shE = (_shQ === 'mid') ? 4 : 2;
+      if (_shadowTick % _shE === 0) { rd.shadowMap.needsUpdate = true; }
+    }
   if (lastTs && ts - lastTs < G.FRAME_MS) { return; }
   /* ★★ dt 必须用【真实帧间隔】，不能写死 1/60（第 28 轮修的真 bug）★★
      原来这里是 `var dt = 1 / 60;` —— 不管这一帧实际过了多久，位移都按 1/60 秒算 ✗

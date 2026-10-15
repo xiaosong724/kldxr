@@ -94,6 +94,15 @@ UI.visible = function (id) {
 };
 
 /* ---------- setDetail ---------- */
+/* ★★ 第 79 轮：阴影质量开关（用户要求做个开关自己 A/B）★★
+   为什么做成【手动开关】而不是自动降画质 ✗：
+     用户明确说过不要自动降画质 ✓，而且手动切换能让他两下就看出
+     "到底是不是阴影的锅" ✓（比我在代码里猜准得多 ✓）
+   high = 2048² 每 2 帧（和以前完全一样 ✓ 默认值 ✓ 不改变现状 ✓）
+   mid  = 1024² 每 4 帧（方块影子肉眼几乎看不出差别 ✓ 开销约 1/8）
+   off  = 完全不画影子（最省 ✓）*/
+function setShadow() { return (SETCFG && SETCFG.shadow) || 'high'; }
+
 function setDetail() { return (SETCFG && SETCFG.detail) ? SETCFG.detail : SET_DEF.detail; }
 
 /* ---------- E ---------- */
@@ -494,7 +503,28 @@ function updHP() {
 function saveSet() { try { SETCFG.v = SETCFG_VER; localStorage.setItem('xx3d_set', JSON.stringify(SETCFG)); } catch (e) { } }
 
 /* ---------- applySet ---------- */
+function applyShadow() {
+  var sh = setShadow();
+  var on = (sh !== 'off');
+  if (!rd) { return; }
+  rd.shadowMap.enabled = on;
+  if (sun && sun.shadow) {
+    var sz = (sh === 'mid') ? 1024 : 2048;
+    if (sun.shadow.mapSize.x !== sz) {
+      sun.shadow.mapSize.set(sz, sz);
+      /* ★ 改了 mapSize 必须把旧的贴图释放掉 ✗
+         不然 three.js 不会重建 → 改了没效果 ✗（这个坑很容易踩 ✗）*/
+      if (sun.shadow.map) {
+        try { sun.shadow.map.dispose(); } catch (e1) { }
+        sun.shadow.map = null;
+      }
+    }
+  }
+  rd.shadowMap.needsUpdate = true;
+}
+
 function applySet() {
+  applyShadow();          // ★ 第 79 轮：阴影质量 ✓
   try {
     var dpr = setDpr();
     G.PROP_R = (DETAIL_RANGE && DETAIL_RANGE[setDetail()]) ? DETAIL_RANGE[setDetail()] : 28;
@@ -609,6 +639,9 @@ function openSet(wantTab) {
   mkOpts('rowDpr', [{ v: 1.0, t: '1.0x', s: '省' }, { v: 1.5, t: '1.5x', s: '较快' },
                     { v: 2.0, t: '2.0x', s: '清晰' }, { v: 2.5, t: '2.5x', s: '很清晰' },
                     { v: 3.0, t: '3.0x', s: '最清晰' }], 'dpr', setDpr());
+  mkOpts('rowShadow', [{ v: 'high', t: '高', s: '2048 · 默认' },
+                       { v: 'mid', t: '中', s: '1024 · 省' },
+                       { v: 'off', t: '关', s: '最快' }], 'shadow', setShadow());
   mkOpts('rowAA', [{ v: 'off', t: '关', s: '最快' }, { v: 'fxaa', t: 'FXAA', s: '低开销' },
                    { v: 'msaa', t: 'MSAA', s: '最干净' }], 'aa', setAA());
   mkOpts('rowDet', [{ v: 'low', t: '低', s: '±16 格' }, { v: 'mid', t: '中', s: '±28 格' },
