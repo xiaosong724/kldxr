@@ -3355,6 +3355,14 @@ function inAtkArc(tx, tz) {
 function frame(ts) {
   UI.raf(frame);
   if (!loadedOk) { return; }
+  /* ★ 第 183 轮：还没登录就【不跑世界】✗
+     不然登录框后面僵尸照样打你 ✓ 登录进去发现自己已经死了 ✓
+     ★ 只停"世界更新" ✗ 渲染继续跑 ✓（登录框背后那层画面还是要画的 ✓）
+     ★ 登录成功那一刻会自动恢复 ✓（WSC.role 有值了 ✓）*/
+  if (typeof WSC !== 'undefined' && !WSC.role) {
+    rd.render(scene, cam);
+    return;
+  }
     /* ★ 第 44 轮：阴影隔帧更新（见渲染器那里的注释）*/
     _shadowTick = (_shadowTick + 1) & 1;
     /* ★ 第 79 轮：更新间隔跟着【阴影质量】走 ✓

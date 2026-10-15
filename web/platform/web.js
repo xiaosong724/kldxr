@@ -325,6 +325,12 @@ function _sfxFallback(key, buf, mime, label, attempt) {
 */
 function sfx(name, volScale) {
   if (!SFX_ON) { return; }
+  /* ★★ 第 183 轮（用户："游戏还没有登录就有打斗的声音了"）★★
+     原因：登录框是【盖在游戏画面上的一个层】✗
+       游戏世界在它后面一直在跑 ✓ 单机兜底还会刷本地僵尸 ✓
+       → 僵尸打你 → 挨打音效 / 挥砍音效全都在响 ✓ 而你还停在登录界面 ✓
+     修：没登录就一声都不出 ✓（一个判断管住所有音效 ✓ 最省事也最不容易漏 ✓）*/
+  if (typeof WSC !== 'undefined' && !WSC.role) { return; }
   if (!_audioUnlocked) { unlockAudio(); }
   var bank = SFX_BANK[name];
   if (!bank || !bank.length) {

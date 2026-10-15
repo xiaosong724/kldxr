@@ -25,7 +25,7 @@ import weapons
 
 PBKDF2_ROUNDS = 200_000          # Python 的 pbkdf2_hmac 是 C 实现，约 60~80ms，可接受
 TOKEN_TTL_MS = 30 * 24 * 3600 * 1000    # token 有效期 30 天
-NAME_RE = re.compile(r'^[0-9A-Za-z_\u4e00-\u9fa5-]{2,16}$')
+NAME_RE = re.compile(r'^[0-9A-Za-z_\u4e00-\u9fa5-]{2,10}$')
 PW_MIN, PW_MAX = 6, 64
 
 MAX_FAIL = 5                     # 连续失败几次开始退避
@@ -66,7 +66,7 @@ def _check_name(name):
     if not name:
         return '请填写游戏名'
     if not NAME_RE.match(name):
-        return '游戏名只能 2~16 个中英文、数字、下划线或短横线'
+        return '游戏名只能 2~10 个中英文、数字、下划线或短横线'
     return None
 
 
