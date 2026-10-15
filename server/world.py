@@ -280,6 +280,17 @@ class World(object):
             _np = Player(conn.cid, role)
             self.players[conn.cid] = _np
             # ★ 第 63 轮：上线也让附近的人"看得见"✓（不是凭空冒出来 ✗）
+            # ★★ 第 102 轮：进世界时主动告诉他【穿着的防具 + 有效血量上限】★★
+            #   不然客户端登录后不知道上限（它那边原来是写死的 200 ✗）
+            #   → 表现就是"穿了防具血量没变化"✓
+            try:
+                if getattr(_np, 'armor', None):
+                    self._send_cid(conn.cid, P.pack('armor', a=_np.armor,
+                                                    hpm=self._hp_max(_np)))
+                else:
+                    self._send_cid(conn.cid, P.pack('armor', a=None, hpm=self._hp_max(_np)))
+            except Exception:
+                pass
             self._evt_near(_np.x, _np.z, 'evt',
                            {'kind': 'join', 'id': _np.role_id,
                             'name': _np.name, 'x': round(_np.x, 2),
@@ -1028,6 +1039,22 @@ class World(object):
                 self.mob_seq, _lv, p.x + math.sin(ang) * dist, p.z + math.cos(ang) * dist,
                 kind=kind)
 
+    def _hp_max_hint(self, role):
+        """给 HTTP 线程用的血量上限估算（第 102 轮）
+
+        ★ 为什么不直接调 _hp_max()：那要一个 Player 对象 ✗
+          而 Player 是 tick 线程的东西 ✗ HTTP 线程不许碰 ✓
+        → 这里只按【角色基础 + 数据库里那件防具】算 ✓ 够用 ✓
+        """
+        try:
+            base = int((role or {}).get('hpMax') or 200)
+            import auth as _auth
+            ar = _auth.armor_of(self.cfg if hasattr(self, 'cfg') else None, role.get('id'))
+            st = armormod.stats_of((ar[0] if ar else None))
+            return max(1, int(round((base + st['hp']) * (1.0 + st['hp_pct'] / 100.0))))
+        except Exception:
+            return int((role or {}).get('hpMax') or 200)
+
     def _hp_max(self, p):
         """生命上限（角色基础 + 防具的 hp / hp%% ✓ 第 67 轮）
 
@@ -1066,7 +1093,11 @@ class World(object):
             e = self._pend[q.cid] = {}
         e['me'] = {'lv': level, 'exp': int(role.get('exp') or 0),
                    'need': mobs.level_up_need(level),
-                   'inv': round(q.invulnT, 2)}
+                   'inv': round(q.invulnT, 2),
+                   # ★ 第 102 轮：把【有效血量上限】带上 ✓
+                   #   （含防具加成 ✓ 客户端那边原来一直是写死的 200 ✗
+                   #    所以"穿了防具血量没变化"✓ 根因就在这 ✗）
+                   'hpm': self._hp_max(q)}
         if ups:
             self._send_cid(q.cid, P.pack('notice', text='升到 %d 级！' % level, level=level))
 

@@ -1220,11 +1220,16 @@ var MAT_ICON_BY_NAME = {
      · 两侧肩甲（半透明 ✓ 一眼看出是"穿在身上的甲"✓）
      · 中缝（深色线 ✓ 不管品阶是什么颜色都看得清 ✓）*/
 var ARMOR_ICON = '<svg viewBox="0 0 24 24" width="100%" height="100%">' +
-  '<path d="M7 4 L11 1.5 h2 l4 2.5 v5.5 c0 4.6 -3.2 7.8 -7 9.5 -3.8 -1.7 -7 -4.9 -7 -9.5 z"' +
-  ' fill="currentColor" opacity="0.92"/>' +
-  '<path d="M4.2 4.2 L1.2 6.2 v3.4 l3 1.4 z M19.8 4.2 l3 2 v3.4 l-3 1.4 z"' +
-  ' fill="currentColor" opacity="0.55"/>' +
-  '<path d="M12 3 v15.5" stroke="#000" stroke-opacity="0.28" stroke-width="1"/>' +
+  /* ★★ 第 102 轮（用户："改成衣服的盔甲样式"）★★
+     从"一块胸甲板"改成【一件穿在身上的甲衣】：
+       衣身 + 两侧袖子 + 领口 + 中缝 + 下摆横线 ✓
+     用 currentColor ✓ 品阶颜色自动跟着变 ✓ */
+  '<path d="M8.6 3 h6.8 l5 2.6 -1.7 4.3 -2.3 -0.9 V21 H7.6 V9 l-2.3 0.9 L3.6 5.6 z"' +
+  ' fill="currentColor" opacity="0.9"/>' +
+  '<path d="M9.4 3.2 c0.7 1.5 4.5 1.5 5.2 0" stroke="#000" stroke-opacity="0.32"' +
+  ' stroke-width="1.1" fill="none"/>' +
+  '<path d="M12 5.2 V21" stroke="#000" stroke-opacity="0.22" stroke-width="0.9"/>' +
+  '<path d="M7.6 13.4 h8.8" stroke="#000" stroke-opacity="0.22" stroke-width="0.9"/>' +
   '</svg>';
 
 function iconOfItem(it) {
@@ -1410,18 +1415,27 @@ function wNeedLevel(it) {
 function wStatHtml(it, dim) {
   /* ★ 第 67 轮：防具显示【自己的】属性（减伤/生命 ✓ 不是武器的攻速射程 ✗）*/
   if (it && it.slot === 'armor') {
+    /* ★ 第 102 轮（用户："防具点击装备的弹窗的文字信息太少了"）✗
+       补上：部位 / 品阶 / 建议等级 / 减伤 / 生命 / 词条 / 穿上后的对比 ✓ */
     var bb = it.base || {};
     var afs = it.affixes || [];
-    var o2 = '<span>品阶 <s>' + ((it.tier || 0) + 1) + '</s> 阶 · 建议等级 <s>' +
-      (it.reqLevel || 1) + '</s></span>' +
-      '<span>减伤 <s>' + (Math.round((+bb.dr || 0) * 10) / 10) + '</s> 点</span>' +
-      '<span>生命上限 <s>+' + Math.round(+bb.hp || 0) + '</s></span>';
+    var o2 = '<span style="color:#8ee0ff">防具 · 穿在【武器槽右边】那个槽</span>' +
+      '<span>品阶 <s>' + ((it.tier || 0) + 1) + '</s> 阶 · 建议等级 <s>' +
+        (it.reqLevel || 1) + '</s></span>' +
+      '<span>基础减伤 <s>' + (Math.round((+bb.dr || 0) * 10) / 10) + '</s> 点' +
+        '（挨打时先扣这么多，最少留 1 点）</span>' +
+      '<span>基础生命上限 <s>+' + Math.round(+bb.hp || 0) + '</s> 点</span>' +
+      '<span>你当前生命上限 <s>' + Math.round(HPMAX) + '</s>' +
+        '（穿上后服务器会重算 ✓）</span>';
     if (afs.length) {
       o2 += '<span style="color:#ffd83d">词条 ' + afs.length + ' 条：</span>';
       for (var i2 = 0; i2 < afs.length; i2++) {
         o2 += '<span style="color:#8ee0ff">· ' + (afs[i2].text || '') + '</span>';
       }
+    } else {
+      o2 += '<span style="opacity:.7">（这件没有词条）</span>';
     }
+    o2 += '<span style="opacity:.75">点【使用】穿上 · 点右边的防具槽脱下</span>';
     return o2;
   }
   var s = wStatsOf(it);
