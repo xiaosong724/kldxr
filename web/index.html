@@ -300,6 +300,7 @@
    <!-- ★ 第 128 轮（用户）：【调试】页签已移除 ✗
         那些开关（刷怪/无敌等）本来就只该管理员用 ✗
         → 现在全部收进【管理页】✓（本轮正在做）-->
+   <div class="tab" data-tab="wiki">百科</div>
    <div class="tab" data-tab="about">信息</div>
   </div></div>
 
@@ -409,6 +410,15 @@
   </div>
 
   <!-- ★ 第 128 轮：调试面板已移除 ✗（内容全部挪到管理页 ✓）-->
+  <!-- ★★ 第 148 轮（用户要求）：百科全书 ★★
+       目录 + 内容两块 ✓ 纯前端 ✗ 不发请求 ✓ 秒开 ✓
+       加新条目只要在 platform/web.js 的 WIKI 数组里加一条 ✓ -->
+  <div class="tabpane" data-pane="wiki">
+   <div id="wikiNav" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
+   <div id="wikiBody" class="bagTipBox" style="position:static;max-height:52vh;overflow-y:auto;
+        display:block;box-shadow:none;padding:8px 10px"></div>
+  </div>
+
 
   <div class="tabpane" data-pane="about">
    <div class="setLabel">账号</div>
