@@ -62,7 +62,12 @@ class MainActivity : Activity() {
 
         /* 屏幕常亮：玩久了不该自动锁屏 */
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        goFullscreen()
+        /* ★★ 真机闪退教我的事（第 184 轮）★★
+           这里【不能】调 goFullscreen() ✗
+           因为此时还没 setContentView ✓ 界面（DecorView）根本不存在 ✓
+           → window.insetsController 是 null → NullPointerException → 一启动就闪退 ✓✓
+           崩溃日志：MainActivity.goFullscreen(MainActivity.kt:148) ← onCreate 调的 ✓
+           → 挪到 setContentView 之后再调 ✓（见下面）*/
 
         val root = FrameLayout(this)
         root.setBackgroundColor(Color.parseColor("#1a1208"))
@@ -131,6 +136,9 @@ class MainActivity : Activity() {
         )
         setContentView(root)
 
+        /* 界面建好了，这时候才能安全地进全屏 ✓ */
+        goFullscreen()
+
         web.loadUrl(GAME_URL)
     }
 
@@ -142,6 +150,17 @@ class MainActivity : Activity() {
      *   横屏时刘海那侧也会被让开 → 一侧留黑边 ✓
      */
     private fun goFullscreen() {
+        /* ★ 第 184 轮：全屏失败也绝不能闪退 ✓
+           各家 ROM 对 insets 的实现不完全一样 ✓ 万一抛异常就跳过这一帧 ✓
+           大不了系统栏留着 ✗ 也比进不去游戏强 ✓ */
+        try {
+            goFullscreenInner()
+        } catch (e: Throwable) {
+            // 静默跳过（下一帧 onWindowFocusChanged 还会再试一次 ✓）
+        }
+    }
+
+    private fun goFullscreenInner() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             /* Android 11+：新的 insets API */
             window.setDecorFitsSystemWindows(false)
