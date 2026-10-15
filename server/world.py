@@ -47,11 +47,13 @@ PARTY_MAX = 3                 # 队伍上限（用户定：3 人 ✓）
 PARTY_SHARE = 0.10            # 队友分到的经验比例（该僵尸经验的 10% ✓）
 PARTY_SHARE_DIST = 30.0       # 分经验的距离（防异地挂机蹭 ✗）
 PARTY_INVITE_DIST = 20.0      # 邀请的距离（防全图骚扰 ✗）
-PARTY_INVITE_TTL = 10.0       # 邀请有效期（没人理就作废 ✓）
+PARTY_INVITE_TTL = 60.0       # ★ 第 82 轮用户改：10 秒 → 1 分钟 ✓
+                              #   （原因：弹窗没看到就没了 ✗
+                              #    现在界面里也有待处理列表 ✓ 给一分钟才够用 ✓）
 PARTY_INVITE_RATE = 3         # 10 秒最多发 3 次邀请 ✓
 PARTY_PUSH_INTERVAL = 1.0     # roster 每秒补推一次（血条要动 ✓）
 # ★ 第 82 轮：大厅（独立页 ✓ 队长邀请 + 玩家申请 两条路 ✓）
-PARTY_APPLY_TTL = 30.0        # 申请 30 秒过期 ✓
+PARTY_APPLY_TTL = 60.0        # ★ 第 82 轮用户改：30 秒 → 1 分钟 ✓（和邀请一致 ✓）
 PARTY_APPLY_RATE = 3          # 每人 10 秒最多 3 次申请 ✓
 LOBBY_INTERVAL = 1.0          # 大厅名单发布频率 ✓
 
@@ -351,6 +353,46 @@ class World(object):
                             'max': PARTY_MAX, 'names': _nm})
             # ★ 整对象替换（读的人拿到旧的也没事 ✓ 不会读到半个 ✗）
             self.lobby_stat = {'players': _lp, 'parties': _lq}
+            # ★★ 第 82 轮：待处理列表每秒补推一次 ★★
+            #   用户要求："不仅有弹窗，界面里也应该有可以同意拒绝的地方"
+            #   → 弹窗是一次性的 ✗ 没看到就没了 ✗
+            #   → 现在每秒把【谁邀请了我】和【谁申请了我的队】都推一遍 ✓
+            #     客户端拿到就能在面板里列出来 ✓ 刷新也不丢 ✓
+            _now2 = now_s()
+            for _rid3, _lst3 in list(self.party_inv.items()):
+                _ok3 = [x for x in _lst3 if _now2 - x[1] < PARTY_INVITE_TTL]
+                self.party_inv[_rid3] = _ok3
+                if not _ok3:
+                    continue
+                for _q3 in self.players.values():
+                    if getattr(_q3, 'role_id', None) == _rid3:
+                        _out3 = []
+                        for _f3, _ts3 in _ok3:
+                            for _q4 in self.players.values():
+                                if getattr(_q4, 'role_id', None) == _f3:
+                                    _out3.append([_f3, _q4.name,
+                                                  int(round(PARTY_INVITE_TTL - (_now2 - _ts3)))])
+                                    break
+                        self._send_cid(_q3.cid, P.pack('partyinv', list=_out3))
+                        break
+            for _pid4, _pt4 in list(self.parties.items()):
+                _ap4 = [x for x in self.party_apply.get(_pid4, [])
+                        if _now2 - x[1] < PARTY_APPLY_TTL]
+                self.party_apply[_pid4] = _ap4
+                if not _ap4:
+                    continue
+                for _q5 in self._party_members(_pid4):
+                    if _q5.role_id != _pt4['leader']:
+                        continue
+                    _out4 = []
+                    for _r4, _ts4 in _ap4:
+                        for _q6 in self.players.values():
+                            if getattr(_q6, 'role_id', None) == _r4:
+                                _out4.append([_r4, _q6.name,
+                                              int(round(PARTY_APPLY_TTL - (_now2 - _ts4)))])
+                                break
+                    self._send_cid(_q5.cid, P.pack('partyapply', pid=_pid4, list=_out4))
+                    break
 
         self._party_acc += TICK_DT
         if self._party_acc >= PARTY_PUSH_INTERVAL:
