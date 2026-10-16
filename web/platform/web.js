@@ -2640,8 +2640,24 @@ function bagRender() {
      so the button never lit up. Price itself is computed by the SERVER. */
   var sellBtn = document.getElementById('bagSell');
   /* round299d: the CLICK needs the DB row id, and that lives on the OUTER record
-     ({id, item, stack}) - the inner `item` dict has no id at all. Using
-     selItem.id sent {iid: undefined} -> the server answered 400 "参数不对". */
+     ({id, item, stack}) - the inner `item` dict has no id at all. */
+  /* round301: find the DB row id of the item that is selected RIGHT NOW.
+     ---------------------------------------------------------------
+     Why this is a function and not just a local `var sellId`:
+     the click handler is bound exactly once per page load (guarded by `_b`), and the
+     binding happens on the FIRST bagRender() - which runs with an EMPTY bag right after
+     login. At that moment sellId is null. The closure kept that null forever, so the
+     click handler hit `if (sellBtn.disabled || !sellId) return;` and returned without a
+     single request, while the ENABLED state (recomputed here on every render) happily
+     lit the button up. Symptom: bright button, click does nothing, no network at all.
+     => resolve the id at CLICK time; never trust a captured value. */
+  function sellIdNow() {
+    if (typeof BAG === 'undefined' || !BAG || !BAG.items || !BAG.sel) { return null; }
+    for (var _si = 0; _si < BAG.items.length; _si++) {
+      if (String(BAG.items[_si].id) === String(BAG.sel)) { return BAG.items[_si].id; }
+    }
+    return null;
+  }
   var sellId = null;
   if (selItem && typeof BAG !== 'undefined' && BAG.items) {
     for (var _bi = 0; _bi < BAG.items.length; _bi++) {
@@ -2666,17 +2682,22 @@ function bagRender() {
        arrives first and cannot be swallowed that way. `_t` debounces the pair so
        one tap does not sell twice. */
     var _sellGo = function () {
-      if (sellBtn.disabled || !sellId) { return; }
+      /* round301: resolve the item HERE, not at bind time (see sellIdNow above). */
+      var iid = sellIdNow();
+      if (!iid) { return; }
       var _now = Date.now();
       if (sellBtn._t && _now - sellBtn._t < 600) { return; }
       sellBtn._t = _now;
       sellBtn.disabled = true;
+      /* round301: the id goes into the request NOW (it used to be the captured
+         `sellId`). Keep the numeric form the server's int() expects. */
+      var reqId = iid;
       var tok = '';
       try { tok = localStorage.getItem('token') || ''; } catch (e) {}
       fetch('/api/sell', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Token': tok },
-        body: JSON.stringify({ iid: sellId })
+        body: JSON.stringify({ iid: reqId })
       }).then(function (r) { return r.json(); }).then(function (j) {
         if (j && j.ok) {
           if (typeof toast === 'function') {
