@@ -2174,18 +2174,7 @@ function netServerSpawn(n, clear) {
 
 
 function netClkUpdate(st, localNow, remoteT) {
-  /* ★★★ 第 276 轮（用户："别的玩家随便移动，一下就跑出去很远，自己看是正常的"）★★★
-     病根：远程玩家的插值缓冲基础值只有 60ms ✗
-       而第 244 轮我把视距从 60 米改到 100 米 ✓
-       → 每个快照要带的玩家/僵尸/掉落多了很多 ✗ 包更大 ✗ 到达更抖 ✓
-       → 自适应缓冲【反复变大】✗
-       → 而这个实现里"变大是立刻的"（下面的注释写了 ✗ 变大立刻 ✗ 变小才慢慢收 ✓）
-       → 每变大一次 ✗ 渲染时刻就跳一下 → 位置瞬移 → ★ 就是"一下跑很远"✓✓
-       ★ 修：基础缓冲 60ms → 120ms ✗
-         给更大的数据量留余量 ✗ 这样缓冲就不用反复变大 ✓ 也就不会反复跳 ✓
-       ★ 代价：远程玩家的动作会晚约 60ms 显示 ✗
-         但对"看别人在干嘛"完全够用 ✗ 换来的是不瞬移 ✓（用户报的就是瞬移 ✓）*/
-  if (!st) { st = { off: undefined, late: 0, delay: 0.06, n: 0 }; }   /* round281: 改回 60ms 排查（120ms 之后反而更飞 ✗）*/
+  if (!st) { st = { off: undefined, late: 0, delay: 0.06, n: 0 }; }
   if (!remoteT) { return st; }
   /* ★★ 重复 / 过期的包不参与时钟校准（P0-9 实测出来的真 bug ★★）
      服务端是按自己的 tick 重发"当前状态"的：对方站着没动时，
@@ -2193,27 +2182,7 @@ function netClkUpdate(st, localNow, remoteT) {
      于是 raw = localNow - remoteT 越来越大 → late 虚增（实测能到 1 秒）✗
      → 抖动缓冲被顶到 maxDelay 上限、而且来回变 → 画面一顿一冲。
      同一份时间戳只校准一次就够了 ✓ */
-  /* ★★★ 第 282 轮修的真 bug（用户："只要刷新了位置又会回到正确的位置"）★★★
-     病根就在下面这句守卫 ✗
-       · 客户端上报的 t 是 performance.now()/1000 ✗ 也就是【页面加载起的秒数】✓
-       · 对方只要【刷新过页面】✗ 这个数就从几千秒掉回 0 ✓
-       · 而这里判 "remoteT <= st.lastT" 就当成重复包 ✗ 直接 return ✓
-         → 时钟偏移永远停在旧值 ✗ 再也不会被修正 ✓
-         → 渲染时刻算错 ✗ 位置按错误的速度播放 → ★ 飞快 ✓✓
-         → ★★ 自己刷新一下重置了本地状态 ✗ 又正常 ✓✓ 和用户观察完全一致 ✓
-     ★ 修：检测到时间戳【大幅倒退】（超过 60 秒 ✓）就认为对方重新加载过 ✗
-       把这一路的时钟状态清空 ✗ 让它重新校准 ✓
-       → 自动恢复 ✗ 再也不用刷新 ✓✓
-     ★ 为什么用 60 秒：正常的乱序/重复包最多差几毫秒 ✗
-       只有"页面重新加载"才会一次倒退几十秒以上 ✓ */
-  if (st.lastT !== undefined && remoteT <= st.lastT) {
-    if (st.lastT - remoteT > 60) {
-      st.off = undefined; st.late = 0; st.n = 0; st.delay = 0; st.lastT = undefined;
-      /* ★ 清空后继续往下走 ✓ 这次会重新取基准 ✓ */
-    } else {
-      return st;
-    }
-  }
+  if (st.lastT !== undefined && remoteT <= st.lastT) { return st; }
   st.lastT = remoteT;
   var raw = localNow - remoteT;
   st.n++;
@@ -2869,7 +2838,7 @@ var _ov3 = null;
            于是位置始终连续，代价只是 0.1~0.3 秒的轻微快慢，眼睛看不出来 ✓ */
 function netRenderAt(o, localNow, dt) {
   var oc = o.clk || {};
-  var want = localNow - (oc.off || 0) - (oc.delay || 0.06);   /* round276b: 兜底值 60->120ms ✓ */
+  var want = localNow - (oc.off || 0) - (oc.delay || 0.06);
   if (o.rtS === undefined || o.rtLast === undefined) {
     o.rtS = want; o.rtLast = localNow; return want;
   }
@@ -3039,7 +3008,7 @@ function updateMarks() {
 function netUpdate(dt) {
   if (!NET.on) { return; }
   var now = performance.now() / 1000;
-  var srvDelay = (NET.srv && NET.srv.delay) || 0.06;          /* round276b: 同上 ✓ */
+  var srvDelay = (NET.srv && NET.srv.delay) || 0.06;
   var srvRender = now - (NET.srv && NET.srv.off ? NET.srv.off : 0) - srvDelay;   // ★ 服务器钟里的"该渲染哪一刻"
   for (var uid in NET.others) {
     var o = NET.others[uid];
