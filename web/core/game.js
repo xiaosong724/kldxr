@@ -3041,6 +3041,38 @@ function updateSelfBar() {
 function updateMarks() {
   var uid, m, k;
   if (!NET.on) {   // 离线 / 断线 → 全部收掉 ✓
+    /* round291（用户：组队时不管再远都要显示队友的方向和距离）
+       第 264 轮服务器已经把队友坐标加进队伍名单了（roster 最后两项 x/z ✓）
+       但客户端这半一直没做 ✗ 所以超出视野就看不到队友 ✓
+       做法：遍历队伍名单 ✗ 对不在视野里的队友也画一个屏幕边缘标记 ✓ */
+    if (typeof PARTY !== 'undefined' && PARTY.roster && PARTY.roster.length) {
+      for (var _ri = 0; _ri < PARTY.roster.length; _ri++) {
+        var _rm = PARTY.roster[_ri];
+        if (!_rm || _rm.length < 13) { continue; }
+        var _rid = _rm[0], _rname = _rm[1], _rx = _rm[11], _rz = _rm[12];
+        if (String(_rid) === String(WSC.myId)) { continue; }
+        if (_marks[_rid]) { continue; }
+        var _rdx = _rx - P.x, _rdz = _rz - P.z;
+        var _rdist = Math.sqrt(_rdx * _rdx + _rdz * _rdz);
+        var _rang = Math.atan2(_rdz, _rdx) - (P.yaw || 0) - Math.PI / 2;
+        var _rhw = innerWidth * 0.5 - 30;
+        var _rny = Math.sin(_rang);
+        var _rhh = (_rny < 0) ? Math.max(10, innerHeight * 0.5 - 78)
+                              : Math.max(10, innerHeight * 0.5 - 44);
+        var _rax = Math.abs(Math.cos(_rang)), _ray = Math.abs(Math.sin(_rang));
+        var _rt = Math.min(_rhw / (_rax || 1e-6), _rhh / (_ray || 1e-6));
+        if (!_marks[_rid]) { _marks[_rid] = UI.mark.make(); }
+        used[_rid] = true;
+        UI.mark.at(_marks[_rid],
+          innerWidth * 0.5 + Math.cos(_rang) * _rt,
+          innerHeight * 0.5 + Math.sin(_rang) * _rt,
+          _rang * 180 / Math.PI,
+          '★' + _rname + ' ' + Math.round(_rdist) + 'm',
+          _rm[9] ? '#888888' : '#5aa8ff');
+        UI.mark.show(_marks[_rid], true);
+      }
+    }
+
     for (k in _marks) { UI.mark.remove(_marks[k]); delete _marks[k]; }
     return;
   }
@@ -3094,35 +3126,6 @@ function updateMarks() {
       (_mate ? '队友 ' : '') + Math.round(dist) + 'm', markColor(o, _mate));
     UI.mark.show(m, true);
   }
-  /* round291（用户：组队时不管再远都要显示队友的方向和距离）
-     第 264 轮服务器已经把队友坐标加进队伍名单了（roster 最后两项 x/z ✓）
-     但客户端这半一直没做 ✗ 所以超出视野就看不到队友 ✓
-     做法：遍历队伍名单 ✗ 对不在视野里的队友也画一个屏幕边缘标记 ✓ */
-  if (typeof PARTY !== 'undefined' && PARTY.roster && PARTY.roster.length) {
-    for (var _ri = 0; _ri < PARTY.roster.length; _ri++) {
-      var _rm = PARTY.roster[_ri];
-      if (!_rm || _rm.length < 13) { continue; }
-      var _rid = _rm[0], _rname = _rm[1], _rx = _rm[11], _rz = _rm[12];
-      if (String(_rid) === String(WSC.myId)) { continue; }
-      if (_marks[_rid]) { continue; }
-      var _rdx = _rx - P.x, _rdz = _rz - P.z;
-      var _rdist = Math.sqrt(_rdx * _rdx + _rdz * _rdz);
-      var _rang = Math.atan2(_rdz, _rdx) - (P.yaw || 0) - Math.PI / 2;
-      var _rhw = innerWidth * 0.5 - 30;
-      var _rny = Math.sin(_rang);
-      var _rhh = (_rny < 0) ? Math.max(10, innerHeight * 0.5 - 78)
-                            : Math.max(10, innerHeight * 0.5 - 44);
-      var _rax = Math.abs(Math.cos(_rang)), _ray = Math.abs(Math.sin(_rang));
-      var _rt = Math.min(_rhw / (_rax || 1e-6), _rhh / (_ray || 1e-6));
-      if (!_marks[_rid]) { _marks[_rid] = UI.mark.make(); }
-      used[_rid] = true;
-      UI.mark.at(_marks[_rid],
-        innerWidth * 0.5 + Math.cos(_rang) * _rt,
-        innerHeight * 0.5 + Math.sin(_rang) * _rt,
-        _rang * 180 / Math.PI,
-        '★' + _rname + ' ' + Math.round(_rdist) + 'm',
-        _rm[9] ? '#888888' : '#5aa8ff');
-      UI.mark.show(_marks[_rid], true);
   for (k in _marks) {   // 走了 / 跑远了 / 断线的收掉 ✓
     if (!used[k]) { UI.mark.remove(_marks[k]); delete _marks[k]; }
   }
