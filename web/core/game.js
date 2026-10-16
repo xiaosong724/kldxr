@@ -3050,7 +3050,15 @@ function drawFarMates(marks, used) {
     if (!r || r.length < 13) { continue; }              /* no coords -> old roster */
     var rid = r[0], rname = r[1], rx = r[11], rz = r[12];
     if (String(rid) === String(WSC.myId)) { continue; } /* myself */
-    if (marks[rid]) { continue; }                       /* already drawn in view */
+    /* ★★★ round293（用户："会一直闪烁，移动时方向还会乱跳"）★★★
+       病根：这里原来写的是 if (marks[rid]) { continue; } ✗
+         → 已存在时【跳过】= 没有设 used[rid] ✓
+         → 紧接着 updateMarks 末尾的收尾循环 if (!used[k]) remove ✗ 就把它删了 ✓
+         → 下一帧又重建 ✗ 每帧闪一下 ✓✓ 方向乱跳也是这么来的（每次新建 ✓）
+       ★ 修：已存在就【更新位置】✗ 不跳过 ✓ 并且始终标记 used ✓
+         （★ 这条对"视野内的队友"也适用：那时 marks[rid] 已由上面的循环建好 ✓
+           我们也要把它标成 used ✗ 否则同样被删 ✓） */
+    var _keep = !!marks[rid];
     var dx = rx - P.x, dz = rz - P.z;
     var dist = Math.sqrt(dx * dx + dz * dz);
     var ang = Math.atan2(dz, dx) - (P.yaw || 0) - Math.PI / 2;
@@ -3061,7 +3069,7 @@ function drawFarMates(marks, used) {
     var ax = Math.abs(Math.cos(ang)), ay = Math.abs(Math.sin(ang));
     var t = Math.min(hw / (ax || 1e-6), hh / (ay || 1e-6));
     if (!marks[rid]) { marks[rid] = UI.mark.make(); }
-    used[rid] = true;
+    used[rid] = true;                     /* ★ 每帧都要标 ✓ 不然会被收尾循环删掉 ✗ */
     UI.mark.at(marks[rid],
       innerWidth * 0.5 + Math.cos(ang) * t,
       innerHeight * 0.5 + Math.sin(ang) * t,
