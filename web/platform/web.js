@@ -2096,9 +2096,9 @@ function wStatHtml(it, dim) {
        · 耐久要能看到：原来防具这段【没写耐久】✗（武器的有 ✓）→ 用户："耐久度是多少看不到"✓
        · 信息"太简单"：把能写的都写上 ✓ 并且说清每条是什么意思 ✓ */
     o2 += ((+it.durMax > 0) ? ('<span>耐久 <s>' +
-        itDur(it, (e && e.id)) + '</s> / ' + it.durMax +
+        itDur(it, null) + '</s> / ' + it.durMax +
         ' 次挨打' + (function () {
-          var k = itDur(it, (e && e.id)) / it.durMax;
+          var k = itDur(it, null) / it.durMax;
           return k <= 0.2 ? ' <i style="color:#ff7a6a;font-style:normal">⚠ 快坏了</i>'
                           : (k <= 0.5 ? ' <i style="color:#ffd83d;font-style:normal">磨损过半</i>' : '');
         })() + '（每挨一次 -1，归零就损坏消失）</span>') : '') +
@@ -2149,9 +2149,9 @@ function wStatHtml(it, dim) {
        （用户原话："这些效果也要写到文案里，不然玩家不知道" ✓）
        ★ 机制文案来自服务器（物品数据里的 fx ✓）—— 不在 JS 里再抄一份表 ✗ */
     (it.fx ? '<span style="color:#8ee0ff">特效：' + it.fx.text + '</span>' : '') +
-    ((+it.durMax > 0) ? ('<span>耐久 <s>' + itDur(it, (e && e.id)) +
+    ((+it.durMax > 0) ? ('<span>耐久 <s>' + itDur(it, null) +
       '</s> / ' + it.durMax + ' 次挥砍' +
-      (function () { var k = itDur(it, (e && e.id)) / it.durMax;
+      (function () { var k = itDur(it, null) / it.durMax;
         return k <= 0.2 ? ' <i style="color:#ff7a6a;font-style:normal">⚠ 快坏了</i>' : ''; })() +
       '</span>') : '');
 }
