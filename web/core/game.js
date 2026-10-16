@@ -3417,9 +3417,21 @@ function autoRevive() {
   AUTO.lastX = P.x; AUTO.lastZ = P.z;
   if (recent >= 2) { AUTO.pauseUntil = now + 8000; }   /* 30 秒内死第 2 次 → 停手 8 秒 ✓ */
 }
+function autoRelease() {
+  /* ★★ 第 209 轮修的真 bug（用户："他现在会一直往前走不知道是什么情况"）★★
+     病根：自动战斗是靠改 jx/jy（摇杆值）走路的 ✓
+           但【关掉的那一刻没清零】✗
+           → 摇杆值留着最后那个方向 → 人就一直朝那边走 ✓✓
+           → 而且 autoTick 一看"没开"就 return ✗ 更没人清 ✓
+     修：只要是我写的摇杆值，收手时一定还回去 ✓
+     ★ 只清【我自己写的】✗ 玩家手指还按在摇杆上就不动它 ✓（AUTO.setInput 标记 ✓）*/
+  if (AUTO.setInput) { jx = 0; jy = 0; AUTO.setInput = false; }
+  atkHeld = false;
+}
+
 function autoTick(dt) {
   var now = performance.now();
-  if (!AUTO.on) { return; }
+  if (!AUTO.on) { autoRelease(); return; }
   /* ---- 手动操作检测（自己判 ✗ 不用平台层加钩子 ✓）----
      上一帧我没写 jx/jy ✓ 而这一帧它们有值 → 说明是玩家在推摇杆 ✓
      键盘 WASD 也一起判 ✓ */
@@ -3427,8 +3439,8 @@ function autoTick(dt) {
     keys['w'] || keys['a'] || keys['s'] || keys['d'];
   AUTO.setInput = false;
   if (manual) { AUTO.pauseUntil = now + 3000; }
-  if (now < AUTO.pauseUntil) { AUTO.info = '自动战斗：你正在手动操作，稍后继续'; return; }
-  if (dead) { AUTO.info = '自动战斗：已倒下，正在复活…'; autoRevive(); return; }
+  if (now < AUTO.pauseUntil) { AUTO.info = '自动战斗：你正在手动操作，稍后继续'; autoRelease(); return; }
+  if (dead) { AUTO.info = '自动战斗：已倒下，正在复活…'; autoRelease(); autoRevive(); return; }
 
   if (!AUTO.tgt || !NET.rmobs[AUTO.tgt] || !NET.rmobs[AUTO.tgt].alive ||
       !(NET.rmobs[AUTO.tgt].hp > 0) || NET.rmobs[AUTO.tgt].dying >= 0) {

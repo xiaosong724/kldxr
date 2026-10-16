@@ -2170,6 +2170,8 @@ function autoToggle() {
   AUTO.tgt = ''; AUTO.phase = 'find'; AUTO.t = 0; AUTO.kills = 0;
   AUTO.deaths = []; AUTO.pauseUntil = 0; AUTO.stuckT = 0;
   AUTO.info = AUTO.on ? '自动战斗：正在找目标…' : '';
+  /* ★ 第 209 轮：关掉时立刻把摇杆还回去 ✗ 不然人会一直往前走 ✓ */
+  try { if (typeof autoRelease === 'function') { autoRelease(); } } catch (e) { }
   try { if (typeof SETCFG !== 'undefined') { SETCFG.auto = AUTO.on; } saveSet(); } catch (e) { }
   autoUiUpd();
   toast(AUTO.on ? '自动战斗已开启（再长按攻击键 5 秒关闭）' : '自动战斗已关闭');
