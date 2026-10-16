@@ -214,6 +214,7 @@ class World(object):
         self.mob_cap = int(mobs.MOB_CAP)
         self.spawn_interval = float(mobs.SPAWN_INTERVAL)
         self.mob_cap_of = {}      # {role_id: 该人的上限} ✓ 没记录就用全局值
+        self._tune_sig = None     # 第 216 轮：管理员设置的指纹（变了就存 ✓）
         self.pvp_pair = {}        # ★ 第 150 轮：{(killer,victim): 上次算数时刻} —— 同一对 10 分钟只算一次 ✓
         self.pvp_pair_steal = {}  # ★ 第 167 轮：夺取自己一张表（默认 1 分钟 ✓）
         self.ghost_grace = 6.0     # ★ 第 168 轮（用户 #5）：离线宽限（秒）
@@ -632,7 +633,8 @@ class World(object):
         if self._admin_acc >= 15:
             self._admin_acc = 0
             self._publish_admin()
-            self._ghost_tick()   # ★ 第 168 轮（用户 #5）：收回超时的幽灵 ✓
+            self._ghost_tick()
+            self._admin_tune_check()   # ★ 第 168 轮（用户 #5）：收回超时的幽灵 ✓
             self._tp_tick()      # 第 173 轮（用户 #6）：推进传送读条 ✓
 
     def _talent_op(self, p, d):
@@ -1301,6 +1303,53 @@ class World(object):
             if q.name == name:
                 return q
         return None
+
+    def _admin_tune_save(self):
+        """把管理员改的开关排队存进 meta（第 216 轮用户要求）
+
+        用户原话：刷怪上限和 PVP、妖兽伤害也是要保存的，
+                  不要重启服务器后也恢复默认了
+        ★ 为什么排队而不是直接写库：tick 线程不许碰磁盘（规矩 1）
+          post_save 是入队给存档线程，和玩家存档同一个机制
+        ★ 为什么打包成一条字典：以后再加管理员开关只改这一处
+        """
+        import json as _json
+        try:
+            blob = _json.dumps({
+                'mob_cap': int(getattr(self, 'mob_cap', 0) or 0),
+                'mob_cap_of': {str(k): int(v) for k, v in (getattr(self, 'mob_cap_of', {}) or {}).items()},
+                'pvp_all': bool(getattr(self, 'pvp_all', False)),
+                'pvp_of': {str(k): bool(v) for k, v in (getattr(self, 'pvp_of', {}) or {}).items()},
+                'mob_atk_all': bool(getattr(self, 'mob_atk_all', True)),
+                'mob_atk_of': {str(k): bool(v) for k, v in (getattr(self, 'mob_atk_of', {}) or {}).items()},
+            }, ensure_ascii=False)
+            self.post_save("INSERT OR REPLACE INTO meta(k, v) VALUES(?, ?)",
+                           ('admin_tune', blob))
+            print('[admin] 管理员设置已排队保存')
+        except Exception as e:
+            print('[admin] 管理员设置保存失败：%r' % (e,))
+
+    def _admin_tune_check(self):
+        """每约 2 秒比对一次指纹，变了就排队存
+
+        ★ 为什么不写在 _handle_admin 里：那几个分支里有 return
+          第一次就是这么失败的：接口返回 ok，库里啥也没有
+        ★ 谁改的都能兜住：HTTP、命令行、以后加的任何入口
+        """
+        try:
+            sig = (
+                int(getattr(self, 'mob_cap', 0) or 0),
+                tuple(sorted((k, int(v)) for k, v in (getattr(self, 'mob_cap_of', {}) or {}).items())),
+                bool(getattr(self, 'pvp_all', False)),
+                tuple(sorted((k, bool(v)) for k, v in (getattr(self, 'pvp_of', {}) or {}).items())),
+                bool(getattr(self, 'mob_atk_all', True)),
+                tuple(sorted((k, bool(v)) for k, v in (getattr(self, 'mob_atk_of', {}) or {}).items())),
+            )
+            if sig != self._tune_sig:
+                self._tune_sig = sig
+                self._admin_tune_save()
+        except Exception as e:
+            print('[admin] 管理员设置检查失败：%r' % (e,))
 
     def _handle_admin(self, act, d):
         """管理页的操作（第 48 轮）—— ★ 只有 tick 线程会进来 ✓
@@ -2488,6 +2537,23 @@ class World(object):
                     self._mob_died(p, o)
 
     def _mob_died(self, p, m):
+        # ★★★ 第 217 轮修的真 bug（用户实测发现）★★★
+        #   用户原话："出现给很多经验的情况是自动捡东西触发的，
+        #             我看到这个系统提示一下刷新很多条，经验也跟着狂长"
+        #
+        #   病根：这个函数是"结算一只怪"（给经验 + 队友分经验 + 掉落 ✓）
+        #         但它【没有"这只怪已经算过了"的标记】✗
+        #         唯一的保护是调用处那句 "血量 <= 0 才结算"✓
+        #         而尸体还留在场景里 ✓ 任何一条路径再打到它 ✗
+        #         → 就再结算一次 ✓✓
+        #   ★ 为什么自动战斗/自动捡东西一开就明显：
+        #     自动战斗每 0.62 秒挥一刀 ✓ 全砍在尸体上 ✓
+        #     → 一次击杀被结算几十次 → 提示刷屏 + 经验狂涨 ✓✓
+        #   ★ 修法：加一个一次性标记 ✗ 一只怪【只可能】结算一次 ✓
+        #     这样不管以后谁再写出打到尸体的路径 ✗ 都不会重复给 ✓
+        if getattr(m, 'awarded', False):
+            return
+        m.awarded = True
         # ★ 第 67 轮：击杀回灵气（防具词条 ✓）
         try:
             _qi = armormod.stats_of(p.armor)['qi_kill']
