@@ -101,10 +101,14 @@ const VIEW = disposableName('ShotV');
   await give(VIEW, 'sword', 4);
   /* 看客要有钱（"只看买得起"才看得出效果 ✓）→ 先卖一件给系统 ✓ */
   const bagV = await fetch(ORIGIN + '/api/bag', { headers: { 'X-Token': tokView } }).then(x => x.json());
-  await fetch(ORIGIN + '/api/sell', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token': tokView },
-    body: JSON.stringify({ iids: (bagV.items || []).map(x => x.id) }),
-  }).then(x => x.json());
+  /* ★ 卖掉换钱 ✗ 但【留一件】在背包里（截图要展示"选中之后按钮的样子"✓）*/
+  const vIds = (bagV.items || []).map(x => x.id).slice(0, -1);
+  if (vIds.length) {
+    await fetch(ORIGIN + '/api/sell', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token': tokView },
+      body: JSON.stringify({ iids: vIds }),
+    }).then(x => x.json());
+  }
 
   /* ★ 布景：让店主【真的挂几件】✗ 不然面板是空的 ✓ */
   const shopWs = await (async function () {
@@ -139,7 +143,11 @@ const VIEW = disposableName('ShotV');
   };
   const bagS = await fetch(ORIGIN + '/api/bag', { headers: { 'X-Token': tokShop } }).then(x => x.json());
   let pi = 0;
+  /* ★ 留一件【不挂】✗ 背包那张图要看"选中之后按钮什么样"✓
+     （别再多发一件 ✗ 快照是在那之前拍的 ✓ 直接少挂一件最省事 ✓）*/
+  const keepOne = (bagS.items || [])[0] && (bagS.items || [])[0].id;
   for (const it of (bagS.items || [])) {
+    if (it.id === keepOne) { continue; }        /* 留一件 ✓ */
     const price = [8000, 3000, 1200, 600, 300, 120, 40][pi++] || 100;
     const r = await listOne(tokShop, it.id, price);
     console.log('   listed ' + ((it.item || {}).name) + ' @ ' + price + ' -> ' + r);
@@ -198,14 +206,36 @@ const VIEW = disposableName('ShotV');
   await sleep(1200);
   await ev('openSet("mkt"); return 1;');
   await sleep(2800);
-  const shot = await send('Page.captureScreenshot', { format: 'png' });
-  if (shot && shot.result && shot.result.data) {
-    const f = path.join(OUT, 'mkt-panel.png');
-    fs.writeFileSync(f, Buffer.from(shot.result.data, 'base64'));
-    console.log('saved ' + f + ' (' + fs.statSync(f).size + ' bytes)');
-  } else {
-    console.error('no screenshot data');
-  }
+  const grab = async function (name) {
+    const shot = await send('Page.captureScreenshot', { format: 'png' });
+    if (shot && shot.result && shot.result.data) {
+      const f = path.join(OUT, name + '.png');
+      fs.writeFileSync(f, Buffer.from(shot.result.data, 'base64'));
+      console.log('saved ' + f + ' (' + fs.statSync(f).size + ' bytes)');
+      return true;
+    }
+    console.error('no screenshot data for ' + name);
+    return false;
+  };
+  await grab('mkt-panel');
+  /* ★ 再截一张【背包】的（用户提的"按钮有点多"就是这一页 ✓）★
+     顺手选中一件 ✗ 这样那张图里"选中之后按钮变成什么样"也看得见 ✓ */
+  await ev('openSet("bag"); bagFetch(bagRender); return 1;');
+  await sleep(1200);
+  /* ★ 重新读一次背包：留着那一件是挂完才发的 ✗ 快照里可能没有 ✓ */
+  await ev('bagFetch(bagRender); return 1;');
+  await sleep(1500);
+  const selInfo = await ev(
+    'var s = document.querySelector("#bagGrid .slot[data-id]");' +
+    'if (!s) { return "NO-SLOT"; }' +
+    'BAG.sel = s.getAttribute("data-id"); bagRender();' +
+    'return JSON.stringify({ sel: BAG.sel, items: (BAG.items || []).length,' +
+    ' useDisabled: document.getElementById("bagUse").disabled,' +
+    ' sellDisabled: document.getElementById("bagSell").disabled,' +
+    ' mktDisabled: document.getElementById("bagMkt").disabled });');
+  console.log('   bag selection: ' + selInfo);
+  await sleep(900);
+  await grab('bag-panel');
   try { spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { stdio: 'ignore' }); } catch (e) { }
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { }
   await sleep(400);

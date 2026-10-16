@@ -1291,18 +1291,12 @@ function statRender() {
           mates ? '' : '菜单 → 组队 里可以组队') +
     '<div class="bagTip" style="margin-top:6px">★ 敌人打你的伤害 = 它的攻击力 − 你的减伤，' +
     '最后至少留 30% ✓</div>';
-  /* round294b: keep the gold tab in sync. Put here (a statement position)
-     NOT inside the stRow() concatenation chain - that broke the syntax once. */
-  try {
-    var _gv = (WSC.role && WSC.role.gold) || 0;
-    var _gb = document.getElementById('goldBig');
-    if (_gb) { _gb.textContent = fmtGold(_gv); }
-    var _gd = document.getElementById('goldDetail');
-    if (_gd) {
-      _gd.textContent = '当前 ' + _gv.toLocaleString('en-US') + ' 金币'
-        + (_gv >= 1000000000 ? '（已达上限）' : '');
-    }
-  } catch (e) {}
+  /* ★★ round304e（用户要求）：【金币】页签删掉了 ✗ 这段同步代码跟着删 ✓
+     round294b 当时为什么把它放这儿：它必须写在【语句位置】✗
+       塞进上面那串 stRow() 拼接里会把语法弄坏（真发生过 ✓）
+     ★ 现在删掉是安全的 ✗ 因为金币在别处都看得到：
+       左上角常驻那一行 / 背包顶部 / 交易所页面顶部 ✓
+     ★ 顺手确认：没有任何地方还引用 goldBig / goldDetail ✓（自测会扫一遍 ✓）*/
 }
 
 function ptEsc(s) {
@@ -2758,12 +2752,6 @@ function bagRender() {
       }
     }
   }
-  var _mktTip = document.getElementById('bagMktSendTip');
-  if (_mktTip) {
-    _mktTip.textContent = sellable
-      ? '填价格（默认已填系统收购价 ✗ 挂交易所一般能卖出好几倍）✓'
-      : '先选中背包里的一件 → 填价格 → 挂上去';
-  }
   /* round299 step 3: the click. Only asks the server - the price comes back from
      /api/sell (value.py). On success the bag refreshes and `me` carries the new
      balance on the next push, so the HUD updates by itself. */
@@ -2852,11 +2840,30 @@ function bagRender() {
                              : '没选中装备（点上面的格子选一件）');
     }
   }
+  /* ★★ round304e：这一行提示是【唯一】的 ✗ 别在两处各写一遍 ✓
+     自测踩到：我新加的那一段先写、这里又覆盖回去 ✗ 结果提示永远停在默认那句 ✓
+     （★ 同一个节点被两处赋值 ✗ 谁在后面谁赢 ✗ 这类 bug 看着像"没生效"✓）*/
+  /* ★ round304e（用户嫌按钮多）：没选中东西时【那一排动作按钮直接藏起来】✓
+     ★ 为什么不能只靠 disabled：灰着的按钮还是占地方 ✗ 用户说的就是"多"✓
+     ★ 藏起来的是【跟选中有关】的那一排 ✗ 批量那一排永远在（它和选中无关 ✓）*/
+  var _rowUse = document.getElementById('bagRowUse');
+  if (_rowUse) { _rowUse.style.display = (selItem || BAG.multi) ? 'flex' : 'none'; }
   var selTip = document.getElementById('bagSelTip');
   if (selTip) {
-    selTip.textContent = isW8
-      ? (selIsEquipped ? '这件正拿在手上 ✓' : '点左边的「使用」穿上它')
-      : '点上面的格子选中一件武器';
+    if (isW8) {
+      selTip.textContent = selIsEquipped
+        ? '这件正拿在手上 ✓（要脱下来点下面的【脱下】）'
+        : (BAG.multi ? '点格子勾选 ✓ 再点【批量出售】'
+                     : ('已选中：' + ((selItem && selItem.name) || '这件') +
+                        ' · 点【使用】穿上它 · 价格框已填系统收购价'));
+    } else if (BAG.multi) {
+      selTip.textContent = '点格子勾选 ✓ 再点【批量出售】';
+    } else if (sellable) {
+      selTip.textContent = '已选中：' + ((selItem && selItem.name) || '这件') +
+        ' · 可以【卖给系统】或填价格【挂交易所】';
+    } else {
+      selTip.textContent = '点上面的格子选中一件（武器或防具）';
+    }
   }
   if (mg) {
     mg.textContent = BAG.msg || (BAG.items.length ? '' :

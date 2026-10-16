@@ -350,6 +350,12 @@
 .bagB:hover{background:#2f3b49;border-color:#ffffff3a}
 .bagB.off{background:#3a2630;border-color:#a05a4a66}
 .bagB:disabled{opacity:.4;cursor:default}
+/* ★★ round304e（用户："按钮有点多了不美观"）：收成两行 ✗ 紧凑一点 ✓
+   原来三行按钮 + 一行提示 ✗ 现在两行（选中那件的动作 / 批量工具）+ 一行提示 ✓
+   ★ 会换行 ✗ 手机上窄屏不会挤成一坨 ✓ */
+.bagRow{flex-wrap:wrap;gap:6px;align-items:center}
+.bagRow .bagB{padding:6px 11px;font-size:12.5px}
+.bagRow .mktInput{width:74px;padding:5px 6px;font-size:12.5px}
 #setX{width:26px;height:26px;border-radius:8px;background:#26303c;border:1px solid #ffffff22;
   display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;color:#cfd8e3}
 #setX:hover{background:#3a2630;border-color:#a05a4a66;color:#ffb4a0}
@@ -572,7 +578,10 @@
    <div class="tab" data-page="1" data-tab="stat">属性</div>
    <div class="tab" data-page="1" data-tab="talent">天赋</div>
    <div class="tab on" data-page="1" data-tab="view">设置</div>
-   <div class="tab" data-page="1" data-tab="gold">金币</div>
+   <!-- ★★ round304e（用户要求）：【金币】页签删掉了 ✗ 不需要了 ✓
+        钱在三个地方本来就看得到：左上角常驻那一行 / 背包顶部的余额 / 交易页面 ✓
+        ★ 删的时候必须一起处理"上次停在这一页"那种存档 ✗
+          不然老玩家一进游戏会看到"点开菜单是空的"✓（setTab 里已经有兜底 ✓）-->
    <!-- ★★ round304d（用户要求）：交易所改成【独立导航按钮】★★
         用户原话："交易所应该是单独的导航按钮，做和背包放到一个页面了"
         ★ 之前那版是按方案 v3 §8 做的（塞进背包 ✗ 理由是"卖东西和上架都在一起顺"✓）
@@ -602,25 +611,27 @@
      <span id="bagPageTxt" class="bagTip" style="min-width:74px;text-align:center">1 / 1</span>
      <button class="bagB" id="bagNext">下一页 ›</button>
    </div>
-   <!-- ★ 第 54 轮：点武器选中 → 这里出现【使用】；穿上之后变成【脱下】-->
-   <div class="bagBtns"><button id="bagUse" class="bagB" disabled>使 用</button>
-   <button id="bagSell" class="bagB off" disabled>卖给系统</button>
-     <span class="bagTip" id="bagSelTip">点上面的格子选中一件装备（武器或防具）</span></div>
-   <!-- round303 ★ 用户要求：可以勾选 ✗ 批量出售 ✗ 二次确认后再卖 ✓
-        【卖给系统】保持原样（单选 ✗ 点一下就走 ✓ 不加摩擦 ✓）
-        批量出售是另一条路：先勾 ✗ 再确认 ✓（一次最多 100 件 ✓）-->
-   <div class="bagBtns"><button id="bagPick" class="bagB">批量选择</button>
-   <button id="bagSellMulti" class="bagB off" disabled>批量出售</button>
-     <span class="bagTip" id="bagPickTip">勾选多件一起卖（5 阶以上要再确认一次）</span></div>
+   <!-- ★★★ round304e（用户："背包界面的按钮有点多了不美观"）★★★
+        把散的按钮收进两个语义容器 ✗ 只是归拢 ✗ 一个 id / 标签 / 行为都没改 ✓
+        · #bagRowUse   = 针对【当前选中那件】的动作（使用 / 卖给系统 / 挂交易所）
+        · #bagRowBatch = 跟选中无关的批量工具（批量选择 / 批量出售）
+        ★ 为什么要分这两类：前者该"跟着选中走"✗ 后者跟选中完全无关 ✓
+          以前三行混在一起 ✗ 看着就是一坨 ✓ -->
+   <div id="bagRowUse" class="bagBtns bagRow">
+    <button id="bagUse" class="bagB" disabled>使 用</button>
+    <button id="bagSell" class="bagB off" disabled>卖给系统</button>
+    <button id="bagMkt" class="bagB off" disabled>挂交易所</button>
+    <input id="bagMktPrice" class="mktInput" type="text" inputmode="numeric"
+           placeholder="价格" maxlength="10">
+   </div>
+   <div class="bagTip" id="bagSelTip" style="margin-top:4px">
+     点上面的格子选中一件装备（武器或防具）</div>
 
-   <!-- ★★ round304d：交易所那一行只留【挂上去】✗ 不再自带一个开面板的按钮 ✓
-        为什么：交易所已经是独立的导航按钮了（菜单→交易所 ✓）
-        这里留一个"交易所"按钮会让人以为面板还藏在背包里 ✓（用户就是这么觉得的 ✓）
-        ★ 但【挂交易所】这个动作确实该在背包里 ✗ 选东西、定价、挂上 ✓ 一条线 ✓ -->
-   <div class="bagBtns"><button id="bagMkt" class="bagB off" disabled>挂交易所</button>
-     <input id="bagMktPrice" class="mktInput" type="text" inputmode="numeric"
-            placeholder="价格" maxlength="10">
-     <span class="bagTip" id="bagMktSendTip">先选中背包里的一件 → 填价格 → 挂上去</span></div>
+   <div id="bagRowBatch" class="bagBtns bagRow">
+    <button id="bagPick" class="bagB">批量选择</button>
+    <button id="bagSellMulti" class="bagB off" disabled>批量出售</button>
+    <span class="bagTip" id="bagPickTip">勾选多件一起卖（5 阶以上会再确认一次）</span>
+   </div>
 
 
    <!-- ★★ 第 56 轮（用户第 5 条）：以前这几行挂在"装备"标题下面 ✗
@@ -737,21 +748,6 @@
    <div id="ptParties"></div>
   </div>
 
-  <!-- round294: 金币面板（只用内联样式 ✗ 不依赖未知类名 ✓）-->
-  <div class="tabpane" data-pane="gold">
-    <div style="text-align:center;padding:16px 0 10px">
-      <span id="goldBig" style="font-size:26px;color:#ffd83d;font-weight:700">0</span>
-      <span style="font-size:13px;color:#9aa0a6;margin-left:6px">金币</span>
-    </div>
-    <div style="font-size:12.5px;color:#9aa0a6;line-height:1.9;text-align:center">
-      打怪掉落 · 卖物品给系统 · 交易所卖给其他玩家<br>
-      上限 10 亿 · 到顶后自动换成
-      <span style="color:#ffd83d">【黄金】</span>
-      （1 黄金 = 1 亿）<br>
-      黄金卖给系统可以换回金币
-    </div>
-    <div id="goldDetail" style="font-size:12px;color:#7a8087;text-align:center;margin-top:14px"></div>
-  </div>
   <div class="tabpane on" data-pane="view">
    <div class="setLabel">分辨率倍率（越高越清晰越吃性能）</div>
    <div id="rowDpr"></div>
