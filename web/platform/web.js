@@ -1900,7 +1900,18 @@ function bagToken() {
 /* 拉一次背包（只读接口 ✓ 不用占 tick 线程）*/
 function bagFetch(cb) {
   if (!NET.on || !WSC.ready) {           // 单机/离线：没有背包这个东西 ✓
-    BAG.items = []; BAG.weapon = MY_WEAPON; BAG.weaponItemId = null;
+    BAG.items = []; BAG.weapon = MY_WEAPON;
+    /* ★★★ 第 231 轮修的真 bug（用户："穿戴之后在背包里看不到对应的小绿点了"）★★★
+       病根：这里原来把 weaponItemId / armorItemId 清成 null ✗
+         → 然后才去请求背包数据 ✓ 等响应回来再设上 ✓
+         → 只要有一次【请求失败 / 响应晚到 / 中途又被重跑】✗
+           这两个值就停在 null ✓ 所有绿点全没 ✓
+         → 穿戴之后如果又触发一次重载 ✗ 也会先被清空 ✓
+           表现就是"概率会看不到绿点"✓✓
+       ★ 修：不清空 ✗ 保留上一次的值 ✓
+         宁可旧一点点 ✗ 也不要整片绿点消失 ✓
+         （服务器那边本来就发这两个字段 ✓ app.py 第 675/677 行 ✓）*/
+    BAG.armorItemId = BAG.armorItemId || null;
     BAG.msg = '单机模式没有背包（联机才有 ✓）';
     if (cb) { cb(); }
     return;
@@ -2433,7 +2444,12 @@ function bagRender() {
       var a2 = BAG.armor;
       if (!box2 || !a2) { bagTipHide(); return; }
       box2.innerHTML = '<b style="color:' + tierHex(a2.tier || 0) + '">' + (a2.name || '?') +
-        '</b><i> · ' + ((a2.tier || 0) + 1) + ' 阶 · 已装备</i>' + wStatHtml(a2, true);
+        '</b><i> · ' + ((a2.tier || 0) + 1) + ' 阶 · 已装备</i>' +
+        /* ★ 第 231 轮（用户要求）：防具穿上后也显示耐久 ✗ 不再只写"已装备"✓
+           和武器一个口径 ✓ 耐久从身上那份取（穿在身上时 item_json 里是旧值 ✓）*/
+        ((+a2.durMax > 0) ? ('<i style="color:#ffd83d"> · 耐久 ' +
+          ((typeof a2.dur === 'number') ? a2.dur : a2.durMax) +
+          ' / ' + a2.durMax + '</i>') : '') + wStatHtml(a2, true);
       bagTipAt(e, box2);
     };
     arsEl.onmouseleave = function () { bagTipHide(); };
@@ -2719,6 +2735,14 @@ function bindBag() {
   if (eqs) {
     eqs.onclick = function (e) {
       if (e) { e.preventDefault(); }
+      /* ★★ 第 231 轮（用户要求）：点已装备的格子【不要卸下】★★
+         要卸下只能点明确的"脱下"按钮 ✗
+         为什么：已装备的格子和背包格子长得很像 ✗
+           手一抖点一下就脱了 ✓ 挂机时更容易误触 ✓
+         ★ 这里直接 return ✗ 什么也不做 ✓
+           （下面那两条才是真正的卸下入口：
+             防具 wsSend('unequiparmor') · 武器 wsSend('unequip') ✓）*/
+      if (eqs.getAttribute('data-w') === '1') { return; }
       if (eqs.getAttribute('data-w') !== '1') { return; }
       bagUnequip();
     };
@@ -2729,7 +2753,10 @@ function bindBag() {
       var m6 = wMastery(w);
       var lv6 = (WSC.role && WSC.role.level) || 1;
       box.innerHTML = '<b style="color:' + tierHex(w.tier || 0) + '">' + (w.name || '?') + '</b>' +
-        '<i> · ' + ((w.tier || 0) + 1) + ' 阶 · 已装备</i>' +
+        '<i> · ' + ((w.tier || 0) + 1) + ' 阶 · 已装备' +
+        ((+w.durMax > 0) ? (' · 耐久 ' +
+          ((typeof w.dur === 'number') ? w.dur : w.durMax) +
+          ' / ' + w.durMax) : '') + '</i>' +
         (m6 < 1 ? ('<i> · 建议 ' + (w.reqLevel || 1) + ' 级（你 ' + lv6 + ' 级）· 发挥 ' +
                    Math.round(m6 * 100) + '%</i>') : '') + '<br>实际每击 <b>' +
         wRealHit(w).toFixed(0) + '</b> · 每秒 <b>' + wRealDps(w).toFixed(0) + '</b><br>' +
