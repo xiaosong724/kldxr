@@ -261,6 +261,8 @@ class World(object):
         self._spawn_acc = 0.0           # 刷怪节流
         self.pvp = False                # ★ PvP 总开关（服务器权威；客户端只是请求开/关 ✓）
         self._pend = {}                 # cid -> {'hurts': [...], 'mhits': [...], 'me': {...}}
+        self._ticker_last = {}          # 第 247 轮：同类弹幕最后发送时间（1 秒合并）
+        self._ticker_dup = {}           # 被合并掉了几条
         # ★ 本 tick 的治疗事件（第 46 轮）：[[医生x, 医生z, 目标x, 目标z, 回了多少], ...]
         #   医生一多，玩家必须能看出【谁给谁回了多少】✗ → 所以发事件、客户端画连线+数字 ✓
         self.heals = []
@@ -1733,6 +1735,8 @@ class World(object):
                    'hpm': self._hp_max(q)}
         if ups:
             self._send_cid(q.cid, P.pack('notice', text='升到 %d 级！' % level, level=level))
+            # ★ 第 247 轮：升级还要播报给全服（用户要求：谁升到了多少级）
+            self._ticker('%s 升到了 %d 级' % (q.name, level), 'up', tag='up:%d' % q.role_id)
 
     # ================================================================ 组队（第 81 轮）
 
@@ -2887,6 +2891,32 @@ class World(object):
             c = conns.get(cid)
             if c:
                 c.push_text(text)
+
+    def _ticker(self, text, kind='sys', tag=''):
+        """第 247 轮（用户要求）：滚动通知（弹幕）
+
+        · notice = 只发给一个人 ✗ 屏幕中间弹一下（"你已经在安全区了"这类）
+        · ticker = 广播给所有人 ✗ 屏幕上方【向左滚动】（谁升级了 / 谁杀了谁）
+        文案限长 22 字：滚动时长 = (文字宽 + 屏宽) ÷ 速度 ✗ 太长会滚十几秒 ✗ 后面全堵住
+        同类 1 秒内合并：打团战 3 秒杀 5 个 ✗ 不然弹幕滚一分钟
+        """
+        try:
+            import time as _t
+            now = _t.time()
+            if tag:
+                last = self._ticker_last.get(tag)
+                if last is not None and now - last < 1.0:
+                    self._ticker_dup[tag] = self._ticker_dup.get(tag, 0) + 1
+                    return
+                n = self._ticker_dup.pop(tag, 0)
+                if n:
+                    text = text + '（等 %d 条）' % n
+                self._ticker_last[tag] = now
+            if len(text) > 22:
+                text = text[:21] + '…'
+            self._broadcast(P.pack('ticker', text=text, kind=kind))
+        except Exception as e:
+            print('[ticker] 发不出去：%r' % (e,))
 
     def _broadcast(self, text):
         """★ 在 asyncio 循环里执行"""
