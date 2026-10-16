@@ -124,7 +124,9 @@ class Player(object):
         #     以前客户端每个移动包都把 200 推上来，正好盖住了这个 0 ✓
         self.hp = int(role.get('hp') or 0)
         if self.hp <= 0:
-            self.hp = int(role.get('hpMax') or 200)   # ★ 建号时还拿不到 _hp_max（self 还没就绪 ✓）
+            # ★ 第 225 轮：先用等级血占位（真正的上限由 _hp_max 在进世界时算 ✓）
+            import mobs as _mobs0
+            self.hp = int(_mobs0.level_hp(role.get('level') or 1))
         self.qi = int(role.get('qi') or 0)
         self.atk = 0
         # ★★ 第 66 轮：挥砍序号 ★★
@@ -1553,13 +1555,16 @@ class World(object):
         → 这里只按【角色基础 + 数据库里那件防具】算 ✓ 够用 ✓
         """
         try:
-            base = int((role or {}).get('hpMax') or 200)
+            import mobs as _mobs1
+            # ★ 第 225 轮：按等级算（和 tick 线程的 _hp_max 口径一致 ✓）
+            base = int(_mobs1.level_hp((role or {}).get('level') or 1))
             import auth as _auth
             ar = _auth.armor_of(self.cfg if hasattr(self, 'cfg') else None, role.get('id'))
             st = armormod.stats_of((ar[0] if ar else None))
             return max(1, int(round((base + st['hp']) * (1.0 + st['hp_pct'] / 100.0))))
         except Exception:
-            return int((role or {}).get('hpMax') or 200)
+            import mobs as _mobs2
+            return int(_mobs2.level_hp((role or {}).get('level') or 1))
 
     def _hp_max(self, p):
         """生命上限（角色基础 + 防具的 hp / hp%% ✓ 第 67 轮）
@@ -1568,7 +1573,15 @@ class World(object):
           以前 hpMax 散在好几处（role['hpMax'] or 200 ✗）
           加了防具之后再散着写，迟早出现"治疗治不满 / 复活半血"✗
         """
-        base = int((p.role or {}).get('hpMax') or 200)
+        # ★★★ 第 225 轮（用户："玩家成长生命值是不是忘记做了"）★★★
+        #   原来这里是 int(role['hpMax'] or 200) —— 建号写死的 200 ✗
+        #   → 血量【完全不随等级成长】✗（方案 §4.5 要求 100 + 22L + 0.6L²）
+        #   → 63 级只有 249 血，而同级僵尸一口 403 → 一口就死 ✓
+        #   ★ 现在按等级算 ✓ 老角色不用迁移 ✗ 下次登录自动就对了 ✓
+        #   ★ 顺序保持不变：等级血 + 防具血 → 乘防具 hp% → 再加天赋血 ✓
+        #     （方案 §5 第 3 条特意写了：天赋要加在百分比【之后】✓ 免得被二次放大 ✓）
+        import mobs as _mobs
+        base = int(_mobs.level_hp((p.role or {}).get('level') or 1))
         st = armormod.stats_of(p.armor)
         v = (base + st['hp']) * (1.0 + st['hp_pct'] / 100.0)
         # ★★ 第 117 轮（方案第 4 步）：天赋血量加进来 ★★
