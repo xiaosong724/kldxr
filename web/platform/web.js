@@ -2273,7 +2273,7 @@ function tpBarRender() {
        ① 攻击按钮变绿 + 呼吸光   ② 上方一行小字显示它在干嘛
        ③ 开/关各弹一次提示       ④ 菜单里也留开关（万一忘了长按 ✓）
    ============================================================================ */
-var AUTO_LONG_PRESS = 5000;
+var AUTO_LONG_PRESS = 3000;   /* round253: 用户要求长按 3 秒（原 5 秒）*/
 var _autoHold = null;
 
 function autoUiUpd() {
@@ -2303,7 +2303,7 @@ function autoToggle() {
   try { if (typeof autoRelease === 'function') { autoRelease(); } } catch (e) { }
   try { if (typeof SETCFG !== 'undefined') { SETCFG.auto = AUTO.on; } saveSet(); } catch (e) { }
   autoUiUpd();
-  toast(AUTO.on ? '自动战斗已开启（再长按攻击键 5 秒关闭）' : '自动战斗已关闭');
+  toast(AUTO.on ? '自动战斗已开启（再长按攻击键 3 秒关闭）' : '自动战斗已关闭');
 }
 
 /* 手动操作 → 暂停 3 秒（不是关掉 ✓ 方便临时接管 ✓）
