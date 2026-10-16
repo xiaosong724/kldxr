@@ -67,6 +67,21 @@
    backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
    user-select:none;cursor:pointer;z-index:30;
    transition:transform .07s ease,box-shadow .15s ease}
+/* ★★ 第 206 轮：自动战斗视觉提示 ★★ */
+#atk.auto{
+  border-color:#6ee08a99 !important;
+  animation:autoBreath 1.8s ease-in-out infinite
+}
+@keyframes autoBreath{
+  0%,100%{box-shadow:0 4px 12px #00000055, 0 0 0 2px #6ee08a44, inset 0 1px 0 #ffffff22}
+  50%    {box-shadow:0 4px 12px #00000055, 0 0 0 7px #6ee08a30, inset 0 1px 0 #ffffff22}
+}
+#autoInfo{
+  position:fixed;left:50%;transform:translateX(-50%);bottom:152px;display:none;
+  padding:4px 12px;border-radius:12px;background:rgba(10,16,12,.74);
+  border:1px solid #6ee08a55;color:#c8f5d4;font-size:11px;
+  z-index:31;white-space:nowrap;pointer-events:none;text-shadow:0 1px 2px #000
+}
 /* ★★ 第 185 轮（用户）：传送回安全区 —— 常驻按钮，放底部中间 ★★
    为什么放中间：右下角是攻击键、左下角是摇杆 ✗ 只有中间是空的 ✓
    为什么常驻：原来塞在菜单里 ✗ 打起来根本来不及开菜单点 ✓
@@ -316,6 +331,7 @@
 <div id="setBtn" class="pane">☰ 菜单</div>
 
 <!-- ★ 第 185 轮：传送回安全区（常驻按钮 ✓ 不占菜单 ✓ 点了自动关菜单 ✓）-->
+<div id="autoInfo"></div>
 <div id="safeTp"><i id="safeTpFill"></i><span id="safeTpTxt">回安全区</span></div>
 
 <div id="atk"><div class="cd"></div><svg class="ic" viewBox="0 0 24 24" fill="none"

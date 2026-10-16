@@ -853,7 +853,13 @@ class Srv(ThreadingHTTPServer):
     · handle_error 里过滤掉「客户端把 keep-alive 连接掐了」这种纯噪音，
       真异常照旧打印（不然排查问题时会被淹没）"""
     daemon_threads = True
-    allow_reuse_address = False
+    # ★★ 第 207 轮修的真 bug：原来这里写 False ✗
+    #   后果：服务只要【曾经有连接】就被 TIME_WAIT 卡住 ✗
+    #         重启时报 [Errno 98] Address already in use ✓
+    #         要等 60 秒才起得来 ✓ 云上就这么翻过一次车 ✓
+    #   （第 196 轮部署时，用户正在线玩 → 连接没断干净 → TIME_WAIT ✓）
+    # 改成 True ✓ 立刻能重用，重启不再看运气 ✓
+    allow_reuse_address = True
 
     def handle_error(self, request, client_address):
         import sys as _s

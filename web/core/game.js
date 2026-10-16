@@ -3352,6 +3352,152 @@ function inAtkArc(tx, tz) {
   return Math.abs(a) <= G.ATK_ARC;
 }
 
+/* ============================================================================
+   ★★ 第 206 轮：自动战斗（方案 docs/自动战斗方案.md 第 13/14 节）★★
+
+   · 永远"打带跑"：砍一刀 → 退 0.45 秒 → 它追进来 → 再砍
+     （0.45 秒 ≈ 僵尸蓄力时间 ✓ 服务器"走开了就取消蓄力"✓ 真能躲 ✓）
+   · 数量多少都一样打带跑 ✗ 唯一例外：被墙挡住退不动 → 原地打 ✓
+   · 死了原地自动复活继续打 ✓（不回安全区 ✓ 用户指定）+ 三层防送死 ✓
+   · 手动操作（推摇杆/按 WASD）→ 自动暂停 3 秒 ✓
+
+   ★ 放客户端的理由：这个项目【位置归客户端】【伤害归服务器】✓
+     所以只要"改自己的摇杆值 + 置 atkHeld"✓ 和真人走同一套代码 ✓
+     服务器一行都不用改 ✓
+   ============================================================================ */
+var AUTO = {
+  on: false, tgt: '', phase: 'find', t: 0,
+  pauseUntil: 0, stuckT: 0, lastX: 0, lastZ: 0,
+  deaths: [], reviveT: 0, info: '', kills: 0, setInput: false
+};
+var AUTO_RANGE = 30.0;
+var AUTO_RETREAT = 0.45;
+var AUTO_STUCK_MOVE = 0.12;
+
+function autoFacing(dx, dz) {
+  return Math.atan2(dx, dz * G.FLIP_Z);   /* ★ 和主循环同一个公式 ✓ */
+}
+function autoInSafe(x, z) {
+  return (typeof SAFE_HALF === 'number') &&
+    Math.abs(x) <= SAFE_HALF && Math.abs(z) <= SAFE_HALF;
+}
+function autoPickTarget() {
+  var best = '', bestD = AUTO_RANGE * AUTO_RANGE;
+  var threat = '', threatD = 16.0;
+  for (var mid in NET.rmobs) {
+    var m = NET.rmobs[mid];
+    if (!m || !m.alive || !(m.hp > 0) || m.dying >= 0) { continue; }
+    var dx = m.cur.x - P.x, dz = m.cur.z - P.z;
+    var d2 = dx * dx + dz * dz;
+    if (autoInSafe(m.cur.x, m.cur.z)) { continue; }
+    if (m.atkT >= 0 && d2 < threatD) { threat = mid; threatD = d2; }
+    if (d2 < bestD) { best = mid; bestD = d2; }
+  }
+  return threat || best;                  /* 正在打我的 > 最近的 ✓ */
+}
+function autoRevive() {
+  var now = performance.now();
+  if (now - AUTO.reviveT < 1500) { return; }
+  AUTO.reviveT = now;
+  AUTO.deaths.push(now);
+  while (AUTO.deaths.length > 5) { AUTO.deaths.shift(); }
+  var recent = 0;
+  for (var i = 0; i < AUTO.deaths.length; i++) {
+    if (now - AUTO.deaths[i] < 30000) { recent++; }
+  }
+  if (recent >= 3) {
+    /* ★★ 硬保险：连死 3 次自动关掉 ✗ 防挂机送死（每死一次魔气 -1 ✓）*/
+    AUTO.on = false;
+    AUTO.info = '';
+    if (typeof toast === 'function') { toast('你被反复击杀，自动战斗已关闭'); }
+    return;
+  }
+  wsSend('revive', {});
+  AUTO.phase = 'retreat'; AUTO.t = 0; AUTO.stuckT = 0;
+  AUTO.lastX = P.x; AUTO.lastZ = P.z;
+  if (recent >= 2) { AUTO.pauseUntil = now + 8000; }   /* 30 秒内死第 2 次 → 停手 8 秒 ✓ */
+}
+function autoTick(dt) {
+  var now = performance.now();
+  if (!AUTO.on) { return; }
+  /* ---- 手动操作检测（自己判 ✗ 不用平台层加钩子 ✓）----
+     上一帧我没写 jx/jy ✓ 而这一帧它们有值 → 说明是玩家在推摇杆 ✓
+     键盘 WASD 也一起判 ✓ */
+  var manual = (!AUTO.setInput && (Math.abs(jx) > 0.08 || Math.abs(jy) > 0.08)) ||
+    keys['w'] || keys['a'] || keys['s'] || keys['d'];
+  AUTO.setInput = false;
+  if (manual) { AUTO.pauseUntil = now + 3000; }
+  if (now < AUTO.pauseUntil) { AUTO.info = '自动战斗：你正在手动操作，稍后继续'; return; }
+  if (dead) { AUTO.info = '自动战斗：已倒下，正在复活…'; autoRevive(); return; }
+
+  if (!AUTO.tgt || !NET.rmobs[AUTO.tgt] || !NET.rmobs[AUTO.tgt].alive ||
+      !(NET.rmobs[AUTO.tgt].hp > 0) || NET.rmobs[AUTO.tgt].dying >= 0) {
+    if (AUTO.tgt) { AUTO.kills++; }
+    AUTO.tgt = autoPickTarget();
+    AUTO.phase = AUTO.tgt ? 'approach' : 'find';
+    AUTO.t = 0;
+  }
+  if (!AUTO.tgt) {
+    jx = 0; jy = 0; AUTO.setInput = true;
+    AUTO.info = '自动战斗：附近没有僵尸';
+    return;
+  }
+  var m = NET.rmobs[AUTO.tgt];
+  var dx = m.cur.x - P.x, dz = m.cur.z - P.z;
+  var d = Math.hypot(dx, dz);
+  if (d > AUTO_RANGE * 1.35) {
+    AUTO.tgt = ''; AUTO.phase = 'find'; jx = 0; jy = 0; AUTO.setInput = true;
+    AUTO.info = '自动战斗：目标太远，换一个';
+    return;
+  }
+  var reach = (G.ATK_RANGE || 2.4) * 0.92;
+  AUTO.t += dt;
+  var lvTxt = m.lv ? ('Lv.' + m.lv + ' ') : '';
+
+  if (AUTO.phase === 'find') { AUTO.phase = 'approach'; AUTO.t = 0; }
+
+  if (AUTO.phase === 'approach') {
+    P.yaw = autoFacing(dx, dz);
+    if (d <= reach) {
+      AUTO.phase = 'strike'; AUTO.t = 0; jx = 0; jy = 0; AUTO.setInput = true;
+      P.yaw = autoFacing(dx, dz);
+      atkHeld = true;
+    } else {
+      jx = dx / d; jy = dz / d; AUTO.setInput = true;
+      atkHeld = false;
+    }
+    AUTO.info = '自动战斗：接近 ' + lvTxt + d.toFixed(1) + 'm';
+    return;
+  }
+  if (AUTO.phase === 'strike') {
+    jx = 0; jy = 0; AUTO.setInput = true;
+    P.yaw = autoFacing(dx, dz);
+    atkHeld = (atkT < 0);
+    AUTO.info = '自动战斗：挥砍 ' + lvTxt + d.toFixed(1) + 'm';
+    if ((AUTO.t > 0.12 && atkT >= 0) || AUTO.t > 0.8) {
+      AUTO.phase = 'retreat'; AUTO.t = 0; AUTO.stuckT = 0;
+      AUTO.lastX = P.x; AUTO.lastZ = P.z;
+    }
+    return;
+  }
+  /* retreat：往远离目标的方向退 ✓ 这是"躲"的关键 ✓ */
+  atkHeld = false;
+  var rx = -dx / (d || 1), rz = -dz / (d || 1);
+  jx = rx; jy = rz; AUTO.setInput = true;
+  P.yaw = autoFacing(dx, dz);
+  if (Math.hypot(P.x - AUTO.lastX, P.z - AUTO.lastZ) < AUTO_STUCK_MOVE) {
+    AUTO.stuckT += dt;
+  } else {
+    AUTO.stuckT = 0; AUTO.lastX = P.x; AUTO.lastZ = P.z;
+  }
+  AUTO.info = '自动战斗：后撤 ' + d.toFixed(1) + 'm';
+  if (AUTO.t >= AUTO_RETREAT || AUTO.stuckT > 0.25) {
+    AUTO.phase = 'approach'; AUTO.t = 0;
+    if (AUTO.stuckT > 0.25) { AUTO.info = '自动战斗：退不动，原地打'; }
+  }
+}
+
+
 function frame(ts) {
   UI.raf(frame);
   if (!loadedOk) { return; }
@@ -3391,6 +3537,9 @@ function frame(ts) {
   if (hitStop > 0) { hitStop -= dt; dt *= 0.2; }
 
   /* ---- 移动 ---- */
+  /* ★ 第 206 轮：自动战斗先在这一帧决定往哪走/要不要挥刀 ✗
+     必须在读 jx/jy 之前 ✓ 它就是通过改 jx/jy 走路的 ✓ */
+  if (typeof autoTick === 'function') { autoTick(dt); }
   var ix = jx, iz = jy;
   /* ★★ 第 65 轮修的真 bug：手机端（摇杆）死了走不动 ✓ 电脑端（WASD）还能走 ✗
      病根：清零写在【按键之前】→ 按键又把它加回来了 ✗

@@ -2137,6 +2137,73 @@ function tpBarRender() {
    → 直接 return → 按钮永远没有 onclick ✓）
    ★ 委托的好处：不管元素什么时候出现、被谁重建，都能点到 ✓ */
 /* ★ 第 190 轮：点击动作抽出来（委托和直接绑定共用一份 ✓ 不会两边不一致）*/
+/* ============================================================================
+   ★★ 第 206 轮：自动战斗开关（用户指定：长按【攻击按钮】5 秒）★★
+   不做单独按钮 ✓ 省屏幕空间 ✓ 藏进已有操作里 ✓
+   ★ 必须给足视觉提示 ✗ 不然不知道状态、也不知道怎么关：
+       ① 攻击按钮变绿 + 呼吸光   ② 上方一行小字显示它在干嘛
+       ③ 开/关各弹一次提示       ④ 菜单里也留开关（万一忘了长按 ✓）
+   ============================================================================ */
+var AUTO_LONG_PRESS = 5000;
+var _autoHold = null;
+
+function autoUiUpd() {
+  if (typeof AUTO === 'undefined') { return; }
+  var b = document.getElementById('atk');
+  if (b) { if (AUTO.on) { b.classList.add('auto'); } else { b.classList.remove('auto'); } }
+  var info = document.getElementById('autoInfo');
+  if (info) {
+    if (AUTO.on) {
+      info.style.display = 'block';
+      info.textContent = AUTO.info || '自动战斗：启动中…';
+    } else {
+      info.style.display = 'none';
+    }
+  }
+  var chk = document.getElementById('setAuto');
+  if (chk) { chk.checked = !!AUTO.on; }
+}
+
+function autoToggle() {
+  if (typeof AUTO === 'undefined') { return; }
+  AUTO.on = !AUTO.on;
+  AUTO.tgt = ''; AUTO.phase = 'find'; AUTO.t = 0; AUTO.kills = 0;
+  AUTO.deaths = []; AUTO.pauseUntil = 0; AUTO.stuckT = 0;
+  AUTO.info = AUTO.on ? '自动战斗：正在找目标…' : '';
+  try { if (typeof SETCFG !== 'undefined') { SETCFG.auto = AUTO.on; } saveSet(); } catch (e) { }
+  autoUiUpd();
+  toast(AUTO.on ? '自动战斗已开启（再长按攻击键 5 秒关闭）' : '自动战斗已关闭');
+}
+
+/* 手动操作 → 暂停 3 秒（不是关掉 ✓ 方便临时接管 ✓）
+   ★ 摇杆/键盘那两种在 core 里自己判 ✓ 这里只管点攻击键 ✓ */
+function autoPauseManual() {
+  if (typeof AUTO !== 'undefined' && AUTO.on) {
+    AUTO.pauseUntil = performance.now() + 3000;
+  }
+}
+
+function autoBindAtk() {
+  var b = document.getElementById('atk');
+  if (!b || b._autoB) { return; }
+  b._autoB = true;
+  var down = function () {
+    if (_autoHold) { return; }
+    _autoHold = setTimeout(function () {
+      _autoHold = null;
+      autoToggle();
+    }, AUTO_LONG_PRESS);
+  };
+  var up = function () {
+    if (_autoHold) { clearTimeout(_autoHold); _autoHold = null; }
+    autoPauseManual();
+  };
+  b.addEventListener('pointerdown', down);
+  b.addEventListener('pointerup', up);
+  b.addEventListener('pointercancel', up);
+  b.addEventListener('pointerleave', up);
+}
+
 function tpDo(e) {
   if (e && e.preventDefault) { e.preventDefault(); }
   var btn = document.getElementById('safeTp');
@@ -2982,6 +3049,13 @@ function wsWelcome(d) {
   }
   if (window.hideLogin) { hideLogin(); }
   netGoOnline();        // ★ 清掉本地自己模拟的那几只 → 世界归服务器 ✓
+  /* ★ 第 206 轮：进游戏时恢复上次的自动战斗开关（存了 SETCFG.auto ✓）*/
+  try {
+    if (typeof AUTO !== 'undefined' && typeof SETCFG !== 'undefined' && SETCFG.auto) {
+      AUTO.on = true; AUTO.tgt = ''; AUTO.phase = 'find'; AUTO.info = '自动战斗：正在找目标…';
+      autoUiUpd();
+    }
+  } catch (e) { }
   var nm = (d.role && d.role.name) || '';
   var lv = (d.role && d.role.level) || 1;
   if (window.showRole) { showRole(d.role); }
@@ -3139,7 +3213,7 @@ function bindLogin() {
     window.TP_BOOT_DONE = true;
     try { tpBind(); } catch (e) { }
     TPCAST.at = performance.now() / 1000;
-    setInterval(function () { tpEnsureBtn(); tpBarRender(); }, 100);   /* 100ms 一次 ✓ 便宜 ✓ 而且顺带保证按钮一定挂上 ✓ */
+    setInterval(function () { tpEnsureBtn(); tpBarRender(); autoBindAtk(); autoUiUpd(); }, 100);   /* 100ms 一次 ✓ 便宜 ✓ 而且顺带保证按钮一定挂上 ✓ */
     tpBarRender();                      /* 先画一次，把按钮恢复成正常样子 ✓ */
   }
   if (typeof document === 'undefined') { return; }
