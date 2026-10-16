@@ -795,21 +795,24 @@ class World(object):
             _dist = ((_nx - p.x) ** 2 + (_nz - p.z) ** 2) ** 0.5
             _allow = PLAYER_SPEED * _dt * MOVE_TOL + MOVE_SLACK
             if _dist > _allow:
-                # 不采纳这次位置（保留服务器认可的旧位置 ✓）
-                p.moveT = _now                # ★ 时间戳还是要更新 ✗
-                #   不然下一包的 dt 会越攒越大 → 允许距离跟着变大 → 反而被放过 ✓
+                # round277 fix (user: other players fly around, the mover sees himself fine)
+                #   OLD: reject the position AND send a 'tp' correction when way over.
+                #   WHY IT BROKE: position is client-authoritative; at 30Hz with jitter the
+                #     move packets bunch up, so dt is tiny while the displacement is large
+                #     -> false positive -> server yanks the player back -> everyone else
+                #     sees a jump. The mover never notices because his client is the boss.
+                #   NEW: always accept the position, but still count it as suspicious
+                #     (log + suspect counter -> admin page can ban the real cheaters).
+                p.moveT = _now
                 p.moveBad = int(getattr(p, 'moveBad', 0)) + 1
                 p.suspect = int(getattr(p, 'suspect', 0)) + 1
                 if p.moveBad == 1 or p.moveBad % 20 == 0:
-                    print('[ac] 位移超限：%s 报了 %.1f 米 / 上限 %.1f 米'
-                          '（连续第 %d 次）' % (p.name, _dist, _allow, p.moveBad))
-                # 超得离谱 → 回推一个纠正位置（客户端会跟过来 ✓）
-                if _dist > _allow * MOVE_CORRECT_AT:
-                    self._send_cid(p.cid, P.pack('tp', x=round(p.x, 2), z=round(p.z, 2)))
-            else:
-                p.x = _nx
-                p.z = _nz
-                p.moveT = _now
+                    print('[ac] move over limit (record only, never yank back): %s reported %.1f m / allowed %.1f m (x%d)'
+                          % (p.name, _dist, _allow, p.moveBad))
+            p.x = _nx
+            p.z = _nz
+            p.moveT = _now
+            if _dist <= _allow:
                 p.moveBad = 0
             p.yaw = _f(d.get('yaw'), p.yaw)
             p.ct = _f(d.get('t'), p.ct)
