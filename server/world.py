@@ -71,6 +71,20 @@ LOBBY_INTERVAL = 1.0          # 大厅名单发布频率 ✓
 
 # ★★ 第 69 轮：箭（弓的投射物）★★
 ARROW_SPEED = 14.0        # 米/秒（比僵尸快得多，但不至于一帧穿过一片 ✓）
+
+# ★★★ 第 227 轮：反作弊（用户点名的三条，这是第 1 条：位移校验）★★★
+#   为什么要它：服务器原来直接采信客户端报的坐标 ✗
+#     p.x = _f(d.get('x'), p.x)     ← 一点校验都没有 ✓
+#   → 改个包就能【瞬移】✗ 于是能：贴脸砍人 / 一帧逃命 / 抢刷新点 /
+#     站边界外一毫米瞬移进安全区砍人 / 配合透视补刀抢魔气 ✓✓
+#   ★ 做法照 Grim Anticheat 那套思路（服务器自己算"你最多能走多远"✗
+#     超了就【不采纳】+ 给客户端回推一个纠正位置 ✓）
+#   ★★ 阈值只在这个文件里 ✗ 一个字都不发客户端 ✓
+#      （发过去等于告诉外挂"卡在 X-1 走就行"✓）
+PLAYER_SPEED = 4.4        # 必须和客户端 web/core/game.js 的 G.SPEED 一致 ✓
+MOVE_TOL = 2.4            # 容差倍数：网络抖动时客户端会一次报一大步 ✓
+MOVE_SLACK = 1.6          # 再加固定余量（米）：连接卡一下再恢复 ✓
+MOVE_CORRECT_AT = 4.0     # 超过程度达到这个倍数才回推纠正（免得正常抖动被拉回 ✗）
 ARROW_HIT_R = 0.75        # 命中半径（僵尸体积约 0.5 + 一点余量 ✓）
 ARROW_MAX = 60            # 同时在飞的箭上限（防刷 ✗）        # ★ 复活无敌时长（秒）—— 用户指定 ✓
 
@@ -95,23 +109,29 @@ class Player(object):
     __slots__ = ('cid', 'role', 'x', 'z', 'yaw', 'ct', 'hp', 'qi', 'atk',
                  'intents', 'joined', 'name', 'role_id', 'warned', 'atkT', 'lastMe',
                  'weapon', 'weaponItemId',
-                 'invulnT',   # ★ 复活无敌剩余时间（第 56 轮）
-                 'wDur', 'wDurMax', 'wDurDirty',   # ★ 手上武器的耐久（第 59 轮）
-                 'atkSeq',   # ★★ 第 66 轮：挥砍序号（别人靠它播动作 ✓）
-                 'armor', 'armorItemId',   # ★ 第 67 轮：防具 ✓
-                 'aDur', 'aDurMax', 'aDurDirty',   # ★ 第 103 轮：防具耐久 ✓
-                 # ★ 第 114 轮：天赋（方案§6 → 内存字段 ✓）
-                 #   tal=已投点数 talRaw=原始值 talEff=有效值（过完上限 ✓）
-                 #   ★ tick 线程只读这三个 ✗ 从不碰 DB ✗（铁律 ✓）
+                 'invulnT',
+                 'wDur', 'wDurMax', 'wDurDirty',
+                 'atkSeq',
+                 'armor', 'armorItemId',
+                 'aDur', 'aDurMax', 'aDurDirty',
                  'tal', 'talRaw', 'talEff', 'talDirty', 'resetT',
                  'mq', 'mqAt',
-                 'ghostAt', 'tpEnd')   # 第 173 轮：传送读条结束时刻（0 = 没在读条）      # ★ 第 168 轮（用户 #5）：离线宽限的时刻 ✓
+                 'ghostAt', 'tpEnd',
+                 # ★ 第 227 轮：反作弊（位移校验用 ✓）
+                 #   ★ 加字段一定要记得加到这里 ✗ 不然 __init__ 里赋值就报
+                 #     AttributeError: 'Player' object has no attribute 'moveT' ✓
+                 #     （这个坑我踩过两次了：Player 一次、Mob 一次 ✓）
+                 'moveT', 'moveBad', 'suspect')   # 第 173 轮：传送读条结束时刻（0 = 没在读条）      # ★ 第 168 轮（用户 #5）：离线宽限的时刻 ✓
 
     def __init__(self, cid, role):
         self.cid = cid
         self.role = role
         self.name = role.get('name') or '?'
         self.role_id = role.get('id')
+        # ★ 第 227 轮：反作弊用的三个字段（位移校验 ✓）
+        self.moveT = 0.0        # 上一个【被采纳】的移动包时刻
+        self.moveBad = 0        # 连续被拦次数
+        self.suspect = 0        # 累计可疑次数（管理页看 ✓）
         self.x = float(role.get('x') or 0.0)
         self.z = float(role.get('z') or 0.0)
         self.yaw = float(role.get('yaw') or 0.0)
@@ -149,6 +169,9 @@ class Player(object):
         self.mq = int(role.get('mq') or 0)
         self.mqAt = int(role.get('mqAt') or 0)
         self.ghostAt = None
+        self.moveT = 0.0        # 第 227 轮：上一个被采纳的移动包时刻
+        self.moveBad = 0
+        self.suspect = 0
         self.tpEnd = 0.0        # 第 173 轮（用户 #6）：传送读条（0 = 没在读）     # ★ 第 168 轮：不是 None 就表示“断线幽灵”✓
         _ar0 = self.armor or {}
         self.aDur = int(_ar0.get('dur') or 0)
@@ -718,8 +741,45 @@ class World(object):
 
     def _handle_intent(self, p, t, d):
         if t == 'move':
-            p.x = _f(d.get('x'), p.x)
-            p.z = _f(d.get('z'), p.z)
+            # ★★★ 第 227 轮：位移校验（反瞬移 / 反加速）★★★
+            #   思路（照 Grim Anticheat）：服务器自己算"这么久最多能走多远"
+            #   超出了就不采纳这次位置 ✓ 超得离谱还回推一个纠正 ✓
+            #   ★ 为什么不"一刀切拒绝"：网络抖动 / 切后台回来，
+            #     客户端会一次报一大步 ✗ 拒绝的话正常玩家会被卡住 ✓
+            #     → 所以给了 MOVE_TOL 倍容差 + MOVE_SLACK 米余量 ✓
+            _nx = _f(d.get('x'), p.x)
+            _nz = _f(d.get('z'), p.z)
+            _now = now_s()
+            _last = float(getattr(p, 'moveT', 0) or 0)
+            _dt = _now - _last if _last > 0 else 0.05
+            if _dt < 0.02:
+                _dt = 0.02
+            elif _dt > 3.0:
+                _dt = 3.0                    # ★ 隔太久（切后台/卡顿）按最多 3 秒算 ✓
+                #   ★ 为什么从 1 秒放宽到 3 秒（第 227 轮实测改的）：
+                #     手机切后台 5 秒再回来 ✗ 客户端会一次报 20 米 ✓
+                #     按 1 秒算只允许 12 米 → 正常玩家被误拦 ✗（体感：走不动 ✓）
+                #     按 3 秒算允许 33 米 ✓ 不误伤 ✗ 而瞬移 1000 米照样拦得住 ✓
+                #   ★ 代价：作弊者可以「等 3 秒跳 33 米」✗ 但那只是快走 ✓ 可接受 ✓
+            _dist = ((_nx - p.x) ** 2 + (_nz - p.z) ** 2) ** 0.5
+            _allow = PLAYER_SPEED * _dt * MOVE_TOL + MOVE_SLACK
+            if _dist > _allow:
+                # 不采纳这次位置（保留服务器认可的旧位置 ✓）
+                p.moveT = _now                # ★ 时间戳还是要更新 ✗
+                #   不然下一包的 dt 会越攒越大 → 允许距离跟着变大 → 反而被放过 ✓
+                p.moveBad = int(getattr(p, 'moveBad', 0)) + 1
+                p.suspect = int(getattr(p, 'suspect', 0)) + 1
+                if p.moveBad == 1 or p.moveBad % 20 == 0:
+                    print('[ac] 位移超限：%s 报了 %.1f 米 / 上限 %.1f 米'
+                          '（连续第 %d 次）' % (p.name, _dist, _allow, p.moveBad))
+                # 超得离谱 → 回推一个纠正位置（客户端会跟过来 ✓）
+                if _dist > _allow * MOVE_CORRECT_AT:
+                    self._send_cid(p.cid, P.pack('tp', x=round(p.x, 2), z=round(p.z, 2)))
+            else:
+                p.x = _nx
+                p.z = _nz
+                p.moveT = _now
+                p.moveBad = 0
             p.yaw = _f(d.get('yaw'), p.yaw)
             p.ct = _f(d.get('t'), p.ct)
             # ★★ 第 57 轮：客户端上报的 hp / qi 【不再采信】★★
