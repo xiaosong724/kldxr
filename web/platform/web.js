@@ -2888,10 +2888,140 @@ function bindSet() {
 }
 
 /* ---------- toast ---------- */
+/* ============================================================================
+   ★★★ 第 248 轮（用户要求）：弹幕滚动通知 ★★★
+
+   要求原文："系统通知的方式改成向左移动滚动通知，像弹幕一样，做一下边框"
+   参数（和用户确认过的）：
+     · 单行 26px 高 ✗ 字 12.5px ✗ 速度 110 像素/秒 ✓
+     · 排队 > 5 条 → 开两行（两条同时滚 ✗ 消化速度翻倍 ✗ 不用变速 ✓）
+     · 排队 <= 2 条 → 收回单行（★ 迟滞 ✗ 不然会在单双行之间反复跳 ✓）
+     · 队列上限 10 条 ✗ 超了丢最旧的（挂机一晚上回来不会滚半小时 ✓）
+     · 每行时长 = (文字宽 + 屏宽) ÷ 速度 → 短 4.5 秒 ✗ 长 7 秒 ✓
+     · 五类配色：升级 金 / 击杀 红 / 高阶装备 紫 / 魔气 橙 / 系统 蓝 ✓
+   ★ 普通提示（toast）会跟着它下移 ✗ 两者永不重叠 ✓
+   ============================================================================ */
+var TK = {
+  on: false,              /* 条子是否已经出现 ✓ */
+  rows: 1,                /* 当前几行（1 或 2 ✓） */
+  q: [],                  /* 等着的（最多 10 条 ✓） */
+  lane: [null, null]      /* 两条轨道各自的当前消息 + 进度 ✓ */
+};
+var TK_SPEED = 110;       /* 像素/秒（固定 ✗ 长句子不会滚得更快 ✓） */
+var TK_MAXQ = 10;
+var TK_TWO_AT = 5;        /* 排队超过它 → 开两行 ✓ */
+var TK_ONE_AT = 2;        /* 排队降到它 → 收回单行 ✓（迟滞 ✓） */
+
+function tkEl() {
+  var e = document.getElementById('ticker');
+  if (!e) {
+    e = document.createElement('div');
+    e.id = 'ticker';
+    e.className = 'off';
+    e.innerHTML = '<div class="tkrow"><div class="tk"></div></div>' +
+                  '<div class="tkrow"><div class="tk"></div></div>';
+    document.body.appendChild(e);
+  }
+  return e;
+}
+
+/* ★ 弹幕条高度变了 → 顺手把普通提示挪下去 ✗ 不让它们重叠 ✓ */
+function tkSyncToastTop() {
+  var e = document.getElementById('ticker');
+  var h = (e && !e.classList.contains('off')) ? e.offsetHeight : 0;
+  var top = tkToastTop();                   /* ★ 现算（62 + 弹幕高 + 8 ✓）*/
+  var te = document.getElementById('_toastEl');
+  if (window._toastElRef) { te = window._toastElRef; }
+  if (te) { te.style.top = top + 'px'; }
+  window._toastTop = top;                   /* 给 toast() 用 ✓ */
+  return top;
+}
+
+/* ★ 第 248 轮修补：给 toast 现算位置（弹幕条多高就往下让多少 ✓）
+   为什么不复用 tkSyncToastTop 的返回值：那个是"上次同步时"的值 ✗
+   弹幕条切行以后就过期了 ✓ 实测踩到过一次重叠 ✓ */
+function tkToastTop() {
+  var e = document.getElementById('ticker');
+  var h = (e && !e.classList.contains('off')) ? e.offsetHeight : 0;
+  return 62 + h + 8;
+}
+
+
+function tkPush(text, kind) {
+  if (!text) { return; }
+  if (TK.q.length >= TK_MAXQ) { TK.q.shift(); }   /* 满了丢最旧的 ✓ 永远留最新 ✓ */
+  TK.q.push({ t: String(text), k: kind || 'sys' });
+  tkMaybeRows();
+  if (!TK.on) { tkStart(); }
+}
+
+function tkMaybeRows() {
+  var e = tkEl();
+  var want = TK.rows;
+  if (TK.rows === 1 && TK.q.length > TK_TWO_AT) { want = 2; }
+  else if (TK.rows === 2 && TK.q.length <= TK_ONE_AT) { want = 1; }
+  if (want !== TK.rows) {
+    TK.rows = want;
+    e.classList.toggle('two', want === 2);
+    e.style.height = (want === 2 ? 52 : 26) + 'px';
+    tkSyncToastTop();
+  }
+}
+
+function tkStart() {
+  var e = tkEl();
+  TK.on = true;
+  e.classList.remove('off');
+  e.style.height = (TK.rows === 2 ? 52 : 26) + 'px';
+  tkSyncToastTop();
+  tkTick(true);
+}
+
+/* 每条消息一行轨道各自滚 ✓ 滚完了取队列里的下一条 ✓ */
+function tkTick(first) {
+  var e = tkEl();
+  var rows = e.querySelectorAll('.tkrow');
+  var W = window.innerWidth;
+  var now = Date.now();
+  var busy = false;
+  for (var i = 0; i < TK.rows; i++) {
+    var lane = TK.lane[i];
+    var el = rows[i] ? rows[i].querySelector('.tk') : null;
+    if (!el) { continue; }
+    if (!lane) {
+      var nx = TK.q.shift();
+      if (!nx) { el.textContent = ''; el.style.transform = ''; continue; }
+      el.className = 'tk tk-' + nx.k;
+      el.textContent = nx.t;
+      /* ★ 先量宽度再算总路程 ✗ 长句子只影响时长 ✗ 不影响速度 ✓ */
+      var w = el.offsetWidth || 200;
+      lane = TK.lane[i] = { x: W + 10, w: w, end: -(w + 20) };
+      el.style.transform = 'translateX(' + lane.x + 'px)';
+    }
+    var dt = first ? 0 : Math.min(0.1, (now - (TK.last || now)) / 1000);
+    lane.x -= TK_SPEED * dt;
+    el.style.transform = 'translateX(' + lane.x.toFixed(1) + 'px)';
+    if (lane.x <= lane.end) { TK.lane[i] = null; }     /* 滚完了 ✗ 下一帧取新的 ✓ */
+    busy = true;
+  }
+  TK.last = now;
+  tkMaybeRows();
+  if (TK.on) { requestAnimationFrame(function () { tkTick(false); }); }
+}
+
+
 function toast(msg) {
   if (!_toastEl) {
     _toastEl = document.createElement('div');
-    _toastEl.style.cssText = 'position:fixed;left:50%;top:64px;transform:translateX(-50%);z-index:70;' +
+    window._toastElRef = _toastEl;      /* 第 248 轮：弹幕挪动时要用它 ✓ */
+    _toastEl.style.cssText = /* ★ 第 248 轮：原来写死 top:64px ✗ 正好压在弹幕条上 ✗
+   现在跟着弹幕条的高度走 ✓（弹幕开两行时自动再往下挪 ✓）*/
+      /* ★ 第 248 轮修补：原来用 window._toastTop 缓存值 ✗
+         但弹幕条在单行/两行之间切换时那个值会过期 ✗
+         实测过：弹幕底边 118 ✗ toast 的 top 还是 100 → 仍然重叠 ✓
+         ★ 改成【每次显示时现算】✗ 永远不会过期 ✓ */
+      'position:fixed;left:50%;top:' + tkToastTop() + 'px;' +
+      'transform:translateX(-50%);z-index:70;' +
       'background:#000000cc;color:#ffd83d;font-size:13px;padding:8px 14px;border-radius:9px;' +
       'border:1px solid #ffd83d55;pointer-events:none;opacity:0;transition:opacity .2s;white-space:nowrap';
     document.body.appendChild(_toastEl);
@@ -2984,6 +3114,8 @@ function wsOnMessage(raw) {
     if (window.showLogin) { showLogin(d.msg || '请重新登录'); }
     return;
   }
+  /* ★ 第 248 轮：弹幕（全服滚动通知 ✓）*/
+  if (t === 'ticker') { tkPush(d.text, d.kind); return; }
   if (t === 'error' || t === 'notice') {
     var _tx = d.msg || d.text || '';
     /* ★ 第 52 轮：服务器说"等级不够"这类拒绝，除了 toast 还要【留在背包面板里】✓

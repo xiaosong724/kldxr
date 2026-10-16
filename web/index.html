@@ -171,7 +171,30 @@
 @keyframes bootDot{0%,100%{opacity:.25;transform:translateY(0)}50%{opacity:1;transform:translateY(-6px)}}
 #boot .bm{font-size:12px;opacity:.6;letter-spacing:1px}
 #boot .bh{font-size:12px;opacity:.75;text-align:center;line-height:1.9;margin-top:6px}
+
 </style>
+
+<!-- ★★★ 第 248 轮（用户要求）：弹幕滚动通知 ★★★
+     全服大事从右往左滚 ✗ 像弹幕一样 ✗ 上下带描边
+     单行 26px ✗ 排队 >5 条时开两行（消化速度翻倍 ✗ 不用变速）
+     ★ 普通提示（toast）会跟着它下移 ✗ 两者永不重叠 -->
+<style>
+#ticker{position:fixed;left:0;right:0;top:62px;z-index:65;pointer-events:none;
+  background:linear-gradient(180deg,#12161ceb,#0a0d11f2);
+  border-top:2px solid #ffd83d66;border-bottom:2px solid #ffd83d66;
+  box-shadow:0 2px 8px #0009;overflow:hidden;transition:height .18s}
+#ticker.off{display:none}
+#ticker .tkrow{height:26px;display:flex;align-items:center;overflow:hidden}
+#ticker.two .tkrow + .tkrow{border-top:1px solid #ffd83d2e}
+#ticker .tk{white-space:nowrap;font-size:12.5px;font-weight:700;letter-spacing:.3px;
+  text-shadow:0 1px 2px #000;will-change:transform}
+#ticker .tk-up{color:#ffd83d}
+#ticker .tk-kill{color:#ff6a5a}
+#ticker .tk-tier{color:#c99dff}
+#ticker .tk-mq{color:#ff8a6a}
+#ticker .tk-sys{color:#9fd8ff}
+</style>
+
 <style>
 /* ---- 登录浮层（独立版新加：自建账号，不再跟 MC 客户端共用登录）---- */
 #login{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;
