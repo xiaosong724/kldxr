@@ -2634,6 +2634,65 @@ function bagRender() {
   }
   /* ★ 第 56 轮（用户第 5 条）：名字和数值挂在【选中的武器】标题下 ✓
      不再写进"装备"那一段（那样点别的武器时，看着像已装备的数值变了 ✗）*/
+  /* round299: sell-to-system button (small step 2: only enable/disable).
+     Placed here - at the END of the bagUse block - because inserting it
+     right after `var useBtn = ...` last time ran before selItem was set,
+     so the button never lit up. Price itself is computed by the SERVER. */
+  var sellBtn = document.getElementById('bagSell');
+  /* round299d: the CLICK needs the DB row id, and that lives on the OUTER record
+     ({id, item, stack}) - the inner `item` dict has no id at all. Using
+     selItem.id sent {iid: undefined} -> the server answered 400 "参数不对". */
+  var sellId = null;
+  if (selItem && typeof BAG !== 'undefined' && BAG.items) {
+    for (var _bi = 0; _bi < BAG.items.length; _bi++) {
+      if (BAG.items[_bi].item === selItem) { sellId = BAG.items[_bi].id; break; }
+    }
+  }
+  var sellable = !!(selItem && !selIsEquipped && selItem !== DEFAULT_W && sellId
+                       && !selItem.broken && !selItem.locked_by && !selItem.locked);
+  if (sellBtn) {
+    sellBtn.disabled = !sellable;
+    sellBtn.className = sellable ? 'bagB' : 'bagB off';
+  }
+  /* round299 step 3: the click. Only asks the server - the price comes back from
+     /api/sell (value.py). On success the bag refreshes and `me` carries the new
+     balance on the next push, so the HUD updates by itself. */
+  if (sellBtn && !sellBtn._b) {
+    sellBtn._b = true;
+    /* round300: bind BOTH pointerdown and click.
+       The bag panel has drag/scroll handling that can swallow the `click` event
+       (the same class of bug we hit with the "more" button: a handler called
+       preventDefault on pointerdown, so click never fired). pointerdown always
+       arrives first and cannot be swallowed that way. `_t` debounces the pair so
+       one tap does not sell twice. */
+    var _sellGo = function () {
+      if (sellBtn.disabled || !sellId) { return; }
+      var _now = Date.now();
+      if (sellBtn._t && _now - sellBtn._t < 600) { return; }
+      sellBtn._t = _now;
+      sellBtn.disabled = true;
+      var tok = '';
+      try { tok = localStorage.getItem('token') || ''; } catch (e) {}
+      fetch('/api/sell', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Token': tok },
+        body: JSON.stringify({ iid: sellId })
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        if (j && j.ok) {
+          if (typeof toast === 'function') {
+            toast('卖出【' + (j.name || '物品') + '】+' + fmtGold(j.gold) + ' 金币');
+          }
+          if (typeof bagFetch === 'function') { bagFetch(); }
+        } else if (typeof toast === 'function') {
+          toast((j && j.error) || '卖不了');
+        }
+      }).catch(function () {
+        if (typeof toast === 'function') { toast('网络错误'); }
+      }).then(function () { sellBtn.disabled = false; });
+    };
+    sellBtn.addEventListener('pointerdown', function (e) { e.preventDefault(); _sellGo(); });
+    sellBtn.onclick = function () { _sellGo(); };
+  }
   var selNameEl = document.getElementById('bagSelName');
   // ★ 第 97 轮：防具也算"装备"✓（原来只认 weapon ✗ → 防具被当成材料显示 ✗）
   var isW8 = !!(selItem && (selItem.slot === 'weapon' || selItem.slot === 'armor') &&
@@ -2859,55 +2918,6 @@ function bindBag() {
   }
   /* ★ 使用 / 脱下 按钮（第 54 轮 用户要求：点武器出现"使用"，穿上后变"脱下"）*/
   var useBtn = document.getElementById('bagUse');
-  /* round298: sell-to-system button.
-     Price comes from the server (value.py) - the client must NOT compute it,
-     otherwise a patched client could invent its own prices.
-     Shown only for items that are sellable: not equipped, not locked, has a price. */
-  var sellBtn = document.getElementById('bagSell');
-  var sellTip = document.getElementById('bagSellTip');
-  var sellable = !!(selItem && !selIsEquipped && selItem !== DEFAULT_W
-                       && !selItem.broken && !selItem.locked_by && !selItem.locked);
-  if (sellBtn) {
-    sellBtn.disabled = !sellable;
-    sellBtn.className = sellable ? 'bagB' : 'bagB off';
-  }
-  if (sellTip) {
-    sellTip.textContent = sellable ? ('\u2605 \u7cfb\u7edf\u6536\u8d2d\u4ef7\u8bf7\u70b9\u3010\u5356\u7ed9\u7cfb\u7edf\u3011') : '';
-  }
-  if (sellBtn && !sellBtn._b) {
-    sellBtn._b = true;
-    sellBtn.addEventListener('click', function () {
-      if (sellBtn.disabled || !selItem || !selItem.id) { return; }
-      if (sellTip) { sellTip.textContent = '\u5904\u7406\u4e2d\u2026'; }
-      sellBtn.disabled = true;
-      var tok = '';
-      try { tok = localStorage.getItem('token') || ''; } catch (e) {}
-      fetch('/api/sell', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Token': tok },
-        body: JSON.stringify({ iid: selItem.id })
-      }).then(function (r) { return r.json(); }).then(function (j) {
-        if (j && j.ok) {
-          if (typeof toast === 'function') {
-            toast('\u5356\u51fa\u3010' + (j.name || '\u7269\u54c1') + '\u3011 +' + fmtGold(j.gold) + ' \u91d1\u5e01', '#ffd83d');
-          }
-          /* the server credits gold via the tick thread; refresh the bag so the
-             item disappears, and let `me` carry the new balance on the next push. */
-          if (typeof bagFetch === 'function') { bagFetch(); }   /* round298b: real name is bagFetch, not loadBag */
-        } else {
-          if (typeof toast === 'function') {
-            toast((j && j.error) || '\u5356\u4e0d\u4e86', '#ff8a6a');
-          }
-          if (sellTip) { sellTip.textContent = (j && j.error) || ''; }
-        }
-      }).catch(function (e) {
-        if (typeof toast === 'function') { toast('\u7f51\u7edc\u9519\u8bef', '#ff8a6a'); }
-        if (sellTip) { sellTip.textContent = '\u7f51\u7edc\u9519\u8bef'; }
-      }).then(function () {
-        sellBtn.disabled = false;
-      });
-    });
-  }
   if (useBtn) {
     useBtn.onclick = function (e) {
       if (e) { e.preventDefault(); }
