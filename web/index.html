@@ -173,24 +173,28 @@
 #boot .bh{font-size:12px;opacity:.75;text-align:center;line-height:1.9;margin-top:6px}
 
 </style>
+
 <style>
-/* ★★★ 第 270 轮（用户："还是点击没有反应"）★★★
-   我决定不再修"更多"按钮了 ✗
-   用户的要求本来是：不要滑动 ✗ 后面的标签要能显示出来 ✓
-   → 最简单的满足方式：让标签【自动换行】✓
-     · 9 个标签分两行 ✗ 全部可见 ✗ 全部可点 ✓
-     · 不需要"更多"✗ 不需要分页 ✗ 不需要隐藏 ✓
-     · ★ 而且 flex-wrap 不可能把元素挤到可视区外 ✗
-       所以"坐标和肉眼位置错开"这类问题从根上消失了 ✓✓
-   ★ 这次只改两行（overflow + flex-wrap）✗ 不动 padding/宽度/字号 ✓ */
+/* ★★★ 第 271 轮（用户："把导航按钮再改小一点吧，后面按钮多了会需要越多排"）★★★
+   目标：一行能塞下更多标签 ✗ 以后加功能不用老是加排 ✓
+   ★ 只改【内边距 + 字号 + 间距】✗ 不碰容器的 flex/overflow ✓
+     （容器布局动过一次 ✗ 把导航栏搞坏了 ✓ 这里绝不再碰 ✓） */
 #setTabs{
   overflow:visible !important;
   overflow-x:visible !important;
   display:flex !important;
-  flex-wrap:wrap !important;      /* ★ 关键：换行而不是溢出 ✓ */
-  row-gap:5px !important;
+  flex-wrap:wrap !important;      /* 换行而不是溢出 ✓ */
+  row-gap:4px !important;
+}
+#setTabs .tab{
+  padding:5px 9px !important;     /* 原 7px 13px → 紧凑 ✓ */
+  font-size:11.5px !important;    /* 原 12.5px ✓ */
+  border-radius:7px !important;
+  margin:0 3px 0 0 !important;    /* 原 4px ✓ */
+  line-height:1.35 !important;
 }
 </style>
+
 
 
 
