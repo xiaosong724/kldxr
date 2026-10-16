@@ -75,7 +75,18 @@ AUTO_SAVE_INTERVAL = 15.0   # ★ 第 109 轮：定时存盘（防崩溃/重启�
 MKT_SWEEP_INTERVAL = 5.0    # 过期检查间隔（秒 ✗ 只动内存 + 投一条 UPDATE ✓）
 #   ★ 为什么 5 秒而不是"每次浏览时顺手扫"：人不在线时过期的东西也得退回去 ✗
 #     挂在 tick 上才不依赖"有没有人在看"✓
-MKT_BAG_MAX = 500           # 背包上限（上架/退回前先看够不够 ✗ 防背包无限涨 ✓）
+MKT_BAG_MAX = 2000          # 背包行数上限（防背包无限涨 ✗ 不是玩法限制 ✓）
+#   ★★ round304t：用户报"用另一个号购买显示背包满了"★★
+#     根因：这里原来是 500 ✗ 而【整个项目没有别的地方限制背包行数】✓
+#       （客户端没有格数上限 ✗ 捡东西 / 买系统 / 退回也都不看行数 ✓）
+#       → 于是这 500 就是唯一的、而且玩家看不见的"背包上限"✓
+#     活证据：真库里角色 fangou 有 775 行（材料都堆叠了 ✗ 装备一件一行 ✓）
+#       → 他一买东西就被这句话挡住 ✗ 而界面上看不出哪里"满"了 ✓
+#   ★ 这个数的本意是"别让内存/库无限涨"✗ 该按这个本意取值 ✓
+#     500 行对一个刷了很久的号太容易到 ✗ 2000 才是"明显异常"的量级 ✓
+#   ★ 判据为什么用【行数】而不是"总件数"：
+#     材料合堆后一件一行已经很省 ✓ 装备本来就该一件一行 ✓
+#     行数才是内存/查询的真实开销 ✓
 MKT_ROW_MAX = 4000          # 内存行数硬上限（超过就不让再上架 ✗ 保护 tick ✓）
 
 # ★★ round302：金币的"内存权威"要给重连让路 ★★
@@ -1907,6 +1918,23 @@ class World(object):
                 d[k] = v
         self._send_cid(p.cid, P.pack('listres', **d))
 
+    def _mkt_bag_room(self, p):
+        """还能不能往背包里塞东西（★ 上架退回 / 购买前都要看 ✓）
+
+        ★★ round304t：用户报"用另一个号购买显示背包满了"★★
+          原来两处各写一遍同一句判断 ✗ 提示只写"满了"✓
+          现在收成一个函数 ✗ 并把【当前行数 / 上限】写进提示 ✓
+            · 玩家一眼能看出是真满还是卡了 ✓
+            · 排查时也不用再猜"它算的到底是哪个数"✓
+        ★ 判据是【行数】（材料合堆后一行一堆 ✗ 装备一件一行 ✓）
+          行数才是内存和查询的真实开销 ✓
+        """
+        n = len(p.role.get('bag') or [])
+        if n >= MKT_BAG_MAX:
+            return False, ('背包满了（%d / %d 行）✗ 先卖掉或用掉一些'
+                           % (n, MKT_BAG_MAX))
+        return True, ''
+
     def _mkt_load(self, role_id, rows, replace=False):
         """把（网络线程读好的）货架装进内存（★ tick 只装配 ✗ 一步都不查库 ✓）
 
@@ -2215,8 +2243,9 @@ class World(object):
             return self._mkt_send(p, False, '这不是你的上架')
         if float(row.get('exp') or 0) > now_s():
             return self._mkt_send(p, False, '还在上架中，先下架再领')
-        if len(p.role.get('bag') or []) >= MKT_BAG_MAX:
-            return self._mkt_send(p, False, '背包满了，先清出空位')
+        _ok, _why = self._mkt_bag_room(p)
+        if not _ok:
+            return self._mkt_send(p, False, _why)
         mkmod.drop(self.mkt, lid)
         self.post_save(('MKT', 'unlist', {'lid': int(lid),
                                           'seller': int(p.role_id),
@@ -2261,8 +2290,9 @@ class World(object):
         if int(getattr(p, 'gold', 0) or 0) < price:
             return self._mkt_send(p, False, '金币不够（要 %d ✗ 你有 %d）'
                                   % (price, int(getattr(p, 'gold', 0) or 0)))
-        if len(p.role.get('bag') or []) >= MKT_BAG_MAX:
-            return self._mkt_send(p, False, '背包满了，先清出空位')
+        _ok, _why = self._mkt_bag_room(p)
+        if not _ok:
+            return self._mkt_send(p, False, _why)
         applied = self._gain_gold(p, -price, 'mkt_buy')
         if applied != -price:
             if applied:

@@ -322,13 +322,20 @@
 .mktCnt{position:absolute;right:2px;bottom:1px;font-size:10px;color:#ffe0a0;
   text-shadow:0 1px 2px #000}
 .mktMain{flex:1 1 auto;min-width:0}
-.mktName{display:block;font-size:12px;color:#e8eef6;white-space:nowrap;
+/* ★★ round304t（用户："商品文字信息显示不全，把文字改小点"）★★
+   行里【不再有购买按钮】✗ 所以名字这一格从 55px 变成约 115px ✓
+   字再各小半号 ✗ 5 个字的装备名（真实最长）就能完整显示 ✓
+   ★ 为什么不去掉省略号：名字以后可能变长 ✗ 省略号是兜底 ✓
+     但【现在】真实数据不会再被截 ✓ */
+.mktName{display:block;font-size:11.5px;line-height:1.25;color:#e8eef6;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mktSub{display:block;font-size:9px;line-height:1.3;color:#8f9aa8;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
-.mktSub{display:block;font-size:10px;color:#8f9aa8;white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis}
-.mktPrice{flex:0 0 auto;text-align:right;color:#ffd83d;font-size:12.5px;min-width:44px}
-.mktPrice small{display:block;color:#8f9aa8;font-size:9.5px;font-weight:400}
+.mktPrice{flex:0 0 auto;text-align:right;color:#ffd83d;font-size:11.5px;min-width:40px}
+.mktPrice small{display:block;color:#8f9aa8;font-size:9px;font-weight:400}
 .mktRow .bagB{flex:0 0 auto;padding:3px 7px;font-size:11.5px}
+/* 点整行 = 打开详情（行里没有按钮了 ✗ 给个手型提示可以点 ✓）*/
+.mktRow{cursor:pointer}
 /* 记录那条信息多 ✗ 给它宽松一点 ✓ */
 #mktLogList .mktRow{padding:6px 8px}
 #mktLogList .mktName{font-size:13px}

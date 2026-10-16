@@ -3354,6 +3354,16 @@ function mktRow(r) {
   var isMe = (MKT.myRole && String(seller) === String(MKT.myRole));
   var it = r[10] || null;                 /* ★ 完整物品（服务端第 11 格 ✓）*/
   if (it) { it.__seller = seller; it.__price = price; }   /* ★ 浮窗里要判"是不是我的"+ 买价 ✓ */
+  /* ★★ round304t（用户："商品文字信息显示不全，把文字改小点" +
+     "买家的数量滑条，你把它做到图标点击后显示了而不是购买的时候显示"）★★
+     ★ 量出来的数据：两列布局里每一行只有 217px ✗
+       其中 图标 36 + 价格 44 + 【购买按钮】60 + 间距 ≈ 150 ✓
+       → 留给名字的只有 55px ✗ 而真实名字（5 个字）在 12px 下要 60px ✓
+       所以名字必然被截 ✗（我把字体调小也没用 ✗ 空间是被按钮吃掉的 ✓）
+     ★ 正解（也是用户要的）：把【购买按钮从行里去掉】✗ 改成点整行出详情浮窗 ✓
+       → 名字那一格立刻多出 60px ✗ 5 个字的装备名能完整显示 ✓
+       → 数量滑条也就在【点开之后】出现（用户第 3 条要的正是这个 ✓）
+     ★ 顺手把字都调小半号（用户："把文字改小点"✓）*/
   var sub = '★' + (tier + 1) + ' 阶' + (lv ? (' · Lv' + lv) : '') +
     (stack > 1 ? (' · ×' + stack) : '') + ' · 卖家 ' + (isMe ? '（你自己）' : ('#' + seller));
   return '<div class="mktRow" data-mktrow="' + lid + '"' +
@@ -3368,10 +3378,10 @@ function mktRow(r) {
     '<span class="mktMain"><span class="mktName">' + mktEsc(name) + '</span>' +
       '<span class="mktSub">' + sub + '</span></span>' +
     '<span class="mktPrice">' + fmtGold(price) + '<small>剩 ' + long + '</small></span>' +
-    (isMe
-      ? '<button class="bagB" disabled>你自己的</button>'
-      : ('<button class="bagB" data-mktbuy="' + lid + '" data-mktname="' +
-         mktEsc(name) + '" data-mktprice="' + price + '">购 买</button>')) +
+    /* ★ 这里原来有个【购买】按钮 ✗ 现在没了 ✓
+       为什么可以拿掉：点整行就会弹出详情浮窗 ✗ 里面就有【购买】+ 数量滑条 ✓
+       拿掉之后名字那一格宽了 60px ✗ 长名字才显示得下 ✓
+       ★ "你自己的"那三个字也一并去掉 ✗ 名字那行已经写了"（你自己）"✓ */
     '</div>';
 }
 
@@ -3452,17 +3462,9 @@ function mktGridBind() {
     var el = e.target;
     while (el && el !== box && !el.getAttribute) { el = el.parentNode; }
     if (!el || el === box) { return; }
-    var buy = el.getAttribute('data-mktbuy');
-    var un = el.getAttribute('data-mktun');
-    if (buy) {
-      mktBuy(+buy, el.getAttribute('data-mktname') || '物品',
-             +el.getAttribute('data-mktprice') || 0, 1);
-      return;
-    }
-    if (un) {
-      mktUnlist(+un, el.getAttribute('data-mktexp') === '1');
-      return;
-    }
+    /* ★ round304t：行里已经没有购买按钮了 ✗ 购买只在详情浮窗里 ✓
+       所以这里【不再有】"点到按钮就快买"那条分支 ✓
+       （留一条永远走不到的分支 = 以后有人以为它还有用 ✗ 直接删掉 ✓）*/
     /* 点在行上（不是按钮）→ 弹说明 */
     var row = el;
     while (row && row !== box && !(row.className && String(row.className).indexOf('mktRow') >= 0)) {
@@ -3475,8 +3477,18 @@ function mktGridBind() {
       return;
     }
     mktTipShow(row, e.clientX, e.clientY);
+    /* ★★ round304t（用户："买家的数量滑条，你把它做到【图标点击后】显示"）★★
+       ★ 关键：点开的这一份必须【停住】✗ 不能跟划过的浮窗一样"鼠标一走就关"✓
+         否则玩家手一抖（或者手指抬起来 ✓）浮窗就没了 ✗ 根本拖不到滑条 ✓
+       ★ 滑条本来就在浮窗里（只剩 >1 个才有 ✓）—— 之前的问题是
+         "只有鼠标恰好停在那一行上才看得到"✗ 现在点一下就固定住了 ✓
+       ★ 点别处 / 再点同一行 / 点 ✕ 都会关（那几条路已经有了 ✓）*/
+    bagTipStickyOn();
   };
-  /* 鼠标划过也弹一份（★ 不"停住"✗ 用和背包一样的延时关 ✓）*/
+  /* 鼠标划过也弹一份（★ 不"停住"✗ 用和背包一样的延时关 ✓）
+     ★ round304t：划过的那份【不能】继承"停住"状态 ✗
+       所以下面每次划到新的一行都先 bagTipStickyOn 的反面走一遍 ✓
+       （点开 → 停住；再划别的行 → 换成划过模式 ✓ 这样两种用法不打架 ✓）*/
   box.onmousemove = function (e) {
     var row = e.target;
     while (row && row !== box && !(row.className && String(row.className).indexOf('mktRow') >= 0)) {
@@ -3486,6 +3498,7 @@ function mktGridBind() {
     if (_mktTipHold) { return; }          /* 鼠标在浮窗上 ✗ 别抢 ✓ */
     var b = document.getElementById('bagTipBox');
     if (b && b._for === row) { return; }  /* 已经是这一行了 ✗ 别重画（会闪）✓ */
+    if (_mktTipSticky) { return; }        /* ★ 停住的那份别被划过覆盖掉 ✓ */
     mktTipShow(row, e.clientX, e.clientY);
   };
   box.onmouseleave = function () { bagTipHideSoon(200); };
@@ -3967,11 +3980,15 @@ function bagTipBtnsHTML(it, id, acts, seller) {
       h += '<button class="bagB" data-tipact="buy">购 买</button>';
       /* ★ 货架上还有多个 ✗ 才能选数量（只剩 1 个就别给滑条了 ✓）*/
       var _avail = Math.max(1, parseInt(seller && seller.qty, 10) || 1);
-      var _aff = Math.floor(((typeof WSC !== 'undefined' && WSC.role &&
-        WSC.role.gold) || 0) / Math.max(1, seller && seller.unit || 1));
-      var _mx = Math.min(_avail, Math.max(1, _aff));
       if (_avail > 1) {
-        h += qtyHTML(_mx, 1, (seller && seller.unit) || 0);
+        /* ★★ round304t：滑条上限就是【货架上还剩几个】✗ 不再按余额夹一次 ✓
+           为什么原来那个夹法是错的：它拿客户端的【金币快照】算能买几个 ✗
+             · 快照可能是旧的（刚花过钱 / 刚登录还没推 ✓）
+             · 结果是"有 8 个也最多只能选 1 个"✗ 看着像坏了 ✓
+               （自测量到过：qmax 变成 "1" ✓）
+           ★ 现在：想选几个选几个 ✗ 钱不够由【服务端】拒 ✓
+             而且它回的话就是"金币不够（要 N ✗ 你有 M）"✗ 够清楚了 ✓ */
+        h += qtyHTML(_avail, 1, (seller && seller.unit) || 0);
       }
     }
     h += '<button class="bagB" data-tipact="close">✕</button></div>';
