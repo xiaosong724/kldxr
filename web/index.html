@@ -695,10 +695,26 @@
   function hitMore(x, y) {
     var m = document.getElementById('tabMore');
     if (!m) { return false; }
+    /* ★★★ 第 262 轮（用户实测："点击按钮下面一点就可以了"）★★★
+       现象：眼睛看到的按钮位置 ✗ 和判定区域【错开了】✓
+       原因：移动端视口缩放 / 祖先有 transform 时 ✗
+             getBoundingClientRect 和肉眼位置可能对不上 ✓
+       ★ 修法：两条判定，任一命中就算 ✗
+         ① elementFromPoint：直接问"这个坐标下面是谁"✗
+            （这是浏览器自己算的 ✗ 一定和肉眼一致 ✓）
+         ② 矩形判定：但容差放大到 20 像素 ✗ 手指点不准也能中 ✓ */
+    try {
+      var el = document.elementFromPoint(x, y);
+      var n = el;
+      var guard = 0;
+      while (n && guard++ < 6) {
+        if (n === m) { return true; }
+        n = n.parentNode;
+      }
+    } catch (e) { }
     var r = m.getBoundingClientRect();
     if (!r || r.width <= 0 || r.height <= 0) { return false; }
-    /* 手指点得没那么准 ✗ 给 8 像素容差 ✓ */
-    return (x >= r.left - 8 && x <= r.right + 8 && y >= r.top - 8 && y <= r.bottom + 8);
+    return (x >= r.left - 20 && x <= r.right + 20 && y >= r.top - 20 && y <= r.bottom + 20);
   }
   function onDown(e) {
     var x = null, y = null;
