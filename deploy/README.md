@@ -119,10 +119,19 @@ sudo systemctl stop xiuxian     # 停服（玩家那边会看到「服务器维�
 
 ```bash
 cd /root/xiuxian2d && git pull
+
+# ★★ 先停服务再复制 ✗ 不然玩家会看到"半个页面" ✗✗
+#    真事：第 196 轮我第一次部署时是边跑边传 ✗
+#    结果玩家那边报 "SETCFG is not defined"✓
+#    原因：index.html 已经是新的 ✓ 但 core/game.js 还没传完 ✗
+#    浏览器加载到一半 → 变量没定义 → 一片报错 ✓
+sudo systemctl stop xiuxian
 sudo cp -r server web /opt/xiuxian2d/     # ★ 别覆盖 game.db ✗
 sudo chown -R xiuxian:xiuxian /opt/xiuxian2d
-sudo systemctl restart xiuxian
+sudo systemctl start xiuxian
 ```
+
+★ 玩家那边会看到「服务器维护中」页面 ✓ 等 15 秒自动重连就回来了 ✓（这套是为这个场景做的 ✓）
 
 ★ **存档就是 `game.db` 一个文件** ✓ 别弄丢 ✓ 建议每天备份：
 
