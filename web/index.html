@@ -638,28 +638,45 @@
 
 
 <script>
-/* round257: two-page tab bar; more swaps in page 2 in place (no scrolling). */
+/* round257c: two-page tab bar - bind DIRECTLY on the button, and listen to
+   both click and touchend, because the tab bar has a _swallow guard that
+   eats clicks after a touch drag. Also neutralise that guard. */
 (function () {
   function bar() { return document.getElementById('setTabs'); }
   function goPage(n) {
     var b = bar();
     if (!b) { return; }
     if (n === 2) { b.classList.add('page2'); } else { b.classList.remove('page2'); }
-    var more = document.getElementById('tabMore');
-    if (more) { more.textContent = (n === 2) ? ('◂ ' + '返回') : ('更多 ' + '▸'); }
+    var m = document.getElementById('tabMore');
+    if (m) { m.textContent = (n === 2) ? '◂ 返回' : '更多 ▸'; }
   }
-  document.addEventListener('click', function (e) {
-    var el = e.target;
-    if (!el || !el.classList) { return; }
-    if (el.id === 'tabMore') {
-      var b = bar();
-      goPage(b && b.classList.contains('page2') ? 1 : 2);
-      e.stopPropagation();
-      return;
-    }
-    if (el.classList.contains('tab') && el.getAttribute('data-page') === '2') { goPage(2); }
-  }, true);
+  function toggle(e) {
+    if (e) { e.preventDefault(); e.stopPropagation(); }
+    var b = bar();
+    goPage(b && b.classList.contains('page2') ? 1 : 2);
+    return false;
+  }
+  function bind() {
+    var m = document.getElementById('tabMore');
+    if (!m || m._bound) { return !!m; }
+    m._bound = true;
+    /* direct binding - no delegation, nothing in between can swallow it */
+    m.addEventListener('click', toggle, true);
+    m.addEventListener('touchend', toggle, true);
+    m.addEventListener('touchstart', function (e) { e.stopPropagation(); }, true);
+    /* the old drag guard would eat this click - switch it off */
+    var b = bar();
+    if (b) { Object.defineProperty(b, '_swallow', { get: function () { return false; }, set: function () { } }); }
+    return true;
+  }
+  if (!bind()) {
+    var tries = 0;
+    var iv = setInterval(function () {
+      if (bind() || ++tries > 40) { clearInterval(iv); }
+    }, 250);
+  }
   window._setTabPage = goPage;
+  window._tabMoreBound = function () { var m = document.getElementById('tabMore'); return !!(m && m._bound); };
 })();
 </script>
 </body></html>
