@@ -1177,6 +1177,10 @@ function mqExpPct(mq) {
    fmtGold(): plain digits below 10000, short form above (12,345 / 1.2wan).
    GOLD_COL is the same yellow used by the ticker's level-up colour. */
 var GOLD_COL = '#ffd83d';
+/* round303b ★ 用户的规矩：5 阶及以上的装备 ✗ 卖掉之前要再问一次 ✓
+   ★ 阶数是【显示用】的（1 起）✗ 而数据里的 tier 是 0 起 ✓
+     所以判断一律用 (tier+1) >= HIGH_TIER_CONFIRM ✓ 别在别处写死 5 ✓ */
+var HIGH_TIER_CONFIRM = 5;
 function fmtGold(n) {
   n = Math.max(0, Math.floor(+n || 0));
   if (n < 10000) { return String(n); }
@@ -2725,11 +2729,41 @@ function bagRender() {
       var _now = Date.now();
       if (sellBtn._t && _now - sellBtn._t < 600) { return; }
       sellBtn._t = _now;
-      /* round303: 单选卖出也复用 sellItems() —— 一套逻辑 ✗ 不会两处走偏 ✓
-         ★ 单选【不弹确认】✗（用户只要求批量 + 5 阶以上要确认 ✓
-           而 5 阶以上的【单件】本来就有原生的"二次确认"效果被否掉了 ✗
-           这里按用户原话办：批量要确认 ✓ 单件保持一点就走 ✓ */
-      sellItems([iid], false);
+      /* round303b ★ 用户的规矩：5 阶以上的装备要二次确认 ✗
+         单件也一样 ✗（"装备"不分单卖还是批量 ✓ 7 阶手一滑就没了才叫亏 ✓）
+         ★ 低阶单件保持"点一下就走"✗ 不给每次卖垃圾都弹框 ✓
+         ★ 确认框里写清楚能卖多少钱（用户要求 ✓ 价格问服务器 ✓） */
+      var _tierN = 0, _nm = '';
+      for (var _q = 0; _q < (BAG.items || []).length; _q++) {
+        if (String(BAG.items[_q].id) === String(iid)) {
+          _tierN = (((BAG.items[_q].item || {}).tier) || 0) + 1;
+          _nm = (BAG.items[_q].item || {}).name || '物品';
+          break;
+        }
+      }
+      if (_tierN < HIGH_TIER_CONFIRM) {
+        sellItems([iid], false);
+        return;
+      }
+      if (sellBtn.disabled) { return; }
+      sellBtn.disabled = true;
+      toast('正在算价…');
+      sellQuote([iid], function (total) {
+        sellBtn.disabled = false;
+        askConfirm({
+          title: '确认卖出',
+          lines: ['要卖出【' + _nm + '】吗？',
+                  (total > 0)
+                    ? ('★ 本次可得 <b style="color:' + GOLD_COL + '">' +
+                       fmtGold(total) + '</b> 金币')
+                    : '<span style="color:#ff7a6a">这件东西现在卖不了钱</span>'],
+          warn: '★ 这是 ' + _tierN + ' 阶的东西 ✗ 卖掉就拿不回来了',
+          ok: '确认出售'
+        }, function (yes) {
+          if (!yes) { return; }
+          sellItems([iid], false);
+        });
+      });
     };
     sellBtn.addEventListener('pointerdown', function (e) { e.preventDefault(); _sellGo(); });
     sellBtn.onclick = function () { _sellGo(); };
@@ -2844,6 +2878,25 @@ function sellItems(ids, isBatch) {
   });
 }
 
+/* round303b: 问服务器【这批东西现在能卖多少钱】✗ 只读 ✓ 不卖 ✓
+   ★ 为什么非要问服务器：价格公式只在 server/value.py 里 ✗
+     客户端自己再算一遍 = 两套公式 ✓ 迟早对不上 ✓（这个项目被这个坑过 ✓）
+   ★ 打不通就回 0 ✗ 确认框改成"价格待定"✗ 绝不编一个数出来 ✓ */
+function sellQuote(ids, cb) {
+  var tok = '';
+  try { tok = localStorage.getItem('token') || ''; } catch (e) {}
+  var q = [];
+  for (var i = 0; i < (ids || []).length && i < 100; i++) { q.push(encodeURIComponent(ids[i])); }
+  if (!q.length) { cb(0, {}); return; }
+  fetch('/api/sellquote?iids=' + q.join(','), { headers: { 'X-Token': tok } })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      if (j && j.ok) { cb(+(j.total || 0), j.prices || {}); }
+      else { cb(0, {}); }
+    })
+    .catch(function () { cb(0, {}); });
+}
+
 /* 批量出售入口（被按钮调用 ✓）★ 先弹二次确认 ✗ 确认了才真的卖 ✓ */
 function bagPickHas(id) {
   for (var k = 0; k < ((BAG.pick) || []).length; k++) {
@@ -2863,16 +2916,40 @@ function bagSellBatch() {
   }
   if (!ids.length) { toast('先勾选要卖的东西'); return; }
   var n = ids.length;
-  var lines = ['要卖出【' + n + '】件物品吗？'];
-  if (n > 100) { lines.push('一次最多 100 件 ✗ 这次只会卖前 100 件'); }
-  askConfirm({
-    title: '批量出售确认',
-    lines: lines,
-    warn: (hi >= 5) ? ('★ 里面有 ' + hi + ' 阶的东西 ✗ 卖掉就拿不回来了') : '',
-    ok: '确认出售'
-  }, function (yes) {
-    if (!yes) { return; }
-    sellItems(ids.slice(0, 100), true);
+  var capped = ids.slice(0, 100);
+  /* ★ 先问价 ✗ 再弹框 ✓（用户要求：确认框里要写这次卖多少钱 ✓）
+     问价是只读的 ✗ 慢一点也不会出事 ✓ 但按钮先禁掉防连点 ✓ */
+  var mb = document.getElementById('bagSellMulti');
+  if (mb) { mb.disabled = true; }
+  toast('正在算价…');
+  sellQuote(capped, function (total, prices) {
+    if (mb) { mb.disabled = false; }
+    var perItem = [];
+    for (var q = 0; q < capped.length; q++) {
+      var pr = prices[String(capped[q])];
+      if (pr) { perItem.push(pr); }
+    }
+    var lines = ['要卖出【' + n + '】件物品吗？'];
+    if (total > 0) {
+      lines.push('★ 本次可得 <b style="color:' + GOLD_COL + '">' +
+        fmtGold(total) + '</b> 金币');
+      if (n > 1 && perItem.length > 1) {
+        lines.push('<span style="color:#9aa4b2">（' + perItem.length + ' 件有收购价的合计 ✗ ' +
+          '没有价的卖不了）</span>');
+      }
+    } else {
+      lines.push('<span style="color:#ff7a6a">这些东西现在卖不了钱</span>');
+    }
+    if (n > 100) { lines.push('一次最多 100 件 ✗ 这次只会卖前 100 件'); }
+    askConfirm({
+      title: '批量出售确认',
+      lines: lines,
+      warn: (hi >= HIGH_TIER_CONFIRM) ? ('★ 里面有 ' + hi + ' 阶的东西 ✗ 卖掉就拿不回来了') : '',
+      ok: '确认出售'
+    }, function (yes) {
+      if (!yes) { return; }
+      sellItems(capped, true);
+    });
   });
 }
 

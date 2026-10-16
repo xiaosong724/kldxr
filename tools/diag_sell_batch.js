@@ -220,6 +220,42 @@ function dbGold(name) {
 
     const bagN = await B.eval('return (typeof BAG !== "undefined" && BAG.items) ? BAG.items.length : -1;');
     ok(bagN === 5, 'bag shows 5 items (got ' + bagN + ')');
+
+    /* ---- single-selection highlight (the user reported it disappeared) ---- */
+    console.log('\n-- click a slot in NORMAL mode: what marks it as selected? --');
+    const r0 = await B.eval(
+      'var s = document.querySelectorAll("#bagGrid .slot[data-id]")[0];' +
+      'var r = s.getBoundingClientRect();' +
+      'return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });');
+    const p0 = JSON.parse(r0);
+    await B.clickAt(p0.x, p0.y);
+    await sleep(400);
+    const selInfo = await B.eval([
+      'var s = document.querySelectorAll("#bagGrid .slot[data-id]")[0];',
+      'if (!s) { return "NO-SLOT"; }',
+      'var cs = getComputedStyle(s);',
+      'return JSON.stringify({',
+      '  bagSel: (typeof BAG !== "undefined") ? BAG.sel : null,',
+      '  className: s.className,',
+      '  hasSelClass: s.classList.contains("sel"),',
+      '  backgroundImage: cs.backgroundImage.slice(0, 80),',
+      '  outline: cs.outline, boxShadow: cs.boxShadow.slice(0, 60),',
+      '  borderColor: cs.borderTopColor,',
+      '  inlineStyle: s.getAttribute("style") });',
+    ].join('\n'));
+    console.log('   ' + selInfo);
+    const SI = JSON.parse(selInfo);
+    ok(SI.bagSel !== null && SI.bagSel !== undefined, 'clicking a slot sets BAG.sel (' + SI.bagSel + ')');
+    ok(SI.hasSelClass === true, 'the clicked slot gets the .sel class');
+    /* round303b: the user reported the selection was invisible. Prove there is a mark
+       that the inline tier gradient cannot override (border/outline/box-shadow). */
+    const marked = (SI.outline && SI.outline.indexOf('none') < 0) ||
+      (SI.boxShadow && SI.boxShadow.indexOf('inset') >= 0 && /rgb/.test(SI.boxShadow) &&
+       SI.boxShadow !== 'none');
+    ok(SI.outline && SI.outline.indexOf('none') < 0,
+      'the selected slot has a real outline now (' + SI.outline + ')');
+    ok(/255,\s*216,\s*61/.test(String(SI.borderColor)),
+      'the selected slot has a gold border (' + SI.borderColor + ')');
     ok((await B.eval('return String(document.getElementById("bagPick") ? "y" : "n");')) === 'y',
       'the 批量选择 button exists in the DOM');
 
@@ -263,7 +299,7 @@ function dbGold(name) {
 
     // ---- batch button -> confirm dialog must appear, nothing sold yet ----
     console.log('\n-- click 批量出售 (must ask first) --');
-    B.reqs.length = 0;
+    B.reqs.length = 0;          // fresh window: only THIS dialog's traffic counts
     console.log('   ' + (await B.clickSel('#bagSellMulti')));
     await sleep(400);
     const dlg = await B.eval(
@@ -273,19 +309,31 @@ function dbGold(name) {
       '  body: (document.getElementById("askBody") || {}).textContent });');
     const D = JSON.parse(dlg);
     ok(D.shown === 'flex', 'the confirm dialog is visible');
+    /* NOTE: /api/sellquote is expected here (asking the price is read-only).
+       Only a real POST /api/sell counts as "it sold something". */
+    const soldAlready = function () {
+      return B.reqs.filter(function (r) {
+        return r.indexOf('/api/sell ') >= 0 && r.indexOf('/api/sellquote') < 0;
+      }).length;
+    };
+    ok(soldAlready() === 0, 'NOTHING was sold before confirming (only the quote was asked)');
+    ok(B.reqs.filter(function (r) { return r.indexOf('/api/sellquote') >= 0; }).length >= 1,
+      'it asked the server for a price (read-only)');
     ok(/批量出售确认/.test(String(D.title)), 'dialog title is right ("' + D.title + '")');
     ok(/3/.test(String(D.body)), 'dialog says 3 items ("' + D.body + '")');
     ok(!/阶/.test(String(D.body)), 'no high-tier warning for 3 low-tier items ("' + D.body + '")');
-    ok(B.reqs.filter(function (r) { return r.indexOf('/api/sell') >= 0; }).length === 0,
-      'NOTHING was sold before confirming');
+    /* round303b: the user asked the confirm box to state how much this sale pays */
+    ok(/本次可得/.test(String(D.body)), 'the dialog states the amount ("' + D.body + '")');
+    const quoted = Number((String(D.body).match(/本次可得\s*([0-9.]+)/) || [])[1]);
+    ok(quoted > 0, 'the stated amount is a real number (' + quoted + ')');
+    console.log('   quoted total in dialog: ' + quoted);
 
     // ---- cancel keeps the items ----
     console.log('\n-- cancel must not sell --');
     console.log('   ' + (await B.clickSel('#askNo')));
     await sleep(400);
     const afterCancel = await B.eval('return JSON.stringify({ n: BAG.items.length, pick: BAG.pick.length });');
-    ok(B.reqs.filter(function (r) { return r.indexOf('/api/sell') >= 0; }).length === 0,
-      'cancel sent no /api/sell');
+    ok(soldAlready() === 0, 'cancel sent no /api/sell');
     ok(/"n":5/.test(String(afterCancel)), 'all 5 items are still in the bag ' + afterCancel);
 
     // ---- confirm actually sells, and the bag refreshes by itself ----
@@ -295,7 +343,9 @@ function dbGold(name) {
     B.reqs.length = 0;
     console.log('   ' + (await B.clickSel('#askYes')));
     await sleep(2000);
-    const sells = B.reqs.filter(function (r) { return r.indexOf('/api/sell') >= 0; });
+    const sells = B.reqs.filter(function (r) {
+      return r.indexOf('/api/sell ') >= 0 && r.indexOf('/api/sellquote') < 0;
+    });
     ok(sells.length >= 1, 'exactly one /api/sell request: ' + JSON.stringify(sells));
     ok(sells.length === 1 && /iids/.test(sells[0]), 'it used the batch form (iids): ' + JSON.stringify(sells));
     const after = await B.eval('return JSON.stringify({ n: BAG.items.length, msg: BAG.msg });');

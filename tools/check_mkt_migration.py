@@ -60,12 +60,40 @@ gold_nonzero = c.execute('SELECT COUNT(*) FROM roles WHERE gold <> 0').fetchone(
 c.close()
 print('  copy starts at version %d (roles=%d items=%d gold<>0=%d)'
       % (v_before, roles_before, items_before, gold_nonzero))
-ok(v_before == 5, 'the live db really is at version 5')
+ok(v_before in (5, 6), 'the live db is at a version this migration knows (%d)' % v_before)
 
 v0, v1, ran = dbmod.ensure_tables(cfg)
 print('  ensure_tables -> %d => %d, %d statements' % (v0, v1, ran))
-ok(v0 == 5 and v1 == 6, 'upgraded 5 -> 6')
-ok(ran > 0, 'it actually ran %d statements' % ran)
+ok(v1 == 6, 'the db ends up at version 6')
+if v_before == 5:
+    ok(ran > 0, 'a v5 db is actually migrated (%d statements)' % ran)
+else:
+    ok(ran == 0, 'an already-migrated db runs nothing (idempotent, %d statements)' % ran)
+
+# the tables must exist regardless of which path we took
+c0 = sqlite3.connect(copy)
+_have = [r[0] for r in c0.execute(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('listings','trade_log')")]
+c0.close()
+ok(sorted(_have) == ['listings', 'trade_log'],
+   'both exchange tables exist after ensure_tables (%s)' % _have)
+
+# prove the 5 -> 6 path separately, so this check never becomes a no-op
+down = os.path.join(tmpdir, 'v5.db')
+src2 = sqlite3.connect('file:%s?mode=ro' % LIVE, uri=True)
+dst2 = sqlite3.connect(down)
+src2.backup(dst2)
+dst2.close()
+src2.close()
+c2 = sqlite3.connect(down)
+for t in ('listings', 'trade_log'):
+    c2.execute('DROP TABLE IF EXISTS %s' % t)
+c2.execute('PRAGMA user_version=5')
+c2.commit()
+c2.close()
+v0c, v1c, ranc = dbmod.ensure_tables({'db': down, 'data': tmpdir})
+ok(v0c == 5 and v1c == 6 and ranc > 0,
+   'a forced v5 copy really does 5 -> 6 (%d => %d, %d sql)' % (v0c, v1c, ranc))
 
 c = sqlite3.connect(copy)
 tabs = [r[0] for r in c.execute(

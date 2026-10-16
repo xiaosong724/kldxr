@@ -771,6 +771,91 @@ const PROBE = [
     console.log('        >> guard line 2669 saw: ' + guardSeen);
     await sleep(300);
 
+    console.log('\n-- Q14: single sell of a HIGH-tier item must ask first (round303b) --');
+    const g14 = await fetch(ORIGIN + '/api/admin/act', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin': at },
+      body: JSON.stringify({ act: 'give', name: ROLE, kind: 'sword', tier: 6 }),
+    }).then(x => x.json()).catch(() => null);
+    console.log('        give tier6 -> ' + JSON.stringify(g14));
+    await B.eval('openSet("bag"); bagFetch(bagRender); return 1;');
+    await sleep(1600);
+    const pick14 = await B.eval([
+      'if (typeof BAG === "undefined" || !BAG.items || !BAG.items.length) { return "NO-ITEMS"; }',
+      'var idx = -1;',
+      'for (var i = 0; i < BAG.items.length; i++) {',
+      '  if ((((BAG.items[i].item || {}).tier) || 0) + 1 >= 5) { idx = i; break; }',
+      '}',
+      'if (idx < 0) { return "NO-HIGH-TIER"; }',
+      'BAG.multi = false; BAG.pick = [];',
+      'BAG.sel = BAG.items[idx].id; BAG.msg = ""; bagRender();',
+      'var s = document.querySelector("#bagGrid .slot[data-i=\\"" + idx + "\\"]");',
+      'var r = s.getBoundingClientRect();',
+      'return JSON.stringify({ iid: BAG.sel, tier: (((BAG.items[idx].item || {}).tier) || 0) + 1,',
+      '  disabled: document.getElementById("bagSell").disabled,',
+      '  x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });',
+    ].join('\n'));
+    console.log('        ' + pick14);
+    let p14 = null;
+    try { p14 = JSON.parse(pick14); } catch (e) { }
+    if (p14 && !p14.disabled) {
+      /* instrument the real handler so a silent early-return cannot hide */
+      await B.eval(
+        'window.__q14 = [];' +
+        'var b = document.getElementById("bagSell");' +
+        '["pointerdown","click"].forEach(function (t) {' +
+        '  b.addEventListener(t, function (e) { window.__q14.push(t); }, true);' +
+        '});' +
+        'window.__q14fetch = [];' +
+        'var _of = window.fetch;' +
+        'window.fetch = function (u) { window.__q14fetch.push(String(u)); return _of.apply(this, arguments); };' +
+        'return 1;');
+      B.reqs.length = 0;
+      /* ★ 一定【现算】按钮位置 ✗ 不能用格子的坐标 ✓
+         这轮给背包多加了【批量】那一行按钮 ✗ 布局往下挪了 ✓
+         （自测就踩到了：照着格子的坐标点 ✗ 点在了空白处 ✓） */
+      const btnPos = await B.eval(
+        'var b = document.getElementById("bagSell");' +
+        'var r = b.getBoundingClientRect();' +
+        'var cx = Math.round(r.left + r.width / 2), cy = Math.round(r.top + r.height / 2);' +
+        'var top = document.elementFromPoint(cx, cy);' +
+        'return JSON.stringify({ x: cx, y: cy, onTop: top ? (top.id || top.tagName) : null });');
+      console.log('        sell button at: ' + btnPos);
+      const bp14 = JSON.parse(btnPos);
+      await B.mouse('mousePressed', bp14.x, bp14.y);
+      await sleep(50);
+      await B.mouse('mouseReleased', bp14.x, bp14.y);
+      await sleep(900);
+      console.log('        dom events: ' + (await B.eval('return JSON.stringify(window.__q14);')));
+      console.log('        fetch seen: ' + (await B.eval('return JSON.stringify(window.__q14fetch);')));
+      console.log('        btn disabled now: ' + (await B.eval('return document.getElementById("bagSell").disabled;')));
+      console.log('        errs: ' + JSON.stringify(B.errs.slice(0, 4)));
+      const dlg14 = await B.eval(
+        'var d = document.getElementById("askBox");' +
+        'return JSON.stringify({ shown: d ? getComputedStyle(d).display : "none",' +
+        '  title: (document.getElementById("askTitle") || {}).textContent,' +
+        '  body: (document.getElementById("askBody") || {}).textContent });');
+      console.log('        dialog: ' + dlg14);
+      let D14 = null;
+      try { D14 = JSON.parse(dlg14); } catch (e) { }
+      console.log('        >>> SINGLE HIGH-TIER ASKS FIRST: ' + (D14 && D14.shown === 'flex'));
+      console.log('        >>> says the amount: ' + /本次可得/.test(String(D14 && D14.body)));
+      console.log('        >>> warns about tier: ' + /阶/.test(String(D14 && D14.body)));
+      console.log('        >>> nothing sold yet: ' +
+        (B.reqs.filter(function (u) { return u.indexOf('/api/sell ') >= 0 && u.indexOf('sellquote') < 0; }).length === 0));
+      console.log('        >>> network so far: ' + JSON.stringify(B.reqs));
+      // cancel it and make sure the item is still there
+      await B.eval('askClose(false); return 1;');
+      await sleep(400);
+      const still14 = await B.eval(
+        'var n = 0;' +
+        'for (var i = 0; i < BAG.items.length; i++) { if (String(BAG.items[i].id) === String(' +
+        JSON.stringify(p14.iid) + ')) { n++; } }' +
+        'return n;');
+      console.log('        >>> after cancel the item is still in the bag: ' + (still14 === 1));
+    } else if (p14) {
+      console.log('        no high-tier item to test with (' + pick14 + ')');
+    }
+
     console.log('\n-- Q4: page errors so far --');
     console.log('        ' + JSON.stringify(B.errs.slice(0, 8)));
 

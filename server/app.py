@@ -192,6 +192,12 @@ class Api(BaseHTTPRequestHandler):
             return self.api_admin_players()
         if path == '/api/admin/who':
             return self.api_admin_who()
+        # round303: 卖东西前的【报价】（只读 ✗ 不动任何东西 ✓）
+        #   ★ 为什么要有这个接口：确认框里要写"这次能卖多少钱" ✗
+        #     而价格公式只在服务器的 value.py 里 ✗
+        #     客户端自己算一遍 = 两套公式 ✗ 迟早对不上 ✓（项目的老毛病 ✓）
+        if path == '/api/sellquote':
+            return self.api_sellquote()
         if path == '/ws-config.js':
             return self.ws_config()
         if path.startswith('/api/'):
@@ -740,6 +746,63 @@ class Api(BaseHTTPRequestHandler):
         return self._send(200, {'ok': True, 'sold': sold, 'total': int(total),
                                 'failed': int(failed)})
 
+
+    def api_sellquote(self):
+        """报价：这些背包装备【现在】卖给系统能拿多少钱（round303 只读 ✓）。
+
+        Why: the confirm dialog has to state the amount before anything is sold, and
+        the price formula lives in value.py only. Computing it again in JS would be a
+        second source of truth - this project has been bitten by exactly that.
+        The numbers here are the SAME function the sale itself uses (auth.sell_item
+        calls value.value_of the same way), so the dialog cannot promise one amount
+        and pay another.
+
+        GET /api/sellquote?iids=1,2,3      (max BATCH_SELL_MAX ids)
+        -> {"ok":true,"prices":{"1":2400,...},"total":2400}
+        """
+        ok, r = authmod.check_token(self.cfg, self._token())
+        if not ok:
+            return self._send(401, {'ok': False, 'error': r})
+        rid = r['role']['id']
+        # ★ 这里没有现成的 query 解析器 ✗ 就按本文件既有的写法手工切 ?iids= ✓
+        #   （_token() 就是这么干的 ✓ 保持一致 ✓）
+        raw = ''
+        if '?' in self.path:
+            for kv in self.path.split('?', 1)[1].split('&'):
+                if kv.startswith('iids='):
+                    raw = urllib.parse.unquote(kv[5:])
+                    break
+        ids = [x for x in str(raw).split(',') if x.strip()][:BATCH_SELL_MAX]
+        if not ids:
+            return self._send(400, {'ok': False, 'error': '\u6ca1\u7ed9\u7269\u54c1'})
+        # one db read for the whole bag, then price in memory
+        bag = {}
+        try:
+            for rec in authmod.bag_of(self.cfg, rid):
+                bag[str(rec['id'])] = rec
+        except Exception as e:
+            return self._send(500, {'ok': False, 'error': '\u8bfb\u80cc\u5305\u5931\u8d25\uff1a%r' % (e,)})
+        try:
+            import value as valuemod
+        except Exception as e:
+            return self._send(500, {'ok': False, 'error': '\u4ef7\u683c\u8868\u8bfb\u4e0d\u5230\uff1a%r' % (e,)})
+        prices = {}
+        total = 0
+        for one in ids:
+            rec = bag.get(str(one).strip())
+            if not rec:
+                continue
+            it = rec.get('item') or {}
+            if it.get('locked_by') or it.get('locked'):
+                continue
+            try:
+                p = int(valuemod.value_of(it, int(rec.get('stack') or 1)))
+            except Exception:
+                continue
+            if p > 0:
+                prices[str(one).strip()] = p
+                total += p
+        return self._send(200, {'ok': True, 'prices': prices, 'total': int(total)})
 
     def api_bag(self):
         """背包 + 手上的武器（只读 ✓ 打开面板/登录时拉一次就够了）"""

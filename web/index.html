@@ -349,6 +349,17 @@
   text-shadow:0 1px 2px #000,0 0 3px #000}
 /* ★ 第 56 轮（用户第 4 条）：高品阶用【底色】区分就够了 —— 不再画任何边框 ✓
    选中：提亮底色；已装备：右上角一个小绿点（不用框）*/
+/* round303b ★ 用户报："点击背包物品格的选中框没有了" —— 是真的坏了 ✗
+   病根：这条规则只改 background-image ✗
+        而格子身上有一句【内联】的品阶底色（linear-gradient ✓）
+        内联样式优先 ✗ 所以这条渐变永远被压掉 ✓ 根本看不见 ✓
+        （box-shadow 那条也只给"已装备"的 .cur ✗ 选中的格子什么都没有 ✓）
+   ★ 修：用 border + outline 双保险 ✗ 这两个不会被内联 background 影响 ✓
+     · 金边 = 选中（和批量勾选的金框同一套视觉 ✓ 但勾选那边是左上角打勾 ✓ 不冲突 ✓）
+     · 鼠标悬停本来就有一条淡金边 ✓ 选中要【明显更亮】才分得出来 ✓ */
+.slot.sel{border-color:#ffd83d;outline:1px solid #ffd83d;outline-offset:-1px;
+  box-shadow:inset 2px 2px 0 rgba(0,0,0,.5), inset -1px -1px 0 rgba(255,255,255,.18),
+  0 0 7px rgba(255,216,61,.55)}
 .slot.sel{background-image:linear-gradient(180deg,rgba(255,255,255,.22),rgba(255,255,255,.05))}
 .slot.cur::after{content:'';position:absolute;right:3px;top:3px;width:6px;height:6px;
   border-radius:50%;background:#8ee08a;box-shadow:0 0 4px #8ee08a}
