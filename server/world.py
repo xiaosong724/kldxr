@@ -1955,8 +1955,6 @@ class World(object):
                     mkmod.drop(self.mkt, l)
             for l, r in keep.items():
                 mkmod.add(self.mkt, r)
-        _dbg_loaded = [int(r['lid']) for r in mkmod.load_rows(rows)]
-        print('[dbg-load] replace=%r incoming lids=%s' % (replace, sorted(_dbg_loaded)))
         for row in mkmod.load_rows(rows):
             if int(row.get('lid') or 0) < 0:
                 # ★ 负数 lid 是【内存占位】（正在上架 ✗ 还没落库 ✓）不入内存 ✓
