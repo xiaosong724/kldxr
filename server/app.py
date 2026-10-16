@@ -45,6 +45,15 @@ from world import World   # noqa: E402
 
 DEFAULT_CFG = os.path.join(HERE, 'config.json')
 
+# round303: 一次最多卖几件（批量出售）。
+#   ★ 为什么要有上限：一个请求里循环 DELETE ✗ 没有任何上限的话
+#     改个包就能一次塞几千件 ✓ 把 saver 线程堵住 ✓
+#   ★ 和客户端那个 100 是同一个数 ✗ 改这里记得两边一起改 ✓
+#   上限算的是【成功卖出的件数】✓ 见 api_sell 里的注释 ✓
+BATCH_SELL_MAX = 100
+# 一次请求最多尝试多少条（含卖不掉的）—— 纯粹是防滥用保险 ✓
+BATCH_SELL_ATTEMPT_MAX = 1000
+
 # 静态文件的 MIME（.ogg/.mp3/.wav 必须有，不然音效放不出来 —— 这个坑踩过）
 MIME = {
     '.html': 'text/html; charset=utf-8',
@@ -667,25 +676,69 @@ class Api(BaseHTTPRequestHandler):
     # ---------- 背包 / 装备 ----------
 
     def api_sell(self, body):
-        """Sell one bag item to the system (round297).
+        """Sell bag items to the system (round297 single, round303 batch).
 
         Flow: validate + DELETE in auth.sell_item(), then post a 'gain' intent so
         the TICK thread credits the gold (memory is authoritative). The response
         carries the price so the client can show "+2,400" immediately.
+
+        round303: the batch form takes {"iids": [...]} and caps at BATCH_SELL_MAX.
+        A batch is best-effort on purpose: each item is its own DELETE, and the
+        reply says exactly how many went through, so a half-done batch shows the
+        truth instead of a vague failure. Gold is credited as one summed intent.
         """
         ok, r = authmod.check_token(self.cfg, self._token())
         if not ok:
             return self._send(401, {'ok': False, 'error': r})
         rid = r['role']['id']
-        ok2, price, name = authmod.sell_item(self.cfg, rid, body.get('iid'))
-        if not ok2:
-            return self._send(400, {'ok': False, 'error': price})
+        raw = body.get('iids')
+        if raw is None:
+            # ---- single (unchanged behaviour) ----
+            ok2, price, name = authmod.sell_item(self.cfg, rid, body.get('iid'))
+            if not ok2:
+                return self._send(400, {'ok': False, 'error': price})
+            try:
+                if self.world:
+                    self.world.inbox.put(('gain', None, (rid, int(price), 'sell')))
+            except Exception as e:
+                return self._send(500, {'ok': False, 'error': '\u5165\u8d26\u5931\u8d25\uff1a%r' % (e,)})
+            return self._send(200, {'ok': True, 'gold': int(price), 'name': name})
+        # ---- batch ----
+        if not isinstance(raw, list):
+            return self._send(400, {'ok': False, 'error': '\u53c2\u6570\u4e0d\u5bf9'})
+        # round303: 上限按【成功卖出的件数】算 ✗ 不是按数组前 100 个切 ✓
+        #   为什么：按位置切的话 ✗ 前面塞一堆不存在的 id
+        #     就能把真的东西挤出窗口 ✓ 玩家的东西一件也卖不掉 ✓
+        #     （自测抓到的：150 个假 id 排前面 → 6 件真的全被丢掉 ✓）
+        #   ATTEMPT_MAX 是保险 ✗ 免得有人塞几十万条把 saver 线程拖住 ✓
+        total = 0
+        sold = []
+        failed = 0
+        first_err = ''
+        for one in raw[:BATCH_SELL_ATTEMPT_MAX]:
+            if len(sold) >= BATCH_SELL_MAX:
+                break
+            try:
+                ok3, price3, _nm3 = authmod.sell_item(self.cfg, rid, one)
+            except Exception as e:
+                ok3, price3 = False, '\u5356\u51fa\u5931\u8d25\uff1a%r' % (e,)
+            if ok3:
+                total += int(price3)
+                sold.append(one)
+            else:
+                failed += 1
+                if not first_err:
+                    first_err = str(price3)
+        if not sold:
+            return self._send(400, {'ok': False,
+                                    'error': first_err or '\u4e00\u4ef6\u4e5f\u6ca1\u5356\u51fa\u53bb'})
         try:
-            if self.world:
-                self.world.inbox.put(('gain', None, (rid, int(price), 'sell')))
+            if self.world and total:
+                self.world.inbox.put(('gain', None, (rid, int(total), 'sell')))
         except Exception as e:
             return self._send(500, {'ok': False, 'error': '\u5165\u8d26\u5931\u8d25\uff1a%r' % (e,)})
-        return self._send(200, {'ok': True, 'gold': int(price), 'name': name})
+        return self._send(200, {'ok': True, 'sold': sold, 'total': int(total),
+                                'failed': int(failed)})
 
 
     def api_bag(self):

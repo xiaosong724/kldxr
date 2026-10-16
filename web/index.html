@@ -357,6 +357,16 @@
 .bagB.off{border-color:#a05a4a}
 .bagB:disabled{opacity:.45;cursor:default}
 .slot.cur{box-shadow:inset 2px 2px 0 rgba(0,0,0,.4), inset -1px -1px 0 rgba(255,255,255,.18)}
+/* round303 ★ 批量出售的勾选框（用户要求：可以勾选 ✗ 二次确认后再卖 ✓）
+   只在【批量模式】下出现 ✓ 平时不占地方也不影响观感 ✓
+   勾中的格子：左上角打勾 + 整体加一圈金边（一眼看得出选了哪些 ✓）*/
+.slot.pick{outline:2px solid #ffd83d;outline-offset:-2px}
+.slot .pickbox{position:absolute;left:-4px;top:-5px;width:17px;height:17px;
+  border-radius:5px;background:#1b232c;border:1px solid #ffffff55;color:#ffd83d;
+  font-size:12px;line-height:15px;text-align:center;font-weight:700;z-index:2;
+  pointer-events:none}
+.slot.pick .pickbox{background:#ffd83d;color:#1b232c;border-color:#ffd83d}
+.bagB.on{background:#4a3d1c;border-color:#ffd83d99}
 /* ★ 等级不够：压暗 + 左下角标"需要 N 级"（一眼看出不是我不想穿 ✓）*/
 /* ★ 第 53/56 轮：等级不够【不禁止穿】—— 只用右上角一个百分比小字提示 ✓ 不画框 ✗ */
 .slot.lowmastery .lvl{position:absolute;right:2px;top:-1px;font-size:9px;color:#ffd83d;
@@ -547,6 +557,12 @@
    <div class="bagBtns"><button id="bagUse" class="bagB" disabled>使 用</button>
    <button id="bagSell" class="bagB off" disabled>卖给系统</button>
      <span class="bagTip" id="bagSelTip">点上面的格子选中一件装备（武器或防具）</span></div>
+   <!-- round303 ★ 用户要求：可以勾选 ✗ 批量出售 ✗ 二次确认后再卖 ✓
+        【卖给系统】保持原样（单选 ✗ 点一下就走 ✓ 不加摩擦 ✓）
+        批量出售是另一条路：先勾 ✗ 再确认 ✓（一次最多 100 件 ✓）-->
+   <div class="bagBtns"><button id="bagPick" class="bagB">批量选择</button>
+   <button id="bagSellMulti" class="bagB off" disabled>批量出售</button>
+     <span class="bagTip" id="bagPickTip">勾选多件一起卖（5 阶以上要再确认一次）</span></div>
 
    <!-- ★★ 第 56 轮（用户第 5 条）：以前这几行挂在"装备"标题下面 ✗
         点别的武器时它就跟着变 → 看着像"已装备的数值变了"✗ 多余

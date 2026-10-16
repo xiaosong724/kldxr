@@ -2007,7 +2007,9 @@ function tierHex(tier) {
 
 var BAG = { items: [], weapon: null, weaponItemId: null,
             armor: null, armorItemId: null,     // ★ 第 67 轮：防具 ✓
-            busy: false, msg: '', sel: null };
+            busy: false, msg: '', sel: null,
+            /* round303: 批量出售 —— multi = 是否在勾选模式 ✗ pick = 勾中的 id 列表 ✓ */
+            multi: false, pick: [] };
 
 function bagToken() {
   try { return localStorage.getItem('token') || ''; } catch (e) { return ''; }
@@ -2468,6 +2470,13 @@ function bagRender() {
     var cur = ((BAG.weaponItemId && String(e.id) === String(BAG.weaponItemId)) ||
                (BAG.armorItemId && String(e.id) === String(BAG.armorItemId))) ? ' cur' : '';
     var sel = (BAG.sel && String(BAG.sel) === String(e.id)) ? ' sel' : '';
+    /* round303: 批量勾选 —— 勾中的格子加 pick 类 ✗ 左上角一个方框 ✓ */
+    var _pk = false;
+    if (BAG.multi) {
+      for (var _pc = 0; _pc < (BAG.pick || []).length; _pc++) {
+        if (String(BAG.pick[_pc]) === String(e.id)) { _pk = true; break; }
+      }
+    }
     /* ★ 第 233 轮：损坏的装备要有明显样式（挂机回来一眼看得出来 ✓）*/
     var brk = !!it.broken;
     if (brk) { cur = ''; }   /* 坏了的显示损坏 ✗ 不显示已装备绿点 ✓ */
@@ -2475,10 +2484,11 @@ function bagRender() {
     var n = (e.stack || 1);
     var bg = 'background:linear-gradient(180deg,' + tierRgba(it.tier || 0, 0.40) + ','
              + tierRgba(it.tier || 0, 0.18) + ')';
-    html += '<div class="slot' + cur + sel + (lowm ? ' lowmastery' : '') +(brk ? ' broken' : '') +  '" style="' + bg + '"' +
+    html += '<div class="slot' + cur + sel + (_pk ? ' pick' : '') + (lowm ? ' lowmastery' : '') +(brk ? ' broken' : '') +  '" style="' + bg + '"' +
       ' data-id="' + e.id + '" data-w="' + (isW ? 1 : 0) + '" data-i="' + i + '"' +
       (lowm ? (' title="建议 ' + (it.reqLevel || 1) + ' 级（发挥 ' +
         Math.round(wMastery(it) * 100) + '%）"') : '') + '>' +
+      (BAG.multi ? ('<span class="pickbox">' + (_pk ? '✓' : '') + '</span>') : '') +
       '<span style="color:' + col + '">' + iconOfItem(it) + '</span>' +
       '<span class="tg">' + ((it.tier || 0) + 1) + '</span>' +      // ★ 显示 1~12 ✓
       (!isW && n > 1 ? '<span class="cnt">' + n + '</span>' : '') +
@@ -2670,6 +2680,33 @@ function bagRender() {
     sellBtn.disabled = !sellable;
     sellBtn.className = sellable ? 'bagB' : 'bagB off';
   }
+  /* round303: 批量按钮的亮/灰 + 提示文字 ✓（勾了几件也写在那里 ✓）*/
+  var _pickBtn = document.getElementById('bagPick');
+  var _multiBtn = document.getElementById('bagSellMulti');
+  var _pickTip = document.getElementById('bagPickTip');
+  /* 勾中的东西要是已经不在背包里了（卖掉了/换页了）✗ 顺手清掉 ✓ */
+  if (BAG.pick && BAG.pick.length) {
+    BAG.pick = BAG.pick.filter(function (id) {
+      for (var _z = 0; _z < (BAG.items || []).length; _z++) {
+        if (String(BAG.items[_z].id) === String(id)) { return true; }
+      }
+      return false;
+    });
+  }
+  if (_pickBtn) {
+    _pickBtn.textContent = BAG.multi ? '退出批量' : '批量选择';
+    _pickBtn.className = BAG.multi ? 'bagB on' : 'bagB';
+  }
+  if (_multiBtn) {
+    var _pn = (BAG.pick || []).length;
+    _multiBtn.textContent = _pn ? ('批量出售 (' + _pn + ')') : '批量出售';
+    _multiBtn.disabled = !_pn;
+  }
+  if (_pickTip) {
+    _pickTip.textContent = BAG.multi
+      ? '点格子勾选 ✓ 再点【批量出售】'
+      : '勾选多件一起卖（5 阶以上会再确认一次）';
+  }
   /* round299 step 3: the click. Only asks the server - the price comes back from
      /api/sell (value.py). On success the bag refreshes and `me` carries the new
      balance on the next push, so the HUD updates by itself. */
@@ -2688,28 +2725,11 @@ function bagRender() {
       var _now = Date.now();
       if (sellBtn._t && _now - sellBtn._t < 600) { return; }
       sellBtn._t = _now;
-      sellBtn.disabled = true;
-      /* round301: the id goes into the request NOW (it used to be the captured
-         `sellId`). Keep the numeric form the server's int() expects. */
-      var reqId = iid;
-      var tok = '';
-      try { tok = localStorage.getItem('token') || ''; } catch (e) {}
-      fetch('/api/sell', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Token': tok },
-        body: JSON.stringify({ iid: reqId })
-      }).then(function (r) { return r.json(); }).then(function (j) {
-        if (j && j.ok) {
-          if (typeof toast === 'function') {
-            toast('卖出【' + (j.name || '物品') + '】+' + fmtGold(j.gold) + ' 金币');
-          }
-          if (typeof bagFetch === 'function') { bagFetch(); }
-        } else if (typeof toast === 'function') {
-          toast((j && j.error) || '卖不了');
-        }
-      }).catch(function () {
-        if (typeof toast === 'function') { toast('网络错误'); }
-      }).then(function () { sellBtn.disabled = false; });
+      /* round303: 单选卖出也复用 sellItems() —— 一套逻辑 ✗ 不会两处走偏 ✓
+         ★ 单选【不弹确认】✗（用户只要求批量 + 5 阶以上要确认 ✓
+           而 5 阶以上的【单件】本来就有原生的"二次确认"效果被否掉了 ✗
+           这里按用户原话办：批量要确认 ✓ 单件保持一点就走 ✓ */
+      sellItems([iid], false);
     };
     sellBtn.addEventListener('pointerdown', function (e) { e.preventDefault(); _sellGo(); });
     sellBtn.onclick = function () { _sellGo(); };
@@ -2757,7 +2777,105 @@ function bagRender() {
   }
 }
 
-/* 悬停详情（MC 那种提示框 ✓）*/
+/* ============================================================
+   round303: 卖给系统（单件 / 批量共用一套）
+   ------------------------------------------------------------
+   ★ 服务器权威：价格由服务器算（value.py ✓）✗ 客户端不猜 ✓
+   ★ 卖出去之后【本地先删掉那一行】✗ 再拉一次背包 ✓
+     为什么要本地先删：用户报过"卖完了背包里还在 ✗ 重进才消失"✓
+     只有 bagFetch 一条路的话 ✗ 那一次请求慢一点/失败一点
+     界面就停在旧样子 ✗ 看着就像没卖成功 ✓
+   ★ 批量：服务端一次最多 100 件 ✓（超了只卖前 100 ✓ 会明确告诉你 ✓）
+   ============================================================ */
+function sellItems(ids, isBatch) {
+  ids = (ids || []).filter(function (v) { return v !== null && v !== undefined; });
+  if (!ids.length) { return; }
+  var tok = '';
+  try { tok = localStorage.getItem('token') || ''; } catch (e) {}
+  var sellBtn = document.getElementById('bagSell');
+  var multiBtn = document.getElementById('bagSellMulti');
+  if (sellBtn) { sellBtn.disabled = true; }
+  if (multiBtn) { multiBtn.disabled = true; }
+  fetch('/api/sell', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Token': tok },
+    body: JSON.stringify(isBatch ? { iids: ids } : { iid: ids[0] })
+  }).then(function (r) { return r.json(); }).then(function (j) {
+    if (j && j.ok) {
+      var gone = (j.sold && j.sold.length) ? j.sold : ids;
+      /* 本地先删 ✗ 界面立刻正确 ✓（下面的 bagFetch 只是跟服务器再对一次账 ✓）*/
+      try {
+        if (typeof BAG !== 'undefined' && BAG && BAG.items) {
+          BAG.items = BAG.items.filter(function (x) {
+            for (var k = 0; k < gone.length; k++) {
+              if (String(gone[k]) === String(x.id)) { return false; }
+            }
+            return true;
+          });
+          if (BAG.sel !== null && BAG.sel !== undefined) {
+            var _still = false;
+            for (var q = 0; q < BAG.items.length; q++) {
+              if (String(BAG.items[q].id) === String(BAG.sel)) { _still = true; break; }
+            }
+            if (!_still) { BAG.sel = null; }
+          }
+          if (typeof bagRender === 'function') { bagRender(); }
+        }
+      } catch (e) { }
+      if (typeof toast === 'function') {
+        if (j.total !== undefined && j.sold && j.sold.length > 1) {
+          toast('卖出 ' + j.sold.length + ' 件 +' + fmtGold(j.total) + ' 金币');
+        } else {
+          toast('卖出【' + (j.name || '物品') + '】+' + fmtGold(j.total !== undefined ? j.total : j.gold) + ' 金币');
+        }
+      }
+      if (j && j.failed) { toast('有 ' + j.failed + ' 件没能卖出（状态已变化）'); }
+      if (typeof bagFetch === 'function') { bagFetch(bagRender); }
+    } else if (typeof toast === 'function') {
+      toast((j && j.error) || '卖不了');
+    }
+  }).catch(function () {
+    if (typeof toast === 'function') { toast('网络错误'); }
+  }).then(function () {
+    /* 只负责解禁 ✗ 真正的亮/灰还是 bagRender 说了算 ✓ */
+    if (sellBtn) { sellBtn.disabled = false; }
+    if (typeof bagRender === 'function') { bagRender(); }
+    if (multiBtn) { multiBtn.disabled = !(typeof BAG !== 'undefined' && BAG.pick && BAG.pick.length); }
+  });
+}
+
+/* 批量出售入口（被按钮调用 ✓）★ 先弹二次确认 ✗ 确认了才真的卖 ✓ */
+function bagPickHas(id) {
+  for (var k = 0; k < ((BAG.pick) || []).length; k++) {
+    if (String(BAG.pick[k]) === String(id)) { return true; }
+  }
+  return false;
+}
+function bagSellBatch() {
+  if (typeof BAG === 'undefined' || !BAG) { return; }
+  var ids = [], hi = 0;
+  for (var j = 0; j < (BAG.items || []).length; j++) {
+    var r2 = BAG.items[j];
+    if (!bagPickHas(r2.id)) { continue; }
+    ids.push(r2.id);
+    var t = (((r2.item || {}).tier) || 0) + 1;      /* tier 是 0 起的 ✗ 显示要 +1 ✓ */
+    if (t > hi) { hi = t; }
+  }
+  if (!ids.length) { toast('先勾选要卖的东西'); return; }
+  var n = ids.length;
+  var lines = ['要卖出【' + n + '】件物品吗？'];
+  if (n > 100) { lines.push('一次最多 100 件 ✗ 这次只会卖前 100 件'); }
+  askConfirm({
+    title: '批量出售确认',
+    lines: lines,
+    warn: (hi >= 5) ? ('★ 里面有 ' + hi + ' 阶的东西 ✗ 卖掉就拿不回来了') : '',
+    ok: '确认出售'
+  }, function (yes) {
+    if (!yes) { return; }
+    sellItems(ids.slice(0, 100), true);
+  });
+}
+
 function bagTipAt(e, el) {
   var box = document.getElementById('bagTipBox');
   if (!box || !el) { return; }
@@ -2922,6 +3040,24 @@ function bindBag() {
       var el = e.target;
       while (el && el !== grid && !(el.getAttribute && el.getAttribute('data-id'))) { el = el.parentNode; }
       if (!el || el === grid || !el.getAttribute) { return; }
+      /* round303: 批量模式下点格子 = 勾选/取消勾选 ✗ 不再走"选中看数值" ✓
+         （两种模式分开 ✗ 免得手滑一下既勾了又换了选中 ✓）*/
+      if (BAG.multi) {
+        var _id = el.getAttribute('data-id');
+        var _hit = -1;
+        for (var _k = 0; _k < (BAG.pick || []).length; _k++) {
+          if (String(BAG.pick[_k]) === String(_id)) { _hit = _k; break; }
+        }
+        if (_hit >= 0) { BAG.pick.splice(_hit, 1); }
+        else {
+          /* 一次最多 100 件（和服务端一致 ✓ 到顶了就直接说 ✓ 不然白勾 ✓）*/
+          if ((BAG.pick || []).length >= 100) { toast('一次最多勾 100 件'); }
+          else { BAG.pick.push(_id); }
+        }
+        BAG.msg = '';
+        bagRender();
+        return;
+      }
       /* ★ 第 54 轮（用户要求）：点武器 = 【选中】它（面板显示它的数值 ✓）
          真正穿上要再按【使用】按钮 ✓ —— 免得手一滑就换了装备 ✗
          ★ 材料只选中看一眼，不参与穿 ✓ */
@@ -2945,6 +3081,26 @@ function bindBag() {
       var act = useBtn.getAttribute('data-act');
       if (act === 'use' && BAG.sel) { bagEquip(BAG.sel); }
       else if (act === 'off') { bagUnequip(); }
+    };
+  }
+  /* round303: 批量选择的开关 + 批量出售（用户要求 ✓）
+     ★ 退出批量时把勾全清掉 ✗ 不然下次进来还留着上次的勾 ✓ 会误卖 ✓ */
+  var pickBtn = document.getElementById('bagPick');
+  if (pickBtn) {
+    pickBtn.onclick = function (e) {
+      if (e) { e.preventDefault(); }
+      BAG.multi = !BAG.multi;
+      if (!BAG.multi) { BAG.pick = []; }
+      BAG.msg = '';
+      bagRender();
+    };
+  }
+  var multiBtn = document.getElementById('bagSellMulti');
+  if (multiBtn) {
+    multiBtn.onclick = function (e) {
+      if (e) { e.preventDefault(); }
+      if (BAG.busy) { return; }
+      bagSellBatch();
     };
   }
   // 点装备槽 = 脱下（MC 那种"点一下就摘"✓）
@@ -3192,6 +3348,58 @@ function toast(msg) {
   _toastEl.style.opacity = '1';
   if (_toastTimer) { clearTimeout(_toastTimer); }
   _toastTimer = setTimeout(function () { _toastEl.style.opacity = '0'; }, 1600);
+}
+
+/* ============================================================
+   round303: 二次确认弹窗（用户要求：批量出售 / 5 阶以上装备 都要再问一次）
+   ------------------------------------------------------------
+   ★ 为什么不用浏览器自带的 confirm()：
+     · 它是【原生窗口】✗ 手机上难看 ✗ 还会卡住整个页面（渲染循环也停 ✓）
+     · 这个项目的界面全是自己画的 ✓ 保持一套观感 ✓
+   ★ 用法（回调式 ✗ 不阻塞）：
+       askConfirm({ title, lines:[], warn, ok }, function (yes) { ... });
+   ★ 同时只允许一个弹窗 ✓ 重复调用会把上一个直接当"取消"结束掉（不会泄漏回调 ✓）
+   ============================================================ */
+var _askEl = null, _askCb = null;
+function askConfirm(o, cb) {
+  if (_askCb) { var _prev = _askCb; _askCb = null; try { _prev(false); } catch (e) { } }
+  if (!_askEl) {
+    _askEl = document.createElement('div');
+    _askEl.id = 'askBox';
+    _askEl.style.cssText = 'position:fixed;inset:0;z-index:95;display:none;' +
+      'background:#000000aa;align-items:center;justify-content:center';
+    var box = document.createElement('div');
+    /* 点遮罩 = 取消 ✓（和大多数游戏一致 ✓）*/
+    _askEl.onclick = function (e) { if (e.target === _askEl) { askClose(false); } };
+    box.id = 'askInner';
+    box.style.cssText = 'min-width:250px;max-width:86vw;background:#141a22;' +
+      'border:1px solid #ffd83d55;border-radius:12px;padding:16px 18px;' +
+      'box-shadow:0 10px 34px #000c;color:#e8eef6;font-size:13px;line-height:1.7';
+    box.innerHTML = '<div id="askTitle" style="color:#ffd83d;font-weight:700;' +
+      'font-size:15px;margin-bottom:8px"></div>' +
+      '<div id="askBody"></div>' +
+      '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">' +
+      '<button id="askNo" class="bagB">取 消</button>' +
+      '<button id="askYes" class="bagB off">确 定</button></div>';
+    _askEl.appendChild(box);
+    document.body.appendChild(_askEl);
+    box.querySelector('#askNo').onclick = function () { askClose(false); };
+    box.querySelector('#askYes').onclick = function () { askClose(true); };
+  }
+  document.getElementById('askTitle').textContent = o.title || '确认';
+  document.getElementById('askBody').innerHTML = (o.lines || []).map(function (s) {
+    return '<div>' + s + '</div>';
+  }).join('') + (o.warn
+    ? '<div style="color:#ff7a6a;margin-top:6px">' + o.warn + '</div>' : '');
+  document.getElementById('askYes').textContent = o.ok || '确 定';
+  _askCb = cb;
+  _askEl.style.display = 'flex';
+}
+function askClose(yes) {
+  var cb = _askCb;
+  _askCb = null;
+  if (_askEl) { _askEl.style.display = 'none'; }
+  if (cb) { try { cb(!!yes); } catch (e) { } }
 }
 
 /* ---------- wsUrl ---------- */
