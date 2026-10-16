@@ -146,6 +146,20 @@ class Net(object):
             self.world.post_intent(conn.cid, 'armorset',
                                    {'armor': _r2, 'itemId': int((d or {}).get('itemId') or 0)})
             return
+        # ★ round304v：一键整理（★ 要写库 ✗ 在网络线程做 ✓ 和 equip 同一类 ✓）
+        if t == 'bagsort':
+            import auth as authmod4
+            role = self.authed.get(conn.cid) or {}
+            _ok, _r = authmod4.bag_sort(self.cfg, role.get('id'))
+            if not _ok:
+                conn.push_text(P.pack('notice', text=str(_r)))
+                return
+            role['bag'] = _r                    # ★ 顺手把登录那份快照也换掉 ✓
+            # ★ 客户端拉背包走的是 HTTP /api/bag ✗ 这里没有那条下行 ✓
+            #   → 只用 notice 告诉它"去重拉"✗ 客户端认那个尾巴就会刷新 ✓
+            conn.push_text(P.pack(
+                'notice', text='背包已整理：武器 → 防具 → 材料，同品阶高的在前（背包已更新）'))
+            return
         if t in ('equip', 'unequip'):
             import auth as authmod3
             role = self.authed.get(conn.cid) or {}

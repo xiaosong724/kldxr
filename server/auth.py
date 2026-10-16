@@ -259,6 +259,71 @@ def logout(cfg, token):
 
 # ---------------------------------------------------------------- 背包 / 装备（第 47 轮）
 
+# 分类顺序（★ 一键整理用 ✗ 和 value.CAT_ORDER 是一个口径 ✓）
+_SORT_CAT = {'weapon': 0, 'armor': 1, None: 2}
+#   同一类里再按"小类"排（★ 用户："按分类和种类品质进行排序"✓）
+_SORT_KIND = {
+    'dagger': 0, 'sword': 1, 'saber': 2, 'staff': 3, 'spear': 4, 'axe': 5,
+    'hammer': 6, 'bow': 7, 'armor': 0, 'helmet': 1, 'boots': 2,
+}
+
+
+def bag_sort(cfg, role_id):
+    """一键整理：给背包排个序 ✗ 把顺序写进 items.slot_index ✓
+
+    ★★ round304v（用户："增加一个一键整理的按钮，按分类和种类品质进行排序"）★★
+    ★ 顺序规则（都是"一眼能找到"优先 ✓）：
+        ① 大类：武器 → 防具 → 材料 → 其它
+        ② 小类：剑/刀/棍…（武器）· 甲/盔/靴（防具）· 材料按名字
+        ③ 品质：同一小类里【品阶高的在前】✗ 同阶按物品等级 ✓
+        ④ 品阶等级都一样：按名字（稳定 ✗ 不会每次整理都变顺序 ✓）
+    ★ 为什么用 slot_index 而不是每次读的时候现算：
+        现算的话玩家【自己摆的顺序】就没了 ✗ 而且"整理"这个词本身就是"存下来"✓
+      （slot_index 这个列一直在写 -1 ✗ 但从来没人读 ✓ 正好拿来用 ✓）
+    ★ 线程：这是【读 + 写库】✗ 所以只能在网络线程调 ✓（见 net.py ✓）
+    返回 (ok, 新的背包列表 / 错误说明) ✓
+    """
+    import json
+    try:
+        with dbmod.db(cfg) as c:
+            rows = c.execute(
+                'SELECT id, item_json, stack FROM items'
+                ' WHERE role_id=? AND in_storage=0', (role_id,)).fetchall()
+            items = []
+            for rid, js, stack in rows:
+                try:
+                    it = json.loads(js)
+                except Exception:
+                    continue
+                if not isinstance(it, dict):
+                    continue
+                items.append((int(rid), it, int(stack or 1)))
+            def _key(rec):
+                rid, it, _st = rec
+                slot = it.get('slot') or None
+                cat = _SORT_CAT.get(slot, 3) if slot else 2
+                # ★ 武器的"小类"在 look 里（sword/staff/axe… ✓）✗ 不是 kind
+                #   （kind 只有材料才有 ✓ 自测抓到的：拿 kind 当小类会把所有武器
+                #     都归成同一类 ✗ 于是品阶高的反而排到后面 ✓）
+                kind = str(it.get('look') or it.get('kind') or '')
+                return (cat,
+                        _SORT_KIND.get(kind, 50),
+                        -int(it.get('tier') or 0),
+                        -int(it.get('itemLv') or 0),
+                        str(it.get('name') or ''),
+                        rid)
+            items.sort(key=_key)
+            n = 0
+            for idx, rec in enumerate(items):
+                c.execute('UPDATE items SET slot_index=? WHERE id=? AND role_id=?',
+                          (idx, rec[0], role_id))
+                n += 1
+        #   整理完读一次（顺序就是刚写的那个 ✓ 和面板看到的完全一致 ✓）
+        return True, bag_of(cfg, role_id)
+    except Exception as e:
+        return False, '整理失败：%r' % (e,)
+
+
 def bag_of(cfg, role_id, cap=2000):
     """读【背包】（in_storage=0）里的东西 → [{id, item}, ...]（新的在前 ✓）
 
@@ -282,9 +347,12 @@ def bag_of(cfg, role_id, cap=2000):
     out = []
     try:
         with dbmod.db(cfg) as c:
+            # ★ round304v：整理过的按 slot_index 排 ✗ 没整理过的还是"新的在前"✓
+            #   （一条 ORDER BY 就够 ✗ 不用加列不用迁移 ✓）
             rows = c.execute(
                 'SELECT id, item_json, stack FROM items WHERE role_id=? AND in_storage=0'
-                ' ORDER BY id DESC LIMIT ?', (role_id, int(cap))).fetchall()
+                ' ORDER BY (slot_index IS NULL), slot_index, id DESC LIMIT ?',
+                (role_id, int(cap))).fetchall()
     except Exception:
         return out
     for rid, js, stack in rows:

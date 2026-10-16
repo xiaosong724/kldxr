@@ -2696,6 +2696,20 @@ function bagRender() {
     sellBtn.className = sellable ? 'bagB' : 'bagB off';
   }
   /* round303: 批量按钮的亮/灰 + 提示文字 ✓（勾了几件也写在那里 ✓）*/
+  var _sortBtn = document.getElementById('bagSort');
+  if (_sortBtn && !_sortBtn._b) {
+    _sortBtn._b = true;
+    _sortBtn.onclick = function () {
+      /* ★ round304v（用户："一键整理"）★
+         ★ 顺序由【服务端】定 ✗ 客户端不自己排 ✓
+           （排序规则和 slot_index 都在服务端 ✓ 两端各排一次迟早不一致 ✓）
+         ★ 发完只等着 notice"（背包已更新）"✗ 它会自动重拉背包 ✓ */
+      if (MKT.busy) { return; }
+      BAG.msg = '正在整理…';
+      bagRender();
+      wsSend('bagsort', {});
+    };
+  }
   var _pickBtn = document.getElementById('bagPick');
   var _multiBtn = document.getElementById('bagSellMulti');
   var _pickTip = document.getElementById('bagPickTip');
@@ -3364,13 +3378,22 @@ function mktRow(r) {
        → 名字那一格立刻多出 60px ✗ 5 个字的装备名能完整显示 ✓
        → 数量滑条也就在【点开之后】出现（用户第 3 条要的正是这个 ✓）
      ★ 顺手把字都调小半号（用户："把文字改小点"✓）*/
-  var sub = '★' + (tier + 1) + ' 阶' + (lv ? (' · Lv' + lv) : '') +
-    (stack > 1 ? (' · ×' + stack) : '') + ' · 卖家 ' + (isMe ? '（你自己）' : ('#' + seller));
+  /* ★★ round304u（用户："卖家名字看不到，可以把它改到点击商品的悬浮信息中"）★★
+     ★ 原来这里塞了"★N 阶 · LvN · ×N · 卖家 #1234" ✗ 在半屏宽里必然被截 ✓
+       （卖家 id 又长又不好看 ✓ 截断的还正好是它 ✓）
+     ★ 现在行里只留【阶数 / 物品等级 / 买几个】✗ 卖家挪进详情浮窗 ✓
+       → 行里短了 ✗ 而且这些字【不用再缩】✗ 可以回到 12px ✓
+     ★ "你自己的"也挪走了 ✗ 详情浮窗里会写（那边判得更准 ✓）*/
+  var sub = '★' + (tier + 1) + ' 阶' + (lv ? (' · Lv' + lv) : '');
   return '<div class="mktRow" data-mktrow="' + lid + '"' +
     ' style="border-left-color:' + tierHex(tier) + '">' +
     '<span class="mktIco" style="background:' + tierRgba(tier, 0.18) + '">' +
       '<span class="mktTier">' + (tier + 1) + '</span>' + mktIcon(it, tier, icon) +
-      (stack > 1 ? ('<span class="mktCnt">×' + stack + '</span>') : '') +
+      /* ★★ round304u（用户："商品的图标上要显示物品数量"）★★
+         ★ 显示的是【还剩几个】= 第 12 格 ✗ 不是原来那一堆有几个 ✓
+           （买走 2 个之后要变成 ×2 ✗ 这才是买家想看的数 ✓）
+         ★ 1 个就不显示（大多数装备都是 1 ✗ 挂个 ×1 只是噪音 ✓）*/
+      ((+r[11] || 1) > 1 ? ('<span class="mktCnt">×' + (+r[11]) + '</span>') : '') +
       /* ★★ round304j（用户："耐久度的进度条显示在图标下方和背包一样"）★★
          挪到【图标那一格里】✗ 和背包格子上那条【同一个类、同一个位置、同一套色】✓
          （原来我放在名字那一行 ✗ 用户要的是和背包一致的观感 ✓）*/
@@ -3445,8 +3468,29 @@ function mktTipShow(rowEl, x, y) {
   var sinfo = { seller: rowEl._seller,
                 unit: (MKT.tab === 'mine') ? (src.price || 0) : (src[1] || 0),
                 qty: (MKT.tab === 'mine') ? 1 : (src[11] || 1) };
+  /* ★★ round304u：单价要【单独记在行元素上】★★
+     （用户报："点击购买时显示需要 0 金币"✓）
+     根因：_it 上的 __price 被 mktRender 当脏字段清掉了 ✗
+       （它只留 __seller ✗ 因为按钮要判"是不是我自己的"✓）
+       → 点购买时读 it.__price 得到 undefined ✗ 兜底成 0 ✓
+       → 确认框写"要花 0 金币"✗ 而真正扣钱走的是服务端的价 ✗ 所以扣得对 ✓
+     ★ 现在：sinfo 里已经有 unit（服务端第 2 格 ✓）✗ 直接记在行上 ✓
+       买的时候从这里读 ✗ 不再碰 _it 上的字段 ✓ */
+  rowEl._unit = sinfo.unit;
+  rowEl._qty = sinfo.qty;
+  /* ★ round304u：卖家 / 买家看得到的那些信息，挪进详情浮窗（行里放不下 ✓）
+     ★ 一行一条 ✗ 写在名字下面最显眼的位置 ✓
+     ★ "你自己的"也写在这（行里已经不写了 ✓）*/
+  var extra = '<span style="opacity:.75;font-size:11px">' +
+    (MKT.tab === 'mine'
+      ? ('挂单 #' + lid2 + ' · 单价 ' + fmtGold(sinfo.unit) + ' · 还剩 ' + sinfo.qty + ' 个')
+      : ('卖家：' + (String(rowEl._seller) === String(MKT.myRole)
+          ? '你自己' : ('#' + rowEl._seller)) +
+         ' · 单价 ' + fmtGold(sinfo.unit) +
+         ((+sinfo.qty || 1) > 1 ? (' · 还剩 ' + sinfo.qty + ' 个') : ''))) +
+    '</span><br>';
   var box = document.getElementById('bagTipBox');
-  bagTipShowAt(x, y, bagTipHTML(it, lid2, 'market', sinfo));
+  bagTipShowAt(x, y, extra + bagTipHTML(it, lid2, 'market', sinfo));
   if (box) { box._for = rowEl; }
 }
 
@@ -4149,8 +4193,11 @@ function bagTipBind() {
       if (act === 'buy') {
         var qb = box.querySelector('.qtyRow .qtyRange');
         var nq = qb ? (parseInt(qb.value, 10) || 1) : 1;
+        /* ★ 单价从【那一行】上读（mktTipShow 记的 ✓）✗ 不用 _it.__price（已清 ✓）*/
+        var _rowEl = box._for;
+        var _unit = (_rowEl && _rowEl._unit) || (it && it.__price) || 0;
         bagTipHide();
-        mktBuy(+id, (it && it.name) || '物品', (it && it.__price) || 0, nq);
+        mktBuy(+id, (it && it.name) || '物品', _unit, nq);
       }
       else if (act === 'unlist') { bagTipHide(); mktUnlist(+id, false); }
       else if (act === 'claim') { bagTipHide(); mktUnlist(+id, true); }
@@ -4269,12 +4316,94 @@ function bindBag() {
       if (e.key === 'Escape') { bagTipHide(); }
     });
   }
-  var grid = document.getElementById('bagGrid');
+  /* ★★★ round304v（用户："批量出售时可以滑动多选，像手机图库删除照片一样"）★★★
+     做法：按住不放划过格子 = 一路勾上（图库那套 ✓）
+       · 按下时记住"这一笔是【勾】还是【取消】"✗ 一路按同一个动作走 ✓
+         （从已勾的开始划 = 一路取消 ⚠ 这样手滑了也能划回去 ✓）
+       · 鼠标松开 / 手指抬起 → 结束这一笔 ✓
+       · 不阻止默认行为：不然页面滚不动（手机上很关键 ✓）
+     ★ 为什么要它：一个一个点 ✗ 卖 50 件材料要点 50 下 ✓ 用户说得对 ✓ */
+  var _drag = null;                  /* {on:true/false} = 这一笔是勾还是取消 ✓ */
+  var _dragSlot = function (node) {
+    var el = node;
+    while (el && el !== grid && !(el.getAttribute && el.getAttribute('data-id'))) { el = el.parentNode; }
+    if (!el || el === grid || !el.getAttribute) { return null; }
+    return el;
+  };
+  var _dragApply = function (el) {
+    if (!_drag || !el) { return; }
+    var id = el.getAttribute('data-id');
+    if (!id || el._dragDone === _drag) { return; }   /* 同一格不重复处理 ✓ */
+    el._dragDone = _drag;
+    var has = bagPickHas(id);
+    if (_drag.on && !has) {
+      if ((BAG.pick || []).length >= 100) { toast('一次最多勾 100 件'); return; }
+      BAG.pick.push(id);
+    } else if (!_drag.on && has) {
+      for (var k = 0; k < (BAG.pick || []).length; k++) {
+        if (String(BAG.pick[k]) === String(id)) { BAG.pick.splice(k, 1); break; }
+      }
+    } else {
+      return;                                        /* 状态没变 ✗ 不用重画 ✓ */
+    }
+    BAG.msg = '';
+    bagRender();
+  };
+  var _dragEnd = function () {
+    _drag = null;
+    var all = grid ? grid.querySelectorAll('.slot') : [];
+    for (var i = 0; i < all.length; i++) { all[i]._dragDone = null; }
+  };
+  if (grid && !grid._dragBound) {
+    grid._dragBound = true;
+    grid.addEventListener('mousedown', function (e) {
+      if (!BAG.multi) { return; }
+      var el = _dragSlot(e.target);
+      if (!el) { return; }
+      _drag = { on: !bagPickHas(el.getAttribute('data-id')) };
+      _dragApply(el);
+    });
+    grid.addEventListener('mouseover', function (e) {
+      if (!_drag) { return; }
+      _dragApply(_dragSlot(e.target));
+    });
+    /* 松手可能在棋盘外面 ✗ 所以挂在 window 上 ✓ */
+    window.addEventListener('mouseup', _dragEnd);
+    /* 手机上：touchmove 要 preventDefault 才不会一边滚一边勾 ✗
+       但那样就滚不动列表了 ✓ → 用【长按 250ms 才进入滑动多选】两全 ✓ */
+    var _tTimer = null;
+    grid.addEventListener('touchstart', function (e) {
+      if (!BAG.multi) { return; }
+      var el = _dragSlot(e.target);
+      if (!el) { return; }
+      var t = (e.touches && e.touches[0]) || {};
+      _tTimer = setTimeout(function () {
+        _tTimer = null;
+        _drag = { on: !bagPickHas(el.getAttribute('data-id')) };
+        _dragApply(el);
+        if (navigator.vibrate) { try { navigator.vibrate(15); } catch (x) { } }
+      }, 250);
+    }, { passive: true });
+    grid.addEventListener('touchmove', function (e) {
+      if (_tTimer) { clearTimeout(_tTimer); _tTimer = null; }
+      if (!_drag) { return; }                     /* 没进多选就让它正常滚动 ✓ */
+      if (e.cancelable) { e.preventDefault(); }   /* 进了多选就别滚了 ✓ */
+      var t = (e.touches && e.touches[0]) || null;
+      if (t) { _dragApply(_dragSlot(document.elementFromPoint(t.clientX, t.clientY))); }
+    }, { passive: false });
+    grid.addEventListener('touchend', function () {
+      if (_tTimer) { clearTimeout(_tTimer); _tTimer = null; }
+      _dragEnd();
+    }, { passive: true });
+  }
   if (grid) {
     grid.onclick = function (e) {
       var el = e.target;
       while (el && el !== grid && !(el.getAttribute && el.getAttribute('data-id'))) { el = el.parentNode; }
       if (!el || el === grid || !el.getAttribute) { return; }
+      /* ★ 滑动多选的那一笔已经处理过了 ✗ 别在 click 里再翻一次 ✓
+         （不然划过去=勾上 ✗ 松手时 click 又把它取消 ✓ 表现就是"划不动"✓）*/
+      if (el._dragDone) { el._dragDone = null; return; }
       /* round303: 批量模式下点格子 = 勾选/取消勾选 ✗ 不再走"选中看数值" ✓
          （两种模式分开 ✗ 免得手滑一下既勾了又换了选中 ✓）*/
       if (BAG.multi) {
