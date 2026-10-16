@@ -449,7 +449,13 @@
   </div>
 
   <!-- ★ 分类导航：点不同分类切不同面板（第 31 轮）-->
-  <div id="setTabsWrap"><div id="setTabs">
+  <!-- ★★★ 第 269 轮：菜单上显示版本号（用户："为什么你自己测试可以我测试还是不行"）★★★
+     我被这个问题卡了很久 ✗ 根本原因是【我看不出你那边跑的是哪一版】✓
+     → 加一个可见的版本号 ✗ 你一眼就能告诉我"我看到的是 v269 还是旧的"✓
+     这样我们就不会在"页面没更新"和"代码没修好"之间反复猜 ✓ -->
+  <div id="verTag" style="position:absolute;right:46px;top:14px;font-size:10px;
+       color:#ffffff55;pointer-events:none">v269</div>
+<div id="setTabsWrap"><div id="setTabs">
    <div class="tab" data-page="1" data-tab="bag">背包</div>
    <div class="tab" data-page="1" data-tab="party">组队</div>
    <div class="tab" data-page="1" data-tab="stat">属性</div>
