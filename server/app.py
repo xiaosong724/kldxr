@@ -213,6 +213,8 @@ class Api(BaseHTTPRequestHandler):
             return self.api_register(body)
         if path == '/api/login':
             return self.api_login(body)
+        if path == '/api/sell':
+            return self.api_sell(body)
         if path == '/api/logout':
             return self.api_logout()
         if path == '/api/admin/login':
@@ -663,6 +665,28 @@ class Api(BaseHTTPRequestHandler):
         return self._send(200, {'ok': True, 'act': 'give', 'item': w['name'], 'role': name})
 
     # ---------- 背包 / 装备 ----------
+
+    def api_sell(self, body):
+        """Sell one bag item to the system (round297).
+
+        Flow: validate + DELETE in auth.sell_item(), then post a 'gain' intent so
+        the TICK thread credits the gold (memory is authoritative). The response
+        carries the price so the client can show "+2,400" immediately.
+        """
+        ok, r = authmod.check_token(self.cfg, self._token())
+        if not ok:
+            return self._send(401, {'ok': False, 'error': r})
+        rid = r['role']['id']
+        ok2, price, name = authmod.sell_item(self.cfg, rid, body.get('iid'))
+        if not ok2:
+            return self._send(400, {'ok': False, 'error': price})
+        try:
+            if self.world:
+                self.world.inbox.put(('gain', None, (rid, int(price), 'sell')))
+        except Exception as e:
+            return self._send(500, {'ok': False, 'error': '\u5165\u8d26\u5931\u8d25\uff1a%r' % (e,)})
+        return self._send(200, {'ok': True, 'gold': int(price), 'name': name})
+
 
     def api_bag(self):
         """背包 + 手上的武器（只读 ✓ 打开面板/登录时拉一次就够了）"""

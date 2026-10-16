@@ -2859,6 +2859,55 @@ function bindBag() {
   }
   /* ★ 使用 / 脱下 按钮（第 54 轮 用户要求：点武器出现"使用"，穿上后变"脱下"）*/
   var useBtn = document.getElementById('bagUse');
+  /* round298: sell-to-system button.
+     Price comes from the server (value.py) - the client must NOT compute it,
+     otherwise a patched client could invent its own prices.
+     Shown only for items that are sellable: not equipped, not locked, has a price. */
+  var sellBtn = document.getElementById('bagSell');
+  var sellTip = document.getElementById('bagSellTip');
+  var sellable = !!(selItem && !selIsEquipped && selItem !== DEFAULT_W
+                       && !selItem.broken && !selItem.locked_by && !selItem.locked);
+  if (sellBtn) {
+    sellBtn.disabled = !sellable;
+    sellBtn.className = sellable ? 'bagB' : 'bagB off';
+  }
+  if (sellTip) {
+    sellTip.textContent = sellable ? ('\u2605 \u7cfb\u7edf\u6536\u8d2d\u4ef7\u8bf7\u70b9\u3010\u5356\u7ed9\u7cfb\u7edf\u3011') : '';
+  }
+  if (sellBtn && !sellBtn._b) {
+    sellBtn._b = true;
+    sellBtn.addEventListener('click', function () {
+      if (sellBtn.disabled || !selItem || !selItem.id) { return; }
+      if (sellTip) { sellTip.textContent = '\u5904\u7406\u4e2d\u2026'; }
+      sellBtn.disabled = true;
+      var tok = '';
+      try { tok = localStorage.getItem('token') || ''; } catch (e) {}
+      fetch('/api/sell', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Token': tok },
+        body: JSON.stringify({ iid: selItem.id })
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        if (j && j.ok) {
+          if (typeof toast === 'function') {
+            toast('\u5356\u51fa\u3010' + (j.name || '\u7269\u54c1') + '\u3011 +' + fmtGold(j.gold) + ' \u91d1\u5e01', '#ffd83d');
+          }
+          /* the server credits gold via the tick thread; refresh the bag so the
+             item disappears, and let `me` carry the new balance on the next push. */
+          if (typeof bagFetch === 'function') { bagFetch(); }   /* round298b: real name is bagFetch, not loadBag */
+        } else {
+          if (typeof toast === 'function') {
+            toast((j && j.error) || '\u5356\u4e0d\u4e86', '#ff8a6a');
+          }
+          if (sellTip) { sellTip.textContent = (j && j.error) || ''; }
+        }
+      }).catch(function (e) {
+        if (typeof toast === 'function') { toast('\u7f51\u7edc\u9519\u8bef', '#ff8a6a'); }
+        if (sellTip) { sellTip.textContent = '\u7f51\u7edc\u9519\u8bef'; }
+      }).then(function () {
+        sellBtn.disabled = false;
+      });
+    });
+  }
   if (useBtn) {
     useBtn.onclick = function (e) {
       if (e) { e.preventDefault(); }

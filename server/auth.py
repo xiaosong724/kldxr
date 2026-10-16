@@ -428,6 +428,62 @@ def unequip_armor(cfg, role_id):
     return True, None
 
 
+def sell_item(cfg, role_id, item_id):
+    """Sell one stack to the system. Returns (ok, price_or_reason, item_name).
+
+    \u2605\u2605 Server-authoritative (same rule as equip_weapon):
+        the client only says "sell item id=N"; whether it is his, whether it is
+        still in the bag, whether it is locked - all decided here from the db.
+
+    \u2605\u2605 This function does NOT touch roles.gold on purpose.
+        Gold is memory-authoritative (see docs v3 section 1); writing the db here
+        would be overwritten by the tick thread\u0027s periodic full save.
+        The caller posts a (\u0027gain\u0027, ...) intent instead, and the tick
+        thread credits it - online immediately, offline via pending_gold.
+    """
+    import json
+    try:
+        iid = int(item_id)
+    except Exception:
+        return False, '\u53c2\u6570\u4e0d\u5bf9', ''
+    try:
+        with dbmod.db(cfg) as c:
+            row = c.execute(
+                'SELECT item_json, stack FROM items'
+                ' WHERE id=? AND role_id=? AND in_storage=0',
+                (iid, role_id)).fetchone()
+            if not row:
+                return False, '\u80cc\u5305\u91cc\u6ca1\u6709\u8fd9\u4ef6\u4e1c\u897f', ''
+            try:
+                it = json.loads(row[0])
+            except Exception:
+                return False, '\u8fd9\u4ef6\u4e1c\u897f\u574f\u4e86', ''
+            if not isinstance(it, dict):
+                return False, '\u8fd9\u4ef6\u4e1c\u897f\u574f\u4e86', ''
+            # \u2605 \u9501\u5b9a\u4e2d\uff08\u4ea4\u6613\u6240\u4e0a\u67b6\u4e2d\uff09\u4e0d\u80fd\u5356
+            if it.get('locked_by') or it.get('locked'):
+                return False, '\u8fd9\u4ef6\u4e1c\u897f\u6b63\u5728\u4ea4\u6613\u6240\u4e0a\u67b6\uff0c\u4e0d\u80fd\u5356', ''
+            n = max(1, int(row[1] or 1))
+            try:
+                import value as valuemod
+                price = int(valuemod.value_of(it, n))
+            except Exception:
+                return False, '\u7b97\u4e0d\u51fa\u4ef7\u683c', ''
+            if price <= 0:
+                return False, '\u8fd9\u4ef6\u4e1c\u897f\u5356\u4e0d\u4e86\u94b1', ''
+            # \u2605 \u4e00\u6761 DELETE \u5c31\u591f\uff08\u91d1\u5e01\u4e0d\u5199\u5e93 \u2717 \u6240\u4ee5\u4e0d\u9700\u8981\u591a\u8bed\u53e5\u4e8b\u52a1\uff09
+            cur = c.execute('DELETE FROM items WHERE id=? AND role_id=? AND in_storage=0',
+                            (iid, role_id))
+            if cur.rowcount != 1:
+                return False, '\u7269\u54c1\u72b6\u6001\u5df2\u53d8\u5316\uff0c\u8bf7\u91cd\u8bd5', ''
+            c.commit()
+        name = str(it.get('name') or '\u7269\u54c1')
+        return True, price, name
+    except Exception as e:
+        return False, '\u5356\u51fa\u5931\u8d25\uff1a%r' % (e,), ''
+
+
+
 def equip_weapon(cfg, role_id, item_id, role_level):
     """装上一件武器 → (True, weapon 字典) / (False, 原因)
 
