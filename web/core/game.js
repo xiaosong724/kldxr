@@ -3376,7 +3376,8 @@ var AUTO = {
   detourT: 0,                 /* 侧向绕行还剩多久 */
   detourDir: 1,               /* 往哪边绕（左/右 ✓ 随机）*/
   stuckTries: 0,              /* 这个目标已经绕了几次 */
-  skipMid: '', skipUntil: 0   /* 暂时放弃的目标（绕 3 次还打不到 ✓）*/
+  skipMid: '', skipUntil: 0   /* 暂时放弃的目标（绕 3 次还打不到 ✓）*/,
+  attacking: false            /* ★ 第 214 轮：这一刀是不是【我】按下的 ✓ */
 };
 var AUTO_RANGE = 30.0;
 var AUTO_LOOT_R = 12.0;      /* 没怪时去捡东西的搜索半径 ✓ */
@@ -3443,7 +3444,14 @@ function autoRelease() {
      修：只要是我写的摇杆值，收手时一定还回去 ✓
      ★ 只清【我自己写的】✗ 玩家手指还按在摇杆上就不动它 ✓（AUTO.setInput 标记 ✓）*/
   if (AUTO.setInput) { jx = 0; jy = 0; AUTO.setInput = false; }
-  atkHeld = false;
+  /* ★★ 第 214 轮修的真 bug（用户："点击攻击按钮没有反应了"）★★
+     病根：这里原来无条件写 atkHeld = false ✗
+           而这个函数在【没开自动战斗】时每帧都会被调 ✓
+           → 玩家手点攻击键置 true ✗ 下一帧就被我清掉 ✓✓
+           → 攻击键完全没反应 ✓ 一字不差 ✓
+     修：只还【我自己按下】的那一次（attacking 标记 ✓）
+         玩家自己按的，绝不碰 ✓ */
+  if (AUTO.attacking) { atkHeld = false; AUTO.attacking = false; }
 }
 
 function autoTick(dt) {
@@ -3549,7 +3557,7 @@ function autoTick(dt) {
     var sx = Math.sin(ang), sz = Math.cos(ang);
     jx = sx; jy = sz; AUTO.setInput = true;
     P.yaw = autoFacing(dx, dz);
-    atkHeld = false;
+    atkHeld = false; AUTO.attacking = false;
     return;
   }
   var lvTxt = m.lv ? ('Lv.' + m.lv + ' ') : '';
@@ -3561,7 +3569,7 @@ function autoTick(dt) {
     if (d <= reach) {
       AUTO.phase = 'strike'; AUTO.t = 0; jx = 0; jy = 0; AUTO.setInput = true;
       P.yaw = autoFacing(dx, dz);
-      atkHeld = true;
+      atkHeld = true; AUTO.attacking = true;
     } else {
       /* ★★ 第 211 轮：★ 根本不进安全区 ★
          不是"进去了怎么办"✗ 是"这一步就别踩进去"✓
@@ -3569,12 +3577,12 @@ function autoTick(dt) {
       var stepX = P.x + (dx / d) * 0.6, stepZ = P.z + (dz / d) * 0.6;
       if (autoInSafe(stepX, stepZ)) {
         jx = 0; jy = 0; AUTO.setInput = true;
-        atkHeld = false;
+        atkHeld = false; AUTO.attacking = false;
         AUTO.info = '自动战斗：前面是安全区，不过去';
         return;
       }
       jx = dx / d; jy = dz / d; AUTO.setInput = true;
-      atkHeld = false;
+      atkHeld = false; AUTO.attacking = false;
     }
     AUTO.info = '自动战斗：接近 ' + lvTxt + d.toFixed(1) + 'm';
     return;
@@ -3582,7 +3590,7 @@ function autoTick(dt) {
   if (AUTO.phase === 'strike') {
     jx = 0; jy = 0; AUTO.setInput = true;
     P.yaw = autoFacing(dx, dz);
-    atkHeld = (atkT < 0);
+    atkHeld = (atkT < 0); AUTO.attacking = atkHeld;
     AUTO.info = '自动战斗：挥砍 ' + lvTxt + d.toFixed(1) + 'm';
     if ((AUTO.t > 0.12 && atkT >= 0) || AUTO.t > 0.8) {
       AUTO.phase = 'retreat'; AUTO.t = 0; AUTO.stuckT = 0;
@@ -3591,7 +3599,7 @@ function autoTick(dt) {
     return;
   }
   /* retreat：往远离目标的方向退 ✓ 这是"躲"的关键 ✓ */
-  atkHeld = false;
+  atkHeld = false; AUTO.attacking = false;
   var rx = -dx / (d || 1), rz = -dz / (d || 1);
   jx = rx; jy = rz; AUTO.setInput = true;
   P.yaw = autoFacing(dx, dz);
