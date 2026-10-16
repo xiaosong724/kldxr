@@ -1278,6 +1278,18 @@ function statRender() {
           mates ? '' : '菜单 → 组队 里可以组队') +
     '<div class="bagTip" style="margin-top:6px">★ 敌人打你的伤害 = 它的攻击力 − 你的减伤，' +
     '最后至少留 30% ✓</div>';
+  /* round294b: keep the gold tab in sync. Put here (a statement position)
+     NOT inside the stRow() concatenation chain - that broke the syntax once. */
+  try {
+    var _gv = (WSC.role && WSC.role.gold) || 0;
+    var _gb = document.getElementById('goldBig');
+    if (_gb) { _gb.textContent = fmtGold(_gv); }
+    var _gd = document.getElementById('goldDetail');
+    if (_gd) {
+      _gd.textContent = '当前 ' + _gv.toLocaleString('en-US') + ' 金币'
+        + (_gv >= 1000000000 ? '（已达上限）' : '');
+    }
+  } catch (e) {}
 }
 
 function ptEsc(s) {
