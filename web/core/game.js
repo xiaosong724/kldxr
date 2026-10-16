@@ -3038,6 +3038,41 @@ function updateSelfBar() {
   }
 }
 
+/* round292: teammates at ANY distance get an edge marker.
+   The server puts every member's x/z at the end of the roster (round 264), so
+   teammates beyond the 100m view can still be shown as a screen-edge arrow.
+   Kept as its own function on purpose: the first attempt inlined this into
+   updateMarks with a regex and landed inside the `if (!NET.on)` offline branch. */
+function drawFarMates(marks, used) {
+  if (typeof PARTY === 'undefined' || !PARTY.roster || !PARTY.roster.length) { return; }
+  for (var i = 0; i < PARTY.roster.length; i++) {
+    var r = PARTY.roster[i];
+    if (!r || r.length < 13) { continue; }              /* no coords -> old roster */
+    var rid = r[0], rname = r[1], rx = r[11], rz = r[12];
+    if (String(rid) === String(WSC.myId)) { continue; } /* myself */
+    if (marks[rid]) { continue; }                       /* already drawn in view */
+    var dx = rx - P.x, dz = rz - P.z;
+    var dist = Math.sqrt(dx * dx + dz * dz);
+    var ang = Math.atan2(dz, dx) - (P.yaw || 0) - Math.PI / 2;
+    var hw = innerWidth * 0.5 - 30;
+    var ny = Math.sin(ang);
+    var hh = (ny < 0) ? Math.max(10, innerHeight * 0.5 - 78)
+                      : Math.max(10, innerHeight * 0.5 - 44);
+    var ax = Math.abs(Math.cos(ang)), ay = Math.abs(Math.sin(ang));
+    var t = Math.min(hw / (ax || 1e-6), hh / (ay || 1e-6));
+    if (!marks[rid]) { marks[rid] = UI.mark.make(); }
+    used[rid] = true;
+    UI.mark.at(marks[rid],
+      innerWidth * 0.5 + Math.cos(ang) * t,
+      innerHeight * 0.5 + Math.sin(ang) * t,
+      ang * 180 / Math.PI,
+      '\u2605' + rname + ' ' + Math.round(dist) + 'm',
+      r[9] ? '#888888' : '#5aa8ff');                    /* grey when down */
+    UI.mark.show(marks[rid], true);
+  }
+}
+
+
 function updateMarks() {
   var uid, m, k;
   if (!NET.on) {   // 离线 / 断线 → 全部收掉 ✓
@@ -3126,6 +3161,9 @@ function updateMarks() {
       (_mate ? '队友 ' : '') + Math.round(dist) + 'm', markColor(o, _mate));
     UI.mark.show(m, true);
   }
+  /* round292: teammates beyond the view - see drawFarMates above */
+  drawFarMates(_marks, used);
+
   for (k in _marks) {   // 走了 / 跑远了 / 断线的收掉 ✓
     if (!used[k]) { UI.mark.remove(_marks[k]); delete _marks[k]; }
   }
