@@ -56,7 +56,7 @@ DMG_FLOOR = 0.30
 #   而 safetp 分支里用了它 → NameError → 被意图派发的 try 吞掉 → 静默失效 ✓
 #   表现：点传送没反应、界面上也不出读条 ✓（因为客户端永远收不到 tpcast ✓）
 TELEPORT_CAST = 6.0            # 传送回安全区的读条秒数               # 减伤地板：至少吃原来伤害的 30%（第 118 轮 ✓）
-PARTY_SHARE_DIST = 30.0       # 分经验的距离（防异地挂机蹭 ✗）
+PARTY_SHARE_DIST = 9999999.0   # round 241: user wants NO distance limit for party exp
 PARTY_INVITE_DIST = 20.0      # 邀请的距离（防全图骚扰 ✗）
 PARTY_INVITE_TTL = 60.0       # ★ 第 82 轮用户改：10 秒 → 1 分钟 ✓
                               #   （原因：弹窗没看到就没了 ✗
@@ -1983,7 +1983,7 @@ class World(object):
             if q is killer or int(q.hp or 0) <= 0:
                 continue
             if (q.x - m.x) ** 2 + (q.z - m.z) ** 2 > d2:
-                continue                      # ★ 30 米外不分享（防异地蹭 ✗）
+                continue                      # round 241: 距离已不限制，这句现在永不触发
             self._gain_exp(q, share)
             # ★★ 第 86 轮（用户报）："这个没有真的加上，一刷新就没有了" ★★
             #   病根：分经验只改了内存里的 role['exp'] ✗
