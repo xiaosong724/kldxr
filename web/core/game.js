@@ -1855,7 +1855,19 @@ function wsApplyWorld(d) {
     // ★ 字段名换一下喂给原来那套（名称短是为了省带宽：n=名字 y=朝向 t=对方的钟）
     addOther({
       uid: w.id, name: w.n, realm: '', lv: w.lv,
-      x: w.x, z: w.z, yaw: w.y, hp: w.hp, hpm: 0,
+      x: w.x, z: w.z, yaw: w.y, hp: w.hp,
+      /* ★★★ 第 221 轮修的真 bug（用户："我的血条在别的玩家那边没有按比例扣除，
+             只有数字变化"）★★★
+         这里原来写死 hpm: 0 ✗
+         → 下层兜底成 100（hpMax: (w.hpm > 0) ? w.hpm : 100）
+         → 别人看你：血量 200+ ÷ 100 → 血条永远是满的 ✓✓
+           而数字是直接显示 hp ✗ 所以数字照常变 ✓ 一字不差
+         ★ 为什么第 220 轮没修好：我只在【服务器】那边补了 hpm 字段 ✗
+           忘了客户端这层【显式映射表】里 hpm 是写死的 0 ✗✓
+           → 服务器的值进来就被覆盖成 0 了 ✓
+         ★ 这个坑我记录过（"加服务器字段要改好几层"）✗ 还是又踩了一次 ✓
+           层数：服务器打包 dict → 客户端 wsApplyWorld 映射 → addOther → 画血条 */
+      hpm: (typeof w.hpm === 'number' && w.hpm > 0) ? w.hpm : 0,
       ct: w.t,
       atk: (typeof w.atk === 'number') ? w.atk : -1,   // ★ 挥砍序号（服务器第 66 轮改的 ✓）
       mate: !!w.mate,        // ★ 第 90 轮：服务器直接告诉我"他是不是我队友" ✓
