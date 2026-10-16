@@ -3066,7 +3066,9 @@ function drawFarMates(marks, used) {
        ★ 修：视野内的队友【交给主循环】✗ 我这里跳过 ✓
          但★必须标 used[rid] ✗ 不然又会被收尾循环删掉 → 又闪 ✓
          （第 293 轮就是栽在"跳过时没标 used" ✓ 这次两个一起做 ✓）*/
-    if (rd && rd[rid]) { used[rid] = true; continue; }   /* 在视野里 → 主循环负责 ✓ */
+    /* ★ round295b：上面我写成了 rd[rid] ✗ 但主循环用的是 for (uid in NET.others) ✓
+       所以那个判断永远为假 ✗ 箭头走到身边也不消失 ✓ 改成 NET.others ✓ */
+    if (NET.others && NET.others[rid]) { used[rid] = true; continue; }   /* 在视野里 → 主循环负责 ✓ */
     var dx = rx - P.x, dz = rz - P.z;
     var dist = Math.sqrt(dx * dx + dz * dz);
     /* ★★★ round294（用户："他会跟着我滑动的方向一起移动，方向还是会乱动"）★★★
