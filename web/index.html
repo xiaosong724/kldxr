@@ -174,6 +174,35 @@
 
 </style>
 <style>
+/* ★★★ 第 266 轮治本（用户："手机电脑APP这三个都不行"）★★★
+   真正的病根（我复现出来了）：
+     第一页原来 5 个标签 ✗ 刚好放得下 ✓
+     我加了"更多"变成 6 个 ✗ 总宽超过屏幕 ✓
+     而标签栏是 overflow-x:auto（可以横向滑动 ✗）
+     → "更多"被挤到【内容右边外面】✗
+       眼睛看到的是它滑出来的样子 ✗ 坐标却是它在内容里的位置 ✓
+       两者错开 → 点不中 ✓✓（用户："点下面一点就可以了"✓）
+     ★ 治本：六格平分 ✗ 不滚动 ✗ 不溢出 ✗
+       这样【坐标 === 肉眼位置】✗ 和别的导航按钮一模一样 ✓ */
+#setTabsWrap{overflow:visible !important}
+#setTabs{
+  overflow:visible !important;
+  overflow-x:visible !important;
+  display:flex !important;
+  flex-wrap:nowrap !important;
+  gap:4px !important;
+  padding:0 6px !important;
+}
+#setTabs .tab{
+  flex:1 1 0 !important;          /* ★ 六格平分 ✓ */
+  min-width:0 !important;         /* ★ 允许压缩 ✓ */
+  text-align:center !important;
+  padding:7px 2px !important;     /* ★ 左右内边距压小 ✗ 字号不用缩 ✓ */
+  white-space:nowrap !important;
+}
+</style>
+
+<style>
 /* round257 (user): menu shows 6 tabs, the rest live behind a more-page. */
 #setTabs .tab[data-page="2"]{display:none}
 #setTabs.page2 .tab[data-page="1"]{display:none}
