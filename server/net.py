@@ -19,6 +19,55 @@ import protocol as P
 from world import TICK_HZ, VIEW
 
 
+# ============================================================================
+# ★★★ 第 228 轮：按连接限流（防包洪水 DoS）★★★
+#
+# 为什么需要：
+#   post_intent() 就是一句 inbox.put(...) ✗ 而 inbox 是【无界队列】✓
+#   → 一个人每秒发几千个包 → 队列涨 + tick 变慢 → 所有人卡 ✓
+#   （这是【可用性】攻击 ✗ 比作弊严重：作弊影响公平 ✗ 卡服所有人都玩不了 ✓）
+#
+# ★ 为什么放在这一层（net.py）而不是 tick 里：
+#   inbox 里【同时装着玩家意图和管理页操作】✗
+#   要是等 tick 再去限制 ✗ 队列已经涨起来了 ✓ 治标不治本 ✓
+#
+# ★ 阈值按客户端【真实频率】定（不是拍脑袋 ✓）：
+#     客户端 netSync() 是 30Hz（代码注释里写着 ✓）→ move 给 60（2 倍余量）
+#     攻击冷却 0.62 秒（理论最多 1.6/秒）→ atk 给 10
+#     chat 给 5 · 其它给 20
+#
+# ★★ 超标只【丢包 + 记一笔】✗ 绝不踢人 ✓
+#    网络抖动时正常玩家也会瞬间超 ✗ 踢了就掉线 ✓ 那个体验比被攻击还糟 ✓
+#
+# ★ 实现故意用【最笨的写法】：一个字典 + 每秒清零 ✗ 不做滑动窗口 ✓
+#   这是热路径（每个包都过）✗ 开销必须最小 ✓
+# ============================================================================
+RATE_LIMIT = {'move': 60, 'atk': 10, 'chat': 5}
+RATE_LIMIT_DEFAULT = 20
+_rate_state = {}          # cid -> {'sec': 秒, 'n': {类型: 次数}, 'bad': 累计超限}
+
+
+def _rate_ok(cid, t):
+    """True = 放行 / False = 这次丢掉"""
+    import time as _t
+    now = int(_t.time())
+    st = _rate_state.get(cid)
+    if st is None or st['sec'] != now:
+        st = {'sec': now, 'n': {}, 'bad': (st or {}).get('bad', 0)}
+        _rate_state[cid] = st
+    n = st['n'].get(t, 0) + 1
+    st['n'][t] = n
+    lim = RATE_LIMIT.get(t, RATE_LIMIT_DEFAULT)
+    if n > lim:
+        st['bad'] += 1
+        if st['bad'] == 1 or st['bad'] % 500 == 0:
+            print('[ac] 频率超限：连接 %s 发 %s 到 %d 次/秒（上限 %d，累计超 %d 次）'
+                  % (cid, t, n, lim, st['bad']))
+        return False
+    return True
+
+
+
 class Net(object):
     def __init__(self, cfg, world):
         self.cfg = cfg
@@ -93,6 +142,9 @@ class Net(object):
                                        {'weapon': _r, 'itemId': int((d or {}).get('itemId') or 0)})
             else:
                 self.world.post_intent(conn.cid, 'equipset', {'weapon': None, 'itemId': None})
+            return
+        # ★ 第 228 轮：限流（超标就丢包 ✗ 不踢人 ✓）
+        if not _rate_ok(conn.cid, t):
             return
         self.world.post_intent(conn.cid, t, d)
 
