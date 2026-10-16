@@ -449,7 +449,10 @@
    <div class="tab" data-page="1" data-tab="stat">属性</div>
    <div class="tab" data-page="1" data-tab="talent">天赋</div>
    <div class="tab on" data-page="1" data-tab="view">画面</div>
-   <div class="tab" id="tabMore" data-page="1" data-tab="more">更多 ▸</div>
+   <div class="tab" id="tabMore" data-page="1" data-tab="more"
+       onpointerdown="try{window._moreTap&&window._moreTap(event);}catch(e){}"
+       ontouchstart="try{window._moreTap&&window._moreTap(event);}catch(e){}"
+       onclick="try{window._moreTap&&window._moreTap(event);}catch(e){}">更多 ▸</div>
    <div class="tab" data-page="2" data-tab="ctrl">操作</div>
    <div class="tab" data-page="2" data-tab="audio">音效</div>
    <!-- ★ 第 128 轮（用户）：【调试】页签已移除 ✗
@@ -688,7 +691,25 @@
      → 见下面 setTab 里的 more 分支 ✓ */
 
   window._setTabPage = goPage;
-  window._tabMoreBound = function () { var m = document.getElementById('tabMore'); return !!(m && m._bound); };
+  /* ★★★ 第 265 轮（用户："你先把按钮修好，为什么现在点击没有反应"）★★★
+     前三版都失败的原因（现在想明白了）：
+       标签栏的拖动代码在 pointerdown 里 preventDefault() ✗
+       → 浏览器【不再派发后续的 click】✓
+       → 所以我之前用 click / addEventListener 都会被它干掉 ✓
+       （我的无头测试却"通过"✗ 因为程序化点击和真手点走的事件序列不同 ✓）
+     ★ 两个修法叠加 ✗ 保证一定能通：
+       ① HTML 内联 onpointerdown ✗ 解析期就注册 ✗ 比任何 JS 都早 ✓
+       ② 幂等：120ms 内重复触发只算一次 ✗ 防止 pointerdown+click 翻两次 ✓ */
+  var _moreLast = 0;
+  window._moreTap = function (e) {
+    var now = Date.now();
+    if (now - _moreLast < 120) { return; }
+    _moreLast = now;
+    if (e && e.preventDefault) { e.preventDefault(); }
+    if (e && e.stopPropagation) { e.stopPropagation(); }
+    try { toggle(); } catch (err) { }
+  };
+window._tabMoreBound = function () { var m = document.getElementById('tabMore'); return !!(m && m._bound); };
 })();
 </script>
 </body></html>
