@@ -2442,10 +2442,27 @@ function bagRender() {
       ars.innerHTML = '<span style="color:' + tierHex(ar2.tier || 0) + '">' +
         iconOfItem(ar2) + '</span>' +
         '<span class="tg">' + ((ar2.tier || 0) + 1) + '</span>' +
-        '<span class="cnt" style="bottom:-1px">减伤 ' +
-        Math.round((+((ar2.base || {}).dr) || 0)) + '</span>';
+        /* ★★ 第 234 轮（用户："防具下面穿搭后不要显示文字 ✗ 跟武器一样显示耐久度"）★★
+           这里原来显示的是文字「减伤 N」✗ 而武器格子显示的是耐久条 ✓
+           两个格子长得不一样 ✗ 用户要求统一成耐久条 ✓
+           ★ 减伤那个信息不删 ✗ 挪到悬停提示里（鼠标放上去还能看到 ✓）
+           ★ 数据用 BAG.armor 身上那份（实时 ✓ 和武器一个来源 ✓）*/
+        ((+ar2.durMax > 0) ? (function () {
+          var _dm = +ar2.durMax || 0;
+          var _dd = (typeof ar2.dur === 'number') ? ar2.dur : _dm;
+          var _k = Math.max(0, Math.min(1, _dd / _dm));
+          var _col = (_k > 0.5) ? '#7ee08a' : (_k > 0.2 ? '#ffd83d' : '#ff7a6a');
+          return '<span class="durbar"><i style="width:' + (_k * 100).toFixed(1) +
+            '%;background:' + _col + '"></i></span>';
+        })() : '');
       ars.setAttribute('data-a', '1');
-      ars.title = (ar2.name || '防具') + ' —— 点一下脱下';
+      /* ★ 第 234 轮：提示语也要跟着改 ✗
+         第 231 轮起"点已装备的格子"已经不再卸下了 ✓
+         提示里还写着"点一下脱下"✗ 会误导 ✓ 改成指路【脱下】按钮 ✓ */
+      ars.title = (ar2.name || '防具') + ' · 减伤 ' +
+        Math.round((+((ar2.base || {}).dr) || 0)) +
+        (ar2.broken ? ' · ★ 已损坏' : '') +
+        ' —— 要脱下请点下面的【脱下】按钮';
     }
   }
 
