@@ -2059,8 +2059,19 @@ function wsApplyWorld(d) {
 
   if (d.me) {
     if (WSC.role) {
-      WSC.role.level = d.me.lv || WSC.role.level || 1;
-      WSC.role.exp = d.me.exp || 0;
+      /* ★★★ 第 249 轮修的真 bug（用户："杀怪看不到经验条动，并且显示0"）★★★
+         病根：第 239 轮为了让血量实时同步 ✗ 让服务器【每帧】都推 me ✓
+              但 me 里只带 hp/hpm ✗ 不带 lv/exp ✗
+              而这里原来是【无条件赋值】：
+                  WSC.role.level = d.me.lv || WSC.role.level || 1;
+                  WSC.role.exp   = d.me.exp || 0;     ← 每帧把经验清成 0 ✗✗
+              → 经验条永远是 0 ✗ 杀怪也不动 ✓ 用户报的一字不差 ✓
+         ★ 修法：改成【部分更新】✗ 服务器给了哪个字段才更新哪个 ✓
+         ★ 教训：把"变化时才推"改成"每帧都推"的时候 ✗
+           必须同时检查【接收端有没有把缺失字段当成 0】✓
+           （这次就是漏了这一步 ✗ 结果经验被每帧清零 ✓）*/
+      if (typeof d.me.lv === 'number' && d.me.lv > 0) { WSC.role.level = d.me.lv; }
+      if (typeof d.me.exp === 'number') { WSC.role.exp = d.me.exp; }
       /* ★★★ 第 230 轮修的真 bug（用户："升级所需经验客户端显示的是不是不会刷新，
              导致经验显示已经够升级了，结果还没有升级"）★★★
          病根：这里只更新了 level 和 exp ✗ 没更新 need ✓
