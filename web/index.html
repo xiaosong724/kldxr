@@ -173,6 +173,15 @@
 #boot .bh{font-size:12px;opacity:.75;text-align:center;line-height:1.9;margin-top:6px}
 
 </style>
+<style>
+/* ★★★ 第 268 轮：只保留【显隐】三条规则 ✗
+   不再碰导航栏的任何布局（padding/flex/overflow 一律不动 ✓）
+   —— 上一轮我就是因为改了布局 ✗ 把导航栏搞糟了 ✓ */
+#setTabs .tab[data-page="2"]{display:none}
+#setTabs.page2 .tab[data-page="1"]{display:none}
+#setTabs.page2 .tab[data-page="2"]{display:block}
+</style>
+
 
 
 
