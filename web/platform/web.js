@@ -1637,6 +1637,17 @@ function setTab(name) {
      最低风险做法：不动 HTML 结构 ✗ 三个面板还在原地 ✓
      只在这里"选设置时把它们一起显示"✓（搬 HTML 容易把别的钩子搬坏 ✗） */
   var _mergePanes = { view: ['view', 'ctrl', 'audio'] };
+  /* ★★★ 第 273 轮（用户："为什么变成三个滑动条，我需要他们是在一个页面里"）★★★
+     病根：三个面板各自带 overflow-y:auto ✗
+       → 于是变成三条独立滚动条 ✓（用户看到的 ✓）
+     ★ 修：给外层 #setPanel 加一个 merge 类 ✗
+       CSS 里在这个类下把三个面板的【滚动关掉 + 高度放开】✓
+       → 它们就拼成一个连续页面 ✗ 只有一条滚动条 ✓✓ */
+  var _sp = document.getElementById('setPanel');
+  if (_sp) {
+    if (_mergePanes[name]) { _sp.classList.add('merge'); }
+    else { _sp.classList.remove('merge'); }
+  }
   var _want = _mergePanes[name] || [name];
   var panes = document.querySelectorAll('#setPanel .tabpane');
   var hit = false;
