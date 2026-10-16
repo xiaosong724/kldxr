@@ -173,6 +173,15 @@
 #boot .bh{font-size:12px;opacity:.75;text-align:center;line-height:1.9;margin-top:6px}
 
 </style>
+<style>
+/* round257 (user): menu shows 6 tabs, the rest live behind a more-page. */
+#setTabs .tab[data-page="2"]{display:none}
+#setTabs.page2 .tab[data-page="1"]{display:none}
+#setTabs.page2 .tab[data-page="2"]{display:block}
+#tabMore{background:linear-gradient(180deg,#ffd83d33,#ffd83d11);border:1px solid #ffd83d55}
+#setTabs.page2 #tabMore{display:block}
+</style>
+
 
 <!-- ★★★ 第 248 轮（用户要求）：弹幕滚动通知 ★★★
      全服大事从右往左滚 ✗ 像弹幕一样 ✗ 上下带描边
@@ -435,21 +444,21 @@
 
   <!-- ★ 分类导航：点不同分类切不同面板（第 31 轮）-->
   <div id="setTabsWrap"><div id="setTabs">
-   <div class="tab" data-tab="bag">背包</div>
-   <div class="tab" data-tab="party">组队</div>
-   <div class="tab" data-tab="stat">属性</div>
-   <div class="tab" data-tab="talent">天赋</div>
-   <div class="tab on" data-tab="view">画面</div>
-   <div class="tab" data-tab="ctrl">操作</div>
-   <div class="tab" data-tab="audio">音效</div>
+   <div class="tab" data-page="1" data-tab="bag">背包</div>
+   <div class="tab" data-page="1" data-tab="party">组队</div>
+   <div class="tab" data-page="1" data-tab="stat">属性</div>
+   <div class="tab" data-page="1" data-tab="talent">天赋</div>
+   <div class="tab on" data-page="1" data-tab="view">画面</div>
+   <div class="tab" data-page="2" data-tab="ctrl">操作</div>
+   <div class="tab" data-page="2" data-tab="audio">音效</div>
    <!-- ★ 第 128 轮（用户）：【调试】页签已移除 ✗
         那些开关（刷怪/无敌等）本来就只该管理员用 ✗
         → 现在全部收进【管理页】✓（本轮正在做）-->
-   <div class="tab" data-tab="wiki">百科</div>
-   <div class="tab" data-tab="about">信息</div>
+   <div class="tab" data-page="2" data-tab="wiki">百科</div>
+   <div class="tab" data-page="2" data-tab="about">信息</div>
   </div><!-- ★ 第 169 轮（用户 #3）：这个箭头提示"右边还有页签，可以滑" ✓
             滑到最右（或者不用滑）时 JS 会给外层加 on 类 → 箭头和渐隐都淡出 ✓ -->
-  <span id="setTabsHint">›<b>滑动</b></span></div>
+  <div class="tab" id="tabMore" data-page="1">更多 ▸</div></div>
 
   <div class="tabpane" data-pane="bag">
    <!-- ★ 第 48 轮：改成【格子背包】（用户要求：像我的世界那样用图标，不要纯文字）✓
@@ -627,4 +636,30 @@
 <script src="/core/game.js"></script>
 
 
+
+<script>
+/* round257: two-page tab bar; more swaps in page 2 in place (no scrolling). */
+(function () {
+  function bar() { return document.getElementById('setTabs'); }
+  function goPage(n) {
+    var b = bar();
+    if (!b) { return; }
+    if (n === 2) { b.classList.add('page2'); } else { b.classList.remove('page2'); }
+    var more = document.getElementById('tabMore');
+    if (more) { more.textContent = (n === 2) ? ('◂ ' + '返回') : ('更多 ' + '▸'); }
+  }
+  document.addEventListener('click', function (e) {
+    var el = e.target;
+    if (!el || !el.classList) { return; }
+    if (el.id === 'tabMore') {
+      var b = bar();
+      goPage(b && b.classList.contains('page2') ? 1 : 2);
+      e.stopPropagation();
+      return;
+    }
+    if (el.classList.contains('tab') && el.getAttribute('data-page') === '2') { goPage(2); }
+  }, true);
+  window._setTabPage = goPage;
+})();
+</script>
 </body></html>
