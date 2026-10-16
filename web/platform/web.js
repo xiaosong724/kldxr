@@ -675,7 +675,11 @@ function expNeed(lv) {
 }
 function updExp(r) {
   r = r || (typeof WSC !== 'undefined' && WSC.role) || {};
-  var need = Math.round(r.need || expNeed(r.level || 1));
+  /* ★ 第 230 轮：这里原来写的是 r.need || expNeed(...) ✗
+     优先信【登录时缓存的那份 need】→ 升级后分母不刷新 → 看着够了却没升 ✓
+     改成【一律现算】✗ expNeed 和第 223 轮修对的服务端公式完全一致 ✓
+     （服务器真给了 need 也要按当前等级判断 ✗ 缓存分不清是哪个等级的 ✓）*/
+  var need = Math.round(expNeed(r.level || 1));
   var cur = Math.max(0, Math.round(r.exp || 0));
   var pct = (need > 0) ? Math.max(0, Math.min(100, cur / need * 100)) : 0;
   var b = document.getElementById('exp');

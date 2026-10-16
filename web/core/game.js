@@ -2054,6 +2054,21 @@ function wsApplyWorld(d) {
     if (WSC.role) {
       WSC.role.level = d.me.lv || WSC.role.level || 1;
       WSC.role.exp = d.me.exp || 0;
+      /* ★★★ 第 230 轮修的真 bug（用户："升级所需经验客户端显示的是不是不会刷新，
+             导致经验显示已经够升级了，结果还没有升级"）★★★
+         病根：这里只更新了 level 和 exp ✗ 没更新 need ✓
+         而 updExp 里写的是 need = r.need || expNeed(level) ✗
+           → 优先用【登录时那份 need】✓ 升级后它不会变 ✓
+           → 分母停在"升级前那个较小的值"✗ 经验条显示满了 ✓
+           → 但服务器那边还差得远 ✓✓ 一字不差
+         修：服务器给了新的就用新的 ✓ 没给就把旧的【删掉】✗
+             （删掉之后 updExp 会自动用 expNeed(level) 现算 ✓
+               那个公式第 223 轮刚修对 ✓ 和服务器完全一致 ✓）*/
+      if (typeof d.me.need === 'number' && d.me.need > 0) {
+        WSC.role.need = d.me.need;
+      } else {
+        delete WSC.role.need;
+      }
     }
     UI.role(WSC.role);     // ★ 走 UI.*（core 不碰 DOM —— 分层闸门 check_core_dom 会拦 ✓）
   }
