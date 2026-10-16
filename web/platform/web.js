@@ -710,6 +710,15 @@ function updHP() {
   // ★ 血条上的数字（第 36 轮，用户要求）—— 和血条一起刷，不用管调用点 ✓
   var t = document.getElementById('hpTxt');
   if (t) { t.textContent = Math.max(0, Math.round(HP)) + ' / ' + Math.round(HPMAX); }
+  /* round295: gold on the top-left HUD. The user meant THIS panel (hp + exp bars),
+     not the stSelf/stTotal divs - those belong to the menu's stat page and stay
+     empty until that page is opened, which is why the first attempt looked
+     "missing". Refreshed together with the hp bar, so it updates every frame. */
+  var gt = document.getElementById('goldTxt');
+  if (gt) {
+    var g = (WSC.role && WSC.role.gold) || 0;
+    gt.textContent = '金币 ' + fmtGold(g);
+  }
 }
 
 /* ---------- saveSet ---------- */

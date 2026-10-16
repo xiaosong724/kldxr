@@ -174,6 +174,12 @@
 
 </style>
 <style>
+/* round295: top-left gold line (matches the hp/exp text style) */
+#gw{margin-top:3px;font-size:12.5px;color:#ffd83d;text-shadow:0 1px 2px #000a}
+#goldTxt{font-weight:600}
+</style>
+
+<style>
 /* ★★★ 第 275 轮（用户："把声音放到最上面"）★★★
    目标：设置页里【音效】排在最前面 ✓
    做法：让 #setBox 变成 flex 列 ✗ 然后给各部分指定 order ✓
@@ -454,7 +460,7 @@
 <div id="top" class="pane"><span class="nm" id="uName">—</span> <span class="realm" id="uRealm"></span><br>
  <span id="uStat">载入中…</span>
  <div id="hpw"><div id="hp"></div><span id="hpTxt">— / —</span></div>
- <div id="expw"><div id="exp"></div><span id="expTxt">经验 — / —</span></div></div>
+ <div id="expw"><div id="exp"></div><span id="expTxt">经验 — / —</span></div><div id="gw"><span id="goldTxt">金币 0</span></div></div>
 <!-- ★ 右上角：帧数 + 诊断合成一块【两行】（第 32 轮）
      原来这是散在左上/右上三块（#diag 在左上、#fps 和 #stat 在右上），
      用户要：去掉"物件/Mesh/地顶点"那块（没用）、诊断往上挪跟帧数放一起 ✓ -->

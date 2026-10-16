@@ -484,6 +484,34 @@ class World(object):
                 except Exception:
                     pass
                 continue
+            if kind == 'gain':
+                # round296: HTTP (selling / trading) asks the tick thread to credit
+                #   gold. Memory is authoritative, so ONLY the tick thread may touch
+                #   it - the HTTP layer just posts here.
+                #   payload = (role_id, amount, why)
+                try:
+                    _gr = int(payload[0])
+                    _ga = int(payload[1])
+                    _gw = str(payload[2])[:24]
+                    _gt = None
+                    for _gc, _gq in self.players.items():
+                        if (getattr(_gq, 'role_id', None) == _gr
+                                and getattr(_gq, 'ghostAt', None) is None):
+                            _gt = _gq
+                            break
+                    if _gt is not None:
+                        self._gain_gold(_gt, _ga, _gw)
+                    else:
+                        # offline -> leave it in pending_gold, credited on next login
+                        import db as _dbmod
+                        self.post_save(
+                            'INSERT INTO pending_gold(role, amount, why, ts, done)'
+                            ' VALUES(?,?,?,?,0)',
+                            (_gr, _ga, _gw, _dbmod.now_ms()))
+                except Exception as _ge:
+                    print('[gold] gain intent failed: %r' % (_ge,))
+                continue
+
             if kind == 'leave':
                 # ★★ 第 168 轮（用户 #5）：离线先保留 6 秒 ★★
                 #   用户原话："玩家离开或离线后服务器让他保留 6 秒

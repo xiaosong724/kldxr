@@ -13,7 +13,7 @@ import time
 
 # ============================================================ 版本与迁移
 
-SCHEMA_VERSION = 4   # ★ 第 291 轮：金币（迁移 v4 在下面 MIGRATIONS 定义之后）
+SCHEMA_VERSION = 5   # ★ 第 296 轮：待入账金币（迁移 v5 在下面 MIGRATIONS 定义之后）
 
 # 每个版本一组 SQL。**新版本往后追加，不要改历史版本** ✓
 MIGRATIONS = {
@@ -267,6 +267,26 @@ MIGRATIONS[3] = [
 #   ★ 为什么默认 0：老角色迁移后都是 0 ✗ 不给起步金币（防多开刷）✓
 MIGRATIONS[4] = [
     "ALTER TABLE roles ADD COLUMN gold INTEGER NOT NULL DEFAULT 0 CHECK (gold >= 0)",
+]
+
+
+# ★★★ 第 296 轮：待入账金币 ★★★
+#   ★ 为什么要这张表：金币是【内存权威】✗
+#     而卖东西 / 交易成交这些事发生在 HTTP 线程（碰不到内存 ✗）
+#     如果 HTTP 线程直接改 roles.gold ✗
+#     会被 tick 线程的定期存盘【整份覆盖】✗ 钱就白赚了 ✓✓
+#   ★ 正解：HTTP 只写一条【待入账】✗
+#     tick 线程每秒读一次 ✗ 走 _gain_gold() 加进内存 ✗ 标 done=1 ✓
+MIGRATIONS[5] = [
+    """CREATE TABLE IF NOT EXISTS pending_gold (
+        id     INTEGER PRIMARY KEY AUTOINCREMENT,
+        role   INTEGER NOT NULL,
+        amount INTEGER NOT NULL,
+        why    TEXT    NOT NULL DEFAULT '',
+        ts     INTEGER NOT NULL,
+        done   INTEGER NOT NULL DEFAULT 0
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_pending_gold ON pending_gold(role, done)",
 ]
 
 
