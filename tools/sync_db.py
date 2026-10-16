@@ -95,8 +95,23 @@ def main():
 
         if what == 'pull':
             print('  拉：云端 → 本地')
+            # ★★★ 第 229 轮修的真问题 ★★★
+            #   数据库是 WAL 模式 ✗ 直接拉 game.db 拿到的可能是【不一致的副本】✓
+            #   （已提交的数据可能还在 game.db-wal 里 ✓
+            #     看着像个好文件 ✗ 恢复的时候才发现坏 ✓ 那时候已经晚了 ✓）
+            #   → 先在云端跑一次【在线备份】✗ 再把那个备份文件拉回来 ✓
+            #     （用服务器上现成的 server/backup_db.py ✓ 它用的是标准库 ✓）
+            print('    先在云端做在线备份（WAL 下只有这样才能拿到一致副本 ✓）')
+            out = run('cd /opt/xiuxian2d/server && sudo -u xiuxian /usr/bin/python3 '
+                      'backup_db.py --keep 30 2>&1 | tail -3')
+            print('    ' + (out.replace(chr(10), chr(10) + '    ') if out else '(没有输出)'))
+            newbk = run("ls -t /opt/xiuxian2d/server/backups/game-*.db 2>/dev/null | head -1")
+            if not newbk:
+                print('    ✗ 云端没生成备份 ✗ 中止（宁可不动本地存档 ✓）')
+                return
+            print('    拉取：%s' % newbk)
             tmp = LOCAL_DB + '.new'
-            sftp.get(REMOTE_DB, tmp)
+            sftp.get(newbk, tmp)
             print('    下载完成 → %s' % counts(tmp))
             if os.path.exists(LOCAL_DB):
                 bak = LOCAL_DB + '.bak-' + stamp()
