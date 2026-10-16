@@ -711,9 +711,19 @@
     e.stopPropagation();
     toggle();
   }
-  document.addEventListener('pointerdown', onDown, true);
-  document.addEventListener('touchstart', onDown, true);
-  document.addEventListener('mousedown', onDown, true);
+  /* ★★★ 第 261 轮（用户点出了关键：改成"和导航一样"就点不动了）★★★
+     线索：最早那版"更多"在导航栏【外面】✗ 点得动 ✓
+           移进导航栏之后 ✗ 点不动了 ✓
+     → ★ 说明【导航栏自己有个处理函数】把它吞掉了 ✓
+       （标签栏的拖动逻辑 ✗ 在 pointerdown 里 preventDefault + stopPropagation ✓
+         它注册得比我早 ✗ 而且在同一层，所以我的收不到 ✓）
+     ★ 终极修法：挂到【window 的捕获阶段】✗
+       事件顺序是 window 捕获 → document 捕获 → … → 目标 ✓
+       window 是【最早的】✗ 谁都不可能比我更早 ✓✓
+     ★ 样式不动（还是和导航按钮一模一样 ✓ 用户要的 ✓）*/
+  window.addEventListener('pointerdown', onDown, true);
+  window.addEventListener('touchstart', onDown, true);
+  window.addEventListener('mousedown', onDown, true);
   window._tabMoreBound = function () { return true; };   /* 兜底永远可用 ✓ */
   window._tabMoreSelfTest = function () {
     var before = bar() && bar().classList.contains('page2');
