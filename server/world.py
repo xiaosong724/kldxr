@@ -2381,6 +2381,9 @@ class World(object):
                 lrole['exp'] = have - take
                 got_exp = take
                 self._gain_exp(stealer, take)
+                # ★ 第 251 轮（用户要求）：夺取经验要进弹幕 ✗ 显示谁夺取了谁多少 ✓
+                self._ticker('%s 夺取了 %s 的 %d 点经验' % (stealer.name, loser.name, take),
+                             'mq', tag='stxl:%d' % stealer.role_id)
                 self._save_role(stealer)   # 第 242 轮：抢来的经验也要落库         # ★ 走正常升级检查 ✓
                 self.post_save('UPDATE roles SET exp=? WHERE id=?',
                                (int(lrole['exp']), loser.role_id))
@@ -2403,6 +2406,9 @@ class World(object):
                         ' SELECT id FROM items WHERE role_id=? AND in_storage=0'
                         ' ORDER BY RANDOM() LIMIT 1)', (stealer.role_id, loser.role_id))
                     taken_item = True
+                    # ★ 第 251 轮：夺取背包物品也进弹幕
+                    self._ticker('%s 夺取了 %s 的一件背包物品' % (stealer.name, loser.name),
+                                 'mq', tag='stbg:%d' % stealer.role_id)
             except Exception:
                 pass
             # ---- ★ 穿戴中的：另外掷 1%（耐久原样保留 ✓）----
