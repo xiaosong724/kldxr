@@ -218,12 +218,15 @@ class Mob(object):
                  'spd', 'atkT', 'atkAnim', 'windT', 'tgt', 'awayT', 'deadT', 'wx', 'wz', 'wT',
                  'healT', 'healCd', 'fleeT',
                  # ★ 第 59 轮：武器机制造成的状态
-                 'stunT', 'stunImmune', 'knockImmune', 'bleedT', 'bleedDmg', 'bleedFrom', 'owner' )
+                 'stunT', 'stunImmune', 'knockImmune', 'bleedT', 'bleedDmg', 'bleedFrom', 'owner',
+                  # 第 217 轮：这只怪是不是已经结算过了（经验/掉落只算一次）
+                  'awarded' )
 
     def __init__(self, mid, lv, x, z, kind=None):
         # ★ 第 132 轮：硬配额 —— 这只僵尸是【替谁刷的】✓
         #   用 role_id 标记 ✗ 不进协议 ✗（客户端不需要知道 ✓）
         self.owner = None
+        self.awarded = False    # 第 217 轮：结算标记（只给一次经验）
         self.mid = str(mid)
         self.kind = kind or random.choice(KINDS)
         self.lv = int(lv)
