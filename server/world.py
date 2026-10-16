@@ -1642,7 +1642,11 @@ class World(object):
         #     （方案 §5 第 3 条特意写了：天赋要加在百分比【之后】✓ 免得被二次放大 ✓）
         import mobs as _mobs
         base = int(_mobs.level_hp((p.role or {}).get('level') or 1))
-        st = armormod.stats_of(p.armor)
+        # ★ 第 232 轮：坏掉的防具不提供任何加成 ✗（不然"坏了还加血"很怪 ✓）
+        _ar = p.armor
+        if isinstance(_ar, dict) and _ar.get('broken'):
+            _ar = None
+        st = armormod.stats_of(_ar)
         v = (base + st['hp']) * (1.0 + st['hp_pct'] / 100.0)
         # ★★ 第 117 轮（方案第 4 步）：天赋血量加进来 ★★
         #   ★ 故意加在【百分比之后】✗ 免得被防具的 hp% 二次放大 ✓
@@ -1982,39 +1986,62 @@ class World(object):
                 pass
 
     def _break_weapon(self, p):
-        """武器耐久归零 → 损坏消失（第 59 轮 用户要求 ✓）
+        """武器耐久归零 → ★ 标记为已损坏（不删除）★ 第 232 轮改的
 
-        · 卸下（换回空手 ✓）
-        · 删掉数据库里那一行（真的消失 ✓）
-        · 告诉他一声（不然会以为丢了 ✗）
+        ★★ 用户原话："武器防具损坏了把穿戴的格子做一个损坏的样式，
+                      这样玩家挂机回来后知道是武器防具坏了，
+                      而不是不知道是坏了还是丢了"
+        ★ 以前的做法：直接 DELETE 掉 ✗ 背包里那件凭空消失 ✓
+          挂机一晚上回来只看到"少了一件"✗ 分不清是坏了还是丢了 ✓✓
+        ★ 现在的做法：
+          · 物品【留在背包里】✗ 标记 broken: true ✓
+          · 而且【继续保持穿戴】✗ 这样穿戴格子上能看到"已损坏" ✓
+          · 但打不出伤害（_atk_of 里判 ✓）· 也不能再穿（auth 里判 ✓）
         """
         import json
-        import db as dbmod
         nm = (p.weapon or {}).get('name') or '武器'
         old_id = p.weaponItemId
-        p.weapon = dict(weapons.FIST)
-        p.weaponItemId = None
-        p.wDur = p.wDurMax = 0
+        if p.weapon is not None:
+            p.weapon['broken'] = True          # ★ 身上这份也标上（画穿戴格子要用 ✓）
+        p.wDur = 0
         p.wDurDirty = 0
         if old_id:
-            self.post_save('DELETE FROM items WHERE id=? AND role_id=?', (old_id, p.role_id))
+            # ★ 不删 ✗ 把物品 JSON 改写成 broken 状态 ✓
+            #   ★★ 为什么不用读库：规矩 1 —— tick 线程不许碰磁盘 ✗
+            #      而且【根本不用读】✗ 身上这份 p.weapon 就是物品 JSON 本身 ✓
+            #      （存的时候就是把它 json.dumps 进去的 ✓）
+            try:
+                wv = dict(p.weapon or {})
+                wv['broken'] = True
+                wv['dur'] = 0
+                self.post_save('UPDATE items SET item_json=? WHERE id=? AND role_id=?',
+                               (json.dumps(wv, ensure_ascii=False), old_id, p.role_id))
+            except Exception as e:
+                print('[装备] 标记武器损坏失败：%r' % (e,))
         self._send_cid(p.cid, P.pack('notice',
-                                     text='⚠ %s 耐久耗尽，已经损坏消失了' % nm))
+                                     text='⚠ %s 耐久耗尽，已损坏（还在背包里，不能再用了）' % nm))
         self._send_cid(p.cid, P.pack('weapon', w=None))
 
     def _break_armor(self, p):
-        """防具耐久归零 → 损坏消失（第 103 轮 ✓ 和武器一个规矩 ✓）"""
+        """防具耐久归零 → ★ 标记为已损坏（不删除）★ 第 232 轮（和武器一个规矩 ✓）"""
         import json
         nm = (p.armor or {}).get('name') or '防具'
         old_id = p.armorItemId
-        p.armor = None
-        p.armorItemId = None
-        p.aDur = p.aDurMax = 0
+        if p.armor is not None:
+            p.armor['broken'] = True
+        p.aDur = 0
         p.aDurDirty = 0
         if old_id:
-            self.post_save('DELETE FROM items WHERE id=? AND role_id=?', (old_id, p.role_id))
+            try:
+                av = dict(p.armor or {})
+                av['broken'] = True
+                av['dur'] = 0
+                self.post_save('UPDATE items SET item_json=? WHERE id=? AND role_id=?',
+                               (json.dumps(av, ensure_ascii=False), old_id, p.role_id))
+            except Exception as e:
+                print('[装备] 标记防具损坏失败：%r' % (e,))
         self._send_cid(p.cid, P.pack('notice',
-                                     text='⚠ %s 耐久耗尽，已经损坏消失了' % nm))
+                                     text='⚠ %s 耐久耗尽，已损坏（还在背包里，不能再用了）' % nm))
         self._send_cid(p.cid, P.pack('armor', a=None, hpm=self._hp_max(p)))
 
     def _flush_adur(self, p):
@@ -2394,6 +2421,9 @@ class World(object):
         lv = int(p.role.get('level') or 1)
         inherent = mobs.player_atk(lv)
         w = p.weapon or {}
+        # ★ 第 232 轮：坏了的武器 = 空手打 ✗ 不然会出现"武器坏了伤害照旧"✓
+        if w.get('broken'):
+            w = {}
         base = w.get('base') or {}
         coeff = float(base.get('coeff') or 1.0)
         # ★ 第 51 轮：用【物品自己的等级】算平伤加成 ✓（原来错用了玩家等级 ✗）
