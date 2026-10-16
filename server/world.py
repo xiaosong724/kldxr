@@ -794,7 +794,15 @@ class World(object):
                 #   ★ 代价：作弊者可以「等 3 秒跳 33 米」✗ 但那只是快走 ✓ 可接受 ✓
             _dist = ((_nx - p.x) ** 2 + (_nz - p.z) ** 2) ** 0.5
             _allow = PLAYER_SPEED * _dt * MOVE_TOL + MOVE_SLACK
-            if _dist > _allow:
+            # ★★★ 第 280 轮（用户要求：先把移动速度的作弊检测关了看看）★★★
+            #   ★ 开关：False = 完全关闭位移检测（用来排查"移速飞快"✓）
+            #     想开回来改成 True 就行 ✓ 代码全留着 ✗ 只是不执行 ✓
+            #   ★ 第 277 轮已经去掉了"把玩家拉回"✗ 按理服务器不会再改位置 ✓
+            #     但用户实测问题还在 ✗ 所以先整个关掉 ✗ 一刀切干净 ✓
+            #     —— 关掉之后如果【还是飞快】✗ 那就和这个检测完全无关 ✓
+            #        嫌疑就转到【客户端插值】那边 ✓（我改的 120ms 缓冲 ✓）
+            _MOVE_CHECK_ON = False
+            if _MOVE_CHECK_ON and _dist > _allow:
                 # round277 fix (user: other players fly around, the mover sees himself fine)
                 #   OLD: reject the position AND send a 'tp' correction when way over.
                 #   WHY IT BROKE: position is client-authoritative; at 30Hz with jitter the
