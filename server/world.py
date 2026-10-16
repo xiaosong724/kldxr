@@ -35,7 +35,7 @@ import protocol as P
 
 TICK_HZ = 30
 TICK_DT = 1.0 / TICK_HZ
-VIEW = 60.0                     # 视野半径（与旧客户端一致）
+VIEW = 100.0                     # round 244: user wants players visible at 100m (was 60)
 MAX_DRAIN = 4000                # 单个 tick 最多处理多少条意图（防止一条洪水把 tick 打饿）
 MAX_INTENT_PER_TICK = 90        # 单连接每 tick 的意图上限（30Hz 正常也就 30 条，3 倍冗余）
 SPAWN_SAFE = 20.0               # 出生点/安全区半径：这里不刷怪（方案 §2.1 末日堡垒）
@@ -44,7 +44,7 @@ SPAWN_SAFE = 20.0               # 出生点/安全区半径：这里不刷怪（
 REVIVE_INVULN = 1.5
 
 # ★★ 第 81 轮：组队（用户确认版）★★
-PARTY_MAX = 3                 # 队伍上限（用户定：3 人 ✓）
+PARTY_MAX = 5                     # round 244: user wants 5 (was 3)
 PARTY_SHARE = 0.10            # 队友分到的经验比例（该僵尸经验的 10% ✓）
 # ★★ 第 118 轮（用户："基础减伤不能低于实际受到伤害的 10%，改成 30%"）★★
 #   含义：不管减伤堆多高，最后至少要挨【原来伤害的 30%】✗
