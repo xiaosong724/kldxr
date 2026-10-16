@@ -177,6 +177,13 @@
 /* ★ 第 273 轮：设置页要"一个页面"✗ 不要三条滑动条 ✓
    做法：merge 模式下把三个面板的【各自滚动】关掉 ✗ 高度放开 ✓
         → 它们首尾相接 ✗ 由外层统一滚动 ✓ 只有一条滚动条 ✓✓ */
+/* ★★★ 第 274 轮（用户："下面还有内容看不到，并且超出菜单的范围了"）★★★
+   病根：我把三个面板的滚动关掉了 ✗ 但【外层没有接管滚动】✓
+     → 内容直接溢出菜单盒子 ✗ 下面的东西看不到 ✓
+   ★ 修：让【菜单盒子】来滚 ✗ 三个面板仍然不滚 ✓
+     → 仍然只有一条滚动条 ✗ 但内容不会跑出菜单 ✓✓ */
+#setPanel.merge #setBox{overflow-y:auto !important;overflow-x:hidden !important;
+  max-height:86vh !important}
 #setPanel.merge .tabpane{overflow:visible !important;height:auto !important;
   max-height:none !important;flex:none !important}
 #setPanel.merge .tabpane + .tabpane{margin-top:14px !important;
