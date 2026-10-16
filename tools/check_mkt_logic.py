@@ -680,6 +680,46 @@ W._mkt_do(seller, 'mklist', {'iid': stack_iid, 'price': 20, 'qty': 99})
 ok(d_of('listres')['ok'] is False and '只有' in d_of('listres')['msg'],
    'asking to list more than you own is refused: %s' % d_of('listres')['msg'])
 
+print('--- 13b. the db → shelf round trip (round304r) ---')
+#   ★★ 用户先看出来的 bug：买家的数量滑条不出来 ★★
+#   根因是 auth.market_rows_of 的 SELECT 列顺序和 market.load_rows 解包顺序不一致 ✗
+#     → qty 被当成 expire ✗ 于是【买家看到的所有上架单 qty 永远是 1】✓
+#   ★ 这种"位置对不上"的错不报错 ✗ 只会安静地给错数据 ✓
+#     所以必须有一条【从库读回来 → 装进货架 → 发给客户端】的端到端断言 ✓
+with dbmod.db(cfg) as c:
+    # ★ 挑一条【还在货架上、且数量大于 1】的（前面那条已经卖完了 ✗ 读不到 ✓）
+    _rows = c.execute(
+        "SELECT lid, seller, price, item_json, ts, expire, qty FROM listings"
+        " WHERE state='on' ORDER BY lid").fetchall()
+    print('      db has %d on-sale row(s)' % len(_rows))
+_pub = None
+for _r in mkmod.load_rows(_rows):
+    if int(_r['qty']) > 1:
+        _pub = mkmod.pub_row(_r)
+        _rowq = int(_r['qty'])
+        break
+if _pub is None and _rows:
+    # 没有 qty>1 的就退而求其次（照样能验列顺序 ✓）
+    _one = mkmod.load_rows(_rows)[0]
+    _pub = mkmod.pub_row(_one)
+    _rowq = int(_one['qty'])
+    _r = _one
+ok(_pub is not None, 'a listing is readable back from the db (%d rows)' % len(_rows))
+if _pub is not None:
+    ok(int(_pub[11]) == _rowq,
+       'the published "left" matches the row read from the db (%r vs %r)'
+       % (_pub[11], _rowq))
+    # ★ stack 不该是毫秒时间戳（那是列错位的典型症状 ✓）
+    ok(int(_r.get('stack') or 1) < 1000,
+       'stack is a small count, not a millisecond timestamp (%r)' % (_r.get('stack'),))
+    # ★ 内存行的 exp 可能是毫秒（库里就是这么存的 ✓）
+    #   全项目的规矩是：比大小之前【一律先过 market.exp_s()】✗ 只有那一个换算口 ✓
+    #   所以这里验的是【归一化之后】是"还有几天"，而不是"原始值是秒"✓
+    _left_days = (mkmod.exp_s(_r) - valuemod.now_s()) / 86400.0
+    ok(0 < _left_days <= int(valuemod.MKT_DAYS) + 1,
+       'after exp_s() the listing still has %.2f day(s) left (raw exp=%r)'
+       % (_left_days, _r['exp']))
+
 print('--- 14. the trade history payload (round304m) ---')
 with dbmod.db(cfg) as c:
     n_log = c.execute('SELECT COUNT(*) FROM trade_log').fetchone()[0]

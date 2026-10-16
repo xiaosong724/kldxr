@@ -1296,6 +1296,21 @@ const BUYER = disposableName('MkB');
     console.log('   buyer gold (from the tick push) = ' + bGold0);
     ok(bGold0 > 1200, 'the buyer really has money (' + bGold0 + ')');
 
+    /* ★ 自测踩到：第一行现在是最便宜的材料（20 金币）✗
+       而这一节要买的是【卖家挂的那件 1200】✓ → 按 lid 精确点 ✓ */
+    console.log('   ' + (await B.eval(
+      'var rows = document.querySelectorAll("#mktList .mktRow");' +
+      'for (var i = 0; i < rows.length; i++) {' +
+      '  if (String(rows[i].getAttribute("data-mktrow")) !== String(' + listedLid + ')) { continue; }' +
+      '  var b = rows[i].getBoundingClientRect();' +
+      '  var btn = rows[i].querySelector("button[data-mktbuy]");' +
+      '  btn.click();' +
+      '  return "clicked-buy-on-lid-' + listedLid + '";' +
+      '}' +
+      'return "ROW-NOT-FOUND";')));
+    await sleep(900);
+    await B.clickSel('#askYes');
+    await sleep(3200);
     await B.clickTab('bag');
     await B.eval('openSet("bag"); bagFetch(bagRender); return 1;');
     await sleep(1200);
@@ -1313,32 +1328,53 @@ const BUYER = disposableName('MkB');
     ok((await B.eval('return MKT.open;')) === true, 'switching back hooks it again');
     const seen = await B.eval(
       'return JSON.stringify({ total: MKT.total, rows: (MKT.rows || []).length,' +
-      ' has1200: (MKT.rows || []).some(function (r) { return r[1] === 1200; }) });');
-    console.log('   buyer sees: ' + seen);
-    ok(/has1200":true/.test(String(seen)), 'the BUYER can see the SELLER item (the whole shelf loaded)');
+      ' has: (MKT.rows || []).some(function (r) { return String(r[0]) === String(' + listedLid + '); }) });');
+    console.log('   buyer sees: ' + seen + '  (our listing lid=' + listedLid + ')');
+    ok(/"has":true/.test(String(seen)),
+       'the BUYER can see OUR listing (the whole shelf loaded)');
     const iconSvg = await B.eval(
       'var el = document.querySelector("#mktList .mktIco svg");' +
       'return el ? el.tagName + ":" + el.innerHTML.length : "NO-SVG";');
     ok(/^svg:[0-9]+/.test(String(iconSvg)), 'each row draws a real item icon (' + iconSvg + ')');
 
-    console.log('   ' + (await B.clickText('#mktList .bagB', '购 买')));
-    await sleep(500);
+    console.log('   ' + (await B.eval(
+      'var rows = document.querySelectorAll("#mktList .mktRow");' +
+      'for (var i = 0; i < rows.length; i++) {' +
+      '  if (String(rows[i].getAttribute("data-mktrow")) !== String(' + listedLid + ')) { continue; }' +
+      '  var btn = rows[i].querySelector("button[data-mktbuy]");' +
+      '  if (!btn) { return "NO-BUY-BUTTON"; }' +
+      '  btn.click();' +
+      '  return "clicked buy on our listing";' +
+      '}' +
+      'return "OUR-ROW-NOT-FOUND";')));
+    await sleep(600);
     ok((await B.eval('return !!document.querySelector("#askBox") && getComputedStyle(document.getElementById("askBox")).display !== "none";')) === true,
       'the buy confirm dialog opened');
     const buyTxt = await B.eval('return document.getElementById("askBody").textContent;');
-    ok(/1200/.test(String(buyTxt)), 'it names the price: ' + String(buyTxt).slice(0, 70));
+    /* ★ 价格要认【我们挂的那个数】✗ 别硬编码（自测踩到：第一行变成别人的便宜货 ✓）*/
+    const ourPrice = await B.eval(
+      'var out = null;' +
+      'for (var i = 0; i < (MKT.rows || []).length; i++) {' +
+      '  if (String(MKT.rows[i][0]) === String(' + listedLid + ')) { out = MKT.rows[i][1]; }' +
+      '}' +
+      'return String(out);');
+    console.log('   our listing price: ' + ourPrice);
+    ok(new RegExp(String(ourPrice)).test(String(buyTxt)),
+       'it names our price (' + ourPrice + '): ' + String(buyTxt).slice(0, 70));
     console.log('   ' + (await B.clickSel('#askYes')));
     await sleep(3000);
 
     const bGold1 = await B.eval('return (WSC.role && WSC.role.gold) || 0;');
     console.log('   buyer gold after: ' + bGold1 + ' (was ' + bGold0 + ')');
-    ok(bGold1 === bGold0 - 1200, 'the buyer paid exactly 1200 (' + bGold0 + ' -> ' + bGold1 + ')');
+    ok(bGold1 === bGold0 - Number(ourPrice),
+       'the buyer paid exactly our price ' + ourPrice + ' (' + bGold0 + ' -> ' + bGold1 + ')');
     const bBag = await B.eval('return (BAG.items || []).length;');
     console.log('   buyer bag now: ' + bBag + ' items');
     ok(bBag >= 1, 'the item landed in the buyer bag through the UI (' + bBag + ')');
     const after = await B.eval(
-      'return JSON.stringify({ total: MKT.total, has1200: (MKT.rows || []).some(function (r) { return r[1] === 1200; }) });');
-    ok(/has1200":false/.test(String(after)), 'it left the shelf for the buyer: ' + after);
+      'return JSON.stringify({ total: MKT.total,' +
+      ' has: (MKT.rows || []).some(function (r) { return String(r[0]) === String(' + listedLid + '); }) });');
+    ok(/"has":false/.test(String(after)), 'our listing left the shelf for the buyer: ' + after);
     console.log('   seller db after the sale: ' + dbInfo(SELLER));
     console.log('   listing row: ' + dbListing(SELLER));
 

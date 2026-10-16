@@ -342,8 +342,17 @@ def load_rows(rows):
         try:
             lid, seller, price, js, ts, expire = (rec[0], rec[1], rec[2],
                                                    rec[3], rec[4], rec[5])
-            stack = rec[6] if len(rec) > 6 else 1
-            qty = rec[7] if len(rec) > 7 else 1
+            # ★★ round304r：这里的列顺序 = auth.market_rows_of 的 SELECT ★★
+            #   自测抓到的真 bug（用户先看出来的）：那边 SELECT 写成
+            #     lid, seller, price, item_json, ts, expire, qty   ✗
+            #   而这里按 ...ts, expire, stack, qty 解包 ✓
+            #   → expire 被当成 stack、qty 被当成 expire ✗
+            #   → 买家看到的所有上架单 qty 永远是 1 ✗（数量滑条因此不出现 ✓）
+            #   ★ 7 列 = 表里的列（listings 没有 stack 列 ✗ 物品是整份 JSON ✓）
+            #     stack 只是"这一单是几个"的旧说法 ✗ 现在一律按 1 ✓
+            #     （真正的"还剩几个"看 qty ✓）
+            stack = 1
+            qty = rec[6] if len(rec) > 6 else 1
         except Exception:
             continue
         try:

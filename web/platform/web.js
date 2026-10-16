@@ -2989,7 +2989,20 @@ function mktBindOnce() {
   if (tAll) { tAll.onclick = function () { MKT.tab = 'all'; mktAsk(true); }; }
   if (tMine) { tMine.onclick = function () { MKT.tab = 'mine'; mktAsk(false); }; }
   var tLog = document.getElementById('mktTabLog');
-  if (tLog) { tLog.onclick = function () { MKT.tab = 'log'; MKT.page = 1; mktLogAsk(0); }; }
+  if (tLog) {
+    tLog.onclick = function () {
+      MKT.tab = 'log';
+      MKT.page = 1;
+      /* ★★ round304r：先【立刻重画一次】✗ 再去拉数据 ✓
+         自测抓到的真 bug：只调了 mktLogAsk ✗ 而它遇到"还没登录/还没数据"会直接
+         return ✗ 于是页面状态是"记录页"✗ 显示的却还是【商品列表】✓
+         （用户点一下就会看到这个 ✗ 点完像是没反应 ✓）
+         ★ 而且重画里带着"商品列表藏起来 / 记录页显示出来"那段 ✗
+           不重画 = 两块同时显示或者两块都不对 ✓ */
+      mktRender();
+      mktLogAsk(0);
+    };
+  }
   /* 分类 / 阶数 / 排序：一组按钮共用一个处理器（★ 取值一律现算 ✓）*/
   var cats = document.querySelectorAll('#mktCatRow .mktCat');
   for (var i = 0; i < cats.length; i++) {

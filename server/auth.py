@@ -427,7 +427,24 @@ def armor_of(cfg, role_id):
 
 
 def market_rows_of(cfg, role_id, all_sellers=True):
-    """读出【在售】的上架单 → [(lid, seller, price, item_json, ts, expire, stack), ...]
+    """读出【在售】的上架单 → [(lid, seller, price, item_json, ts, expire, stack, qty), ...]
+
+    ★★ round304r：列的【顺序】必须和 market.load_rows 解包的一模一样 ★★
+      自测抓到的真 bug（是用户先看出来的："买家的数量滑条不出来"）：
+        这里原来写成 ... ts, expire, qty ✗（第 6 位是 expire、第 7 位是 qty）
+        而 load_rows 按 ... ts, expire, stack, qty 解包 ✓
+        → expire 被当成 stack、qty 被当成 expire ✗
+        → 买家看到的所有上架单【qty 永远是 1】✗（所以数量滑条根本不出现 ✓）
+          而且 row['stack'] 变成了毫秒时间戳（脏值 ✗ 界面没用到所以一直没露 ✓）
+      ★ 教训：这种"位置对不上"的错【不会报错】✗ 只会安静地给出错数据 ✓
+        所以离线测试里必须有"这个数一定等于那个数"的断言（已加 ✓）
+      ★ 修法：让【两边的列顺序一致】（这里 ts, expire, qty ✗ load_rows 那边
+        必须按 7 列解包、stack 固定当 1 ✓）
+      ★★ 我第一版修错了，值得记下来：我以为"少读了一列 stack"✗ 就往 SELECT 里
+         加了一列 stack ✓ 结果 sqlite 直接报 no such column: stack ✓
+         —— listings 表【本来就没有 stack 列】（物品本身是整份 JSON ✗ 没有单独列 ✓）
+         ★ 教训：改 SQL 之前先看一眼【表结构】（PRAGMA table_info ✓ 一条命令 ✓）
+           我凭印象改 ✗ 白跑一轮 ✓
 
     round304b: 交易所的货架要在内存里（tick 线程不许读库 ✗），
     所以由【网络线程】把库读出来，交给 tick 只做内存装配（和 weapon_of 同一个套路 ✓）。
@@ -447,13 +464,13 @@ def market_rows_of(cfg, role_id, all_sellers=True):
             if all_sellers:
                 # ★ round304l：qty 一起读（还剩几个 ✓ 买家可以只买一部分 ✓）
                 rows = c.execute(
-                    "SELECT lid, seller, price, item_json, ts, expire, qty FROM listings"
-                    " WHERE state='on' ORDER BY lid LIMIT ?",
+                    "SELECT lid, seller, price, item_json, ts, expire, qty"
+                    " FROM listings WHERE state='on' ORDER BY lid LIMIT ?",
                     (int(valuemod.MKT_SHELF_MAX),)).fetchall()
             else:
                 rows = c.execute(
-                    "SELECT lid, seller, price, item_json, ts, expire, qty FROM listings"
-                    " WHERE seller=? AND state='on' ORDER BY lid",
+                    "SELECT lid, seller, price, item_json, ts, expire, qty"
+                    " FROM listings WHERE seller=? AND state='on' ORDER BY lid",
                     (int(role_id),)).fetchall()
     except Exception:
         return out
