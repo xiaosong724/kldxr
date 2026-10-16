@@ -135,6 +135,26 @@ class Browser {
     await this.clickAt(p.x, p.y);
     return 'clicked [' + text + ']';
   }
+  /* ★★ 切到一个导航页签 ✗ 真鼠标点击优先 ✗ 到不了再用合成 click 兜底 ✓
+     为什么要兜底：无头 Chromium 的 CDP 鼠标事件在这个页签上【到不了处理器】
+       （实测：elementFromPoint 命中的就是它 ✗ 合成 MouseEvent 和 .click() 都能触发 ✓）
+     → 这是工具的假象 ✗ 不是游戏的问题 ✓ 但测试不能因此假红 ✓
+     ★ 兜底时必须【说出来】（返回哪个路径生效的 ✗ 别偷偷降级 ✓）*/
+  async clickTab(name) {
+    const sel = '#setTabs .tab[data-tab=' + name + ']';
+    const before = await this.eval('return (typeof SETCFG !== "undefined") ? SETCFG.setTab : null;');
+    await this.clickSel(sel);
+    await sleep(900);
+    const after = await this.eval('return (typeof SETCFG !== "undefined") ? SETCFG.setTab : null;');
+    if (after === name) { return 'real-mouse'; }
+    await this.eval('document.querySelector(' + JSON.stringify(sel) + ').click(); return 1;');
+    await sleep(900);
+    const now = await this.eval('return (typeof SETCFG !== "undefined") ? SETCFG.setTab : null;');
+    console.log('   [note] the CDP mouse click did not reach the tab (was ' + before +
+      '), used a synthetic click -> ' + now);
+    return now === name ? 'synthetic' : 'FAILED';
+  }
+
   async type(sel, text) {
     await this.eval('var e = document.querySelector(' + JSON.stringify(sel) + ');' +
       'e.focus(); e.value = ' + JSON.stringify(String(text)) + '; return e.value;');
@@ -323,15 +343,66 @@ const BUYER = disposableName('MkB');
     console.log('   seller db after listing: ' + dbInfo(SELLER));
     console.log('   listing row: ' + dbListing(SELLER));
 
-    /* open the panel through the real entry: the bag panel needs a "交易所" entry.
-       NOTE: the panel is opened by the 我的上架 / 全部商品 tabs after a listing, but
-       the intended entry is a button - check what exists. */
     /* 我的上架 tab */
-    const entryBtn = await A.eval('return !!document.getElementById("bagMktOpen");');
-    ok(entryBtn === true, 'the bag has a dedicated 交易所 entry button');
-    console.log('   ' + (await A.clickSel('#bagMktOpen')));
-    await sleep(2000);
-    ok((await A.eval('return MKT.open;')) === true, 'clicking it opens the panel');
+    /* ★ round304d（用户要求）：交易所是【独立导航按钮】✗ 不再是背包里的浮层 ✓ */
+    const navInfo = await A.eval(
+      "var t = document.querySelector('#setTabs .tab[data-tab=mkt]');" +
+      'return JSON.stringify({ tab: !!t, text: t ? t.textContent : null,' +
+      ' inBag: !!document.getElementById("bagMktOpen"),' +
+      ' close: !!document.getElementById("mktClose") });');
+    ok(/"tab":true/.test(String(navInfo)), 'there is a nav tab for the exchange: ' + navInfo);
+    ok(/"inBag":false/.test(String(navInfo)), 'the old in-bag entry button is gone');
+    ok(/"close":false/.test(String(navInfo)), 'the overlay close button is gone too');
+    /* nav tab may live on page 2 (the "more" paging) - click only when really visible */
+    const vis = await A.eval(
+      "var e = document.querySelector('#setTabs .tab[data-tab=mkt]');" +
+      'var r = e.getBoundingClientRect();' +
+      'var bar = document.getElementById("setTabs");' +
+      'var br = bar.getBoundingClientRect();' +
+      'return JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height),' +
+      ' inside: (r.right <= br.right + 1) && (r.left >= br.left - 1),' +
+      ' page2: bar.classList.contains("page2") });');
+    console.log('   mkt tab geometry: ' + vis);
+    if (!/"inside":true/.test(String(vis))) {
+      console.log('   -> not visible, paging with 更多 first');
+      await A.clickSel('#tabMore');
+      await sleep(700);
+    }
+    /* ★★ 点击之前先问一句"这一点上是谁" ✗ 别猜 ✓
+       这个项目在"点了没反应"上栽过四次（出售按钮 / 更多按钮 / 装备 / 这次 ✓）
+       每次的根因都是"有东西盖在上面"或者"事件被吞掉"✓ */
+    const hitInfo = await A.eval(
+      "var e = document.querySelector('#setTabs .tab[data-tab=mkt]');" +
+      'var r = e.getBoundingClientRect();' +
+      'var x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);' +
+      'var top = document.elementFromPoint(x, y);' +
+      'var chain = []; var n = top;' +
+      'while (n && chain.length < 4) {' +
+      '  chain.push(n.tagName + (n.id ? "#" + n.id : ""));' +
+      '  n = n.parentElement; }' +
+      'return JSON.stringify({ x: x, y: y,' +
+      ' hit: top ? (top.tagName + (top.id ? "#" + top.id : "")) : null,' +
+      ' isTab: top === e, chain: chain });');
+    console.log('   what is on top of the tab? ' + hitInfo);
+    ok(/"isTab":true/.test(String(hitInfo)),
+       'nothing covers the 交易所 tab (the click lands on it): ' + hitInfo);
+    console.log('   switch via nav tab -> ' + (await A.clickTab('mkt')));
+    await sleep(2500);
+    /* ★ 点了没反应时先分清"事件没到"还是"到了但没干活"✗ 这是这个项目的第四次了 ✓ */
+    const afterClick = await A.eval(
+      'return JSON.stringify({ open: (typeof MKT !== "undefined") ? MKT.open : "no-MKT",' +
+      ' cfg: (typeof SETCFG !== "undefined") ? SETCFG.setTab : "no-SETCFG",' +
+      ' netOn: (typeof NET !== "undefined") ? NET.on : "no-NET",' +
+      ' wsReady: (typeof WSC !== "undefined") ? WSC.ready : "no-WSC",' +
+      ' tabOn: (function(){ var e = document.querySelector("#setTabs .tab[data-tab=mkt]");' +
+      '   return e ? e.className : null; })() });');
+    console.log('   after the click: ' + afterClick);
+    ok((await A.eval('return MKT.open;')) === true,
+       'clicking the nav tab opens the panel (geometry was ' + vis + ')');
+    ok((await A.eval(
+      "var p = document.querySelector('.tabpane[data-pane=mkt]');" +
+      'return p ? (getComputedStyle(p).display !== "none") : false;')) === true,
+      'the exchange pane is really visible (not display:none)');
     console.log('   ' + (await A.clickSel('#mktTabMine')));
     await sleep(1500);
     const mineTxt = await A.eval('return document.getElementById("mktList").textContent;');
@@ -405,9 +476,18 @@ const BUYER = disposableName('MkB');
 
     await B.eval('openSet("bag"); bagFetch(bagRender); return 1;');
     await sleep(1200);
-    console.log('   ' + (await B.clickSel('#bagMktOpen')));
+    console.log('   switch via nav tab -> ' + (await B.clickTab('mkt')));
     await sleep(2500);
-    ok((await B.eval('return MKT.open;')) === true, 'the buyer opened the panel from the bag');
+    ok((await B.eval('return MKT.open;')) === true,
+       'the buyer opened the panel from the nav tab');
+    /* ★ 切回背包再切回来：面板要还在、数据还要在（页签那套逻辑本来就是对的 ✓
+       但 MKT.open 是我这轮新接的 ✗ 值得验一遍 ✓）*/
+    console.log('   switch to bag -> ' + (await B.clickTab('bag')));
+    await sleep(900);
+    ok((await B.eval('return MKT.open;')) === false, 'switching to the bag unhooks the market');
+    console.log('   switch back -> ' + (await B.clickTab('mkt')));
+    await sleep(2200);
+    ok((await B.eval('return MKT.open;')) === true, 'switching back hooks it again');
     const seen = await B.eval(
       'return JSON.stringify({ total: MKT.total, rows: (MKT.rows || []).length,' +
       ' has1200: (MKT.rows || []).some(function (r) { return r[1] === 1200; }) });');

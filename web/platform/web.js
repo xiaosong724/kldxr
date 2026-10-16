@@ -1706,6 +1706,12 @@ function setTab(name) {
        因为切页签有好几条路（点页签 / 快捷键 / 恢复上次停留 / 代码里直接调 ✓）
        修在点击处 = 只修了一条路 ✗ 迟早又漏 ✗
        —— setTab 是【唯一收口】✓ 所有路都经过它 ✓ */
+  /* ★★ round304d（用户要求：交易所要独立导航按钮）★★
+     MKT.open 的【唯一来源】就是这里 ✗ 别的任何地方都不许自己设它 ✓
+     ★ 为什么：页签有好几条路会切过来（点页签 / 快捷键 / 恢复上次停留 / 代码跳 ✓）
+       谁自己设 MKT.open ✗ 迟早出现"面板在后台还在刷"或者"切过来是空的"✓ */
+  MKT.open = (name === 'mkt');
+  if (name === 'mkt') { mktBindOnce(); mktAsk(true); }
   if (name === 'bag') { bagFetch(bagRender); }   // ★ 切到背包页就拉一次（只读接口 ✓ 很便宜）
   if (name === 'stat') { statRender(); }         // ★ 第 119 轮：属性页
   if (name === 'talent') { talBind(); talRender(); }   // ★ 第 119 轮：天赋页
@@ -2752,20 +2758,6 @@ function bagRender() {
       }
     }
   }
-  /* 打开交易所面板（★ 这是面板的【唯一入口】✗ 方案 §8：放进背包里 ✓）
-     ★ 每次进游戏都重绑一次是安全的 ✗ _b 守着 ✓ 但里面绝不捕获任何会变的值 ✓ */
-  var mktOpenBtn = document.getElementById('bagMktOpen');
-  if (mktOpenBtn && !mktOpenBtn._b) {
-    mktOpenBtn._b = true;
-    var _mktOpenGo = function () {
-      var now = Date.now();
-      if (mktOpenBtn._t && now - mktOpenBtn._t < 500) { return; }
-      mktOpenBtn._t = now;
-      mktOpen();
-    };
-    mktOpenBtn.addEventListener('pointerdown', function (e) { e.preventDefault(); _mktOpenGo(); });
-    mktOpenBtn.onclick = function () { _mktOpenGo(); };
-  }
   var _mktTip = document.getElementById('bagMktSendTip');
   if (_mktTip) {
     _mktTip.textContent = sellable
@@ -2973,8 +2965,8 @@ function mktBindOnce() {
   var p = document.getElementById('mktPanel');
   if (!p || p._b) { return; }
   p._b = true;
-  var close = document.getElementById('mktClose');
-  if (close) { close.onclick = mktClose; }
+  /* ★ round304d：没有"关闭"按钮了 ✗ 交易所是独立页签（点别的页签就走 ✓）
+     自测会断言 #mktClose 不存在 ✗ 免得以后有人又加回来 ✓ */
   var tAll = document.getElementById('mktTabAll');
   var tMine = document.getElementById('mktTabMine');
   if (tAll) { tAll.onclick = function () { MKT.tab = 'all'; mktAsk(true); }; }
@@ -3049,21 +3041,17 @@ function mktBindOnce() {
   mktGridBind();
 }
 
-/* 打开/关闭（★ 打开 = mktopen ✗ 服务器会重读库 ✓）*/
+/* 打开交易所（★ round304d：现在它是一个【独立页签】✗ 不再是浮层 ✓）
+   ★ 为什么保留这个函数：背包里的【挂交易所】成功后要跳过去看一眼 ✓
+     跳转 = openSet('mkt') ✗ 和用户自己点那个导航按钮【走同一条路】✓
+     （★ 别再自己管显隐 ✗ 页签那套逻辑在 setTab 里只有一份 ✓）*/
 function mktOpen() {
-  var p = document.getElementById('mktPanel');
-  if (!p) { return; }
+  if (typeof openSet === 'function') { openSet('mkt'); return; }
   mktBindOnce();
   MKT.open = true;
-  p.classList.add('on');
   MKT.tab = 'all';
   MKT.page = 1;
   mktAsk(true);
-}
-function mktClose() {
-  var p = document.getElementById('mktPanel');
-  MKT.open = false;
-  if (p) { p.classList.remove('on'); }
 }
 
 /* 问一次服务器（fresh=true 走 mktopen ✗ 否则走纯内存的 lists ✓）*/

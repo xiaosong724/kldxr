@@ -193,10 +193,11 @@ const VIEW = disposableName('ShotV');
     const st = await ev('return (typeof WSC !== "undefined") && WSC.ready;');
     if (st === true) { break; }
   }
+  /* round304d：交易所现在是独立页签 ✗ 截图就从那一页截 ✓ */
   await ev('openSet("bag"); bagFetch(bagRender); return 1;');
-  await sleep(1500);
-  await ev('mktOpen(); return 1;');
-  await sleep(2500);
+  await sleep(1200);
+  await ev('openSet("mkt"); return 1;');
+  await sleep(2800);
   const shot = await send('Page.captureScreenshot', { format: 'png' });
   if (shot && shot.result && shot.result.data) {
     const f = path.join(OUT, 'mkt-panel.png');
