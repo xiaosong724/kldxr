@@ -2448,7 +2448,7 @@ function addOther(w, t) {
      into his buffer, which froze him in place for ~242s (reviewer measured it).
      When ct is missing: clear the buffer, snap to the snapshot position, and
      wait for his real ct before interpolating again. */
-  if (!(ct > 0)) {
+  if (!(w.ct > 0)) {
     o.buf.length = 0;
     o.rtS = null;
     o.rtLast = undefined;
@@ -2456,7 +2456,7 @@ function addOther(w, t) {
     o.cur = { x: w.x, z: w.z, yaw: w.yaw || 0 };
     o.last = { x: w.x, z: w.z };
   } else {
-    netPush(o.buf, w.x, w.z, w.yaw || 0, ct);
+    netPush(o.buf, w.x, w.z, w.yaw || 0, w.ct);
   }
   var moved = !lp || Math.abs(lp.x - w.x) > 0.002 || Math.abs(lp.z - w.z) > 0.002 ||
               Math.abs(lp.yaw - (w.yaw || 0)) > 0.002;
