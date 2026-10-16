@@ -823,10 +823,15 @@ const BUYER = disposableName('MkB');
       '             durMax: it.durMax || 0, aff: (it.affixes || []).length,' +
       '             svg: el ? el.outerHTML : null });' +
       '}' +
+      /* ★ 自测抓到的测试错：这里原来读 window.__listedIid ✗
+         那个变量我改名之后【再也没赋过值】→ 永远是 undefined
+         → 一个都没匹配上 → __exchIconSvg 一直是空串 ✗
+         → 报出来是"图标不一样"✗ 其实是"我根本没取到图标"✓
+         ★ 教训：断言失败时先确认【取到值了没有】✗ 别直接判"功能错"✓ */
       'window.__exchIconSvg = "";' +
       'for (var k = 0; k < rows.length; k++) {' +
       '  var kt = rows[k]._it || {};' +
-      '  if (Number(kt.__iid) !== Number(window.__listedIid)) { continue; }' +
+      '  if (Number(kt.__iid) !== Number(' + wornIid + ')) { continue; }' +
       '  var ks = rows[k].querySelector(".mktIco svg");' +
       '  window.__exchIconSvg = ks ? ks.outerHTML : "";' +
       '}' +
@@ -1065,6 +1070,16 @@ const BUYER = disposableName('MkB');
        'the tooltip says how worn it is ("只剩 N%"), not just two numbers');
     ok(/"hasBar":true/.test(String(wornTip)), 'and the tooltip draws the bar too');
 
+    /* ★★ 买家浏览器要【提前】起来 ✗ 2d / 2e 里就要用他（真正的买家视角 ✓）
+       自测踩到：原来它在第 3 节才 new ✗ 于是 2d 一跑到"切到买家"就崩 ✓
+       而崩在 try 里 ✗ 末尾照样打 FAILED: 0 ✗ 特别容易误判成"全过了"✓
+       ★ 教训：脚本"跑完没跑完"要有【明确的结尾标记】✗ 别只看 FAILED ✓ */
+    B = new Browser(9362, 'buyer');
+    await B.start();
+    await sleep(1000);
+    await B.eval('localStorage.setItem("token",' + JSON.stringify(tokB) + '); location.reload(); return 1;');
+    ok(await B.waitReady('buyer'), 'the buyer is online before the quantity tests');
+
     /* ====== 2d. 数量滑条：按数量上架 + 部分购买（用户点名要的）====== */
     console.log('\n== 2d. quantity sliders ==');
     await A.clickTab('bag');
@@ -1162,7 +1177,20 @@ const BUYER = disposableName('MkB');
     /* 买家那边：数量滑条应该出现（还剩 4 个 ✗ 单价 20 ✓）*/
     console.log('   switch to buyer tab…');
     console.log('   ' + (await B.clickTab('mkt')));
+    /* ★ 老毛病又犯了一次：切页签只改"哪一页" ✗ 整个设置面板还是 display:none ✓
+       → 浮窗/列表都"画了但看不见" ✗ 断言就全红了 ✓ */
+    await B.eval('openSet("mkt"); return 1;');
     await sleep(2800);
+    ok((await B.eval(
+      'var r = document.querySelector(".tabpane[data-pane=mkt]").getBoundingClientRect();' +
+      'return r.width > 100;')) === true,
+      'the buyer exchange pane is really visible');
+    console.log('   buyer shelf rows: ' + await B.eval(
+      'return JSON.stringify({ rows: (MKT.rows || []).length, open: MKT.open,' +
+      ' els: document.querySelectorAll("#mktList .mktRow").length,' +
+      ' names: (MKT.rows || []).map(function (r) { return r[5]; }) });'));
+    ok((await B.eval('return (MKT.rows || []).length > 0;')) === true,
+       'the buyer really received the shelf');
     const buySlider = await B.eval(
       'var rows = document.querySelectorAll("#mktList .mktRow");' +
       'for (var i = 0; i < rows.length; i++) {' +
@@ -1178,6 +1206,23 @@ const BUYER = disposableName('MkB');
       '}' +
       'return "NOT-ON-SHELF";');
     console.log('   buyer slider: ' + buySlider);
+    console.log('   buyer material row: ' + await B.eval(
+      'var out = null;' +
+      'for (var i = 0; i < (MKT.rows || []).length; i++) {' +
+      '  var r = MKT.rows[i];' +
+      '  if (String(r[5]) !== ' + JSON.stringify(matInfo.name) + ') { continue; }' +
+      '  out = { lid: r[0], len: r.length, qty: r[11], iid: r[12], price: r[1], stack: r[8] };' +
+      '}' +
+      'return JSON.stringify(out);'));
+    console.log('   buyer tip: ' + await B.eval(
+      'var b = document.getElementById("bagTipBox");' +
+      'var f = b.querySelector("[data-tipfor]");' +
+      'return JSON.stringify({ disp: getComputedStyle(b).display,' +
+      '   forId: f ? f.getAttribute("data-tipfor") : null,' +
+      '   acts: [].map.call(b.querySelectorAll("[data-tipact]"), function (x) {' +
+      '     return x.getAttribute("data-tipact"); }),' +
+      '   hasQty: !!b.querySelector(".qtyRow"),' +
+      '   head: String(b.textContent).slice(0, 24) });'));
     ok(/"hasRow":true/.test(String(buySlider)),
        'the buyer sees a quantity slider for a stack listing');
     ok(JSON.parse(buySlider).max === '4', 'its max is what is left on the shelf (4)');
@@ -1187,8 +1232,19 @@ const BUYER = disposableName('MkB');
     console.log('\n== 2e. trade history page ==');
     ok((await A.eval('return !!document.getElementById("mktTabLog");')) === true,
        'there is a 我的记录 tab');
+    /* ★ 关键：要用【切页签那条正规路】✗ 别在一个藏着的页面上点 #mktTabLog ✓
+       （切页签会把 MKT.open 置真 + 重拉货架 ✓ 这正是 mktLogAsk 的前置条件 ✓）
+       ★ 自测踩到：只 openSet 没切页签 → MKT.open 还是 false
+         → mktLogAsk 直接 return ✗ 一个请求都没发 ✓ 而 tab 却已经是 'log' ✓
+         → 表现是"页面在记录页 ✗ 但列表还显示商品"✓ */
+    console.log('   switch via nav tab -> ' + (await A.clickTab('mkt')));
+    await A.eval('openSet("mkt"); return 1;');
+    await sleep(2200);
+    ok((await A.eval('return MKT.open === true;')) === true,
+       'the exchange panel is really open before touching 我的记录');
     console.log('   ' + (await A.clickSel('#mktTabLog')));
-    await sleep(2000);
+    await sleep(2200);
+    ok((await A.eval('return MKT.tab;')) === 'log', 'the tab switched to the log');
     const logState = await A.eval(
       'return JSON.stringify({ tab: MKT.tab,' +
       ' listShown: getComputedStyle(document.getElementById("mktList")).display,' +
@@ -1235,10 +1291,6 @@ const BUYER = disposableName('MkB');
 
     /* ================= 买家：购买 ================= */
     console.log('\n== 3. 买家：在面板里买走它 ==');
-    B = new Browser(9362, 'buyer');
-    await B.start();
-    await sleep(1000);
-    await B.eval('localStorage.setItem("token",' + JSON.stringify(tokB) + '); location.reload(); return 1;');
     ok(await B.waitReady('buyer'), 'the buyer is in the world');
     const bGold0 = await B.eval('return (WSC.role && WSC.role.gold) || 0;');
     console.log('   buyer gold (from the tick push) = ' + bGold0);
@@ -1304,6 +1356,7 @@ const BUYER = disposableName('MkB');
       'c = sqlite3.connect("file:game.db?mode=ro", uri=True)',
       "print(c.execute(\"SELECT COUNT(*) FROM roles WHERE name LIKE 'MkS%' OR name LIKE 'MkB%'\").fetchone()[0])",
     ].join('\n'), []);
+    console.log('\n== all sections reached the end ==');
     console.log('\nleftover test roles: ' + left);
     console.log('FAILED: ' + fails);
     /* ★ 别用 process.exit：它不等 stdout 刷完 ✗ 输出会被截断 ✓

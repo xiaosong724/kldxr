@@ -317,6 +317,9 @@ def pub_row(row):
     #   ★ 为什么要它：一件东西可能在交易所挂了好几单 ✗ 名字一模一样 ✓
     #     "我挂的是哪一单 / 哪一件"只能靠 id 认 ✗（自测在"按名字找"上栽了四次 ✓）
     #   ★ 老服务端没有这一格 ✗ 客户端要能容忍 undefined ✓
+    #   ★ 这一格必须【真的等于货架上剩的个数】✗ 它是买家数量滑条的最大值 ✓
+    #     （离线测试里有一条专门盯它：货架上剩 4 就一定得是 4 ✓
+    #       理由：这种"看着像取字段、其实写成常量"的错最难看出来 ✓）
     return [row['lid'], row['price'], row['cat'], row['tier'], row['lv'],
             row['name'], row['seller'], left, row.get('stack') or 1, icon, it,
             max(1, _int(row.get('qty'), 1)), _int(row.get('iid'), 0)]

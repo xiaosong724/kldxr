@@ -603,6 +603,11 @@ ok(lrow is not None and int(lrow[2]) == 6,
    'the listing row says qty=6 (unit price 3): %s' % (tuple(lrow) if lrow else None,))
 sq_lid = int(lrow[0]) if lrow else 0
 ok(int(lrow[1]) == 20, 'the listing stores the UNIT price (20), not the total 120')
+#   ★ 第 12 格（还能买几个）必须等于货架上剩的个数 ✗ 它是买家数量滑条的最大值 ✓
+#     为什么单独盯它：这种"看着像取字段、其实写成常量"的错最难看出来 ✓
+_pubq = mkmod.pub_row([r for r in W.mkt['by_lid'].values() if int(r['lid']) == sq_lid][0])
+ok(int(_pubq[11]) == 6,
+   'the published row says 6 left (that is the buyer slider max), got %r' % (_pubq[11],))
 
 #   买家只买 2 个
 buyer.gold = 5000
