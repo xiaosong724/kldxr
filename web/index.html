@@ -513,6 +513,7 @@
    <div class="tab" data-page="1" data-tab="stat">属性</div>
    <div class="tab" data-page="1" data-tab="talent">天赋</div>
    <div class="tab on" data-page="1" data-tab="view">设置</div>
+   <div class="tab" data-page="1" data-tab="gold">金币</div>
    <!-- ★ 第 128 轮（用户）：【调试】页签已移除 ✗
         那些开关（刷怪/无敌等）本来就只该管理员用 ✗
         → 现在全部收进【管理页】✓（本轮正在做）-->
@@ -606,6 +607,21 @@
    <div id="ptParties"></div>
   </div>
 
+  <!-- round294: 金币面板（只用内联样式 ✗ 不依赖未知类名 ✓）-->
+  <div class="tabpane" data-pane="gold">
+    <div style="text-align:center;padding:16px 0 10px">
+      <span id="goldBig" style="font-size:26px;color:#ffd83d;font-weight:700">0</span>
+      <span style="font-size:13px;color:#9aa0a6;margin-left:6px">金币</span>
+    </div>
+    <div style="font-size:12.5px;color:#9aa0a6;line-height:1.9;text-align:center">
+      打怪掉落 · 卖物品给系统 · 交易所卖给其他玩家<br>
+      上限 10 亿 · 到顶后自动换成
+      <span style="color:#ffd83d">【黄金】</span>
+      （1 黄金 = 1 亿）<br>
+      黄金卖给系统可以换回金币
+    </div>
+    <div id="goldDetail" style="font-size:12px;color:#7a8087;text-align:center;margin-top:14px"></div>
+  </div>
   <div class="tabpane on" data-pane="view">
    <div class="setLabel">分辨率倍率（越高越清晰越吃性能）</div>
    <div id="rowDpr"></div>
