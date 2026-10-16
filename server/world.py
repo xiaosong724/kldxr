@@ -628,6 +628,22 @@ class World(object):
                     d['loot'] = lt
                 # ★ 本 tick 攒的反馈：hurts=我挨的打，mhits=我打中僵尸（弹伤害数字用）✓
                 pend = self._pend.get(p.cid)
+                # ★★★ 第 239 轮：每帧都把"我自己的血量"带上 ★★★
+                #   为什么：客户端原来那份血量是【本地算的】✗
+                #     服务器打它多少 ✗ 它不知道 ✓
+                #     → 血条不跟着掉 ✓ 一直到服务器判死 ✗ 客户端才突然变尸体 ✓
+                #     → 这就是用户报的"假死"（别人看你死了 ✗ 你看自己活着 ✓）
+                #   ★ 为什么现在可以【每帧直接赋值】而不是插值：
+                #     服务器 30Hz 推 ✓ 客户端 60Hz 画 ✓
+                #     30 次/秒的更新已经足够平滑 ✗ 不会抖 ✓
+                #     （第 140 轮那次抖 ✗ 是因为只发"变化时"✗ 间隔不均匀 ✓）
+                if pend is None:
+                    pend = self._pend[p.cid] = {}
+                _me0 = pend.get('me')
+                if _me0 is None:
+                    _me0 = pend['me'] = {}
+                _me0['hp'] = int(p.hp or 0)
+                _me0['hpm'] = int(self._hp_max(p))
                 if pend:
                     if pend.get('hurts'):
                         d['hurts'] = pend['hurts']
