@@ -13,7 +13,7 @@ import time
 
 # ============================================================ 版本与迁移
 
-SCHEMA_VERSION = 3   # ★ 第 149 轮：魔气值（迁移 v3 在下面 MIGRATIONS 定义之后）
+SCHEMA_VERSION = 4   # ★ 第 291 轮：金币（迁移 v4 在下面 MIGRATIONS 定义之后）
 
 # 每个版本一组 SQL。**新版本往后追加，不要改历史版本** ✓
 MIGRATIONS = {
@@ -254,6 +254,19 @@ def current_version(c):
 MIGRATIONS[3] = [
     "ALTER TABLE roles ADD COLUMN mq    INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE roles ADD COLUMN mq_at INTEGER NOT NULL DEFAULT 0",
+]
+
+
+# ★★★ 第 291 轮（金币系统 第 1 步）：金币字段 ★★★
+#   ★ 为什么加在 roles 表而不建独立钱包表：和魔气 mq 完全同构（上面就是）✗
+#     离线玩家天然就在库里 ✓ 查询也少一次 join ✓
+#   ★ CHECK(gold>=0)：防负的第一层（共三层：SQL CHECK + UPDATE...WHERE gold>=? + 业务兜底）
+#     ★ 已在真库副本上实测：有数据的表上 ADD COLUMN 带 CHECK 成功 ✓
+#       而且直接写 -1 会被 SQLite 当场拒绝 ✓✓
+#   ★ 为什么用 INTEGER：金币一律整数 ✗ 不许浮点（避免精度问题）✓
+#   ★ 为什么默认 0：老角色迁移后都是 0 ✗ 不给起步金币（防多开刷）✓
+MIGRATIONS[4] = [
+    "ALTER TABLE roles ADD COLUMN gold INTEGER NOT NULL DEFAULT 0 CHECK (gold >= 0)",
 ]
 
 

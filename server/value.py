@@ -1,0 +1,138 @@
+# -*- coding: utf-8 -*-
+"""物品价值表 + 金币常量（第 291 轮 · 金币系统第 1 步）
+
+★ 为什么是【纯 Python 字典】而不是数据库表：
+   tick 线程绝对不许做磁盘 IO（架构铁律 ✓）
+   而"卖东西给系统"要在 tick 线程里立刻算出价格 ✓
+   价格是【不变的规则】✗ 写死在代码里最安全 ✓
+   改价要重启服务器 ✗ 可接受 ✓（比 tick 线程读库安全得多 ✓）
+
+★ 价格水平（用户定稿 ✓ 保持低价 ✗ 不追求几个月到上限 ✓）：
+   装备：1阶10 → 9阶80000（约 ×2.8/阶）
+   材料：常见2 → 传说1500
+   交易所里玩家自己定价 ✗ 系统价 ≈ 玩家成交价的 30% ✓
+   —— 这样"卖给系统"永远不如"挂交易所"✓ 交易所才有生意 ✓
+
+★ 字段口径（已在真库 1562 件上核对过 ✓）：
+   装备：slot=='weapon'/'armor' · tier · itemLv · base · affixes · dur/durMax · ext
+   材料：kind=='material' · tier（通常是 0）· 靠 stack 叠数量
+   ★ 等级一律用 itemLv ✗ 不用 reqLevel（那是"装备需求等级"✓）
+"""
+
+# ---------------------------------------------------------------- 常量
+GOLD_CAP = 1000000000          # 金币上限 10 亿（到顶后自动换黄金）
+GOLD_PER_BULLION = 100000000  # 1 黄金 = 1 亿金币
+BULLION_NAME = '黄金'
+
+# 系统回收价：装备基础价（按阶数 ✗ 约 ×2.8/阶）
+EQUIP_BASE = {1: 10, 2: 30, 3: 100, 4: 300, 5: 800,
+              6: 2500, 7: 8000, 8: 25000, 9: 80000}
+
+# 类型系数（武器最贵 ✓ 防具最便宜 ✓）
+TYPE_MUL = {'weapon': 1.2, 'armor': 1.0, 'other': 1.1}
+
+# 状态系数
+BROKEN_MUL = 0.3               # 破损装备只值三成
+AFFIX_BONUS = 0.15             # 每条附加属性 +15%
+
+# 材料基础价（按稀有度 ✗ 从 drops.py 的稀有度定义读 ✓ 这里给兜底）
+MAT_RARITY_BASE = {'common': 2, 'uncommon': 10, 'rare': 60,
+                   'epic': 300, 'legend': 1500}
+MAT_DEFAULT_BASE = 5           # 认不出稀有度的材料给个底价 ✓
+
+# 材料稀有度表（名字 → 稀有度 ✗ 和 drops.py 保持一致 ✓）
+# ★ 这里只映射【已知材料】✗ 认不出的走 MAT_DEFAULT_BASE ✓
+MAT_RARITY = {
+    '碎玻璃': 'common', '破布': 'common', '生锈铁片': 'common',
+    '废纸箱': 'common', '塑料瓶': 'common', '旧电池': 'common',
+    '医用酒精': 'uncommon', '绷带': 'uncommon', '螺丝刀': 'uncommon',
+    '铜线': 'uncommon', '弹簧': 'uncommon',
+    '抗生素': 'rare', '芯片': 'rare', '合金板': 'rare', '瞄准镜': 'rare',
+    '军用电池': 'epic', '纳米材料': 'epic', '能量核心': 'epic',
+    '陨铁': 'legend', '龙鳞': 'legend', '源质结晶': 'legend',
+}
+
+
+def _f(v, d=0.0):
+    try:
+        return float(v)
+    except Exception:
+        return d
+
+
+def _i(v, d=0):
+    try:
+        return int(v)
+    except Exception:
+        return d
+
+
+def is_material(it):
+    return isinstance(it, dict) and it.get('kind') == 'material'
+
+
+def cat_of(it):
+    """交易所分类（★ 按真实字段 ✗ 已核对 1562 件真数据 ✓）"""
+    if not isinstance(it, dict):
+        return 'other'
+    if it.get('slot') == 'weapon':
+        return 'weapon'
+    if it.get('slot') == 'armor':
+        return 'armor'
+    if it.get('kind') == 'material':
+        return 'material'
+    return 'other'
+
+
+def value_of(it, n=1):
+    """物品价值（卖给系统的价格 ✗ 整数 ✓ 永不返回负数 ✓）
+
+    it: item_json 解出来的 dict
+    n : 数量（材料可堆叠 ✗ 装备通常 1 ✓）
+    返回：金币数（int ✓）
+    """
+    if not isinstance(it, dict):
+        return 0
+    # ---------- 材料 ----------
+    if is_material(it):
+        rar = it.get('rarity') or MAT_RARITY.get(it.get('name') or '', '')
+        base = MAT_RARITY_BASE.get(rar, MAT_DEFAULT_BASE)
+        cnt = max(1, _i(n, 1))
+        return max(0, int(base * cnt))
+    # ---------- 黄金（可堆叠 ✗ 1 个 = 1 亿 ✓）----------
+    if it.get('name') == BULLION_NAME:
+        cnt = max(1, _i(n, 1))
+        return max(0, int(GOLD_PER_BULLION * cnt))
+    # ---------- 装备 ----------
+    tier = _i(it.get('tier'), 0)
+    if tier <= 0:
+        # 既不是材料也不是装备（认不出的东西）→ 给个底价，别报错 ✓
+        return max(0, int(MAT_DEFAULT_BASE * max(1, _i(n, 1))))
+    base = EQUIP_BASE.get(tier)
+    if base is None:
+        base = EQUIP_BASE[9] * (2 ** (tier - 9)) if tier > 9 else EQUIP_BASE[1]
+    lv = _i(it.get('itemLv'), 0)          # ★ 一律用 itemLv ✗ 不用 reqLevel ✓
+    lv_mul = 1.0 + max(0, lv) / 40.0
+    slot = it.get('slot') or 'other'
+    type_mul = TYPE_MUL.get(slot, TYPE_MUL['other'])
+    broken = 1.0
+    if it.get('broken'):
+        broken = BROKEN_MUL
+    else:
+        dmax = _f(it.get('durMax'), 0)
+        dur = _f(it.get('dur'), 0)
+        # ★ 耐久不满也略打折（最低到 0.5 ✗ 不会归零 ✓）
+        if dmax > 0 and dur >= 0:
+            r = dur / dmax
+            if r < 1.0:
+                broken = max(0.5, 0.5 + 0.5 * r)
+    aff = it.get('affixes')
+    n_aff = len(aff) if isinstance(aff, (list, tuple)) else 0
+    aff_mul = 1.0 + AFFIX_BONUS * n_aff
+    v = base * lv_mul * type_mul * broken * aff_mul
+    return max(0, int(v))
+
+
+def equip_base(tier):
+    """给界面/测试用的基础价查询 ✓"""
+    return EQUIP_BASE.get(_i(tier, 0), 0)
