@@ -121,6 +121,9 @@ class Player(object):
                  #   ★ 加字段一定要记得加到这里 ✗ 不然 __init__ 里赋值就报
                  #     AttributeError: 'Player' object has no attribute 'moveT' ✓
                  #     （这个坑我踩过两次了：Player 一次、Mob 一次 ✓）
+                 # round293: gold. Memory is authoritative (docs v3 section 1);
+                 #   goldDirty = client has not seen it; goldLog = ring buffer.
+                 'gold', 'goldDirty', 'goldLog',
                  'moveT', 'moveBad', 'suspect')   # 第 173 轮：传送读条结束时刻（0 = 没在读条）      # ★ 第 168 轮（用户 #5）：离线宽限的时刻 ✓
 
     def __init__(self, cid, role):
@@ -646,6 +649,9 @@ class World(object):
                     _me0 = pend['me'] = {}
                 _me0['hp'] = int(p.hp or 0)
                 _me0['hpm'] = int(self._hp_max(p))
+                # round294: gold goes out with `me` (one extra int, no new message).
+                #   The client adopts it field-wise, so a missing value never zeroes it.
+                _me0['gold'] = int(getattr(p, 'gold', 0) or 0)
                 if pend:
                     if pend.get('hurts'):
                         d['hurts'] = pend['hurts']
@@ -1726,6 +1732,82 @@ class World(object):
         v += float((p.talRaw or {}).get('hp') or 0.0)
         return max(1, int(round(v)))
 
+    # ================= round293: gold =================
+    GOLD_CAP = 1000000000
+    GOLD_PER_BULLION = 100000000
+
+    def _gain_gold(self, q, n, why=''):
+        """THE only place gold changes. Returns the amount actually applied.
+
+          * memory is authoritative - never write the db here (tick thread)
+          * n < 0 -> will not go below zero (returns 0 when it cannot pay)
+          * n > 0 -> anything above GOLD_CAP becomes gold bullion automatically
+          * every change goes into a small ring buffer (admin / debugging)
+        """
+        if q is None or not n:
+            return 0
+        try:
+            n = int(n)
+        except Exception:
+            return 0
+        cur = int(getattr(q, 'gold', 0) or 0)
+        if n < 0:
+            pay = min(cur, -n)
+            if pay <= 0:
+                return 0
+            q.gold = cur - pay
+            applied = -pay
+        else:
+            q.gold = cur + n
+            applied = n
+            try:
+                if q.gold > self.GOLD_CAP:
+                    k = (q.gold - self.GOLD_CAP) // self.GOLD_PER_BULLION
+                    if k > 0 and self._give_bullion(q, k):
+                        q.gold -= k * self.GOLD_PER_BULLION
+            except Exception as e:
+                print('[gold] bullion convert failed: %r' % (e,))
+        q.goldDirty = True
+        try:
+            log = getattr(q, 'goldLog', None)
+            if log is None:
+                log = q.goldLog = []
+            log.append((int(now_s()), int(applied), str(why)[:24]))
+            if len(log) > 200:
+                del log[:len(log) - 200]
+        except Exception:
+            pass
+        return applied
+
+    def _give_bullion(self, q, k):
+        """Hand k gold bullion to the player. True when it was queued.
+
+        post_save() takes SQL, NOT an action name - my first version passed
+        'give_bullion' and would have failed at runtime. Pattern copied from
+        the debug give-weapon branch near world.py:914.
+        """
+        try:
+            rid = getattr(q, 'role_id', None)
+            if not rid:
+                return False
+            import json
+            import db as dbmod
+            it = {'name': '黄金', 'tier': 0, 'kind': 'material', 'rarity': 'legend'}
+            self.post_save(
+                'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
+                ' VALUES(?,0,-1,?,?,?)',
+                (rid, int(k), json.dumps(it, ensure_ascii=False), dbmod.now_ms()))
+            try:
+                self._send_cid(q.cid, P.pack('notice',
+                    text='金币已达上限——自动兑换成 %d 个【黄金】' % int(k)))
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            print('[gold] give bullion failed: %r' % (e,))
+            return False
+
+
     def _gain_exp(self, q, amount):
         """给某个玩家加经验 → 够就升级 → 推 me（第 81 轮抽出来的 ✓）
 
@@ -2778,6 +2860,22 @@ class World(object):
             pass
         """僵尸死了 → 给击杀者经验 → 队友分 10% → 落库"""
         self._gain_exp(p, int(m.exp))
+        # round293: gold from kills. Base by kind, scaled by mob level.
+        #   Small on purpose (~25 gold per mob) - user decision, see docs v3.
+        try:
+            _gk = str(getattr(m, 'kind', '') or '')
+            if _gk in ('工人', '保安', '健身教练'):
+                _gb = 12
+            elif _gk in ('医生', '程序员'):
+                _gb = 8
+            else:
+                _gb = 5
+            _gl = max(1, int(getattr(m, 'lv', 1) or 1))
+            _gg = int(_gb * (1.0 + _gl / 12.0))
+            if _gg > 0:
+                self._gain_gold(p, _gg, 'kill')
+        except Exception as _ge:
+            print('[gold] kill drop failed: %r' % (_ge,))
         # ★★ 第 81 轮：队友分经验（用户确认：每个队友拿该僵尸的 10% ✓）★★
         self._party_share_exp(p, m)
         self._save_role(p)

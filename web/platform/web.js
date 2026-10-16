@@ -1164,6 +1164,16 @@ function mqExpPct(mq) {
   return (mq >= 501) ? '15%' : (mq >= 200) ? '10%' : (mq >= 100) ? '8%' : '5%';
 }
 
+/* round294: gold display helpers.
+   fmtGold(): plain digits below 10000, short form above (12,345 / 1.2wan).
+   GOLD_COL is the same yellow used by the ticker's level-up colour. */
+var GOLD_COL = '#ffd83d';
+function fmtGold(n) {
+  n = Math.max(0, Math.floor(+n || 0));
+  if (n < 10000) { return String(n); }
+  if (n < 100000000) { return (n / 10000).toFixed(n < 100000 ? 1 : 0) + '万'; }
+  return (n / 100000000).toFixed(2) + '亿';
+}
 function statRender() {
   var r = WSC.role || {};
   var lv = r.level || 1;
@@ -1211,6 +1221,9 @@ function statRender() {
         (MY_MQ > 0
           ? ('伤害 +' + Math.min(50, MY_MQ) + '% · 夺取概率 ' + mqStealPct(MY_MQ).toFixed(1) +
              '% · 夺取经验 ' + mqExpPct(MY_MQ) + '（详见 菜单→百科→魔气值）')
+    /* round294: gold. Read from the `me` payload (WSC.role.gold) - the
+       server sends it every tick, so this never goes stale. */
+    + stRow('金币', fmtGold((WSC.role && WSC.role.gold) || 0), GOLD_COL)
           : '没有魔气（杀人才会涨，详见百科）'))
 
   /* ---- 武器 ---- */
