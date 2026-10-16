@@ -2274,7 +2274,12 @@ function netSample(buf, t, out) {
        夹死反而制造出"一顿一冲"。
        所以改成：允许外推，但用【总外推距离】设安全上限（真丢包时不飞出去）。
        12 段 ≈ 12×33ms ≈ 0.4 秒 ≈ 1.2 米（3m/s），够兜住采样抖动，又不至于瞬移 ✓ */
-    var uMax = NET.extrapMax || 12;
+    /* round284 structural guard: cap by TIME, not only by segment count.
+       With a broken clock u could reach ~90000 -> clamped to 12 -> the drawn
+       position sat 12 packets ahead and every jitter got multiplied by 12.
+       With a time cap the worst case is a short freeze, never 12x speed. */
+    var uMaxT = 0.15 / (seg > 0 ? seg : 0.033);
+    var uMax = Math.min(NET.extrapMax || 12, uMaxT);
     if (u > uMax) { u = uMax; }
   }
   out.x = a.x + (b.x - a.x) * u;
@@ -2356,7 +2361,7 @@ function addOther(w, t) {
        只有"页面重新加载"才会一次倒退几秒以上 ✓ */
   var _ct = (typeof w.ct === 'number') ? w.ct : null;
   if (o && o.clk && typeof o.clk.lastT === 'number' && _ct !== null &&
-      (o.clk.lastT - _ct) > 5.0) {
+            Math.abs(o.clk.lastT - _ct) > 5.0) {   /* round284: two-way (a future clock may jump forward too) */
     console.log('[sync] ' + (w.name || w.uid) + ' 的时间戳大幅倒退（'
                 + o.clk.lastT.toFixed(1) + ' → ' + _ct.toFixed(1)
                 + '）→ 判定他重连/刷新过 ✗ 重建这个玩家 ✓');
@@ -2385,7 +2390,21 @@ function addOther(w, t) {
       dead: !!w.dead                          // ★ 第 57 轮：他倒下了没有
     };
     o.clk = netClkUpdate(o.clk, t, w.ct);          // ★ 对齐他的钟 + 量他的抖动
-    netPush(o.buf, w.x, w.z, w.yaw || 0, w.ct || (t - (o.clk.off || 0)));
+    /* round284: NEVER fall back to our own clock. A reconnecting player
+       reports ct=0 for the first snapshots; using (t - off) pushed OUR clock
+       into his buffer, which froze him in place for ~242s (reviewer measured it).
+       When ct is missing: clear the buffer, snap to the snapshot position, and
+       wait for his real ct before interpolating again. */
+    if (!(w.ct > 0)) {
+      o.buf.length = 0;
+      o.rtS = null;
+      o.rtLast = undefined;
+      if (o.g) { o.g.position.set(w.x, 0, w.z); }
+      o.cur = { x: w.x, z: w.z, yaw: w.yaw || 0 };
+      o.last = { x: w.x, z: w.z };
+    } else {
+      netPush(o.buf, w.x, w.z, w.yaw || 0, w.ct);
+    }
     return o;
   }
   o.name = w.name; o.realm = w.realm;
@@ -2424,7 +2443,21 @@ function addOther(w, t) {
     o.atkSeq = wk;
   }
   var lp = o.buf.length ? o.buf[o.buf.length - 1] : null;
-  var ct = w.ct || (t - (o.clk.off || 0));                 // ★ 他的钟（排队用 ✓）
+  /* round284: NEVER fall back to our own clock. A reconnecting player
+     reports ct=0 for the first snapshots; using (t - off) pushed OUR clock
+     into his buffer, which froze him in place for ~242s (reviewer measured it).
+     When ct is missing: clear the buffer, snap to the snapshot position, and
+     wait for his real ct before interpolating again. */
+  if (!(w.ct > 0)) {
+    o.buf.length = 0;
+    o.rtS = null;
+    o.rtLast = undefined;
+    if (o.g) { o.g.position.set(w.x, 0, w.z); }
+    o.cur = { x: w.x, z: w.z, yaw: w.yaw || 0 };
+    o.last = { x: w.x, z: w.z };
+  } else {
+    netPush(o.buf, w.x, w.z, w.yaw || 0, w.ct);
+  }
   var moved = !lp || Math.abs(lp.x - w.x) > 0.002 || Math.abs(lp.z - w.z) > 0.002 ||
               Math.abs(lp.yaw - (w.yaw || 0)) > 0.002;
   /* ★★ 人没动也要把"我还在这儿"记进缓冲（P0-9 第 26 轮实测出来的真 bug ★★）
