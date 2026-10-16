@@ -1211,20 +1211,20 @@ class World(object):
         ★ 判定用的是【服务端自己算的】建筑（worldgen），不是客户端上传的 ✗
           所以改包说"我这边没有墙"没用 ✓
         """
+        # round256 fix (user: mobs must not enter the safe zone)
+        #   BUG: this safe-zone check used to live INSIDE the worker branch,
+        #        so only workers were stopped and all other kinds walked in.
+        #   FIX: check the safe zone FIRST for every kind, then split by kind.
+        _nx = m.x + dx
+        _nz = m.z + dz
+        _outside = not (abs(m.x) <= mqmod.SAFE_HALF and abs(m.z) <= mqmod.SAFE_HALF)
+        _would_in = (abs(_nx) <= mqmod.SAFE_HALF and abs(_nz) <= mqmod.SAFE_HALF)
+        if _outside and _would_in:
+            return                      # stop at the gate (do not push out - that jitters)
         if m.kind == '工人':
-            # 第 174 轮（用户）：★ 僵尸不能踏进安全区（①）
-            #   做法：先算新位置，如果会进去就不动（贴着边界停下 ✓）
-            #   ★ 为什么不"推出去"✗ 那样会出现怪在边界上抖 ✓
-            _nx = m.x + dx
-            _nz = m.z + dz
-            if (abs(_nx) <= mqmod.SAFE_HALF and abs(_nz) <= mqmod.SAFE_HALF):
-                if not (abs(m.x) <= mqmod.SAFE_HALF and abs(m.z) <= mqmod.SAFE_HALF):
-                    pass          # 本来就在外面 → 这一步就别走了 ✓（停在门外）
-                else:
-                    m.x, m.z = _nx, _nz    # 万一已经在里面（老存档/被击退进去）→ 允许它走出去 ✓
-            else:
-                m.x = _nx
-                m.z = _nz
+            # workers may pass through buildings (user request) and may walk OUT
+            # of the zone if they somehow got in (old save / knockback).
+            m.x, m.z = _nx, _nz
             return
         hw = mobs.MOB_BODY / 2.0
         nx = m.x + dx
