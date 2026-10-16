@@ -162,6 +162,25 @@ function disposableName() {
   for (let i = 0; i < 6; i++) { s += A[Math.floor(Math.random() * A.length)]; }
   return s;                       // 8 chars, inside the 2..10 limit
 }
+/* read one role row straight from sqlite (read-only) so we can prove what was PERSISTED */
+function dbRoleGold(name) {
+  const py = [
+    'import sqlite3, sys',
+    'c = sqlite3.connect("file:game.db?mode=ro", uri=True)',
+    'r = c.execute("SELECT gold FROM roles WHERE name=?", (sys.argv[1],)).fetchone()',
+    'p = c.execute("SELECT COUNT(*) FROM pending_gold WHERE role=(SELECT id FROM roles WHERE name=?) AND done=0", (sys.argv[1],)).fetchone()',
+    'q = c.execute("SELECT COUNT(*) FROM pending_gold WHERE role=(SELECT id FROM roles WHERE name=?) AND done=1", (sys.argv[1],)).fetchone()',
+    'print("gold=%s pending0=%s pending1=%s" % (r[0] if r else "NOROLE", p[0] if p else "?", q[0] if q else "?"))',
+    'c.close()',
+  ].join('\n');
+  const tmp = path.join(os.tmpdir(), 'xx2d_gold_' + Date.now() + '.py');
+  fs.writeFileSync(tmp, py);
+  const { spawnSync } = require('child_process');
+  const r = spawnSync('python', [tmp, name], { cwd: path.join(__dirname, '..', 'server'), encoding: 'utf8' });
+  try { fs.rmSync(tmp, { force: true }); } catch (e) { }
+  return ((r.stdout || '').trim()) || ((r.stderr || '').trim());
+}
+
 async function purgeRole(name) {
   const py = [
     'import sqlite3, sys',
@@ -276,6 +295,78 @@ const PROBE = [
       try { const o = JSON.parse(st); if (o && o.ready) { st = o; break; } } catch (e) { }
     }
     console.log('   in world: ' + JSON.stringify(st));
+
+    /* ------------------------------------------------------------------
+       Q13: is gold DURABLE? Reported by the spec review: role_public() has no
+       `gold` key, Player.__init__ never sets self.gold and _save_player never
+       writes it. That would mean gold lives only in one session's memory.
+       Prove it: sell via HTTP, then reload and see whether the balance survives.
+       ------------------------------------------------------------------ */
+    console.log('\n-- Q13: does gold survive a page reload? --');
+    const g13 = await fetch(ORIGIN + '/api/admin/act', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin': at },
+      body: JSON.stringify({ act: 'give', name: ROLE, kind: 'sword', tier: 3 }),
+    }).then(x => x.json()).catch(() => null);
+    console.log('        give -> ' + JSON.stringify(g13));
+    const bag13 = await fetch(ORIGIN + '/api/bag', { headers: { 'X-Token': tok } }).then(x => x.json()).catch(() => null);
+    const iid13 = bag13 && bag13.items && bag13.items[0] && bag13.items[0].id;
+    const sold13 = await fetch(ORIGIN + '/api/sell', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token': tok },
+      body: JSON.stringify({ iid: iid13 }),
+    }).then(x => x.json()).catch(() => null);
+    console.log('        sold iid=' + iid13 + ' -> ' + JSON.stringify(sold13));
+    /* give the tick thread a moment to credit memory */
+    await sleep(1200);
+    const goldMem = await B.eval('return (typeof WSC !== "undefined" && WSC.role) ? WSC.role.gold : "no-role";');
+    console.log('        in-browser gold BEFORE reload : ' + goldMem);
+    console.log('        db roles.gold / pending done=0 : ' + dbRoleGold(ROLE));
+    await B.eval('location.reload(); return 1;');
+    let st13 = null;
+    for (let i = 0; i < 30; i++) {
+      await sleep(400);
+      st13 = await B.eval('return JSON.stringify({ ready: (typeof WSC !== "undefined") && WSC.ready, gold: (typeof WSC !== "undefined" && WSC.role) ? WSC.role.gold : null });');
+      if (/"ready":true/.test(String(st13))) { break; }
+    }
+    console.log('        in-browser gold AFTER  reload : ' + st13);
+    try {
+      const o = JSON.parse(st13);
+      console.log('        >>> GOLD SURVIVES RELOAD: ' + (o.gold === goldMem) +
+        '  (' + goldMem + ' -> ' + o.gold + ')');
+    } catch (e) { }
+
+    /* Q13b: OFFLINE income. Sell over plain HTTP while the browser is NOT in the world,
+       which makes the tick thread write a pending_gold row. Then log back in and it
+       must be credited (before round302 nothing ever read that table back). */
+    console.log('\n-- Q13b: offline sale -> pending_gold -> credited on login --');
+    await B.eval('if (typeof WS !== "undefined" && WS && WS.close) { WS.close(); } return 1;');
+    await sleep(800);
+    const g13b = await fetch(ORIGIN + '/api/admin/act', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin': at },
+      body: JSON.stringify({ act: 'give', name: ROLE, kind: 'sword', tier: 4 }),
+    }).then(x => x.json()).catch(() => null);
+    const bag13b = await fetch(ORIGIN + '/api/bag', { headers: { 'X-Token': tok } }).then(x => x.json()).catch(() => null);
+    const iid13b = bag13b && bag13b.items && bag13b.items[0] && bag13b.items[0].id;
+    const sold13b = await fetch(ORIGIN + '/api/sell', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token': tok },
+      body: JSON.stringify({ iid: iid13b }),
+    }).then(x => x.json()).catch(() => null);
+    await sleep(900);
+    console.log('        offlined, sold iid=' + iid13b + ' -> ' + JSON.stringify(sold13b));
+    console.log('        db gold / pending done=0 : ' + dbRoleGold(ROLE) + '   <-- a pending row is expected');
+    const goldBeforeLogin = Number(await B.eval('return (typeof WSC !== "undefined" && WSC.role) ? WSC.role.gold : -1;'));
+    await B.eval('location.reload(); return 1;');
+    let st13b = null;
+    for (let i = 0; i < 30; i++) {
+      await sleep(400);
+      st13b = await B.eval('return JSON.stringify({ ready: (typeof WSC !== "undefined") && WSC.ready, gold: (typeof WSC !== "undefined" && WSC.role) ? WSC.role.gold : null });');
+      if (/"ready":true/.test(String(st13b))) { break; }
+    }
+    console.log('        after re-login           : ' + st13b + '  (was ' + goldBeforeLogin + ')');
+    await sleep(2500);
+    console.log('        db gold / pending done=0 : ' + dbRoleGold(ROLE) + '   <-- done=1 expected, gold grown');
+    const credited = /"gold":(\d+)/.exec(String(st13b));
+    console.log('        >>> OFFLINE INCOME CREDITED: ' + (credited && Number(credited[1]) > goldBeforeLogin) +
+      '  (' + goldBeforeLogin + ' -> ' + (credited ? credited[1] : '?') + ')');
 
     // open the bag tab
     await B.eval('openSet("bag"); return 1;');
@@ -750,6 +841,23 @@ const PROBE = [
       await B.mouse('mouseReleased', p2.x, p2.y);
       await sleep(1500);
       console.log('        network: ' + JSON.stringify(B.reqs));
+      /* The user reported: the sale works but the ROW STAYS in the bag until he leaves
+         and re-enters the panel. Watch the bag/DOM for a few seconds instead of checking
+         once, so a slow or missing refresh cannot hide. */
+      for (const wait of [300, 900, 2000, 3500]) {
+        await sleep(wait === 300 ? 300 : wait - 300);
+        const snap = await B.eval([
+          'var b = (typeof BAG !== "undefined") ? BAG : null;',
+          'var kids = document.querySelectorAll("#bagGrid .slot[data-id]");',
+          'var ids = [];',
+          'for (var i = 0; i < kids.length; i++) { var d = kids[i].getAttribute("data-id"); if (d) { ids.push(d); } }',
+          'return JSON.stringify({ t: ' + wait + ',',
+          '  bagN: b ? (b.items || []).length : -1,',
+          '  hasSold: ids.indexOf(String(' + JSON.stringify(p2 ? p2.picked : null) + ')) >= 0,',
+          '  domIds: ids.length, sel: b ? b.sel : null, msg: b ? b.msg : null });',
+        ].join('\n'));
+        console.log('        [+' + wait + 'ms] ' + snap);
+      }
       const after = await B.eval([
         'var b = (typeof BAG !== "undefined") ? BAG : null;',
         'return JSON.stringify({ bagN: b ? (b.items || []).length : -1,',

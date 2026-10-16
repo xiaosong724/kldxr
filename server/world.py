@@ -63,6 +63,14 @@ PARTY_INVITE_TTL = 60.0       # ★ 第 82 轮用户改：10 秒 → 1 分钟 �
                               #    现在界面里也有待处理列表 ✓ 给一分钟才够用 ✓）
 PARTY_INVITE_RATE = 3         # 10 秒最多发 3 次邀请 ✓
 AUTO_SAVE_INTERVAL = 15.0   # ★ 第 109 轮：定时存盘（防崩溃/重启丢状态 ✗）
+
+# ★★ round302：金币的"内存权威"要给重连让路 ★★
+#   问题：刷新页面时【新会话】在登录那一步就把 roles.gold 读进来了 ✗
+#     而旧会话（幽灵）的金币要先落库 ✗ 落库又是异步的 ✓
+#     → 新会话读到的还是旧值 ✗ 表现就是"卖完刷新一下钱没了"✓（实测 141 → 0 ✓）
+#   修：模块级 _live_gold 记住【每个角色最后一次的内存余额】✗
+#     进世界时它比库里的新 ✗ 就用它 ✓ 落库照旧（不丢数据 ✓）
+_live_gold = {}
 PARTY_PUSH_INTERVAL = 1.0     # roster 每秒补推一次（血条要动 ✓）
 # ★ 第 82 轮：大厅（独立页 ✓ 队长邀请 + 玩家申请 两条路 ✓）
 PARTY_APPLY_TTL = 60.0        # ★ 第 82 轮用户改：30 秒 → 1 分钟 ✓（和邀请一致 ✓）
@@ -129,6 +137,12 @@ class Player(object):
     def __init__(self, cid, role):
         self.cid = cid
         self.role = role
+        # round302: gold lives in memory while playing, so it MUST be seeded from the
+        # db on the way in - otherwise _gain_gold()'s getattr fallback starts every
+        # session at 0 and a reload silently wipes the balance (verified: 159 -> 0).
+        self.gold = int(role.get('gold') or 0)
+        self.goldDirty = False
+        self.goldLog = []
         self.name = role.get('name') or '?'
         self.role_id = role.get('id')
         # ★ 第 227 轮：反作弊用的三个字段（位移校验 ✓）
@@ -293,6 +307,14 @@ class World(object):
         """
         for cid, q in list(self.players.items()):
             if getattr(q, 'role_id', None) == role_id and getattr(q, 'ghostAt', None) is not None:
+                # round302: 先落一次档 ✗ 再删 ✓
+                #   为什么：幽灵身上可能有【还没落库的内存金币】✓
+                #   （卖东西刚入账 ✗ 玩家就刷新了 ✗ 定时存盘还没轮到 ✓）
+                #   直接 pop 掉 = 那笔钱凭空消失 ✗（实测：卖了 141 ✗ 刷新后变 0 ✓）
+                try:
+                    self._save_player(q)
+                except Exception:
+                    pass
                 self.players.pop(cid, None)
 
     def post_join(self, conn, role):
@@ -349,6 +371,12 @@ class World(object):
                 self.players.pop(cid, None)
                 try:
                     self._save_player(p)
+                except Exception:
+                    pass
+                # round302: 幽灵真走了 ✗ 这条"内存余额"记录就没用了 ✓
+                #   留着只会让人以为还有旧会话活着 ✓（落库已经在上面做了 ✓）
+                try:
+                    _live_gold.pop(int(getattr(p, 'role_id', 0)), None)
                 except Exception:
                     pass
 
@@ -425,7 +453,28 @@ class World(object):
                 self._drop_ghosts_of(role.get('id'))
             except Exception:
                 pass
+            # round302: 上一个会话（刚被清掉的幽灵）的内存余额比库里新 ✗ 用它 ✓
+            #   网络线程那边是【异步投递】的 ✗ 所以这一句要放在它后面 ✓
+            #   ★ 顺序很重要：先拿到旧会话的余额 ✗ 再建新会话 ✓
+            try:
+                _lg = _live_gold.get(int(role.get('id')))
+                if _lg is not None and int(_lg) >= int(role.get('gold') or 0):
+                    role['gold'] = int(_lg)
+            except Exception:
+                pass
             _np = Player(conn.cid, role)
+            # round302: 离线期间的入账（网络线程已经读好了 ✗ 这里只入账 ✓）
+            #   ★ 走 _gain_gold ✗ 所以上限/黄金转换/流水 全都照常生效 ✓
+            #   ★ done=1 交给存档线程（tick 线程不碰磁盘 ✓）
+            try:
+                for _pg in (role.get('pendingGold') or []):
+                    _amt = int(_pg.get('amount') or 0)
+                    if _amt:
+                        self._gain_gold(_np, _amt, str(_pg.get('why') or 'pending'))
+                    self.post_save('UPDATE pending_gold SET done=1 WHERE id=?',
+                                   (int(_pg.get('id') or 0),))
+            except Exception as _pge:
+                print('[gold] pending drain failed: %r' % (_pge,))
             # ★★ 第 192 轮（用户）：刷新一下血量不回满 ★★
             #   用户原话："如果玩家死亡后，不是点的复活，而是刷新复活的血量不会恢复满"
             #
@@ -549,6 +598,15 @@ class World(object):
             for _q9 in self.players.values():
                 try:
                     self._save_player(_q9)
+                except Exception:
+                    pass
+            # round302: 顺手刷新"内存余额"表 ✓
+            #   为什么需要：_gain_gold 只在【钱变了】的时候记 ✗
+            #   长时间不掉钱的人 ✗ 这张表里可能还是很早以前的值 ✓
+            #   刷新一次才敢保证"比库里的新"✓
+            for _q9 in self.players.values():
+                try:
+                    _live_gold[int(getattr(_q9, 'role_id', 0))] = int(getattr(_q9, 'gold', 0) or 0)
                 except Exception:
                     pass
 
@@ -1796,6 +1854,23 @@ class World(object):
             except Exception as e:
                 print('[gold] bullion convert failed: %r' % (e,))
         q.goldDirty = True
+        # round302: 记住内存余额 ✗ 让【刷新后的新会话】也能拿到最新值 ✓
+        #   （只影响重连时的取值 ✗ 落库那条路一点没变 ✓）
+        try:
+            _rid = getattr(q, 'role_id', None)
+            if _rid is not None:
+                _live_gold[int(_rid)] = int(q.gold)
+        except Exception:
+            pass
+        # round302: 大额 / 交易类变更【立刻排队落库】✗ 不等 15 秒定时存盘 ✓
+        #   为什么：金币是内存权威 ✗ 而落库只在 15 秒定时 + 下线时 ✓
+        #   → 这段时间里刷新/崩溃/被踢 = 这笔钱没了 ✓（docs v3 s1 要求关键节点立即入队）
+        #   ★ 只入队 ✗ 不做 IO ✓（tick 线程的铁律不变 ✓）
+        try:
+            if abs(int(applied)) >= 100000 or str(why).startswith('trade'):
+                self._save_player(q)
+        except Exception:
+            pass
         try:
             log = getattr(q, 'goldLog', None)
             if log is None:
@@ -3175,9 +3250,13 @@ class World(object):
         """只入队，不写盘 —— 写盘交给存档线程"""
         import db as dbmod
         self._flush_dur(p)                       # ★ 下线时把耐久落一次 ✓
+        # round302: gold has to be saved too. Memory is authoritative (docs v3 s1),
+        # so this is a FULL OVERWRITE - idempotent, and it cannot fight the periodic
+        # save. Without it every logout/restart threw the whole balance away.
         self.post_save(
-            'UPDATE roles SET x=?, z=?, yaw=?, hp=?, qi=?, updated_at=? WHERE id=?',
-            (p.x, p.z, p.yaw, p.hp, p.qi, dbmod.now_ms(), p.role_id))
+            'UPDATE roles SET x=?, z=?, yaw=?, hp=?, qi=?, gold=?, updated_at=? WHERE id=?',
+            (p.x, p.z, p.yaw, p.hp, p.qi, int(getattr(p, 'gold', 0) or 0),
+             dbmod.now_ms(), p.role_id))
 
     def _run_saver(self):
         import db as dbmod

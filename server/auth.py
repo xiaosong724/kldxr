@@ -157,6 +157,12 @@ def role_public(row):
         #     就这个中间层偷偷把它丢了 ✗（和客户端那个映射层一个毛病 ✗）
         'mq': int(row['mq'] or 0),
         'mqAt': int(row['mq_at'] or 0),
+        # round302: gold was missing here and that made the whole gold system
+        # session-only - Player() reads this dict, so without the key every login
+        # started from 0 (and the db value was never read at all).
+        # Exactly the same trap as the 'mq' line above: row[col] exists, but this
+        # picking layer drops it.
+        'gold': int(row['gold'] or 0),
     }
 
 
@@ -291,6 +297,30 @@ def bag_of(cfg, role_id, cap=2000):
             weapons.ensure_dur(it)
             # ★ 第 54 轮：把数量带上（材料会堆叠 ✓ 武器永远是 1 ✓）
             out.append({'id': rid, 'item': it, 'stack': int(stack or 1)})
+    return out
+
+
+def pending_gold_of(cfg, role_id):
+    """未入账的金币 → [{'id': n, 'amount': n, 'why': 'sell'}, ...]
+
+    round302: written by the 'gain' intent when the player was offline, and until
+    now NOTHING ever read it back - the rows piled up as done=0 forever, so offline
+    income simply never arrived (the live db still had a stale row for role 927).
+
+    Same pattern as weapon_of(): read on the NETWORK thread at login (it may do disk
+    IO), hand the list to the tick thread, which credits it through _gain_gold() and
+    queues the done=1 update. The tick thread itself never touches the db.
+    """
+    out = []
+    try:
+        with dbmod.db(cfg) as c:
+            rows = c.execute(
+                'SELECT id, amount, why FROM pending_gold'
+                ' WHERE role=? AND done=0 ORDER BY id', (role_id,)).fetchall()
+    except Exception:
+        return out
+    for pid, amount, why in rows:
+        out.append({'id': int(pid), 'amount': int(amount or 0), 'why': str(why or '')})
     return out
 
 

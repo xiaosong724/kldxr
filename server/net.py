@@ -209,6 +209,15 @@ class Net(object):
             if _a:
                 role['armor'] = _a
                 role['armorItemId'] = _aid
+            # round302: 离线期间的入账（卖东西给系统时人不在线 ✗ 走 pending_gold ✓）
+            #   读库放这里（网络线程允许 IO ✓）✗ tick 线程拿到后走 _gain_gold 入账 ✓
+            #   ★ 不这么做的话这些钱永远到不了玩家手里（done=0 一直躺着 ✓）
+            try:
+                _pg = authmod2.pending_gold_of(self.cfg, role.get('id'))
+                if _pg:
+                    role['pendingGold'] = _pg
+            except Exception:
+                pass
             # ★ 第 114 轮：天赋也在这里装载 ✓（方案 §5 第 1 条 ✓）
             #   role['talents'] = {stat: points} ✓ role['talentFree'] = 推导值 ✓
             # ★ 第 149 轮：魔气值 —— 登录时装载 + 算一次自然衰减 ✓
