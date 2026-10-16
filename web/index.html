@@ -514,6 +514,16 @@
    <div class="setLabel">版本</div>
    <div id="aboutVer" style="font-size:11px;color:#8fa3b8;line-height:1.9">—</div>
    <div style="display:flex;gap:8px;margin-top:18px">
+  <!-- ★ 第 210 轮：自动战斗的两个开关（放在设置面板底部 ✓ 每个分类都能看到 ✓）-->
+  <label style="display:flex;align-items:center;gap:8px;padding:7px 2px;font-size:13px;cursor:pointer;user-select:none">
+    <input type="checkbox" id="setAutoOn" style="width:17px;height:17px;flex:0 0 auto">
+    <span>自动战斗<span style="opacity:.6;font-size:11px">（也可长按攻击键 5 秒开关）</span></span>
+  </label>
+  <label style="display:flex;align-items:center;gap:8px;padding:7px 2px;font-size:13px;cursor:pointer;user-select:none">
+    <input type="checkbox" id="setAutoLoot" style="width:17px;height:17px;flex:0 0 auto">
+    <span>自动捡东西<span style="opacity:.6;font-size:11px">（周围没怪时走过去捡）</span></span>
+  </label>
+
     <div id="setReset" class="opt" style="flex:1;padding:10px">恢复默认</div>
     <!-- ★ 第 56 轮：这里原来有个"关闭"按钮 —— 现在统一用右上角的 X 了 ✓
          （JS 里 setClose 可能还在找它 → 保留一个隐藏的占位，免得报错 ✗）-->

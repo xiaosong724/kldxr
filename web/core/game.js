@@ -3368,9 +3368,11 @@ function inAtkArc(tx, tz) {
 var AUTO = {
   on: false, tgt: '', phase: 'find', t: 0,
   pauseUntil: 0, stuckT: 0, lastX: 0, lastZ: 0,
-  deaths: [], reviveT: 0, info: '', kills: 0, setInput: false
+  deaths: [], reviveT: 0, info: '', kills: 0, setInput: false,
+  lootOn: true                /* 自动捡东西（菜单里可关 ✓）*/
 };
 var AUTO_RANGE = 30.0;
+var AUTO_LOOT_R = 12.0;      /* 没怪时去捡东西的搜索半径 ✓ */
 var AUTO_RETREAT = 0.45;
 var AUTO_STUCK_MOVE = 0.12;
 
@@ -3450,6 +3452,32 @@ function autoTick(dt) {
     AUTO.t = 0;
   }
   if (!AUTO.tgt) {
+    /* ★★ 第 210 轮：没怪的时候去捡东西 ★★
+       ★ 好消息：游戏本来就有"走到 2 米内自动捡"（updateLoot ✓）
+         → 所以这里只要【走过去】就行 ✗ 不用另写捡东西逻辑 ✓
+       ★ 可关：AUTO.lootOn（菜单 → 操作 ✓ 默认开 ✓）*/
+    if (AUTO.lootOn) {
+      var bl = null, bd = AUTO_LOOT_R * AUTO_LOOT_R;
+      for (var lid in NET.rloot) {
+        var le = NET.rloot[lid];
+        if (!le) { continue; }
+        var ldx = le.x - P.x, ldz = le.z - P.z;
+        var ld2 = ldx * ldx + ldz * ldz;
+        if (ld2 < bd) { bd = ld2; bl = le; }
+      }
+      if (bl) {
+        var ld = Math.sqrt(bd);
+        if (ld > 1.2) {                       /* 够近了就交给原有的自动捡 ✓ */
+          jx = (bl.x - P.x) / ld; jy = (bl.z - P.z) / ld; AUTO.setInput = true;
+          P.yaw = autoFacing(bl.x - P.x, bl.z - P.z);
+          AUTO.info = '自动战斗：去捡东西 ' + ld.toFixed(1) + 'm';
+          return;
+        }
+        AUTO.info = '自动战斗：捡东西';
+        jx = 0; jy = 0; AUTO.setInput = true;
+        return;
+      }
+    }
     jx = 0; jy = 0; AUTO.setInput = true;
     AUTO.info = '自动战斗：附近没有僵尸';
     return;

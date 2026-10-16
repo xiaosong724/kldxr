@@ -1593,6 +1593,25 @@ function openSet(wantTab) {
                    { v: 'msaa', t: 'MSAA', s: '最干净' }], 'aa', setAA());
   mkOpts('rowDet', [{ v: 'low', t: '低', s: '±16 格' }, { v: 'mid', t: '中', s: '±28 格' },
                     { v: 'high', t: '高', s: '±40 格' }], 'detail', setDetail());
+  /* ★★ 第 210 轮：自动战斗的设置项（放在"操作"分类最前面 ✓）★★ */
+  var _ao = document.getElementById('setAutoOn');
+  if (_ao) {
+    _ao.checked = !!(typeof AUTO !== 'undefined' && AUTO.on);
+    _ao.onchange = function () {
+      if (typeof AUTO === 'undefined') { return; }
+      if (!!AUTO.on !== _ao.checked) { autoToggle(); }
+    };
+  }
+  var _al = document.getElementById('setAutoLoot');
+  if (_al) {
+    _al.checked = !(typeof AUTO !== 'undefined' && AUTO.lootOn === false);
+    _al.onchange = function () {
+      if (typeof AUTO === 'undefined') { return; }
+      AUTO.lootOn = _al.checked;
+      try { SETCFG.autoLoot = _al.checked; saveSet(); } catch (e) { }
+      toast(_al.checked ? '自动捡东西：开' : '自动捡东西：关');
+    };
+  }
   /* ★ 操作分类：攻击键大小（第 31 轮）—— 改完立刻生效（applySet 写 --atk 变量 ✓）*/
   mkOpts('rowAtk', [{ v: 64, t: '小', s: '64' }, { v: 84, t: '中', s: '84 · 默认' },
                     { v: 108, t: '大', s: '108' }, { v: 132, t: '特大', s: '132' }],
@@ -3055,6 +3074,7 @@ function wsWelcome(d) {
   try {
     if (typeof AUTO !== 'undefined' && typeof SETCFG !== 'undefined' && SETCFG.auto) {
       AUTO.on = true; AUTO.tgt = ''; AUTO.phase = 'find'; AUTO.info = '自动战斗：正在找目标…';
+      if (SETCFG.autoLoot === false) { AUTO.lootOn = false; }
       autoUiUpd();
     }
   } catch (e) { }
