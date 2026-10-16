@@ -22,12 +22,16 @@ ROOT = 'C:/mc/xiuxian-2d'
 REMOTE = '/home/ubuntu/xiuxian2d'
 
 FILES = [
-    'server/world.py',      # 重复结算修复 + 别人的 hpm + 假死相关的服务端
-    'server/mobs.py',       # Mob.__slots__ 加 awarded
-    'server/app.py',        # allow_reuse_address（第 207 轮）
-    'web/core/game.js',     # 自动战斗 + 血量采用 + hpm 映射
-    'web/platform/web.js',  # 长按开关 + 加载动画 + 不同步看门狗 + 假死兜底
-    'web/index.html',       # 加载动画 + 状态小字 + 提示行
+    'server/world.py',
+    'server/mobs.py',
+    'server/app.py',
+    # ★★ 第 226 轮：故意【不传】server/config.json ✗✗
+    #   因为云端那份里有【改过的管理页密码】✓
+    #   第 222 轮那次部署就是把它冲回了默认值 xiuxian-admin ✗（安全回退 ✓）
+    #   而且部署脚本里的 cp -r server 也会覆盖它 ✗ → 见下面的 remote 复制那步
+    'web/core/game.js',
+    'web/platform/web.js',
+    'web/index.html',
 ]
 
 # 传完之后，从外网抓这些文件，检查里面有没有"这一批新代码"的标志
@@ -75,7 +79,8 @@ for rel in FILES:
 sftp.close()
 
 print('== 3/5 复制到 /opt 并起服务 ==')
-print('   ' + run('sudo cp -r %s/server %s/web /opt/xiuxian2d/ && '
+print('   ' + run('sudo cp -f %s/server/*.py /opt/xiuxian2d/server/ && '   # ★ 只覆盖 .py ✗ 不碰 config.json / game.db
+                  'sudo cp -r %s/web/. /opt/xiuxian2d/web/ && '
                   'sudo chown -R xiuxian:xiuxian /opt/xiuxian2d && '
                   'sudo systemctl start xiuxian; sleep 5; systemctl is-active xiuxian'
                   % (REMOTE, REMOTE)))
@@ -103,3 +108,4 @@ print()
 print('   ★ 结论：' + ('这一批新代码全都在云端生效了 ✓✓' if allok
                      else '有缺的 ✗ 见上面 ✗ 号那几行'))
 c.close()
+
