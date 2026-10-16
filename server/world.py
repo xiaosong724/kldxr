@@ -731,10 +731,23 @@ class World(object):
             n = int(d.get('n') or 1)
         except Exception:
             n = 1
-        n = max(1, min(50, n))                    # ② 范围
+        # ★★★ 第 255 轮修的真 bug（用户："天赋加点玩家点减号也是增加"）★★★
+        #   病根：原来这里写的是 n = max(1, min(50, n)) ✗
+        #     → 客户端点"减号"发的 n = -1 ✗ 被这句【夹成了 +1】✓✓
+        #     → 所以减号反而加点 ✓ 用户报的一字不差 ✓
+        #     （客户端那边其实是对的 ✓ 它算出来的 n 就是 -1 ✓
+        #       坏在服务器这一句"保护性夹取"✗ 把符号吃了 ✓）
+        #   ★ 修：正数照旧夹到 1~50 ✗ 负数单独夹到 -50~-1 ✓
+        if n < 0:
+            n = max(-50, min(-1, n))              # ② 负范围：减点
+        else:
+            n = max(1, min(50, n))                # ② 正范围：加点
         free = _tal.free_points(lv, p.tal)
-        if n > free:                              # ③ 不许超
+        if n > 0 and n > free:                    # ③ 加点才检查剩余点数
             self._send_cid(p.cid, P.pack('notice', text='天赋点不够了 ✓'))
+            return
+        if n < 0 and int(p.tal.get(stat) or 0) + n < 0:   # ③' 减点不能减成负数
+            self._send_cid(p.cid, P.pack('notice', text='这项已经清零了 ✓'))
             return
 
         p.tal[stat] = int(p.tal.get(stat) or 0) + n
