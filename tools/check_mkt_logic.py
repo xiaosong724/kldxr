@@ -351,8 +351,6 @@ for lid, r in W.mkt['by_lid'].items():
         cheap_lid = lid
         break
 ok(cheap_lid is not None, 'found a 100-gold listing to buy (%s)' % cheap_lid)
-print('    [dbg-buy] now=%r exp=%r left=%r' % (worldmod.now_s(),
-      W.mkt['by_lid'][cheap_lid]['exp'], W.mkt['by_lid'][cheap_lid]['exp'] - worldmod.now_s()))
 load_bag(buyer)
 g0 = buyer.gold
 #   ★ 卖家这一件的 item_json（后面用来确认"换了个主人"✓ 而不是"凭空多一件"✓）
@@ -455,10 +453,13 @@ t_name = dict(W.mkt['by_lid'][target]['it'])['name']
 g_before = seller.gold
 sent[:] = []
 W._mkt_do(seller, 'unlist', {'lid': target})
-ok(d_of('listres')['ok'] is True, 'unlist accepted')
-ok(target not in W.mkt['by_lid'], 'it left the shelf at once')
+#   ★ 下架【不回乐观回执】✗ 内存里当场就下架了 ✓ 回执等落库那条 ✓
+ok(target not in W.mkt['by_lid'], 'it left the shelf at once (memory)')
+ok(len(packs('listres')) == 0, 'no premature reply (the db has not answered yet)')
 run_saves()
 tick()
+ok(len(packs('listres')) == 1 and d_of('listres')['ok'] is True,
+   'exactly ONE reply after the commit: %r' % (packs('listres'),))
 with dbmod.db(cfg) as c:
     st = c.execute('SELECT state FROM listings WHERE lid=?', (target,)).fetchone()[0]
     back = c.execute('SELECT COUNT(*) FROM items WHERE role_id=? AND'
@@ -469,7 +470,8 @@ ok(back == 1, 'the item is back in the seller bag (%d)' % back)
 ok(seller.gold == g_before, 'unlisting does not refund the fee (and does not charge again)')
 sent[:] = []
 W._mkt_do(seller, 'unlist', {'lid': target})
-ok(d_of('listres')['ok'] is False, 'unlisting the same one twice is refused politely')
+ok(len(packs('listres')) == 1 and d_of('listres')['ok'] is False,
+   'unlisting the same one twice is refused politely')
 #   别人的东西不能动
 sent[:] = []
 W._mkt_do(buyer, 'unlist', {'lid': list(W.mkt['by_lid'].keys())[0]})

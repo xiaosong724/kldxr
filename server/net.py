@@ -277,6 +277,19 @@ class Net(object):
         except Exception as _me:
             print('  [ws] 货架装载失败（不影响进游戏）：%r' % (_me,))
 
+        # ★★ round304b：背包快照（交易所的"这件是不是他的"就是这个 ✓）★★
+        #   ★ 为什么要在这层读：上架校验在 tick 线程 ✗ 它不许查库 ✓
+        #   ★ 载荷：item_json 里【没有】这个物品在 items 表里的 id ✗
+        #     而背包接口发的 {'id': items.id, 'item': {...}} 外层 id 就是它 ✓
+        #     → 交易所上架要的 iid 只能从这份快照里拿 ✓✓
+        #   ★ 它【什么时候会变旧】：捡到新东西 / 卖系统 / 穿装备都不会更新它 ✗
+        #     下一轮做界面时会改成"打开交易所时重发一份"✓（先记在这里 ✓）
+        try:
+            role['bag'] = authmod.bag_of(self.cfg, role.get('id'))
+        except Exception as _be:
+            print('  [ws] 背包装载失败（交易所会看不到东西）：%r' % (_be,))
+            role['bag'] = []
+
         conn.push_text(P.pack('welcome',
                               role=role,
                               ver=P.PROTOCOL_VERSION,

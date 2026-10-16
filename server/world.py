@@ -2104,18 +2104,20 @@ class World(object):
             return self._mkt_send(p, False, '这不是你的上架')
         expired = float(row.get('exp') or 0) <= now_s()
         mkmod.drop(self.mkt, lid)
+        # ★ 文案必须在【投给 saver 的那条】里就带上 ✓
+        #   落库回执是 drain 用的 ✗ 它拿不到这里的局部变量 ✓
+        #   （自测抓到的第 8 个坑：不带 msg → 界面显示成兜底的"操作完成"✓）
+        _msg = ('【%s】过期了，已退回背包' if expired else '已下架：%s 退回背包') % row.get('name')
         self.post_save(('MKT', 'unlist', {'lid': int(lid),
                                           'seller': int(p.role_id),
                                           'expired': 1 if expired else 0,
+                                          'msg': _msg,
                                           'it': row.get('it') or {},
                                           'stack': int(row.get('stack') or 1)}))
-        self._mkt_send(p, True,
-                       ('【%s】过期了，已退回背包' if expired else '已下架：%s 退回背包')
-                       % row.get('name'),
-                       lid=int(lid), gold=int(getattr(p, 'gold', 0) or 0),
-                       refresh=1)
-        self._mkt_ack(p, ('【%s】过期了，已退回背包' if expired else '已下架：%s 已退回背包')
-                      % row.get('name'))
+        # ★★ 这里【不回执】✗ 让落库那条回执来说话 ✓
+        #   为什么：回执一定要唯一 ✗ 回两条客户端会当成两次操作 ✓
+        #   （自测抓到的第 9 个坑：这一条 + drain 那条 = 两条一模一样的 listres ✓）
+        #   ★ 好处还顺带把"落库失败"说清楚 ✗ 不会先说成功再改口 ✓
 
     def _mkt_claim(self, p, d):
         """领取（★ 落库失败时东西还在货架上 ✗ 清出空位后点这个拿回来 ✓ 方案 §9 ✓）"""
@@ -2136,11 +2138,10 @@ class World(object):
         self.post_save(('MKT', 'unlist', {'lid': int(lid),
                                           'seller': int(p.role_id),
                                           'expired': 1,
+                                          'msg': '已取回：%s' % row.get('name'),
                                           'it': row.get('it') or {},
                                           'stack': int(row.get('stack') or 1)}))
-        self._mkt_send(p, True, '已取回：%s' % row.get('name'),
-                       lid=int(lid), refresh=1)
-        self._mkt_ack(p, '已取回：%s' % row.get('name'))
+        # ★ 同上：回执只由落库那条发（★ 唯一 ✗ 见 _mkt_unlist 的注释 ✓）
 
     def _mkt_buy(self, p, d):
         """购买（★ 校验+扣钱在同一拍 ✗ 交货和卖家到账等落库成功 ✓）"""
@@ -2228,16 +2229,10 @@ class World(object):
             self.post_save(('MKT', 'exp', {'lid': int(lid),
                                            'seller': int(row.get('seller') or 0),
                                            'name': str(row.get('name') or ''),
+                                           'msg': '【%s】过期了，已退回背包（背包满就去交易所领取）'
+                                                  % row.get('name'),
                                            'it': row.get('it') or {},
                                            'stack': int(row.get('stack') or 1)}))
-            q = self._mkt_player(row.get('seller'))
-            if q is not None:
-                try:
-                    self._send_cid(q.cid, P.pack(
-                        'notice', text='【%s】已过期，退回背包（背包满就去交易所领取）（背包已更新）'
-                        % row.get('name')))
-                except Exception:
-                    pass
             n += 1
         if n:
             print('[mkt] %d listing(s) expired' % n)
@@ -4118,6 +4113,11 @@ class World(object):
             #   → 走了"未知动作"分支 ✗ 界面显示"操作完成" ✗ 而货架那一行还是负数占位 ✓✓
             #   ★ 教训：kind 必须【显式传进来】✗ 绝不从 row 里猜 ✓
             d['kind'] = str(kind)
+            # ★ 回执要用的名字：从 item_json 里补一份 ✗ 别指望调用方都传 ✓
+            #   （自测抓到的第 7 个坑：成交回执给买家发的通知是"买到【None】"✓
+            #    因为 buy 那条 post_save 里根本没带 name ✓）
+            if not d.get('name') and isinstance(d.get('it'), dict):
+                d['name'] = str(d['it'].get('name') or '物品')
             # ★ 回执发给谁：默认是卖家（上架/下架/过期都是他 ✓）
             #   买入那条由 _mkt_buy 显式写 'reply'（买家 ✗ 卖家优先会取错人 ✓）
             d['role'] = int(d.get('reply') or d.get('seller') or d.get('buyer') or 0)
