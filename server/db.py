@@ -13,7 +13,7 @@ import time
 
 # ============================================================ 版本与迁移
 
-SCHEMA_VERSION = 5   # ★ 第 296 轮：待入账金币（迁移 v5 在下面 MIGRATIONS 定义之后）
+SCHEMA_VERSION = 6   # ★ round304：交易所（listings + trade_log ✗ 迁移 v6 在下面）
 
 # 每个版本一组 SQL。**新版本往后追加，不要改历史版本** ✓
 MIGRATIONS = {
@@ -287,6 +287,41 @@ MIGRATIONS[5] = [
         done   INTEGER NOT NULL DEFAULT 0
     )""",
     "CREATE INDEX IF NOT EXISTS ix_pending_gold ON pending_gold(role, done)",
+]
+
+
+# ★★★ round304：交易所（方案 v2 §2.2 + v3 §9）★★★
+#   ★ 为什么上架单要【独立一张表】而不是塞进 items：
+#     上架中的东西【不属于背包】✗（别人能买走 ✓）
+#     和背包混在一张表里 ✗ 就得靠状态字段区分 ✗ 每个查询都要记得过滤 ✓
+#     分开之后：items = 背包 ✗ listings = 货架 ✓ 语义清楚 ✓
+#   ★ trade_log 的 sid 是【主键】✗ 这就是幂等的最后一层：
+#     同一个 sid 再来一次 → UNIQUE 冲突 → 整笔事务回滚 → 钱只动一次 ✓
+#   ★ state 用文本而不是数字：排查时一眼能看懂 ✓（'on'/'sold'/'cancelled'/'expired'）
+MIGRATIONS[6] = [
+    """CREATE TABLE IF NOT EXISTS listings (
+        lid       INTEGER PRIMARY KEY AUTOINCREMENT,
+        seller    INTEGER NOT NULL,
+        item_json TEXT    NOT NULL,
+        price     INTEGER NOT NULL CHECK (price > 0),
+        ts        INTEGER NOT NULL,
+        expire    INTEGER NOT NULL,
+        state     TEXT    NOT NULL DEFAULT 'on'
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_listings_state ON listings(state, price)",
+    "CREATE INDEX IF NOT EXISTS ix_listings_sel   ON listings(seller, state)",
+    "CREATE INDEX IF NOT EXISTS ix_listings_on    ON listings(state, expire, price, lid)",
+    """CREATE TABLE IF NOT EXISTS trade_log (
+        sid       TEXT PRIMARY KEY,
+        lid       INTEGER NOT NULL,
+        seller    INTEGER NOT NULL,
+        buyer     INTEGER NOT NULL,
+        price     INTEGER NOT NULL,
+        tax       INTEGER NOT NULL,
+        item_json TEXT    NOT NULL,
+        ts        INTEGER NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_trade_ts ON trade_log(ts)",
 ]
 
 
