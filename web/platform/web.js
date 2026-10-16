@@ -2428,7 +2428,7 @@ function bagRender() {
       })() : '') +
       (lowm ? '<span class="lvl">' + Math.round(wMastery(it) * 100) + '%</span>' : '') + '</div>';
   }
-  var total = Math.max(16, Math.ceil((BAG.items.length + 1) / 8) * 8);
+  var total = Math.max(16, Math.min(BAG_PAGE_SIZE + 8, Math.ceil((BAG.items.length + 1) / 8) * 8));   /* round252: cap slots (was 800 empty divs at 797 items -> GPU pressure -> WebGL lost -> white screen) */
   /* 第 171 轮（用户 #4）：空位要按【每页 35 格】补。
      不能按背包总容量补 —— 不然第二页开头一个空位都没有，页面长短不一。 */
   var _filled = (_to - _from);
