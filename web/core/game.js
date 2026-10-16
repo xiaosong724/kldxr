@@ -3069,6 +3069,11 @@ function drawFarMates(marks, used) {
            · ★ 还要处理"人在身后时投影是镜像的"✗ 要反过来 ✓
          → 我漏了这两步 ✗ 所以方向完全不对 ✓（跟着自己转会动 ✓ 因为 P.yaw 项 ✓）
        ★ 修：照抄原来那套的算法 ✗ 一个字都不改 ✓（这是今天血换来的规矩 ✓）*/
+    /* ★ 保险：这两个临时向量平时是懒初始化的 ✗
+       万一这个函数比那套循环先跑到 ✗ 这里就会 null 崩 ✓
+       自己初始化一次 ✗ 零成本 ✓ */
+    if (!_mark3) { _mark3 = new THREE.Vector3(); }
+    if (!_mark4) { _mark4 = new THREE.Vector3(); }
     _mark3.set(rx, 1.2, rz);
     _mark4.copy(_mark3).applyMatrix4(cam.matrixWorldInverse);
     var behind = _mark4.z > 0;
