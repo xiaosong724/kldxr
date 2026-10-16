@@ -1633,10 +1633,15 @@ function setTab(name) {
     var on = (tabs[i].getAttribute('data-tab') === name);
     tabs[i].className = 'tab' + (on ? ' on' : '');
   }
+  /* 第 272 轮（用户：把画面/操作/音效合成"设置"）
+     最低风险做法：不动 HTML 结构 ✗ 三个面板还在原地 ✓
+     只在这里"选设置时把它们一起显示"✓（搬 HTML 容易把别的钩子搬坏 ✗） */
+  var _mergePanes = { view: ['view', 'ctrl', 'audio'] };
+  var _want = _mergePanes[name] || [name];
   var panes = document.querySelectorAll('#setPanel .tabpane');
   var hit = false;
   for (var j = 0; j < panes.length; j++) {
-    var on2 = (panes[j].getAttribute('data-pane') === name);
+    var on2 = (_want.indexOf(panes[j].getAttribute('data-pane')) >= 0);
     panes[j].className = 'tabpane' + (on2 ? ' on' : '');
     if (on2) { hit = true; }
   }
