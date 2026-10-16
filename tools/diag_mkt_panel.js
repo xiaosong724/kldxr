@@ -299,15 +299,16 @@ const BUYER = disposableName('MkB');
     body: JSON.stringify({ act: 'give', name: SELLER, kind: 'sword', tier: 4, worn: 0.3 }),
   }).then(x => x.json()).catch(() => null);
   console.log('   worn give -> ' + JSON.stringify(wornGive));
-  console.log('   rows right after worn give: ' + rpc([
-    'import sqlite3, json, sys',
-    'c = sqlite3.connect("file:game.db?mode=ro", uri=True)',
-    'r = c.execute("SELECT id FROM roles WHERE name=?", (sys.argv[1],)).fetchone()',
-    'print("  role", r)',
-    'for x in c.execute("SELECT id, stack, item_json FROM items WHERE role_id=? ORDER BY id", (r[0],)):',
-    '    it = json.loads(x[2])',
-    '    print("  id=%s stack=%s name=%s dur=%s/%s" % (x[0], x[1], it.get("name"), it.get("dur"), it.get("durMax")))',
-  ].join(String.fromCharCode(10)), [SELLER]));
+
+  /* ★★ round304s：再给卖家一件【专门留给第 3 节买】的装备 ★★
+     自测抓到的"自消耗"问题：第 1 节和第 2b 节各挂走一件 ✗
+       第 3 节又要买"我们那一单"✗ 结果那一单早被第 2e 节的买家买掉了 ✓
+       → 报出来是"买家看不到我们的商品"✗ 看着像产品 bug ✗ 其实是脚本用光了自己的道具 ✓
+     ★ 正解：每个"要买/要卖"的小节都【现给一件】✗ 别共用同一件 ✓ */
+  await fetch(ORIGIN + '/api/admin/act', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin': at },
+    body: JSON.stringify({ act: 'give', name: SELLER, kind: 'sword', tier: 3 }),
+  }).then(x => x.json()).catch(() => null);
 
   /* buyer needs real money: he sells three items to the system BEFORE logging in
      (that credits him in memory on login - selling later can land in pending_gold) */

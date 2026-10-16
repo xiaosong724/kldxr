@@ -668,6 +668,19 @@ class Api(BaseHTTPRequestHandler):
             if d.get('matName'):
                 w = {'name': str(d['matName']), 'tier': int(d.get('tier') or 0),
                      'kind': 'material'}
+            elif d.get('tag'):
+                # ★ round304s：装备也能指定名字（只给测试用 ✗ 比如"散件剑A"✓）
+                #   为什么要它：测试里同一名字会有好几件 ✗ 按名字认人必错 ✓
+                #   （这个项目在"按名字认东西"上栽过四次 ✗ 给个可区分的名字最省事 ✓）
+                w = {'id': 'w_sword_%d' % int(d.get('tier') or 0),
+                     'name': str(d['tag']), 'slot': 'weapon', 'tier': int(d.get('tier') or 0),
+                     'itemLv': 1, 'look': str(d.get('kind') or 'sword'),
+                     'base': {'coeff': 1.0, 'atkSpeed': 1.15, 'reach': 2.4, 'arc': 1.05,
+                              'critPt': 0},
+                     'affixes': [], 'effect': None, 'reqLevel': 1, 'ext': {}}
+                import weapons as _wm3
+                _wm3.ensure_dur(w)
+                _is_armor = False
             else:
                 _n, _t = _pool[int(d.get('pick') or 0) % len(_pool)]
                 w = {'name': _n, 'tier': _t, 'kind': 'material'}
