@@ -2849,7 +2849,7 @@ var _ov3 = null;
            于是位置始终连续，代价只是 0.1~0.3 秒的轻微快慢，眼睛看不出来 ✓ */
 function netRenderAt(o, localNow, dt) {
   var oc = o.clk || {};
-  var want = localNow - (oc.off || 0) - (oc.delay || 0.06);
+  var want = localNow - (oc.off || 0) - (oc.delay || 0.12);   /* round276b: 兜底值 60->120ms ✓ */
   if (o.rtS === undefined || o.rtLast === undefined) {
     o.rtS = want; o.rtLast = localNow; return want;
   }
@@ -3019,7 +3019,7 @@ function updateMarks() {
 function netUpdate(dt) {
   if (!NET.on) { return; }
   var now = performance.now() / 1000;
-  var srvDelay = (NET.srv && NET.srv.delay) || 0.06;
+  var srvDelay = (NET.srv && NET.srv.delay) || 0.12;          /* round276b: 同上 ✓ */
   var srvRender = now - (NET.srv && NET.srv.off ? NET.srv.off : 0) - srvDelay;   // ★ 服务器钟里的"该渲染哪一刻"
   for (var uid in NET.others) {
     var o = NET.others[uid];
