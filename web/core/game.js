@@ -3061,7 +3061,21 @@ function drawFarMates(marks, used) {
     var _keep = !!marks[rid];
     var dx = rx - P.x, dz = rz - P.z;
     var dist = Math.sqrt(dx * dx + dz * dz);
-    var ang = Math.atan2(dz, dx) - (P.yaw || 0) - Math.PI / 2;
+    /* ★★★ round294（用户："他会跟着我滑动的方向一起移动，方向还是会乱动"）★★★
+       病根：我这里是【自己编】的角度公式 ✗
+           ang = atan2(dz,dx) − P.yaw − π/2 ✓
+         而原来那套（视野内玩家 ✓ 一直是对的 ✓）用的是【真正的相机投影】✓：
+           · 把世界坐标丢给相机投影 ✓ 得到屏幕方向 ✓
+           · ★ 还要处理"人在身后时投影是镜像的"✗ 要反过来 ✓
+         → 我漏了这两步 ✗ 所以方向完全不对 ✓（跟着自己转会动 ✓ 因为 P.yaw 项 ✓）
+       ★ 修：照抄原来那套的算法 ✗ 一个字都不改 ✓（这是今天血换来的规矩 ✓）*/
+    _mark3.set(rx, 1.2, rz);
+    _mark4.copy(_mark3).applyMatrix4(cam.matrixWorldInverse);
+    var behind = _mark4.z > 0;
+    _mark3.project(cam);
+    var nx = _mark3.x, ny = -_mark3.y;
+    if (behind) { nx = -nx; ny = -ny; }     /* 身后时投影镜像 → 反过来才对 ✓ */
+    var ang = Math.atan2(ny, nx);
     var hw = innerWidth * 0.5 - 30;
     var ny = Math.sin(ang);
     var hh = (ny < 0) ? Math.max(10, innerHeight * 0.5 - 78)
