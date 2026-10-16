@@ -1461,7 +1461,9 @@ class World(object):
         if act == 'say':
             txt = str(d.get('text') or '')[:80]
             if txt:
-                self._broadcast(P.pack('notice', text='[管理] ' + txt))
+                # ★ 第 254 轮（用户要求）：管理公告改成走【弹幕】（全服滚动 ✓）
+                #   原来是 notice（屏幕中间弹一下 ✗ 容易被错过 ✓）
+                self._broadcast(P.pack('ticker', text='[管理] ' + txt, kind='sys'))
             return
         # ★★ 第 133 轮：调整刷怪上限（用户要求）★★
         #   ★ 这一支【不需要 name】✗（全局设置人人可用 ✓）
