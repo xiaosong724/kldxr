@@ -266,6 +266,17 @@ class Net(object):
         self.authed[conn.cid] = role
         self.by_account[acc_id] = conn.cid
 
+        # ★★ round304b：交易所（方案 v3 §9 —— 读库在这层 ✗ tick 只拿内存 ✓）★★
+        #   ★ 为什么在这里读：在线货架要在内存里 ✗ 而 tick 线程不许 IO ✓
+        #   ★ 只读他【卖家=自己】的那些：别人的等他逛交易所时现发（浏览本来就是内存 ✓）
+        #     ⚠ 这是个真缺口：内存货架初始只有自己上线时那一份 ✗
+        #       所以"看别人的商品"要等做界面那一轮补一条【全量装载】✓（见文档下一步 ✓）
+        try:
+            _mr = authmod.market_rows_of(self.cfg, role.get('id'))
+            role['mktRows'] = _mr
+        except Exception as _me:
+            print('  [ws] 货架装载失败（不影响进游戏）：%r' % (_me,))
+
         conn.push_text(P.pack('welcome',
                               role=role,
                               ver=P.PROTOCOL_VERSION,

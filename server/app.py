@@ -1096,12 +1096,25 @@ def main():
     # 建表（幂等）
     v0, v1, ran = dbmod.ensure_tables(cfg)
     tables = dbmod.table_names(cfg)
+    # ★ round304b：启动时清掉"卡在交易锁里"的物品（方案 v3 第 5 节 ✓ 幂等 ✓）
+    unlocked = dbmod.startup_unlock_items(cfg)
 
     print('=' * 58)
     print('  末日丧尸 × 组队修仙 · 独立版后端  v%s' % cfg.get('version', '?'))
     print('=' * 58)
     print('  数据库    : %s' % cfg['db'])
     print('  建表      : 版本 %d → %d（执行 %d 条 SQL）' % (v0, v1, ran))
+    if unlocked:
+        print('  交易锁    : 启动清掉 %d 件卡住的物品（上次崩在交易中间 ✓）' % unlocked)
+    # ★ round304b：交易所参数也打出来 ✗ 用来确认"跑的是新代码"（restart_local.py 的标志 ✓）
+    try:
+        import value as _val
+        print('  交易所    : 上架费 %d%%（%d~%d ✗ 余额<%d 免）· 税 %d%% · 每人 %d 件 · %d 天过期'
+              % (_val.MKT_FEE_PCT, _val.MKT_FEE_MIN, _val.MKT_FEE_MAX,
+                 _val.MKT_FEE_FREE_BELOW, _val.MKT_TAX_PCT,
+                 _val.MKT_MAX_PER_PLAYER, _val.MKT_DAYS))
+    except Exception as _ve:
+        print('  交易所    : 参数读不到（%r）' % (_ve,))
     print('  表 (%d)   : %s' % (len(tables), '、'.join(tables)))
     print('  前端目录  : %s' % cfg['web_root'])
     print('-' * 58)

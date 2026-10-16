@@ -350,6 +350,34 @@ def ensure_tables(cfg):
         c.close()
 
 
+def startup_unlock_items(cfg):
+    """启动清理：把 item_json 里残留的 locked_by / locked 清掉 → 清了几行
+
+    ★ round304b（方案 v3 第 5 节第 ③ 条）：服务器崩在"正在上架"中间时，
+      物品可能带着 locked_by 留在背包里 ✗ 之后再也卖不掉/上架不了 ✓
+      → 启动时无条件清一次 ✗ 幂等 ✓（没锁的话一行都不动 ✓）
+    ★ 为什么在启动时清而不是让业务代码容错：
+      这条例外路径平时走不到 ✗ 散在业务里就是一行永远不会被执行的代码 ✓
+      放在启动路径上 ✗ 每次重启都会真的跑一遍 ✓
+    """
+    n = 0
+    try:
+        with db(cfg) as c:
+            cur = c.execute(
+                "UPDATE items SET item_json = json_remove(item_json,'$.locked_by','$.locked')"
+                " WHERE json_extract(item_json,'$.locked_by') IS NOT NULL"
+                "    OR json_extract(item_json,'$.locked') IS NOT NULL")
+            try:
+                n = int(cur.rowcount or 0)
+            except Exception:
+                n = 0
+            c.commit()
+    except Exception as e:
+        print('[db] 启动清锁失败（不影响启动）：%r' % (e,))
+        return 0
+    return n
+
+
 def table_names(cfg):
     """列出所有业务表（自检 / 排查用）"""
     c = connect(cfg)

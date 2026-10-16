@@ -18,6 +18,7 @@
     网络线程 ──post_*──▶ inbox/saves ──▶ tick线程(step) ──fanout──▶ 网络线程 ──▶ socket
 """
 
+import json
 import math
 import queue
 import random
@@ -26,9 +27,16 @@ import time
 
 import affixes
 import armor as armormod
+import db as dbmod      # round304b: 存档线程要用 dbmod.now_ms() / dbmod.db()
+                        #   ★ 之前 world.py 里全是【函数内】import db as dbmod ✗
+                        #     模块级没有这个名字 ✗ 我新写的落库代码直接用 now_ms()
+                        #     → NameError ✗ 被 run_saver 的 except 吞掉 ✓
+                        #     自测一条一条抓出来的（第 3 个同类错误 ✗ 都长一个样 ✓）
 import drops
+import market as mkmod  # ★ round304b：交易所规则中心（纯函数 ✗ 可离线测 ✓）
 import mobs
 import mq as mqmod      # ★ 第 149 轮：魔气规则中心 ✓
+import value as valuemod  # ★ round304b：价格/上限（和卖系统同一份 ✓）
 import weapons
 import worldgen
 import protocol as P
@@ -63,6 +71,12 @@ PARTY_INVITE_TTL = 60.0       # ★ 第 82 轮用户改：10 秒 → 1 分钟 �
                               #    现在界面里也有待处理列表 ✓ 给一分钟才够用 ✓）
 PARTY_INVITE_RATE = 3         # 10 秒最多发 3 次邀请 ✓
 AUTO_SAVE_INTERVAL = 15.0   # ★ 第 109 轮：定时存盘（防崩溃/重启丢状态 ✗）
+# ★★ round304b：交易所（方案 v3 §9 —— 货架在内存里 ✗ 绝不查库 ✓）★★
+MKT_SWEEP_INTERVAL = 5.0    # 过期检查间隔（秒 ✗ 只动内存 + 投一条 UPDATE ✓）
+#   ★ 为什么 5 秒而不是"每次浏览时顺手扫"：人不在线时过期的东西也得退回去 ✗
+#     挂在 tick 上才不依赖"有没有人在看"✓
+MKT_BAG_MAX = 500           # 背包上限（上架/退回前先看够不够 ✗ 防背包无限涨 ✓）
+MKT_ROW_MAX = 4000          # 内存行数硬上限（超过就不让再上架 ✗ 保护 tick ✓）
 
 # ★★ round302：金币的"内存权威"要给重连让路 ★★
 #   问题：刷新页面时【新会话】在登录那一步就把 roles.gold 读进来了 ✗
@@ -110,6 +124,16 @@ def tier_no(t):
 
 def now_s():
     return time.time()
+
+
+class _MktRollback(Exception):
+    """交易所事务里"业务性失败"（东西被买走了 / 物品不在背包 ✓）
+
+    ★ 为什么不用普通 Exception：存档线程要区分两种情况 ✗
+        · _MktRollback  = 这笔本来就不该成 ✗ 回滚 + 告诉 tick 退钱 ✓（不用打日志 ✗ 不是故障 ✓）
+        · 其它异常      = 数据库/代码出问题 ✗ 回滚 + 打日志 + 退钱 ✓
+      （方案 §6："每条落库都要带回滚"✓）
+    """
 
 
 class Player(object):
@@ -227,6 +251,8 @@ class World(object):
         self.inbox = queue.Queue()      # 网络线程 → tick 线程
         self.saves = queue.Queue()      # 任何线程 → 存档线程
         self._joinq = queue.Queue()     # 认证通过的人（网络线程放，tick 消费）
+        # ★ round304b：上线时读好的货架（网络线程读 ✓ tick 只往内存里放 ✓）
+        self._joinq2 = queue.Queue()
 
         # ---- 世界状态（★ 只有 tick 线程读写）----
         self.players = {}               # cid -> Player
@@ -246,6 +272,21 @@ class World(object):
         self.lobby_stat = {'players': [], 'parties': []}   # tick 发布 ✓ HTTP 只读 ✓
         self._lobby_acc = 0.0
         self._save_acc = 0.0   # ★ 第 109 轮：定时存盘用 ✓
+        # ★★ round304b：交易所（内存货架 ✗ 只有 tick 线程碰 ✓）★★
+        #   ★ 为什么用 mkmod.new_mkt() 而不是在这里写死结构：
+        #     结构和 market.py 的增删逻辑必须一致 ✗ 一处定义 ✓
+        self.mkt = mkmod.new_mkt()
+        #   上架请求在【落库成功之前】物品还在背包里（saver 是异步的 ✗）
+        #   → 这段时间里同一件东西还能被再点一次上架 ✗
+        #   → 记一张"正在上架"的表 ✗ 落库回执清掉 ✓（防重复上架 ✓）
+        self.mkt_locking = set()      # {(role_id, iid), ...}
+        #   同一个 sid 正在处理哪一件（防连点 ✗ 只留最近几十条 ✓）
+        self.mkt_sids = {}
+        #   ★ 落库失败要回滚（买家扣的钱 / 上架费 ✗ 都在内存里 ✓）
+        #     失败只可能是"别人先动了这件东西"✗ 或者数据库出错 ✓
+        #     两种都必须把钱退回去 ✗ 绝不能出现"扣了钱没拿到货"✓（方案 §6 ✓）
+        self.mkt_failq = queue.Queue()
+        self._mkt_acc = 0.0
         self.talent_rate = {}   # ★ 第 116 轮：加点限流（长按会刷屏 ✗）
         # ★★ 第 133 轮（用户："在管理里可以调整单人上限的功能"）★★
         #   为什么不直接改 mobs.MOB_PER_PLAYER ✗
@@ -463,6 +504,16 @@ class World(object):
             except Exception:
                 pass
             _np = Player(conn.cid, role)
+            # round304b: 上线时读好的货架（网络线程读 ✓ 这里只入内存 ✓）
+            #   ★ 为什么不走 intent：那一整行货架有十几 KB ✗
+            #     走 intent 会占限流额度 ✗ 而且和玩家操作抢 tick ✓
+            #   → 单独一条队列 ✗ _mkt_tick 里消费 ✓（本拍就入内存 ✓）
+            try:
+                _mr = role.get('mktRows') or []
+                if _mr:
+                    self._joinq2.put((role.get('id'), _mr))
+            except Exception as _mre:
+                print('[mkt] join load failed: %r' % (_mre,))
             # round302: 离线期间的入账（网络线程已经读好了 ✗ 这里只入账 ✓）
             #   ★ 走 _gain_gold ✗ 所以上限/黄金转换/流水 全都照常生效 ✓
             #   ★ done=1 交给存档线程（tick 线程不碰磁盘 ✓）
@@ -584,6 +635,13 @@ class World(object):
                     self.dropped_intents += 1
                     continue
                 self._handle_intent(p, payload[0], payload[1])
+
+        # ②·5 交易所的非玩家消息（载入货架 / 落库失败回滚 / 过期回收 ✓）
+        #   ★ 为什么单独一支：它们没有 cid ✗ 走不到上面那个 players 查找 ✓
+        try:
+            self._mkt_tick()
+        except Exception as _mke:
+            print('[mkt] tick failed: %r' % (_mke,))
 
         # ③ 僵尸：刷怪 / 回收 / AI（P2 第一刀）
         #    ★ 和玩家一样【只在 tick 线程跑】→ 一张快照发出去时，世界是"冻结"的 ✓
@@ -990,6 +1048,8 @@ class World(object):
                                          text='调试：背包里多了一件【%s】—— 打开背包就能穿上 ✓' % w['name']))
         elif t == 'party':
             self._party_op(p, d)          # ★ 第 81 轮：组队 ✓
+        elif t in ('lists', 'mylists', 'mklist', 'buyitem', 'unlist', 'listclaim'):
+            self._mkt_do(p, t, d)         # ★ round304b：交易所（纯内存 ✓）
         elif t == 'armorset':
             # ★ 第 67 轮：穿/脱防具（网络线程已经查库校验完了 ✓）
             self._flush_adur(p)                     # ★ 换防具前先把旧的落库 ✓
@@ -1821,6 +1881,549 @@ class World(object):
     # ================= round293: gold =================
     GOLD_CAP = 1000000000
     GOLD_PER_BULLION = 100000000
+
+    # ================= round304b: exchange (tick-side, memory-authoritative) =================
+
+    def _mkt_player(self, role_id):
+        """按角色找【在线且不是幽灵】的会话（金币/背包都挂在它身上 ✓）"""
+        try:
+            rid = int(role_id)
+        except Exception:
+            return None
+        for q in self.players.values():
+            if (getattr(q, 'role_id', None) == rid
+                    and getattr(q, 'ghostAt', None) is None):
+                return q
+        return None
+
+    def _mkt_send(self, p, ok, msg='', **kw):
+        """交易所统一回执：★ 文案一律服务器写 ✗ 客户端不许自己编 ✓（方案 v1 §5）"""
+        d = {'ok': bool(ok), 'msg': str(msg or '')}
+        for k, v in kw.items():
+            if v is not None:
+                d[k] = v
+        self._send_cid(p.cid, P.pack('listres', **d))
+
+    def _mkt_load(self, role_id, rows):
+        """上线时把货架读进内存（网络线程已经查好了 ✗ 这里只入内存 ✓）"""
+        n = 0
+        now = now_s()
+        for row in mkmod.load_rows(rows):
+            if int(row.get('seller') or 0) != int(role_id):
+                continue
+            if int(row.get('lid') or 0) < 0:
+                # ★ 负数 lid 是【内存占位】（正在上架 ✗ 还没落库 ✓）不入内存 ✓
+                #   不然会把占位行从库里"载入"一遍 ✗ 出现两行同一件东西 ✓
+                continue
+            if float(row.get('exp') or 0) <= now:
+                # ★ 已经过期的：不进内存 ✗ 直接排一条"退回过期"✓
+                self.post_save(('MKT', 'exp', {'lid': int(row['lid']),
+                                               'seller': int(role_id)}))
+                continue
+            mkmod.add(self.mkt, row)
+            n += 1
+        if n:
+            print('[mkt] role %s loaded %d listing(s)' % (role_id, n))
+
+    def _mkt_rows_of(self, mkt, seller, now=None):
+        """我的上架（含过期待领取的 ✓ 方案 §9 第二条 ✓）"""
+        now = now_s() if now is None else now
+        out = []
+        n_on = 0
+        for row in mkt['by_lid'].values():
+            if int(row.get('seller') or 0) != int(seller):
+                continue
+            exp = float(row.get('exp') or 0)
+            state = 'on' if exp > now else 'expired'
+            if state == 'on':
+                n_on += 1
+            out.append({'state': state, 'row': row})
+        out.sort(key=lambda x: -float(x['row'].get('ts') or 0))
+        return out, n_on
+
+    def _mkt_mine(self, p):
+        """推"我的上架"给本人（★ 一页 20 条够用 ✗ 每人最多 10 件 ✓）"""
+        rows, n_on = self._mkt_rows_of(self.mkt, p.role_id)
+        body = []
+        for x in rows[:20]:
+            r = x['row']
+            body.append({'lid': int(r['lid']), 'price': int(r['price']),
+                         'tier': int(r['tier']), 'lv': int(r['lv']),
+                         'name': r['name'], 'state': x['state'],
+                         'left': int(max(0, float(r['exp']) - now_s())),
+                         'tax': mkmod.tax_of(r['price']),
+                         'net': mkmod.net_of(r['price']),
+                         'it': r['it']})
+        self._send_cid(p.cid, P.pack('listpage', rows=body, page=1, pages=1,
+                                     total=len(rows), mine=1, on=n_on,
+                                     max=int(valuemod.MKT_MAX_PER_PLAYER),
+                                     gold=int(getattr(p, 'gold', 0) or 0)))
+
+    def _mkt_browse(self, p, d):
+        """浏览货架（★ 纯内存 ✗ 一步也不查库 ✓ 方案 §9 最后一条 ✓）"""
+        cat = str(d.get('cat') or 'all')
+        if cat not in ('all',) + tuple(valuemod.CAT_ORDER):
+            cat = 'all'
+        sort = str(d.get('sort') or 'price')
+        if sort not in ('price', 'price_desc', 'new', 'tier', 'tier_desc'):
+            sort = 'price'
+        try:
+            page = int(d.get('page') or 1)
+        except Exception:
+            page = 1
+        # 阶数筛选：客户端传 1~3 / 4~6 / 7~9 这样的档 ✗ 这里换算成区间 ✓
+        lo = hi = None
+        try:
+            tb = int(d.get('tier') or 0)
+        except Exception:
+            tb = 0
+        if tb == 1:
+            lo, hi = 0, 2      # ★ 材料是 0 阶 ✗ 归进"1-3 阶"这档才找得到 ✓
+        elif tb == 2:
+            lo, hi = 3, 5
+        elif tb == 3:
+            lo, hi = 6, 99
+        afford = None
+        if d.get('afford'):
+            afford = int(getattr(p, 'gold', 0) or 0)
+        res = mkmod.browse(self.mkt, cat=cat, q=str(d.get('q') or ''),
+                           tier_lo=lo, tier_hi=hi, afford=afford,
+                           sort=sort, page=page)
+        self._send_cid(p.cid, P.pack(
+            'listpage', rows=mkmod.pub_rows(res['rows']), page=res['page'],
+            pages=res['pages'], total=res['total'],
+            gold=int(getattr(p, 'gold', 0) or 0),
+            pageSize=int(valuemod.MKT_PAGE)))
+
+    def _mkt_open(self, p, d):
+        """客户端打开交易所：一次给齐（余额 + 我的上架 + 第一页商品 ✓）"""
+        op = str(d.get('op') or 'all')
+        if op == 'mine':
+            self._mkt_mine(p)
+            return
+        self._mkt_browse(p, d)
+
+    def _mkt_list(self, p, d):
+        """上架（★ 先查余额 ✗ 再扣上架费 ✗ 再入内存 ✗ 落库 ✗ 回滚兜底 ✓）"""
+        try:
+            iid = int(d.get('iid'))
+        except Exception:
+            return self._mkt_send(p, False, '参数不对')
+        okp, price = mkmod.price_ok(d.get('price'))
+        if not okp:
+            return self._mkt_send(p, False, price)
+        rec = None
+        for x in (p.role.get('bag') or []):
+            try:
+                if int(x.get('id')) == iid:
+                    rec = x
+                    break
+            except Exception:
+                continue
+        if rec is None:
+            return self._mkt_send(p, False, '背包里没有这件东西（刷新一下再看看）')
+        it = rec.get('item') or {}
+        if not isinstance(it, dict) or not it.get('name'):
+            return self._mkt_send(p, False, '这件东西不能上架')
+        if rec.get('lock') or it.get('locked_by') or it.get('locked'):
+            return self._mkt_send(p, False, '这件东西正在上架中')
+        key = (int(p.role_id), iid)
+        if key in self.mkt_locking:
+            return self._mkt_send(p, False, '正在上架，稍等一下')
+        # ★★ 这一件是不是【已经挂在货架上了】（自测抓到的那条路 ✓）★★
+        #   为什么非要显式查一遍：role['bag'] 快照是打开交易所那一刻的副本 ✗
+        #     它不跟着背包刷新 ✓ 所以"同一件挂两次"用背包根本拦不住 ✓
+        #     （上架时存的就是【同一份 item_json】✗ 所以拿字典相等来认领位最准 ✓
+        #      用 lid == -iid 认领位 ✗ 落库换过 lid 之后就认不出来了 ✓）
+        try:
+            for _r in self.mkt['by_lid'].values():
+                if (int(_r.get('seller') or 0) == int(p.role_id)
+                        and (_r.get('it') or {}) == it):
+                    return self._mkt_send(p, False, '这件东西已经挂在货架上了')
+        except Exception:
+            pass
+        try:
+            n_on = mkmod.count_of(self.mkt, p.role_id)
+        except Exception:
+            n_on = 0
+        n_on += sum(1 for k in self.mkt_locking if k[0] == int(p.role_id))
+        if n_on >= int(valuemod.MKT_MAX_PER_PLAYER):
+            return self._mkt_send(p, False, '最多同时上架 %d 件' % valuemod.MKT_MAX_PER_PLAYER)
+        if len(self.mkt['by_lid']) + len(self.mkt_locking) >= MKT_ROW_MAX:
+            return self._mkt_send(p, False, '货架满了，过一会儿再试')
+        bal = int(getattr(p, 'gold', 0) or 0)
+        fee = mkmod.fee_of(bal, price)
+        if fee > 0 and bal < fee:
+            return self._mkt_send(p, False,
+                                  '上架费 %d 金币，你的余额不够' % fee)
+        stack = max(1, int(rec.get('stack') or 1))
+        if fee > 0:
+            self._gain_gold(p, -fee, 'mkt_fee')
+        self.mkt_locking.add(key)
+        # ★ 乐观入货架：lid 先用【负数占位】（-iid ✗ 一定不会和真 lid 撞 ✓）
+        #   真正落库之后 saver 会把真 lid 回灌 ✗ 那时再换掉这一行 ✓
+        #   为什么不等落库再入：等的这段时间里货架上没有它 ✗
+        #   而玩家可能已经在"我的上架"里找它了 ✓（体验 ✗ 不是正确性 ✓）
+        lid_tmp = -iid
+        try:
+            mkmod.add(self.mkt, mkmod.row_of(
+                lid_tmp, p.role_id, int(price), it, now_s(),
+                now_s() + int(valuemod.MKT_DAYS) * 86400, int(stack)))
+        except Exception as e:
+            print('[mkt] optimistic add failed: %r' % (e,))
+        self.post_save(('MKT', 'list', {'sid': str(d.get('sid') or ''),
+                                        'seller': int(p.role_id), 'iid': iid,
+                                        'price': int(price), 'fee': int(fee),
+                                        'stack': int(stack), 'it': it,
+                                        'lid_tmp': lid_tmp}))
+        # ★ 回执先回"处理中"✗ 真回执等落库（几百毫秒 ✗ 免得说成功了其实没成 ✓）
+        self._mkt_send(p, True,
+                       '正在上架【%s】（%d 金币 ✗ 上架费 %d）…'
+                       % (it.get('name'), price, fee),
+                       lid=None, gold=int(getattr(p, 'gold', 0) or 0),
+                       name=str(it.get('name') or ''), price=int(price))
+
+    def _mkt_fail(self, p, msg, refund=0):
+        """落库失败的回滚（★ 钱是在内存里扣的 ✗ 必须退回 ✓ 方案 §6 ✓）"""
+        if p is None:
+            return
+        if refund:
+            self._gain_gold(p, int(refund), 'mkt_fee_back')
+        self._mkt_send(p, False, msg, gold=int(getattr(p, 'gold', 0) or 0))
+
+    def _mkt_unlist(self, p, d):
+        """下架（★ 上架费不退 ✗ 东西原样回背包 ✓ 方案 v2 ✓）"""
+        try:
+            lid = int(d.get('lid'))
+        except Exception:
+            return self._mkt_send(p, False, '参数不对')
+        row = self.mkt['by_lid'].get(lid)
+        if row is None:
+            return self._mkt_send(p, False, '这件商品已经不在了（刷新一下）')
+        if int(row.get('seller') or 0) != int(p.role_id):
+            return self._mkt_send(p, False, '这不是你的上架')
+        expired = float(row.get('exp') or 0) <= now_s()
+        mkmod.drop(self.mkt, lid)
+        self.post_save(('MKT', 'unlist', {'lid': int(lid),
+                                          'seller': int(p.role_id),
+                                          'expired': 1 if expired else 0,
+                                          'it': row.get('it') or {},
+                                          'stack': int(row.get('stack') or 1)}))
+        self._mkt_send(p, True,
+                       ('【%s】过期了，已退回背包' if expired else '已下架：%s 退回背包')
+                       % row.get('name'),
+                       lid=int(lid), gold=int(getattr(p, 'gold', 0) or 0),
+                       refresh=1)
+        self._mkt_ack(p, ('【%s】过期了，已退回背包' if expired else '已下架：%s 已退回背包')
+                      % row.get('name'))
+
+    def _mkt_claim(self, p, d):
+        """领取（★ 落库失败时东西还在货架上 ✗ 清出空位后点这个拿回来 ✓ 方案 §9 ✓）"""
+        try:
+            lid = int(d.get('lid'))
+        except Exception:
+            return self._mkt_send(p, False, '参数不对')
+        row = self.mkt['by_lid'].get(lid)
+        if row is None:
+            return self._mkt_send(p, False, '这件商品已经不在了（刷新一下）')
+        if int(row.get('seller') or 0) != int(p.role_id):
+            return self._mkt_send(p, False, '这不是你的上架')
+        if float(row.get('exp') or 0) > now_s():
+            return self._mkt_send(p, False, '还在上架中，先下架再领')
+        if len(p.role.get('bag') or []) >= MKT_BAG_MAX:
+            return self._mkt_send(p, False, '背包满了，先清出空位')
+        mkmod.drop(self.mkt, lid)
+        self.post_save(('MKT', 'unlist', {'lid': int(lid),
+                                          'seller': int(p.role_id),
+                                          'expired': 1,
+                                          'it': row.get('it') or {},
+                                          'stack': int(row.get('stack') or 1)}))
+        self._mkt_send(p, True, '已取回：%s' % row.get('name'),
+                       lid=int(lid), refresh=1)
+        self._mkt_ack(p, '已取回：%s' % row.get('name'))
+
+    def _mkt_buy(self, p, d):
+        """购买（★ 校验+扣钱在同一拍 ✗ 交货和卖家到账等落库成功 ✓）"""
+        try:
+            lid = int(d.get('lid'))
+        except Exception:
+            return self._mkt_send(p, False, '参数不对')
+        row = self.mkt['by_lid'].get(lid)
+        if row is None:
+            return self._mkt_send(p, False, '这件商品已经不在了（刷新一下）')
+        if float(row.get('exp') or 0) <= now_s():
+            return self._mkt_send(p, False, '这件商品已过期')
+        if int(row.get('seller') or 0) == int(p.role_id):
+            return self._mkt_send(p, False, '这是你自己的上架')
+        # 重复点击 / 网络重发：同一个 sid 直接回"处理中"（真正的幂等在落库那一层 ✓）
+        if str(d.get('sid') or ''):
+            if lid in self.mkt_sids.get(str(d['sid']), ()):
+                return self._mkt_send(p, False, '这笔交易正在处理，别重复点')
+        price = int(row['price'])
+        if int(getattr(p, 'gold', 0) or 0) < price:
+            return self._mkt_send(p, False, '金币不够（要 %d ✗ 你有 %d）'
+                                  % (price, int(getattr(p, 'gold', 0) or 0)))
+        if len(p.role.get('bag') or []) >= MKT_BAG_MAX:
+            return self._mkt_send(p, False, '背包满了，先清出空位')
+        applied = self._gain_gold(p, -price, 'mkt_buy')
+        if applied != -price:
+            if applied:
+                self._gain_gold(p, -applied, 'mkt_buy_back')
+            return self._mkt_send(p, False, '金币不够')
+        seller = self._mkt_player(row.get('seller'))
+        tax = mkmod.tax_of(price)
+        net = mkmod.net_of(price)      # ★ 卖家到手（落库回执要用 ✗ 自测抓到漏了这个 ✓）
+        # 内存里先拿走 ✗ 免得两个人同一拍买同一件 ✓（落库失败会由 _mkt_drain 退回钱 ✓）
+        mkmod.drop(self.mkt, lid)
+        if str(d.get('sid') or ''):
+            self._mkt_sid_note(str(d['sid']), lid)
+        self.post_save(('MKT', 'buy', {'sid': str(d.get('sid') or ''),
+                                       'lid': int(lid),
+                                       'buyer': int(p.role_id),
+                                       'reply': int(p.role_id),
+                                       'seller': int(row.get('seller') or 0),
+                                       'price': price, 'tax': tax, 'net': net,
+                                       'seller_online': 1 if seller is not None else 0,
+                                       'it': row.get('it') or {},
+                                       'stack': int(row.get('stack') or 1)}))
+        # ★ 卖家到账【不在这里做】✗ 在落库成功之后（_mkt_drain ✓）
+        #   为什么：万一落库失败 ✗ 卖家已经拿到钱 ✗ 买家又全额退回 ✓ = 凭空多钱 ✓✓
+        #   ★ 买家这一半是安全的：扣钱和校验在【同一拍】✗ 失败全额退 ✓
+        self._mkt_send(p, True, '正在购买【%s】（%d 金币）…' % (row.get('name'), price),
+                       lid=int(lid), kind='buy', gold=int(getattr(p, 'gold', 0) or 0),
+                       name=str(row.get('name') or ''), price=price)
+
+    def _mkt_offline_pay(self, seller_id, amount):
+        """离线卖家的钱 → 走 pending_gold（★ 上线时自动入账 ✗ 不绕过上限 ✓ 方案 §3 ✓）"""
+        try:
+            if int(amount) <= 0:
+                return
+            import db as dbmod
+            self.post_save(
+                'INSERT INTO pending_gold(role, amount, why, ts, done)'
+                ' VALUES(?,?,?,?,0)',
+                (int(seller_id), int(amount), 'trade_sell', dbmod.now_ms()))
+        except Exception as e:
+            print('[mkt] offline pay failed: %r' % (e,))
+
+    def _mkt_sid_note(self, sid, lid):
+        """记一笔"这个 sid 正在处理哪一件"（防连点 ✗ 只记最近 50 条 ✓）"""
+        try:
+            lst = self.mkt_sids.setdefault(str(sid), [])
+            lst.append(int(lid))
+            if len(self.mkt_sids) > 50:
+                for k in list(self.mkt_sids.keys())[:-40]:
+                    self.mkt_sids.pop(k, None)
+        except Exception:
+            pass
+
+    def _mkt_sweep(self):
+        """过期回收（★ 只动内存 + 投一条 UPDATE ✗ tick 不碰磁盘 ✓ 方案 §9 ✓）"""
+        now = now_s()
+        n = 0
+        for lid, row in list(self.mkt['by_lid'].items()):
+            if float(row.get('exp') or 0) > now:
+                continue
+            mkmod.drop(self.mkt, lid)
+            self.post_save(('MKT', 'exp', {'lid': int(lid),
+                                           'seller': int(row.get('seller') or 0),
+                                           'name': str(row.get('name') or ''),
+                                           'it': row.get('it') or {},
+                                           'stack': int(row.get('stack') or 1)}))
+            q = self._mkt_player(row.get('seller'))
+            if q is not None:
+                try:
+                    self._send_cid(q.cid, P.pack(
+                        'notice', text='【%s】已过期，退回背包（背包满就去交易所领取）（背包已更新）'
+                        % row.get('name')))
+                except Exception:
+                    pass
+            n += 1
+        if n:
+            print('[mkt] %d listing(s) expired' % n)
+
+    def _mkt_ack(self, p, text, **kw):
+        """先弹一句系统提示 ✗ 再回执 ✓
+
+        ★ 为什么用 notice 而不是编一套"刷新背包"协议：
+          notice 是【服务器写的文案】✗ 客户端本来就显示 ✓
+          再带一个约定好的尾巴"（背包已更新）"→ 客户端看到就去重拉背包 ✓
+          （下一轮做界面时用 ✓ 现在先把文案定死 ✓）
+        """
+        if text:
+            self._send_cid(p.cid, P.pack('notice', text='%s（背包已更新）' % text))
+
+    def _mkt_drain(self):
+        """处理落库结果（★ tick 线程唯一能改钱的地方之一 ✓）
+
+        ★★ round304b 的关键顺序（想清楚才写的 ✗ 别改）：
+            购买时【钱在 tick 里先扣】✗ 落库是异步的 ✓
+            → 落库成功：只补"卖家到账 + 买家拿到货"✓
+            → 落库失败：买家全额退回 ✓（绝不会"扣了钱没拿到货"✓）
+          ★ 为什么不等落库成功再扣钱：那样 buy 的校验和扣钱会跨 tick ✗
+            中间买家可能把钱花在别处 ✗ 变成"余额够 ✗ 扣的时候不够"✓
+            现在的写法：扣钱和校验在【同一拍】✗ 不存在这个缝 ✓
+        """
+        n = 0
+        while n < 200:
+            try:
+                ex = self.mkt_failq.get_nowait()
+            except queue.Empty:
+                break
+            n += 1
+            try:
+                kind = str(ex.get('kind') or '')
+                rid = int(ex.get('role') or 0)
+                p = self._mkt_player(rid)
+                if ex.get('done'):
+                    # ---------------- 落库成功 ----------------
+                    if kind == 'list':
+                        # 把乐观那行（lid 是负数占位）换成真行（真有 lid 才能买/下架 ✓）
+                        tmp = int(ex.get('lid_tmp') or 0)
+                        if tmp:
+                            mkmod.drop(self.mkt, tmp)
+                        mkmod.add(self.mkt, mkmod.row_of(
+                            int(ex.get('lid') or 0), rid, int(ex.get('price') or 0),
+                            ex.get('it') or {}, ex.get('ts') or now_s(),
+                            ex.get('exp') or 0, int(ex.get('stack') or 1)))
+                        self.mkt_locking.discard((rid, int(ex.get('iid') or 0)))
+                        # ★ 为什么不把这一件从 role['bag'] 快照里删掉：
+                        #   那个快照是【打开交易所那一刻的】副本 ✗ 不跟背包刷新 ✓
+                        #   删了它 → 玩家把同一件再挂一次 ✗ 快照里已经没有它了 ✗
+                        #     于是"正在上架中"这道本地闸门形同虚设 ✓
+                        #     （自测抓到的：提示会变成落库阶段的"上架失败"✓ 不该这样 ✓）
+                        #   ★ 留着没坏处：真要再挂 ✗ 货架上那一份会先拦下来 ✓
+                        if p is not None:
+                            self._mkt_send(p, True,
+                                           '【%s】已上架：%d 金币（上架费 %d）'
+                                           % (ex.get('name'), int(ex.get('price') or 0),
+                                              int(ex.get('fee') or 0)),
+                                           lid=int(ex.get('lid') or 0),
+                                           gold=int(getattr(p, 'gold', 0) or 0),
+                                           refresh=1)
+                            self._mkt_ack(p, '【%s】已上架（%d 金币）'
+                                          % (ex.get('name'), int(ex.get('price') or 0)))
+                    elif kind == 'buy':
+                        lid = int(ex.get('lid') or 0)
+                        mkmod.drop(self.mkt, lid)
+                        it = ex.get('it') or {}
+                        # ★★ 自测抓到的第 6 个坑：成交这条回执【有两个当事人】★★
+                        #   上面那句 p = _mkt_player(ex['role']) 里的 role 是
+                        #   seller or buyer（卖家优先 ✗）→ 拿到的其实是【卖家】✗
+                        #   而这一段把 p 当买家 ✗
+                        #   → 结果是：买家那一份"交货通知"发给了卖家 ✓
+                        #     而 /api/sell 那边的卖家到账又被"p 就是卖家"覆盖 ✓
+                        #     最后账面上【买家只扣 5 ✗ 卖家净得 0】✓✓
+                        #   ★ 修：两个当事人各自查一次 ✗ 一个都不许猜 ✓
+                        bp = self._mkt_player(int(ex.get('buyer') or 0))
+                        sp = self._mkt_player(int(ex.get('seller') or 0))
+                        if bp is not None and isinstance(it, dict):
+                            # ★ 钱在 _mkt_buy 里已经扣过了 ✗ 这里只交货 ✓
+                            if isinstance(bp.role.get('bag'), list):
+                                bp.role['bag'].insert(0, {'id': 0, 'item': it,
+                                                          'stack': int(ex.get('stack') or 1),
+                                                          'lock': 1})
+                            self._mkt_send(bp, True, '买到【%s】花了 %d 金币'
+                                           % (ex.get('name'), int(ex.get('price') or 0)),
+                                           lid=lid, kind='buy',
+                                           gold=int(getattr(bp, 'gold', 0) or 0),
+                                           name=str(ex.get('name') or ''),
+                                           price=int(ex.get('price') or 0), refresh=1)
+                            self._mkt_ack(bp, '买到【%s】花了 %d 金币'
+                                          % (ex.get('name'), int(ex.get('price') or 0)))
+                        sid = int(ex.get('seller') or 0)
+                        if sp is not None:
+                            # ★ 卖家在线 → 只改内存（他那边下一拍就推金币 ✓）
+                            self._gain_gold(sp, int(ex.get('net') or 0), 'trade')
+                        else:
+                            # ★ 离线 → 走 pending_gold（上线时自动入账 ✓ 方案 §3 ✓）
+                            self._mkt_offline_pay(sid, int(ex.get('net') or 0))
+                    else:
+                        # 下架 / 过期 / 领取：东西已经在库里回到背包了 ✗ 叫客户端重拉 ✓
+                        if p is not None:
+                            self._mkt_send(p, True, str(ex.get('msg') or '操作完成'),
+                                           lid=int(ex.get('lid') or 0), refresh=1)
+                            self._mkt_ack(p, str(ex.get('msg') or '操作完成'))
+                    continue
+                # ---------------- 落库失败 ----------------
+                # ★ 乐观加进去的那一行必须先拿掉 ✓
+                #   不拿掉的话：货架上留着一行【没有 lid 的假商品】✗
+                #     别人看得见却买不了 ✗ 玩家自己也不能再挂它 ✓
+                #   （自测那条"不能留负数占位"的断言就是照这个写的 ✓）
+                if kind == 'list':
+                    # ★ 乐观那行的 lid 就是 -iid（_mkt_list 里定的 ✓）
+                    #   为什么要拿掉：不拿掉的话货架上留着一行【没有真 lid 的假商品】✗
+                    #     别人看得见却买不了 ✗ 玩家自己也不能再挂它 ✓
+                    #   （自测那条"不能留负数占位"的断言就是照这个写的 ✓）
+                    mkmod.drop(self.mkt, -int(ex.get('iid') or 0))
+                    self.mkt_locking.discard((rid, int(ex.get('iid') or 0)))
+                if p is None:
+                    continue
+                if kind == 'list':
+                    # ★ 文案里必须【说清钱退回来了】✗ 不然玩家只看到"上架失败"
+                    #   会以为上架费被吞了 ✓（自测的断言就是照这条写的 ✓）
+                    why = str(ex.get('msg') or '').replace('操作失败：', '') or '数据库出错'
+                    self._mkt_fail(p, '上架失败（%s）✗ 上架费已退还' % why,
+                                   refund=int(ex.get('fee') or 0))
+                elif kind == 'buy':
+                    why = str(ex.get('msg') or '').replace('操作失败：', '') or '数据库出错'
+                    self._mkt_fail(p, '购买失败（%s）✗ 金币没有被扣' % why)
+                else:
+                    why = str(ex.get('msg') or '').replace('操作失败：', '') or '数据库出错'
+                    self._mkt_fail(p, '交易落库失败（%s）✗ 钱已退回' % why)
+            except Exception as e:
+                print('[mkt] drain failed: %r' % (e,))
+        # ★ 卡住的锁也要清（玩家掉线 / 回滚 ✗ 不然他永远上架不了这一件 ✓）
+        try:
+            if self.mkt_locking and (self.tick_count % 300) == 0:
+                for key in list(self.mkt_locking):
+                    if self._mkt_player(key[0]) is None:
+                        self.mkt_locking.discard(key)
+        except Exception:
+            pass
+
+    def _mkt_do(self, p, t, d):
+        """交易所的六条消息（★ 全在 tick 线程 ✗ 纯内存 ✓）"""
+        if t == 'lists':
+            self._mkt_open(p, d)
+        elif t == 'mylists':
+            self._mkt_mine(p)
+        elif t == 'mklist':
+            self._mkt_list(p, d)
+        elif t == 'buyitem':
+            self._mkt_buy(p, d)
+        elif t == 'unlist':
+            self._mkt_unlist(p, d)
+        elif t == 'listclaim':
+            self._mkt_claim(p, d)
+        else:
+            self._send_cid(p.cid, P.pack('listres', ok=False, msg='未知的交易所操作'))
+
+    def _mkt_tick(self):
+        """每 tick 的交易所杂事（★ 全部只碰队列和内存 ✗ 没有磁盘 IO ✓）"""
+        # ① 上线时读好的货架（网络线程读的 ✗ 这里只入内存 ✓）
+        n = 0
+        while n < 50:
+            try:
+                rid, rows = self._joinq2.get_nowait()
+            except queue.Empty:
+                break
+            n += 1
+            try:
+                self._mkt_load(rid, rows)
+            except Exception as e:
+                print('[mkt] load failed: %r' % (e,))
+        # ② 落库失败 → 回滚内存里的钱
+        if not self.mkt_failq.empty():
+            self._mkt_drain()
+        # ③ 过期回收（每 5 秒一次 ✗ 只动内存 + 投 UPDATE ✓）
+        self._mkt_acc += TICK_DT
+        if self._mkt_acc >= MKT_SWEEP_INTERVAL:
+            self._mkt_acc = 0.0
+            try:
+                self._mkt_sweep()
+            except Exception as e:
+                print('[mkt] sweep failed: %r' % (e,))
 
     def _gain_gold(self, q, n, why=''):
         """THE only place gold changes. Returns the amount actually applied.
@@ -3275,9 +3878,22 @@ class World(object):
                 pass
             if not batch:
                 continue
+            # ★ round304b：本批里有哪些交易所事务做成功了（★ commit 之后才通知 tick ✓）
+            mkt_ok = []
+            mkt_wrote = False
             try:
                 with dbmod.db(self.cfg) as db:
                     for sql, params in batch:
+                        if isinstance(sql, tuple):
+                            # ★★ round304b：交易所事务在队列里是 (('MKT', kind, {...})) ★★
+                            #   ★ 是【元组】不是字符串 ✗（自测当场抓到：
+                            #     写成 sql == 'MKT' 的话元组会掉到最后那条 db.execute ✗
+                            #     报 TypeError: execute() argument 1 must be str ✓）
+                            mkt_wrote = True
+                            self._save_mkt(db, sql)
+                            if sql[2].pop('_mkt_ok', 0):
+                                mkt_ok.append(sql[2])
+                            continue
                         if sql == 'PICK':
                             # ★★ 材料堆叠（第 54 轮）★★
                             #   武器/装备：永远新建一行（不堆叠 ✓）
@@ -3286,7 +3902,231 @@ class World(object):
                             continue
                         db.execute(sql, params)
             except Exception as e:
-                print('  [save] 落盘失败：%r' % e)
+                # ★ 整批回滚了（含已经写好的交易所事务 ✗）
+                #   → 这一批里所有"标记成功"的都要改口说失败 ✗ 让 tick 把钱退回去 ✓
+                for row in mkt_ok:
+                    self._mkt_mem(False, str(row.pop('_mkt_kind', '') or ''), row,
+                                  reason=repr(e))
+                mkt_ok = []
+                if mkt_wrote:
+                    print('  [save] 交易落盘失败（整批回滚）：%r' % e)
+                else:
+                    print('  [save] 落盘失败：%r' % e)
+            # ★ commit 真的过了 ✗ 现在才敢通知 tick"成了"（方案 §9 ✓）
+            for row in mkt_ok:
+                self._mkt_mem(True, str(row.pop('_mkt_kind', '') or ''), row)
+
+    def _save_mkt(self, db, params):
+        """交易所的一条事务（★ 只有存档线程会进来 ✓ 方案 §9 ✓）
+
+        四种动作：
+          list   上架：INSERT listings → DELETE items
+          buy    成交：UPDATE listings@sold → 保证买家身份 → INSERT trade_log(sid 主键)
+                       → 把物品塞给买家 / 把卖家的钱记进 pending_gold
+          unlist 下架：UPDATE listings@cancelled/expired → 把东西放回卖家背包
+          exp    过期：同上（原样退回 ✓）
+
+        ★★ 为什么整段都在这一个 with 里：
+           方案 v3 §9 要的是"成交 = 一条事务"✗ 中途抛异常整笔回滚 ✓
+           → 不会出现"上架单变已售但东西没给买家"这种半截状态 ✓
+        ★★ trade_log.sid 是主键：同一个 sid 再来一次会撞 UNIQUE ✗ 整笔回滚 ✓
+           这就是幂等的最后一层（方案 v3 §5 ✓）
+        ★★ 失败要回滚【内存里的钱】✗ 而内存只有 tick 线程能碰 ✓
+           → 所以这里只把失败丢进 mkt_failq ✗ tick 下一次就把钱退回去 ✓
+        """
+        # ★★ 自测当场抓到的两个坑（都改在这里 ✗ 别再写回去）★★
+        #   ① 我原来写的是 json_dumps ✗ 而这个函数【根本不存在】✗
+        #      （凭印象写名字 ✗ 和 auth.py 那次 _equipped 一个毛病 ✓）
+        #      → 4 处调用全会 NameError ✗ 被 run_saver 的 except 吞掉 ✓
+        #   ② 参数解错了：队列里那一条【整条就是元组】
+        #        语句 = ('MKT', 'list'|'buy'|'unlist'|'exp', {...})
+        #      → params[0] 是 'MKT' ✗ params[1] 才是动作名 ✓
+        #      我原来写 params[1] 当 row ✗ 于是 isinstance(row, dict) 永远 False
+        #      → 【静默 return】✗ 库里什么都没发生 ✗ 而且一点都不报错 ✓✓
+        #      ★ 教训：静默 return 比抛异常难查一百倍 ✗ 该抛就抛 ✓
+        #   ③ 还有第三个：_mkt_save_list 里的 json.dumps 在【模块级】就没导入过
+        #      → 局部 import 救不了别的函数 ✗ 只能提到文件头 ✓
+        kind = ''
+        row = None
+        if isinstance(params, (tuple, list)):
+            if len(params) >= 3 and str(params[0]) == 'MKT':
+                kind = str(params[1] or '')
+                row = params[2]
+            elif len(params) == 2:
+                kind, row = str(params[0] or ''), params[1]
+        if not isinstance(row, dict):
+            print('[mkt] save_mkt got a bad payload: %r' % (params,))
+            return
+        # ★ 动作名钉在 row 上：后面所有回执都用它 ✗ 不再从别处猜 ✓
+        row['_mkt_kind'] = kind
+        try:
+            if kind == 'list':
+                self._mkt_save_list(db, row)
+                row['lid_tmp'] = int(row.get('lid_tmp') or 0)
+            elif kind == 'buy':
+                self._mkt_save_buy(db, row)
+            elif kind in ('unlist', 'exp'):
+                self._mkt_save_back(db, row, kind)
+                # ★ 幂等：已经不是 'on' 了也算成功（重复点不该报错 ✗ 但钱/货都没动 ✓）
+                row['noop'] = 1 if not row.pop('_did', 0) else 0
+        except _MktRollback as e:
+            # 业务性回滚（东西被买走了 / 物品不在背包 ✗）→ 报给 tick 去退钱 ✓
+            self._mkt_mem(False, kind, row, reason=str(e))
+            return
+        except Exception as e:
+            self._mkt_mem(False, kind, row, reason=repr(e))
+            raise
+        # ★ 走到这里 = with 块会正常 commit ✗ 但 commit 本身还可能失败 ✓
+        #   所以真正的"成功"由 _run_saver 在 commit 之后再说（见那里的 done 通知 ✓）
+        row['_mkt_ok'] = 1
+
+    def _mkt_save_list(self, db, row):
+        seller = int(row.get('seller') or 0)
+        iid = int(row.get('iid') or 0)
+        price = int(row.get('price') or 0)
+        it = row.get('it') or {}
+        # ① 先把上架单开出来（lid 是自增的 ✗ 要拿到手才能进内存 ✓）
+        cur = db.execute(
+            'INSERT INTO listings(seller, item_json, price, ts, expire, state)'
+            ' VALUES(?,?,?,?,?,?)',
+            (seller, json.dumps(it, ensure_ascii=False), price, dbmod.now_ms(),
+             dbmod.now_ms() + int(valuemod.MKT_DAYS) * 86400000, 'on'))
+        lid = int(cur.lastrowid or 0)
+        # ★★ 自测抓到的第 5 个坑：到期时刻必须【回灌】到内存行 ✓
+        #   内存那一行是上架时乐观加进去的 ✗ 那时还没有 ts/expire ✓
+        #   不回灌的话 exp=0 ✗ → 刚上架的东西当场算"已过期"✓✓
+        #     表现：买家一点就说"已过期"✗ 5 秒后清扫还会把它退回来 ✓
+        row['lid'] = lid
+        row['ts'] = dbmod.now_ms() / 1000.0
+        row['exp'] = (dbmod.now_ms() + int(valuemod.MKT_DAYS) * 86400000) / 1000.0
+        # ② 从背包里删掉（★ rowcount=1 才算成功 ✗ 这是"东西还在不在"的唯一判据 ✓）
+        cur2 = db.execute('DELETE FROM items WHERE id=? AND role_id=? AND in_storage=0',
+                          (iid, seller))
+        try:
+            gone = int(cur2.rowcount or 0)
+        except Exception:
+            gone = 0
+        if gone != 1:
+            # 东西已经被别的操作弄走了（卖系统 / 穿上 / 又捡了一次 ✗）
+            #   → 整笔回滚：物品没了就不能挂着卖 ✓ 上架费由 tick 退回去 ✓
+            raise _MktRollback('物品已不在背包（iid=%d）' % iid)
+        row['lid'] = lid
+
+    def _mkt_save_buy(self, db, row):
+        sid = str(row.get('sid') or '')
+        lid = int(row.get('lid') or 0)
+        price = int(row.get('price') or 0)
+        tax = int(row.get('tax') or 0)
+        buyer = int(row.get('buyer') or 0)
+        seller = int(row.get('seller') or 0)
+        it = row.get('it') or {}
+        stack = max(1, int(row.get('stack') or 1))
+        # ① 先占住这一单（state='on' 是条件 ✗ rowcount=0 = 已被别人买走 ✓）
+        cur = db.execute(
+            "UPDATE listings SET state='sold' WHERE lid=? AND seller=? AND state='on'",
+            (lid, seller))
+        try:
+            n = int(cur.rowcount or 0)
+        except Exception:
+            n = 0
+        if n != 1:
+            raise _MktRollback('上架单已被买走（lid=%d）' % lid)
+        # ② 保证这个买家真的存在（roles 里没有就是脏数据 ✗ 回滚 ✓）
+        if not db.execute('SELECT 1 FROM roles WHERE id=?', (buyer,)).fetchone():
+            raise _MktRollback('买家角色不存在（%d）' % buyer)
+        # ③ 流水（sid 主键 ✗ 撞了就整笔回滚 ✓）
+        db.execute(
+            'INSERT INTO trade_log(sid, lid, seller, buyer, price, tax, item_json, ts)'
+            ' VALUES(?,?,?,?,?,?,?,?)',
+            (sid or ('t%d.%d' % (dbmod.now_ms(), lid)), lid, seller, buyer, price, tax,
+             json.dumps(it, ensure_ascii=False), dbmod.now_ms()))
+        # ④ 东西给买家（★ 材料在【买家背包里】合堆 ✗ 装备单开一行 ✓）
+        self._add_item(db, buyer, it, stack, ('sid', sid, 'buyer', buyer))
+        # ⑤ 卖家的钱：在线的话 tick 已经加进内存了 ✗ 这里只补【离线】的 ✓
+        if not int(row.get('seller_online') or 0):
+            #   走 pending_gold ✗ 上线时自动入账 ✓（不绕过上限/黄金转换 ✓ 方案 §3 ✓）
+            db.execute(
+                'INSERT INTO pending_gold(role, amount, why, ts, done)'
+                ' VALUES(?,?,?,?,0)',
+                (seller, mkmod.net_of(price), 'trade_sell', dbmod.now_ms()))
+
+    def _mkt_save_back(self, db, row, kind):
+        """把货架上的东西退回背包（下架 / 过期 / 领取 ✗ 三处共用 ✓）"""
+        lid = int(row.get('lid') or 0)
+        seller = int(row.get('seller') or 0)
+        it = row.get('it') or {}
+        stack = max(1, int(row.get('stack') or 1))
+        state = 'expired' if (kind == 'exp' or int(row.get('expired') or 0)) else 'cancelled'
+        cur = db.execute("UPDATE listings SET state=? WHERE lid=? AND state='on'",
+                         (state, lid))
+        try:
+            n = int(cur.rowcount or 0)
+        except Exception:
+            n = 0
+        if n != 1:
+            # ★ 已经不是 'on' 了（重复下架 / 已经被买走 ✗）
+            #   幂等：什么都不做 ✗ 也不报错 ✓（重复点不该把东西变出两份 ✓）
+            return
+        row['_did'] = 1
+        self._add_item(db, seller, it, stack, ('lid', lid, 'back', seller))
+
+    def _add_item(self, db, role_id, it, stack, tag):
+        """把一件东西放进某个角色的背包（★ 材料合堆 ✗ 装备单开 ✓ 和 _save_pick 同一口径 ✓）
+
+        ★ 为什么要看 slot 而不是 kind：
+          背包里"能堆叠"的只有 slot 为空的东西（材料 / 黄金 ✓）
+          装备（slot=weapon/armor）永远一件一行 ✓（和第 54 轮的堆叠规则一致 ✓）
+        """
+        if not isinstance(it, dict) or not it.get('name'):
+            raise _MktRollback('物品数据坏了（%r）' % (tag,))
+        n = max(1, int(stack or 1))
+        if not it.get('slot'):
+            cur = db.execute(
+                'UPDATE items SET stack = stack + ?'
+                ' WHERE role_id=? AND in_storage=0'
+                "   AND json_extract(item_json,'$.name')=?"
+                "   AND json_extract(item_json,'$.tier')=?"
+                "   AND json_extract(item_json,'$.slot') IS NULL",
+                (n, role_id, it.get('name'), int(it.get('tier') or 0)))
+            try:
+                hit = int(cur.rowcount or 0)
+            except Exception:
+                hit = 0
+            if hit:
+                return
+        db.execute(
+            'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
+            ' VALUES(?,0,-1,?,?,?)',
+            (role_id, n, json.dumps(it, ensure_ascii=False), dbmod.now_ms()))
+
+    def _mkt_mem(self, ok, kind, row, reason=''):
+        """把落库结果告诉 tick 线程（★ 内存只有 tick 能改 ✗ 走队列 ✓）
+
+        ★ 为什么成功和失败走【同一个队列】：
+          它们必须在 tick 里按【落库的先后顺序】处理 ✗
+          分成两个队列的话顺序就乱了 ✓（比如先成功后失败，钱会算错 ✓）
+        ★ 里面装的是那个 row（原地加工过的）✗ 不重新拼一份 ✓
+          因为 tick 需要 lid / it / price / fee 这些原样的字段 ✓
+        """
+        try:
+            d = dict(row)
+            d['done'] = 1 if ok else 0
+            # ★★ 自测抓到的连环坑（第 4 个 ✗ 都长一个样）★★
+            #   原来是 d['kind'] = str(kind) ✗ 而调用处写的是 row.get('kind') ✓
+            #   那个 key 本来【不存在】→ None → str 成 'None' ✗
+            #   → 回执的 kind 变成字符串 'None' ✗ drain 认不出 ✓
+            #   → 走了"未知动作"分支 ✗ 界面显示"操作完成" ✗ 而货架那一行还是负数占位 ✓✓
+            #   ★ 教训：kind 必须【显式传进来】✗ 绝不从 row 里猜 ✓
+            d['kind'] = str(kind)
+            # ★ 回执发给谁：默认是卖家（上架/下架/过期都是他 ✓）
+            #   买入那条由 _mkt_buy 显式写 'reply'（买家 ✗ 卖家优先会取错人 ✓）
+            d['role'] = int(d.get('reply') or d.get('seller') or d.get('buyer') or 0)
+            if not ok:
+                d['msg'] = '操作失败：%s' % (reason or '数据库出错')
+            self.mkt_failq.put(d)
+        except Exception as e:
+            print('[mkt] mem report failed: %r' % (e,))
+
 
     def _save_pick(self, db, params):
         """把捡到的一件东西落库：材料堆叠、装备单开（★ 只有存档线程会进来 ✓）"""

@@ -425,6 +425,39 @@ def armor_of(cfg, role_id):
     return ar, row[0]
 
 
+def market_rows_of(cfg, role_id):
+    """读出这个角色【正在出售】的上架单 → [(lid, seller, price, item_json, ts, expire, stack), ...]
+
+    round304b: 交易所的货架要在内存里（tick 线程不许读库 ✗），
+    所以登录时在【网络线程】把库读出来，交给 tick 只做内存装配（和 weapon_of 同一个套路 ✓）。
+
+    ★ 为什么只读 seller=自己：浏览别人的商品时是"内存里已经有全量"才对的 ✗
+      而现在内存里的全量还没有来源（界面那一轮要补一条"全服货架装载"✓）
+      → 这里先保证【自己的东西上线就能看到/能下架】✗ 不假装有别人的 ✓
+    ★ state='on' 才算货架上的（sold/cancelled/expired 是历史 ✗ 不进内存 ✓）
+    """
+    import json
+    out = []
+    try:
+        with dbmod.db(cfg) as c:
+            rows = c.execute(
+                "SELECT lid, seller, price, item_json, ts, expire FROM listings"
+                " WHERE seller=? AND state='on' ORDER BY lid", (int(role_id),)).fetchall()
+    except Exception:
+        return out
+    for lid, seller, price, js, ts, expire in rows:
+        try:
+            it = json.loads(js)
+        except Exception:
+            continue
+        if not isinstance(it, dict):
+            continue
+        # ★ 上架单只有一件（材料也是一件一件挂的 ✗ 和背包 stack 无关 ✓）
+        out.append((int(lid), int(seller), int(price), js, int(ts or 0),
+                    int(expire or 0), 1))
+    return out
+
+
 def equip_armor(cfg, role_id, item_id):
     """穿上防具（★ 同样【没有等级门槛】✓ 高级防具只是发挥不出来 ✓）"""
     if not item_id:
