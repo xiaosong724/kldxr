@@ -1457,7 +1457,19 @@ class World(object):
                 bool(getattr(self, 'mob_atk_all', True)),
                 tuple(sorted((k, bool(v)) for k, v in (getattr(self, 'mob_atk_of', {}) or {}).items())),
             )
-            if sig != self._tune_sig:
+            # ★★★ 第 278 轮修的真 bug（用户："管理页面的设置不是说了要保存吗，
+            #     为什么你重启服务器后又恢复默认了"）★★★
+            #   病根：self._tune_sig 初值是 None ✗
+            #     启动后第一次检查时 sig(默认值) != None ✗ 成立 ✓
+            #     → 【立刻把默认值保存进数据库】✗✓
+            #     → 如果这次启动没能从库里读回来（读失败/顺序不对 ✓）
+            #       存档就被默认值覆盖了 ✗ 用户的设置就"恢复默认"了 ✓✓
+            #   ★ 修：第一次检查【只记指纹 ✗ 不保存】✓
+            #     这样"没读回来"最坏也只是本次用默认值 ✗ 不会毁掉存档 ✓
+            if self._tune_sig is None:
+                self._tune_sig = sig          # ★ 第一次：只初始化指纹 ✓ 不写库 ✓
+                print('[admin] 管理员设置指纹已初始化（本次不写库 ✓ 避免默认值覆盖存档）')
+            elif sig != self._tune_sig:
                 self._tune_sig = sig
                 self._admin_tune_save()
         except Exception as e:
