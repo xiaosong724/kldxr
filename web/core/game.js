@@ -2185,7 +2185,7 @@ function netClkUpdate(st, localNow, remoteT) {
          给更大的数据量留余量 ✗ 这样缓冲就不用反复变大 ✓ 也就不会反复跳 ✓
        ★ 代价：远程玩家的动作会晚约 60ms 显示 ✗
          但对"看别人在干嘛"完全够用 ✗ 换来的是不瞬移 ✓（用户报的就是瞬移 ✓）*/
-  if (!st) { st = { off: undefined, late: 0, delay: 0.12, n: 0 }; }
+  if (!st) { st = { off: undefined, late: 0, delay: 0.06, n: 0 }; }   /* round281: 改回 60ms 排查（120ms 之后反而更飞 ✗）*/
   if (!remoteT) { return st; }
   /* ★★ 重复 / 过期的包不参与时钟校准（P0-9 实测出来的真 bug ★★）
      服务端是按自己的 tick 重发"当前状态"的：对方站着没动时，
@@ -2849,7 +2849,7 @@ var _ov3 = null;
            于是位置始终连续，代价只是 0.1~0.3 秒的轻微快慢，眼睛看不出来 ✓ */
 function netRenderAt(o, localNow, dt) {
   var oc = o.clk || {};
-  var want = localNow - (oc.off || 0) - (oc.delay || 0.12);   /* round276b: 兜底值 60->120ms ✓ */
+  var want = localNow - (oc.off || 0) - (oc.delay || 0.06);   /* round276b: 兜底值 60->120ms ✓ */
   if (o.rtS === undefined || o.rtLast === undefined) {
     o.rtS = want; o.rtLast = localNow; return want;
   }
@@ -3019,7 +3019,7 @@ function updateMarks() {
 function netUpdate(dt) {
   if (!NET.on) { return; }
   var now = performance.now() / 1000;
-  var srvDelay = (NET.srv && NET.srv.delay) || 0.12;          /* round276b: 同上 ✓ */
+  var srvDelay = (NET.srv && NET.srv.delay) || 0.06;          /* round276b: 同上 ✓ */
   var srvRender = now - (NET.srv && NET.srv.off ? NET.srv.off : 0) - srvDelay;   // ★ 服务器钟里的"该渲染哪一刻"
   for (var uid in NET.others) {
     var o = NET.others[uid];
