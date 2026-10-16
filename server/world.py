@@ -1781,7 +1781,12 @@ class World(object):
                         int((q.role or {}).get('qiMax') or 100),
                         w.get('look') or 'sword', int(w.get('tier') or 0),
                         1 if int(q.hp or 0) <= 0 else 0,
-                        1 if q.role_id == pt['leader'] else 0])
+                        1 if q.role_id == pt['leader'] else 0,
+                           # ★ 第 264 轮（用户：无论队友多远都显示位置）
+                           #   名单里原来没有坐标 ✗ 所以超出视野(100米)就完全看不到队友 ✓
+                           #   加上 x / z ✗ 客户端就能画远处队友的方向和距离 ✓
+                           #   ★ 名单每秒补推一次(PARTY_PUSH_INTERVAL=1) ✗ 所以坐标够新 ✓
+                           round(float(q.x or 0.0), 1), round(float(q.z or 0.0), 1)])
         return out
 
     def _party_push(self, pid):

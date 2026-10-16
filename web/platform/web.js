@@ -1378,7 +1378,12 @@ function ptRender() {
   for (var c = 0; c < LOBBY.players.length; c++) {
     var p = LOBBY.players[c];
     if (kw && String(p.name || '').toLowerCase().indexOf(kw) < 0) { continue; }
-    var canInv = !p.party && (!PARTY.roster || PARTY.roster.length < 3);
+    /* ★ 第 264 轮修的真 bug：这里原来【写死 3】✗
+   队伍上限第 244 轮已经改成 5 了 ✗ 但客户端这个判断没跟着改 ✓
+   → 满 3 人之后邀请按钮就不给用了 ✓（服务器明明允许 5 个 ✓）
+   ★ 现在用服务器发来的上限（'max' ✓ 没给就退回 5 ✓）*/
+  var _pmax = (PARTY && PARTY.max) ? PARTY.max : 5;
+  var canInv = !p.party && (!PARTY.roster || PARTY.roster.length < _pmax);
     rows.push('<div class="ptLine"><b>' + ptEsc(p.name) + '</b>' +
       '<span class="bagTip">Lv' + (p.lv || 1) + '</span>' + ptWeapon(p.look, p.tier) +
       ptBar(p.hp, '#7ee08a') +
