@@ -1608,6 +1608,21 @@ function tabScrollInit() {
 }
 function setTab(name) {
   if (!name) { name = SET_DEF.setTab || 'view'; }
+  /* ★★★ 第 263 轮（用户："别的导航按钮又是正常的，你出现做按钮不行吗"）★★★
+     用户点破了关键：别的导航按钮都正常 ✗ 只有我做的"更多"有偏移 ✓
+     → 说明我不该在外面加一套坐标判定 ✗
+       而应该让它【走和其他按钮完全相同的那条路】✓
+     ★ 做法：给它 data-tab="more"✗ 在这里拦一下 ✗ 翻页 ✓ 然后返回 ✓
+       · 必须在"找面板"之前返回 ✗ 否则会走到"没这个面板 → 退回 view"✓
+       · 原来的坐标兜底已经删掉 ✗ 不然会翻两次 ✓ */
+  if (name === 'more') {
+    var _bar = document.getElementById('setTabs');
+    if (_bar) { _bar.classList.toggle('page2'); }
+    var _m = document.getElementById('tabMore');
+    if (_m) { _m.textContent = (_bar && _bar.classList.contains('page2')) ? '◂ 取消' : '更多 ▸'; }
+    if (window.tkToastTop) { try { tkSyncToastTop(); } catch (e) { } }
+    return;
+  }
   var tabs = document.querySelectorAll('#setTabs .tab');
   for (var i = 0; i < tabs.length; i++) {
     var on = (tabs[i].getAttribute('data-tab') === name);
