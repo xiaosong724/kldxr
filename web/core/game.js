@@ -2082,6 +2082,10 @@ function wsApplyWorld(d) {
            （这次就是漏了这一步 ✗ 结果经验被每帧清零 ✓）*/
       if (typeof d.me.lv === 'number' && d.me.lv > 0) { WSC.role.level = d.me.lv; }
       if (typeof d.me.exp === 'number') { WSC.role.exp = d.me.exp; }
+      /* round294d: gold must be adopted field-wise too. The `me` payload is a
+         partial update (that is the whole point of the round-239 fix), so a new
+         field is silently dropped unless it is listed here. */
+      if (typeof d.me.gold === 'number') { WSC.role.gold = d.me.gold; }
       /* ★★★ 第 230 轮修的真 bug（用户："升级所需经验客户端显示的是不是不会刷新，
              导致经验显示已经够升级了，结果还没有升级"）★★★
          病根：这里只更新了 level 和 exp ✗ 没更新 need ✓
