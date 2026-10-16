@@ -806,6 +806,8 @@ def start_ws(cfg, ready, world_box=None):
         except Exception as _e0:
             print('[mq] 装载魔气配置失败（用默认值继续）：%s' % _e0)
         world = World(cfg)
+        # 第 224 轮：把上次管理员改的开关读回来（要在 tick 起来之前 ✓）
+        _load_admin_tune(world, cfg)
         net = Net(cfg, world)
         if world_box is not None:
             world_box.append(world)
@@ -892,6 +894,50 @@ def lan_ips():
     except Exception:
         pass
     return out
+
+
+
+# ============================================================
+# 第 224 轮（用户）：启动时把管理员改的开关读回来
+#   用户原话：刷怪上限和 PVP、妖兽伤害也是要保存的，
+#             不要重启服务器后也恢复默认了
+#   读法照抄魔气配置那套（dbmod.db(cfg) + meta 表）
+#   存的活由 world._admin_tune_save() 在 tick 里排队做
+#   ★★ 这个函数必须定义在【调用之前】✗
+#      第 215 轮就是因为定义放在文件末尾 ✗ 而调用发生在模块加载时
+#      → NameError → 世界起不来 → 接口 503 ✓✓ 这次放在 main() 前面 ✓
+# ============================================================
+ADMIN_TUNE_KEY = 'admin_tune'
+
+
+def _load_admin_tune(world, cfg):
+    import json as _json
+    try:
+        with dbmod.db(cfg) as _c:
+            _row = _c.execute("SELECT v FROM meta WHERE k=?", (ADMIN_TUNE_KEY,)).fetchone()
+        if not _row or not _row[0]:
+            print('[admin] 没有存过的管理员设置（用默认值）')
+            return False
+        d = _json.loads(_row[0])
+        if d.get('mob_cap'):
+            world.mob_cap = int(d['mob_cap'])
+        for k, v in (d.get('mob_cap_of') or {}).items():
+            world.mob_cap_of[int(k)] = int(v)
+        if 'pvp_all' in d:
+            world.pvp_all = bool(d['pvp_all'])
+        for k, v in (d.get('pvp_of') or {}).items():
+            world.pvp_of[int(k)] = bool(v)
+        if 'mob_atk_all' in d:
+            world.mob_atk_all = bool(d['mob_atk_all'])
+        for k, v in (d.get('mob_atk_of') or {}).items():
+            world.mob_atk_of[int(k)] = bool(v)
+        print('[admin] 已恢复上次的管理员设置：刷怪上限 %s 只 · 全局PVP %s · 妖兽伤害 %s'
+              % (world.mob_cap, '开' if world.pvp_all else '关',
+                 '开' if world.mob_atk_all else '关'))
+        return True
+    except Exception as e:
+        print('[admin] 读取管理员设置失败（用默认值）：%r' % (e,))
+        return False
 
 
 def main():
