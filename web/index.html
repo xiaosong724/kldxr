@@ -142,6 +142,22 @@
  .opt.on{background:#3a5a8a;border-color:#8fc4ff;color:#fff;font-weight:700}
  .opt.on small{color:#cfe4ff}
  #rowDpr,#rowAA,#rowDet,#rowDisp{display:flex;flex-wrap:wrap;gap:7px}
+/* ★ 第 213 轮：加载动画（慢网络下别露半成品 ✓）*/
+#boot{position:fixed;left:0;top:0;right:0;bottom:0;z-index:9999;
+  background:radial-gradient(circle at 50% 42%,#241a10 0%,#140e07 70%);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  color:#f2e8d8;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  transition:opacity .35s;-webkit-user-select:none;user-select:none}
+#boot.gone{opacity:0;pointer-events:none}
+#boot .bt{font-size:19px;font-weight:800;color:#ffd83d;letter-spacing:3px;margin-bottom:22px}
+#boot .bs{display:flex;gap:9px;margin-bottom:16px}
+#boot .bs i{width:11px;height:11px;border-radius:50%;background:#ffd83d;opacity:.35;
+  animation:bootDot 1.05s ease-in-out infinite}
+#boot .bs i:nth-child(2){animation-delay:.18s}
+#boot .bs i:nth-child(3){animation-delay:.36s}
+@keyframes bootDot{0%,100%{opacity:.25;transform:translateY(0)}50%{opacity:1;transform:translateY(-6px)}}
+#boot .bm{font-size:12px;opacity:.6;letter-spacing:1px}
+#boot .bh{font-size:12px;opacity:.75;text-align:center;line-height:1.9;margin-top:6px}
 </style>
 <style>
 /* ---- 登录浮层（独立版新加：自建账号，不再跟 MC 客户端共用登录）---- */
@@ -316,6 +332,22 @@
 </style>
 </head><body>
 <canvas id="cv"></canvas>
+<!-- ★★ 第 213 轮（用户）：云服务器慢的时候，别让玩家看"没加载好的页面" ★★
+     以前：HTML 一到位就露出半个界面（血条是 "— / —"、世界是空的）✗
+     现在：先盖一层加载动画 ✓ 真正能玩了才揭开 ✓
+     ★ 超过 12 秒还没好 → 自己冒出一个"重新载入"按钮 ✗
+       （云服务器网络抖的时候，玩家知道该干嘛 ✓ 不用干等 ✓）-->
+<div id="boot">
+  <div class="bt">末日丧尸 · 组队修仙</div>
+  <div class="bs"><i></i><i></i><i></i></div>
+  <div class="bm" id="bootMsg">正在载入…</div>
+  <div class="bh" id="bootHint" style="display:none">
+    网络好像有点慢<br>
+    <span id="bootReload" style="display:inline-block;margin-top:10px;padding:8px 22px;
+      border-radius:18px;background:#ffd83d;color:#1a1208;font-weight:700;cursor:pointer">
+      重新载入</span>
+  </div>
+</div>
 <div id="top" class="pane"><span class="nm" id="uName">—</span> <span class="realm" id="uRealm"></span><br>
  <span id="uStat">载入中…</span>
  <div id="hpw"><div id="hp"></div><span id="hpTxt">— / —</span></div>

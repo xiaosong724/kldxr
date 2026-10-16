@@ -2851,7 +2851,7 @@ function wsOnMessage(raw) {
   try { m = JSON.parse(raw); } catch (e) { return; }
   var t = m.t, d = m.d || {};
   if (t === 'welcome') { wsWelcome(d); return; }
-  if (t === 'world') { wsApplyWorld(d); return; }
+  if (t === 'world') { window._lastWorldT = Date.now(); wsApplyWorld(d); return; }
   if (t === 'pong') { WSC.rtt = (performance.now() / 1000 - WSC.lastPing) * 1000; return; }
   if (t === 'kick') {
     WSC.on = false; WSC.ready = false;
@@ -3177,6 +3177,70 @@ function bindDead() {
 /* ============================================================
    登录 / 注册（独立版：自建账号，不再跟 MC 客户端共用）
    ============================================================ */
+/* ============================================================================
+   ★★ 第 213 轮（用户）★★
+   ① 加载动画：云服务器慢的时候别让玩家看半成品
+   ② 不同步检测：看门狗发现"服务器数据停了"就自动刷新一次
+   ============================================================================ */
+
+/* 揭开加载动画（能玩了才揭 ✓）*/
+function bootDone() {
+  var b = document.getElementById('boot');
+  if (!b || b._gone) { return; }
+  b._gone = true;
+  b.classList.add('gone');
+  setTimeout(function () { if (b.parentNode) { b.parentNode.removeChild(b); } }, 500);
+}
+
+/* 加载动画里的"重新载入"按钮 + 超时提示 */
+(function bootGuard() {
+  var t0 = Date.now();
+  var iv = setInterval(function () {
+    var b = document.getElementById('boot');
+    if (!b || b._gone) { clearInterval(iv); return; }
+    var s = (Date.now() - t0) / 1000;
+    var m = document.getElementById('bootMsg');
+    if (m) {
+      if (s > 4) { m.textContent = '正在载入资源…（' + Math.floor(s) + ' 秒）'; }
+    }
+    if (s > 12) {
+      var h = document.getElementById('bootHint');
+      if (h) { h.style.display = 'block'; }
+    }
+  }, 1000);
+  document.addEventListener('click', function (e) {
+    if (e.target && e.target.id === 'bootReload') { location.reload(); }
+  });
+})();
+
+/* ★★ ② 不同步看门狗 ★★
+   用户报的现象："看不到别人在移动，其实那个玩家就在身边"
+   怎么可靠地判断（不靠"别人没动"✗ 因为人家可能真站着 ✓）：
+     看【服务器数据还来不来】✗
+       每个世界快照都会刷新 _lastWorldT ✓
+       如果连接是好的（WSC.ready ✓）却 8 秒没收到任何快照
+       → 说明客户端和服务器脱节了 → 刷新一次 ✓
+   刷新有 20 秒防抖（复用断开重连那套 sessionStorage ✓ 不会刷成死循环 ✓）
+   ★ 命令行 / 界面上都能看：window._desyncCount 记录刷新了几次 */
+window._desyncCount = 0;
+window._lastWorldT = Date.now();
+setInterval(function () {
+  if (typeof WSC === 'undefined' || !WSC.ready) { window._lastWorldT = Date.now(); return; }
+  var gap = (Date.now() - window._lastWorldT) / 1000;
+  if (gap > 8) {
+    try {
+      var last = +(sessionStorage.getItem('autoReloadAt') || 0);
+      if (Date.now() - last > 20000) {
+        sessionStorage.setItem('autoReloadAt', String(Date.now()));
+        window._desyncCount++;
+        console.log('[net] 检测到与服务器不同步（' + gap.toFixed(1) + ' 秒没收到世界数据）→ 自动刷新');
+        location.reload();
+      }
+    } catch (e) { }
+    window._lastWorldT = Date.now();
+  }
+}, 2000);
+
 function showLogin(msg) {
   var el = document.getElementById('login');
   if (!el) { return; }
@@ -3186,6 +3250,7 @@ function showLogin(msg) {
   if (n && !n.value) { setTimeout(function () { n.focus(); }, 60); }
 }
 function hideLogin() {
+  bootDone();   /* ★ 第 213 轮：真正进游戏了才揭开加载动画 ✓ */
   var el = document.getElementById('login');
   if (el) { el.classList.remove('show'); }
 }
