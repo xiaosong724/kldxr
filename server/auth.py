@@ -440,6 +440,8 @@ def equip_weapon(cfg, role_id, item_id, role_level):
                 return False, '这件东西坏了'
             if not isinstance(w, dict) or w.get('slot') != 'weapon':
                 return False, '这不是武器'
+            if w.get('broken'):
+                return False, '这件武器已损坏，不能使用'
             # ★★ 第 53 轮：不再拦"等级不够" ★★
             #   用户要求：能装、能看、能打，只是发挥不出最大伤害 ✓
             #   限制伤害那条在 weapons.mastery_of + §7.5 封顶里做 ✓（不在穿的时候拦 ✗）

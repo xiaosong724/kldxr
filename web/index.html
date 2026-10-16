@@ -67,6 +67,19 @@
    backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
    user-select:none;cursor:pointer;z-index:30;
    transition:transform .07s ease,box-shadow .15s ease}
+/* ★★ 第 233 轮（用户要求）：损坏的装备要有明显样式 ★★
+   为什么：挂机回来只看到"少了一件"✗ 分不清是坏了还是丢了 ✓
+   现在坏了的还在背包里 ✓ 格子上红框 + 压暗 + 右上角一个叉 ✓ */
+.slot.broken{
+  position:relative;
+  box-shadow:inset 0 0 0 2px #ff5a4a99, 0 0 8px #ff5a4a44 !important;
+  filter:grayscale(0.75) brightness(0.75)
+}
+.slot.broken::after{
+  content:'✕';position:absolute;right:2px;top:1px;
+  font-size:12px;font-weight:900;color:#ff5a4a;
+  text-shadow:0 1px 2px #000;pointer-events:none
+}
 /* ★★ 第 206 轮：自动战斗视觉提示 ★★ */
 #atk.auto{
   border-color:#6ee08a99 !important;

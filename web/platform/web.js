@@ -669,6 +669,21 @@ function showRole(r) {
      welcome 和 me 两条都会带 need ✓（客户端不要去猜服务器怎么算的 ✗）
    ★ 万一没带（老服务端/单机）就按同一套公式本地兜一个：
      need = (6 + 1.3L) × (10 + 4L + 0.12L²)   —— 方案 §9.1 ✓ */
+/* ★ 第 233 轮（用户："耐久掉了一半"）★
+   格子上的耐久：如果这件就是身上正穿着的那件 ✗
+   就显示【身上那份】（服务器实时推的 ✓）而不是 item_json 里的旧值 ✓
+   ★ 为什么：穿在身上期间服务端把耐久记在 p.wDur / p.aDur ✓
+     item_json 里那份只在穿和脱的那一刻同步 ✓ 所以是旧的 ✓ */
+function itDur(it, id) {
+  var w = (typeof MY_WEAPON !== 'undefined') ? MY_WEAPON : null;
+  /* ★ 闸门提醒过我：MY_ARMOR 这个全局根本不存在 ✗ 只有 MY_WEAPON ✓
+     防具走 BAG.armor（背包加载时一起存下的 ✓）*/
+  var a = (typeof BAG !== 'undefined' && BAG.armor) ? BAG.armor : null;
+  if (w && String(BAG.weaponItemId || '') === String(id || '') && typeof w.dur === 'number') { return w.dur; }
+  if (a && String(BAG.armorItemId || '') === String(id || '') && typeof a.dur === 'number') { return a.dur; }
+  return (typeof it.dur === 'number') ? it.dur : (it.durMax || 0);
+}
+
 function expNeed(lv) {
   var L = Math.max(1, Math.round(lv || 1));
   return Math.round((6 + 1.3 * L) * (10 + 4 * L + 0.12 * L * L));
@@ -2081,9 +2096,9 @@ function wStatHtml(it, dim) {
        · 耐久要能看到：原来防具这段【没写耐久】✗（武器的有 ✓）→ 用户："耐久度是多少看不到"✓
        · 信息"太简单"：把能写的都写上 ✓ 并且说清每条是什么意思 ✓ */
     o2 += ((+it.durMax > 0) ? ('<span>耐久 <s>' +
-        ((typeof it.dur === 'number') ? it.dur : it.durMax) + '</s> / ' + it.durMax +
+        itDur(it, (e && e.id)) + '</s> / ' + it.durMax +
         ' 次挨打' + (function () {
-          var k = ((typeof it.dur === 'number') ? it.dur : it.durMax) / it.durMax;
+          var k = itDur(it, (e && e.id)) / it.durMax;
           return k <= 0.2 ? ' <i style="color:#ff7a6a;font-style:normal">⚠ 快坏了</i>'
                           : (k <= 0.5 ? ' <i style="color:#ffd83d;font-style:normal">磨损过半</i>' : '');
         })() + '（每挨一次 -1，归零就损坏消失）</span>') : '') +
@@ -2134,9 +2149,9 @@ function wStatHtml(it, dim) {
        （用户原话："这些效果也要写到文案里，不然玩家不知道" ✓）
        ★ 机制文案来自服务器（物品数据里的 fx ✓）—— 不在 JS 里再抄一份表 ✗ */
     (it.fx ? '<span style="color:#8ee0ff">特效：' + it.fx.text + '</span>' : '') +
-    ((+it.durMax > 0) ? ('<span>耐久 <s>' + ((typeof it.dur === 'number') ? it.dur : it.durMax) +
+    ((+it.durMax > 0) ? ('<span>耐久 <s>' + itDur(it, (e && e.id)) +
       '</s> / ' + it.durMax + ' 次挥砍' +
-      (function () { var k = ((typeof it.dur === 'number') ? it.dur : it.durMax) / it.durMax;
+      (function () { var k = itDur(it, (e && e.id)) / it.durMax;
         return k <= 0.2 ? ' <i style="color:#ff7a6a;font-style:normal">⚠ 快坏了</i>' : ''; })() +
       '</span>') : '');
 }
@@ -2352,11 +2367,14 @@ function bagRender() {
     var cur = ((BAG.weaponItemId && String(e.id) === String(BAG.weaponItemId)) ||
                (BAG.armorItemId && String(e.id) === String(BAG.armorItemId))) ? ' cur' : '';
     var sel = (BAG.sel && String(BAG.sel) === String(e.id)) ? ' sel' : '';
+    /* ★ 第 233 轮：损坏的装备要有明显样式（挂机回来一眼看得出来 ✓）*/
+    var brk = !!it.broken;
+    if (brk) { cur = ''; }   /* 坏了的显示损坏 ✗ 不显示已装备绿点 ✓ */
     var lowm = isW ? (wMastery(it) < 1) : false;      // 发挥不满 → 黄标（不是锁 ✓）
     var n = (e.stack || 1);
     var bg = 'background:linear-gradient(180deg,' + tierRgba(it.tier || 0, 0.40) + ','
              + tierRgba(it.tier || 0, 0.18) + ')';
-    html += '<div class="slot' + cur + sel + (lowm ? ' lowmastery' : '') + '" style="' + bg + '"' +
+    html += '<div class="slot' + cur + sel + (lowm ? ' lowmastery' : '') +(brk ? ' broken' : '') +  '" style="' + bg + '"' +
       ' data-id="' + e.id + '" data-w="' + (isW ? 1 : 0) + '" data-i="' + i + '"' +
       (lowm ? (' title="建议 ' + (it.reqLevel || 1) + ' 级（发挥 ' +
         Math.round(wMastery(it) * 100) + '%）"') : '') + '>' +
@@ -2447,6 +2465,7 @@ function bagRender() {
         '</b><i> · ' + ((a2.tier || 0) + 1) + ' 阶 · 已装备</i>' +
         /* ★ 第 231 轮（用户要求）：防具穿上后也显示耐久 ✗ 不再只写"已装备"✓
            和武器一个口径 ✓ 耐久从身上那份取（穿在身上时 item_json 里是旧值 ✓）*/
+        (a2.broken ? '<i style="color:#ff5a4a"> · 已损坏</i>' : '') +
         ((+a2.durMax > 0) ? ('<i style="color:#ffd83d"> · 耐久 ' +
           ((typeof a2.dur === 'number') ? a2.dur : a2.durMax) +
           ' / ' + a2.durMax + '</i>') : '') + wStatHtml(a2, true);
@@ -2754,6 +2773,7 @@ function bindBag() {
       var lv6 = (WSC.role && WSC.role.level) || 1;
       box.innerHTML = '<b style="color:' + tierHex(w.tier || 0) + '">' + (w.name || '?') + '</b>' +
         '<i> · ' + ((w.tier || 0) + 1) + ' 阶 · 已装备' +
+        (w.broken ? ' · 已损坏' : '') +
         ((+w.durMax > 0) ? (' · 耐久 ' +
           ((typeof w.dur === 'number') ? w.dur : w.durMax) +
           ' / ' + w.durMax) : '') + '</i>' +
