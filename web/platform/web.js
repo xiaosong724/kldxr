@@ -1124,9 +1124,21 @@ function statRender() {
   if (!el1) { return; }
 
   /* ---- 人物 ---- */
-  /* ★ 升级所需：和服务器 mobs.level_up_need 同一个公式 ✓
-     （core 里没有现成函数 ✗ 直接算 ✓ 不新加依赖 ✗）*/
-  var need = Math.round(60 + 24 * lv + 2.4 * lv * lv);
+  /* ★★★ 第 223 轮修的真 bug（用户问"needExp 是什么问题"时查出来的）★★★
+     这里原来自己写了一套公式： 60 + 24L + 2.4L²
+     而服务器（和客户端上面那个 expNeed）用的是：
+         (6 + 1.3L) × (10 + 4L + 0.12L²)
+     两套差多少（实测）：
+         等级 13 → 真实需要 1884 ✗ 这里显示 778（少了 59%）
+         等级 62 → 真实需要 62290 ✗ 这里显示 10774（少了 83%）
+     → 玩家在角色信息页看到"经验 1780 / 778"
+     → 看起来早就该升级了 ✓✓
+     → ★ 这就是用户之前那个"怎么杀一只就够升级了"的印象来源 ✓
+     ★ 而且注释里写着"和服务器同一个公式"✗ 其实根本不是 ✗
+       （写注释的时候是这么打算的 ✓ 实现的时候写错了 ✓）
+     修：直接用上面那个 expNeed()（已经是正确公式 ✓）
+         服务器的 need 优先 ✗ 没有才本地兜 ✓（和 updExp 的写法保持一致 ✓）*/
+  var need = Math.round((WSC.role && WSC.role.need) || expNeed(lv));
   if (WSC.role && typeof WSC.role.needExp === 'number' && WSC.role.needExp > 0) {
     need = WSC.role.needExp;
   }
