@@ -149,6 +149,7 @@ function purge(name) {
     '    c.execute("DELETE FROM items WHERE role_id=?", (rid,))',
     '    c.execute("DELETE FROM equipment WHERE role_id=?", (rid,))',
     '    c.execute("DELETE FROM pending_gold WHERE role=?", (rid,))',
+    '    c.execute("DELETE FROM pending_gold WHERE role NOT IN (SELECT id FROM roles)")',
     '    c.execute("DELETE FROM roles WHERE id=?", (rid,))',
     '    if acc:',
     '        c.execute("DELETE FROM tokens WHERE account_id=?", (acc,))',
