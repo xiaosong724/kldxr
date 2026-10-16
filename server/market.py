@@ -98,7 +98,24 @@ def price_ok(price):
 
 # ---------------------------------------------------------------- 内存行
 
-def row_of(lid, seller, price, it, ts, expire, stack=1):
+def _int(v, d=0):
+    try:
+        return int(v)
+    except Exception:
+        return d
+
+
+def is_stack(it):
+    """这件东西【能不能按数量卖】（★ 和背包的堆叠规则【同一个判据】✓）
+
+    ★ 判据就是"有没有 slot"（材料/黄金没有 slot ✗ 装备一定有 ✓）
+      —— 这正是 _save_pick / _add_item 用的那一条 ✓
+        三处必须一致 ✗ 不然会出现"背包里堆着、交易所里按件卖"✓
+    """
+    return not (isinstance(it, dict) and it.get('slot'))
+
+
+def row_of(lid, seller, price, it, ts, expire, stack=1, qty=1, iid=0):
     """item_json → 内存行（上架 / 载入时算一次 ✓ 浏览时零成本 ✓）"""
     it = it if isinstance(it, dict) else {}
     try:
@@ -113,11 +130,25 @@ def row_of(lid, seller, price, it, ts, expire, stack=1):
         st = max(1, int(stack or 1))
     except Exception:
         st = 1
+    # ★ 内部标记不进内存里的物品（★ 公开行会把它整份发出去 ✓ 别漏脏字段 ✓）
+    _iid = _int(iid, 0) or _int(it.get('__iid'), 0)
+    _it2 = dict(it)
+    _it2.pop('__iid', None)
+    it = _it2
     return {
         'lid': int(lid), 'seller': int(seller), 'price': int(price),
         'cat': V.cat_of(it), 'tier': tier, 'lv': lv,
         'name': str(it.get('name') or '物品'), 'ts': float(ts), 'exp': float(expire),
         'stack': st, 'it': it,
+        # ★ round304l：还能买几个（★ 卖完就下架 ✓ 买一半还剩一半 ✓）
+        'qty': max(1, _int(qty, 1)),
+        # ★★ round304q：这件东西【原来在背包里的 id】（iid ✓）★★
+        #   为什么必须存下来：一件东西可能挂了好几单 ✗ 名字一模一样 ✓
+        #     "我挂的是哪一件"只能靠 id 认 ✗（自测在"按名字找"上栽了四次 ✓）
+        #   ★ 从哪来：① 上架时直接给 ② 从库重载时从 item_json 里的 __iid 取 ✓
+        #     自测踩到的：服务端发出去是 3786 ✗ 客户端收到 0 ✓
+        #       根因就是"重启/重载那一份没有 iid"→ 覆盖掉了内存里那份 ✓
+        'iid': _iid,
     }
 
 
@@ -260,17 +291,19 @@ def _now():
 
 
 def pub_row(row):
-    """内存行 → 发客户端的紧凑行（★ 不带完整 item_json ✗ 那是买家点开才要的 ✓）
+    """内存行 → 发客户端的行（★ 第 11 格是【完整 item_json】✗ 用户要看词条/耐久 ✓）
 
-    [lid, price, cat, tier, lv, name, seller, 剩余秒, stack, 图标字段]
-    ★ 图标要用的字段放最后一格（客户端 iconOfItem 认的就是这些名字 ✓）
-    ★★ 材料把【名字】放在 look 里 ✗ 这是个刻意的复用（round304c）★★
-      为什么：材料图标是客户端按【名字】查表画出来的（MAT_ICON_BY_NAME ✓）
-        而装备只要 slot/look 就够（武器模型是按 look 画的 ✓）
-        → 如果这里不带名字 ✗ 客户端就得自己再存一份材料图标表 ✓
-          两张表迟早不同步 ✗（方案 §8b 明写"图标必须和背包里一致"✓）
-        → 带过去之后：客户端只做一次查表 ✗ 服务器加新材料也不用改客户端 ✓
-    ★ 单位：第 8 格 left 是【秒】✗ 名字就代表单位 ✓（客户端除 60 得分钟 ✓）
+    [lid, price, cat, tier, lv, name, seller, 剩余秒, stack, 图标字段, 完整物品]
+    ★★ round304g（用户："交易所里物品的图标为什么没有采用原来的"）★★
+      根因就在这一格：第一版【只发了图标三要素】（slot/look/kind/rarity ✓）
+        → 武器图标是按 look + tier 画的 ✗ 少了 base/affixes/dur 那些字段 ✓
+        → 画出来和背包里那把【不是同一个东西】✗ 一眼就能看出不一样 ✓
+      而且没有完整物品 ✗ 玩家在交易所里就【看不到词条 / 耐久 / 数值】✓
+        （用户原话："不然玩家怎么看装备的属性怎么样词条是什么，耐久还有多少"✓）
+      ★ 修法：该发就发 ✗ 一页只有 20 件 ✗ 一件多几百字节完全不算什么 ✓
+        （当初"紧凑"是为了省流量 ✗ 省错了地方 —— 省掉了玩家真正要看的东西 ✓）
+      ★ 图标字段那一格【留着】✗ 列表可能不展开详情也要画图标 ✓
+        真正的画法改成用第 11 格（完整物品）✗ 和背包里【同一个函数同一个输入】✓
     """
     it = row.get('it') or {}
     is_mat = not it.get('slot')
@@ -279,8 +312,14 @@ def pub_row(row):
             'kind': it.get('kind'), 'rarity': it.get('rarity'),
             'broken': 1 if it.get('broken') else 0}
     left = int(max(0, exp_s(row) - _now()))     # ★ 归一化 ✗ 别直接减 ✓
+    # ★ round304l：第 12 格 = 还能买几个（★ 客户端拿它做数量滑条的最大值 ✓）
+    # ★ round304q：第 13 格 = 【原来那件物品的 id】（iid ✓）
+    #   ★ 为什么要它：一件东西可能在交易所挂了好几单 ✗ 名字一模一样 ✓
+    #     "我挂的是哪一单 / 哪一件"只能靠 id 认 ✗（自测在"按名字找"上栽了四次 ✓）
+    #   ★ 老服务端没有这一格 ✗ 客户端要能容忍 undefined ✓
     return [row['lid'], row['price'], row['cat'], row['tier'], row['lv'],
-            row['name'], row['seller'], left, row.get('stack') or 1, icon]
+            row['name'], row['seller'], left, row.get('stack') or 1, icon, it,
+            max(1, _int(row.get('qty'), 1)), _int(row.get('iid'), 0)]
 
 
 def pub_rows(rows):
@@ -292,7 +331,7 @@ def pub_rows(rows):
 def load_rows(rows):
     """数据库行 → 内存行列表（★ 只在网络线程调 ✗ 它读的是已经查出来的数据 ✓）
 
-    rows: [(lid, seller, price, item_json, ts, expire, stack), ...]
+    rows: [(lid, seller, price, item_json, ts, expire, stack, qty), ...]
     """
     import json
     out = []
@@ -301,6 +340,7 @@ def load_rows(rows):
             lid, seller, price, js, ts, expire = (rec[0], rec[1], rec[2],
                                                    rec[3], rec[4], rec[5])
             stack = rec[6] if len(rec) > 6 else 1
+            qty = rec[7] if len(rec) > 7 else 1
         except Exception:
             continue
         try:
@@ -310,7 +350,7 @@ def load_rows(rows):
         if not isinstance(it, dict):
             continue
         try:
-            out.append(row_of(lid, seller, price, it, ts, expire, stack))
+            out.append(row_of(lid, seller, price, it, ts, expire, stack, qty))
         except Exception:
             continue
     return out

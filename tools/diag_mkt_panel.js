@@ -281,6 +281,33 @@ const BUYER = disposableName('MkB');
   const tokB = await reg(BUYER);
   if (!tokS || !tokB) { console.error('no token'); process.exit(1); }
   for (const t of [2, 4]) { await give(SELLER, t); }
+  /* ★ round304l：发一堆【材料】（可堆叠 ✗ 数量滑条要有东西可拖 ✓）
+     ★ 自测踩到：一开始我用了 kind:'material' ✗ 而服务端那时还不认它
+       → 退回成 sword ✗ 12 把剑✗（count 也是同一次加的 ✓）*/
+  await fetch(ORIGIN + '/api/admin/act', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin': at },
+    body: JSON.stringify({ act: 'give', name: SELLER, kind: 'material',
+                           count: 12, pick: 3 }),
+  }).then(x => x.json()).catch(() => null);
+  /* ★ round304i：再给一件【磨损到 30%】的 ✗ 用户要的就是这种能一眼看出来 ✓
+     （管理端新加的 worn= 参数 ✗ 不传就完全不变 ✓）
+     ★ 自测踩到：这一步一度没生效 ✗ 而我只看到"背包里没有磨损装备"✗
+       → 当时服务端还是旧代码（没重启 ✗ worn 根本不认）✓
+       → 现在把它的回包打出来 ✗ 下次一眼就能看出是"没发成"还是"发了但没到背包"✓*/
+  const wornGive = await fetch(ORIGIN + '/api/admin/act', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin': at },
+    body: JSON.stringify({ act: 'give', name: SELLER, kind: 'sword', tier: 4, worn: 0.3 }),
+  }).then(x => x.json()).catch(() => null);
+  console.log('   worn give -> ' + JSON.stringify(wornGive));
+  console.log('   rows right after worn give: ' + rpc([
+    'import sqlite3, json, sys',
+    'c = sqlite3.connect("file:game.db?mode=ro", uri=True)',
+    'r = c.execute("SELECT id FROM roles WHERE name=?", (sys.argv[1],)).fetchone()',
+    'print("  role", r)',
+    'for x in c.execute("SELECT id, stack, item_json FROM items WHERE role_id=? ORDER BY id", (r[0],)):',
+    '    it = json.loads(x[2])',
+    '    print("  id=%s stack=%s name=%s dur=%s/%s" % (x[0], x[1], it.get("name"), it.get("dur"), it.get("durMax")))',
+  ].join(String.fromCharCode(10)), [SELLER]));
 
   /* buyer needs real money: he sells three items to the system BEFORE logging in
      (that credits him in memory on login - selling later can land in pending_gold) */
@@ -303,10 +330,21 @@ const BUYER = disposableName('MkB');
     await A.eval('localStorage.setItem("token",' + JSON.stringify(tokS) + '); location.reload(); return 1;');
     ok(await A.waitReady('seller'), 'the seller is in the world');
 
+    /* ★★ 自测连踩两次：无头测试里要"真的看得见"才行 ✗
+       ① 只 openSet 不切页签 → 显示的是【上一次那一页】✓
+       ② 只切页签不 openSet → 整个设置面板还是 display:none ✗
+          → 格子的 rect 全是 0 ✗ 点哪儿都点不到 ✓（我在这上面浪费了一整轮 ✓）
+       ★ 两步都要 ✗ 写完顺手断言一下"真的可见"✗ 下次就不用猜了 ✓ */
+    await A.clickTab('bag');
     await A.eval('openSet("bag"); bagFetch(bagRender); return 1;');
+    await sleep(700);
+    ok((await A.eval(
+      'var r = document.querySelector(".tabpane[data-pane=bag]").getBoundingClientRect();' +
+      'return r.width > 100 && r.height > 100;')) === true,
+      'the bag pane is really visible (a hidden pane makes every click miss)');
     await sleep(1500);
     const bagN = await A.eval('return (BAG.items || []).length;');
-    ok(bagN === 2, 'the seller bag shows 2 items (got ' + bagN + ')');
+    ok(bagN >= 3, 'the seller bag shows his equipment + his material stack (got ' + bagN + ')');
     const sellBtnState = await A.eval(
       'return JSON.stringify({ mkt: !!document.getElementById("bagMkt"),' +
       ' price: !!document.getElementById("bagMktPrice") });');
@@ -314,9 +352,24 @@ const BUYER = disposableName('MkB');
     ok((await A.eval('return document.getElementById("bagMkt").disabled;')) === true,
       'it starts disabled (nothing selected)');
 
-    /* click the first bag slot with a real mouse */
+    /* ★★ 选一件【满耐久的装备】挂 ✗ 别把"磨损那件"挂掉 ✓
+       （自测踩到：第一个格子恰好是磨损那件 ✗ 一挂走 ✗
+         后面 2b/2c 就再也找不到"磨损装备"可验了 ✓ 而且报的是别的错 ✓）
+       ★ 教训：测试之间会【互相消耗道具】✗ 挑东西要么显式指定 ✗
+         要么就像这里一样把"留给别的用例的条件"写进筛选里 ✓ */
     const p0 = JSON.parse(await A.eval(
-      'var s = document.querySelectorAll("#bagGrid .slot[data-id]")[0];' +
+      'var all = document.querySelectorAll("#bagGrid .slot[data-id]");' +
+      'var s = null;' +
+      'for (var i = 0; i < all.length; i++) {' +
+      '  var id = all[i].getAttribute("data-id");' +
+      '  for (var j = 0; j < (BAG.items || []).length; j++) {' +
+      '    if (String(BAG.items[j].id) !== String(id)) { continue; }' +
+      '    var it = BAG.items[j].item || {};' +
+      '    if (it.slot && (+it.durMax <= 0 || +it.dur >= +it.durMax)) { s = all[i]; }' +
+      '  }' +
+      '  if (s) { break; }' +
+      '}' +
+      'if (!s) { return "MISSING"; }' +
       'var r = s.getBoundingClientRect();' +
       'return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), id: s.getAttribute("data-id") });'));
     console.log('   clicking slot id=' + p0.id);
@@ -452,7 +505,7 @@ const BUYER = disposableName('MkB');
     const catNow = await A.eval('return MKT.cat;');
     ok(catNow === 'material', 'clicking 材料 really switched the category (MKT.cat=' + catNow + ')');
     const rowsMat = await A.eval('return (MKT.rows || []).length;');
-    ok(rowsMat === 0, 'the 材料 filter drops a weapon-only shelf (' + rowsMat + ')');
+    ok(rowsMat >= 1, 'the 材料 filter keeps the material we listed (' + rowsMat + ')');
     console.log('   ' + (await A.clickText('#mktCatRow .mktCat', '武器')));
     await sleep(1400);
     ok((await A.eval('return MKT.cat;')) === 'weapon', 'clicking 武器 switched it back');
@@ -489,8 +542,20 @@ const BUYER = disposableName('MkB');
        display:none 的格子 rect 是 0,0 ✗ 会一路误报到"浮窗没弹出来"✓（自测踩到 ✓）*/
     console.log('   back to bag -> ' + (await A.clickTab('bag')));
     await sleep(1400);
+    /* ★ 1b 这条要挑【武器】✗ 第一个格子可能是材料（材料没有"使用"按钮 ✓）
+       （自测踩到：加了材料之后，这一节开始报"没有 使用 按钮"✓）*/
     const slotPos = await A.eval(
-      'var s = document.querySelectorAll("#bagGrid .slot[data-id]")[0];' +
+      'var all = document.querySelectorAll("#bagGrid .slot[data-id]");' +
+      'var s = null;' +
+      'for (var i = 0; i < all.length; i++) {' +
+      '  var id = all[i].getAttribute("data-id");' +
+      '  for (var j = 0; j < (BAG.items || []).length; j++) {' +
+      '    if (String(BAG.items[j].id) !== String(id)) { continue; }' +
+      '    var it = BAG.items[j].item || {};' +
+      '    if (it.slot === "weapon" || it.slot === "armor") { s = all[i]; }' +
+      '  }' +
+      '  if (s) { break; }' +
+      '}' +
       'if (!s) { return "MISSING"; }' +
       'var r = s.getBoundingClientRect();' +
       'return JSON.stringify({ x: Math.round(r.left + r.width / 2),' +
@@ -586,16 +651,333 @@ const BUYER = disposableName('MkB');
     console.log('   after cancel: ' + afterNo);
     ok(/"tip":"none"/.test(String(afterNo)), 'the tooltip closed after the action');
 
+    /* 批量按钮不在浮窗里（它们和"选中哪件"无关 ✗ 该留在面板上 ✓）*/
+    const batchOutside = await A.eval(
+      'var b = document.getElementById("bagTipBox");' +
+      'return JSON.stringify({ inTip: !!b.querySelector("#bagPick"),' +
+      ' inPanel: !!document.getElementById("bagPick") });');
+    ok(/"inTip":false/.test(String(batchOutside)) && /"inPanel":true/.test(String(batchOutside)),
+       'the batch tools stay on the panel (they are not about the hovered item)');
+
+    /* ====== 2b. 交易所的图标必须和背包里【一模一样】+ 点开看详情 ======
+       ★ 用户报："交易所里物品的图标为什么没有采用原来的"
+         根因是列表里只发了图标三要素 ✗ 现在发了完整物品 ✓
+       ★ 验法：同一个物品 ✗ 背包里画一次、交易所里画一次 ✗ 两个 SVG 字符串要相等 ✓ */
+    console.log('\n== 2b. 交易所图标 & 详情浮窗 ==');
+    /* ★ 先等客户端把背包真的装好 ✗ 自测踩到过：它被一个晚到的旧响应覆盖成 2 件 ✓
+       （客户端那边也加了护栏 ✗ 这里再等一次"数对了"更稳 ✓）*/
+    await A.eval('bagFetch(bagRender); return 1;');
+    for (let i = 0; i < 20; i++) {
+      await sleep(300);
+      const n = await A.eval('return (BAG.items || []).length;');
+      if (n >= 3) { break; }
+    }
+    console.log('   (db rows) ' + rpc([
+      'import sqlite3, json, sys',
+      'c = sqlite3.connect("file:game.db?mode=ro", uri=True)',
+      'r = c.execute("SELECT id FROM roles WHERE name=?", (sys.argv[1],)).fetchone()',
+      'for x in c.execute("SELECT id, stack, item_json FROM items WHERE role_id=? ORDER BY id", (r[0],)):',
+      '    it = json.loads(x[2])',
+      '    print("     id=%s stack=%s %s dur=%s/%s" % (x[0], x[1], it.get("name"), it.get("dur"), it.get("durMax")))',
+    ].join(String.fromCharCode(10)), [SELLER]));
+    const srvBag = await fetch(ORIGIN + '/api/bag', { headers: { 'X-Token': tokS } })
+      .then(function (x) { return x.json(); });
+    console.log('   (server http bag) ' + JSON.stringify((srvBag.items || []).map(function (x) {
+      return x.item.name + '/' + x.item.dur;
+    })));
+    console.log('   (client bag count) ' + await A.eval('return (BAG.items||[]).length;'));
+    console.log('   bag at this point: ' + await A.eval(
+      'var out = [];' +
+      'for (var i = 0; i < (BAG.items || []).length; i++) {' +
+      '  var it = BAG.items[i].item || {};' +
+      '  out.push(it.name + "/" + (it.slot || "mat") + "/" + it.dur);' +
+      '}' +
+      'return JSON.stringify(out);'));
+    const bagSvg = await A.eval(
+      'return (function(){' +
+      '  var i = 0, txt = null, name = null;' +
+      '  for (i = 0; i < (BAG.items || []).length; i++) {' +
+      '    var it = BAG.items[i].item || {};' +
+      '    if (it.slot !== "weapon") { continue; }' +
+      '    if (!(it.durMax > 0) || !(it.dur < it.durMax)) { continue; }' +   /* 就要磨损那件 ✓ */
+      '    name = it.name;' +
+      '    txt = iconOfItem(it);' +
+      '    window.__bagIconIt = it;' +
+      '    window.__bagIconId = BAG.items[i].id;' +
+      '    break;' +
+      '  }' +
+      '  return JSON.stringify({ name: name, svg: txt,' +
+      '    tier: (window.__bagIconIt || {}).tier,' +
+      '    dur: (window.__bagIconIt || {}).dur,' +
+      '    durMax: (window.__bagIconIt || {}).durMax });' +
+      '})();');
+    /* 取"刚挂上去那件"的图标 ✗ 于是先记住它的 item ✗ 等会儿两边都用它 ✓ */
+    const bagIcon = JSON.parse(bagSvg);
+    ok(bagIcon && bagIcon.svg, 'a worn weapon is in the bag (' + bagIcon.name + ')');
+    ok(bagIcon.dur < bagIcon.durMax,
+       'and it really is worn (' + bagIcon.dur + '/' + bagIcon.durMax + ')');
+    const bagIconFull = await A.eval(
+      'var w = window.__bagIconIt || {};' +
+      'return JSON.stringify({ name: w.name, tier: w.tier, look: w.look,' +
+      ' svg: iconOfItem(w) });');
+    const bagSame = JSON.parse(bagIconFull);
+    /* ★★ 自测踩到的：拿【字符串】去比【DOM 序列化】✗
+       字符串里 <rect .../> 自闭合 ✗ outerHTML 会写成 <rect ...></rect> ✓
+       → 明明一模一样也会"不等"✓ 正解是两边都取 DOM 序列化 ✓ */
+    await A.eval(
+      'var w = window.__bagIconIt || {};' +
+      'var d = document.createElement("span");' +
+      'd.innerHTML = iconOfItem(w);' +
+      'window.__bagIconDom = (d.querySelector("svg") || {}).outerHTML || "";' +
+      'return 1;');
+    console.log('   the exact item we compare: ' + bagSame.name + ' (tier ' + bagSame.tier + ')');
+
+    /* 把同一件挂上去 → 交易所那一行的图标必须一样 */
+    await A.clickTab('bag');
+    /* ★★ 自测第二次踩到这里：光切页签还不够 ✗
+       切页签只改 SETCFG.setTab + 各 pane 的 display ✓
+       但【整个设置面板】#setPanel 还是 display:none ✗
+       → 格子的 getBoundingClientRect() 全是 0 ✗ 点哪儿都点不到 ✓
+       ★ 两步都要：先切页签（决定显示哪一页 ✓）再 openSet（真的把它显示出来 ✓）*/
+    await A.eval('openSet("bag"); bagFetch(bagRender); return 1;');
+    await sleep(1200);
+    /* ★ 要 hover【那一件武器】✗ 不能随手抓第一格（自测踩到：抓到的是另一件 ✓）*/
+    const hv = JSON.parse(await A.eval(
+      'var out = null;' +
+      'var slots = document.querySelectorAll("#bagGrid .slot[data-id]");' +
+      'for (var i = 0; i < slots.length; i++) {' +
+      '  var id = slots[i].getAttribute("data-id");' +
+      '  var it = null;' +
+      '  for (var j = 0; j < (BAG.items || []).length; j++) {' +
+      '    if (String(BAG.items[j].id) === String(id)) { it = BAG.items[j].item; }' +
+      '  }' +
+      '  var eq = (BAG.weaponItemId && String(id) === String(BAG.weaponItemId)) ||' +
+      '           (BAG.armorItemId && String(id) === String(BAG.armorItemId));' +
+      '  var onShelf = false;' +
+      '  for (var q = 0; q < (MKT.rows || []).length; q++) {' +
+      '    if (String(MKT.rows[q][12]) === String(id)) { onShelf = true; }' +
+      '  }' +
+      '  if (!it || it.slot !== "weapon" || eq || onShelf) { continue; }' +
+      '  if (!(it.durMax > 0) || !(it.dur < it.durMax)) { continue; }' +
+      '  var r2 = slots[i].getBoundingClientRect();' +
+      '  out = { x: Math.round(r2.left + r2.width / 2),' +
+      '          y: Math.round(r2.top + r2.height / 2), id: id, name: it.name };' +
+      '  break;' +
+      '}' +
+      'return JSON.stringify(out);'));
+    ok(hv && hv.id, 'found a worn, not-yet-listed weapon in the bag: ' + JSON.stringify(hv));
+    /* ★ 挑中的那一件就是 window.__bagIconId（挑的时候顺手记下的 ✓）
+       ★ 教训：别用"对象引用相等"去找它 ✗ 背包每次重拉都会重建对象 ✓
+         （我上一版就是这么写的 ✗ 结果 id 永远是 0 ✓）*/
+    const wornIid = await A.eval('return String(window.__bagIconId || 0);');
+    console.log('   the worn item id: ' + wornIid);
+    ok(/^[0-9]+$/.test(String(wornIid)), 'we know the exact item id we are listing');
+    await A.moveTo(hv.x, hv.y);
+    await sleep(700);
+    const tipItem = await A.eval(
+      'var b = document.getElementById("bagTipBox");' +
+      'var row = b.querySelector("[data-tipfor]");' +
+      'return JSON.stringify({ forId: row ? row.getAttribute("data-tipfor") : null,' +
+      ' head: String(b.textContent).slice(0, 24) });');
+    console.log('   tooltip is for: ' + tipItem);
+    ok(new RegExp('"' + hv.id + '"').test(String(tipItem)),
+       'the tooltip is about the item we are going to list');
+    await A.eval('var i = document.querySelector("#bagTipBox input[data-tipprice]");' +
+                 'if (i) { i.value = "777"; } return 1;');
+    ok((await A.eval('return !!document.querySelector("#bagTipBox [data-tipact=mkt]");')) === true,
+       'the tooltip of a sellable weapon offers 挂交易所');
+    console.log('   ' + (await A.clickText('#bagTipBox [data-tipact=mkt]', '挂交易所')));
+    await sleep(700);
+    ok((await A.eval('return String(document.getElementById("askBody").textContent).indexOf("777") >= 0;')) === true,
+       'the confirm dialog uses the price typed in the tooltip (777)');
+    await A.clickSel('#askYes');
+    await sleep(2800);
+    /* ★ 记住"刚挂上去的是哪个 lid"✗ 后面按它认人（名字会重 ✓）*/
+    /* ★★ 认挂单要用【lid】✗ 不能用名字（同一件东西可能挂了好几单 ✓）
+       自测在这条上栽了四次 ✗ 记下来：凡是"我要认准某一个"✗ 一律用 id/lid ✓ */
+    const listedLid = await A.eval(
+      'var sid = window.__lastAskLid;' +
+      'if (sid) { window.__listedLid = sid; return String(sid); }' +
+      'var best = null;' +
+      'for (var i = 0; i < (MKT.mine || []).length; i++) {' +
+      '  var m = MKT.mine[i];' +
+      '  if (best === null || +m.lid > +best.lid) { best = m; }' +
+      '}' +
+      'window.__listedLid = best ? best.lid : null;' +
+      'return String(best ? best.lid : "NONE");');
+    console.log('   our listing lid: ' + listedLid);
+    ok(/^[0-9]+$/.test(String(listedLid)), 'we know which listing is ours');
+
+    await A.eval('openSet("mkt"); return 1;');
+    await sleep(2600);
+    const exIcons = await A.eval(
+      'var out = [];' +
+      'var rows = document.querySelectorAll("#mktList .mktRow");' +
+      'for (var i = 0; i < rows.length; i++) {' +
+      '  var it = rows[i]._it || {};' +
+      '  var el = rows[i].querySelector(".mktIco svg");' +
+      '  out.push({ name: it.name, tier: it.tier, hasIt: !!rows[i]._it,' +
+      '             iid: it.__iid || 0,' +
+      '             lid: rows[i].getAttribute("data-mktrow"),' +
+      '             iid: it.__iid,' +
+      '             durMax: it.durMax || 0, aff: (it.affixes || []).length,' +
+      '             svg: el ? el.outerHTML : null });' +
+      '}' +
+      'window.__exchIconSvg = "";' +
+      'for (var k = 0; k < rows.length; k++) {' +
+      '  var kt = rows[k]._it || {};' +
+      '  if (Number(kt.__iid) !== Number(window.__listedIid)) { continue; }' +
+      '  var ks = rows[k].querySelector(".mktIco svg");' +
+      '  window.__exchIconSvg = ks ? ks.outerHTML : "";' +
+      '}' +
+      'return JSON.stringify(out);');
+    const exList = JSON.parse(exIcons);
+    console.log('   raw row[12]: ' + await A.eval(
+      'return JSON.stringify((MKT.rows || []).map(function (r) {' +
+      '  return { lid: r[0], name: r[5], len: r.length, qty: r[11], iid: r[12],' +
+      '           elIid: (function () {' +
+      '             var e = document.querySelector(".mktRow[data-mktrow=\'" + r[0] + "\']");' +
+      '             return e && e._it ? e._it.__iid : "NO-EL"; })() };' +
+      '}));'));
+    console.log('   exList: ' + JSON.stringify(exList.map(function (x) {
+      return [x.name, x.lid, x.iid];
+    })) + '  my listedLid=' + listedLid + ' mine=' + await A.eval(
+      'return JSON.stringify((MKT.mine || []).map(function (m) { return [m.lid, m.name, m.state]; }));'));
+    ok(exList.length > 0 && exList[0].hasIt === true,
+       'every market row now carries the full item (' + exList.length + ' rows)');
+    const sameItem = exList.filter(function (x) { return Number(x.iid) === Number(wornIid); });
+    ok(sameItem.length >= 1,
+       'the listed weapon is on the exchange (item id ' + wornIid + ')');
+    if (sameItem.length) {
+      /* ★★ 比法要一样 ✗ 自测在这绕了三圈，记下来别重犯：★★
+         ① 别拿【字符串】比【DOM 序列化】（<rect/> vs <rect></rect> ✓）
+         ② 只比【我们刚挂的那一件】✗ 列表里还有别人挂的（名字都不一样 ✓）
+         ③ 别用"找到第一个不同位置"当判据 ✗ 两个字符串长度相同但内容不同时
+            那个循环会一直走到末尾 ✗ 打印出来看着"完全一样"✓（就是这次 ✓）
+         → 正解：在浏览器里用 === 直接比 ✗ 不同再去找第一个差异 ✓ */
+      const same = await A.eval(
+        'return window.__bagIconDom === window.__exchIconSvg;');
+      ok(same === true,
+         'the exchange icon is IDENTICAL to the bag icon (' + bagSame.name + ')');
+      if (same !== true) {
+        const cmp = await A.eval(
+          'var a = String(window.__bagIconDom || ""), b = String(window.__exchIconSvg || "");' +
+          'var i = 0; while (i < a.length && i < b.length && a.charAt(i) === b.charAt(i)) { i++; }' +
+          'return JSON.stringify({ lenA: a.length, lenB: b.length, same: a === b,' +
+          '   at: i, a: a.slice(Math.max(0, i - 25), i + 45), b: b.slice(Math.max(0, i - 25), i + 45) });');
+        console.log('   cmp: ' + cmp);
+        console.log('   bag tier=' + bagSame.tier + ' exch tier=' + sameItem[0].tier +
+                    ' bagName=' + bagSame.name + ' exchName=' + sameItem[0].name +
+                    ' exchIid=' + sameItem[0].iid + ' wornIid=' + wornIid);
+      }
+      ok(sameItem[0].durMax > 0 || sameItem[0].aff > 0,
+         'and the row carries durability/affix data (' + sameItem[0].durMax + ' / ' +
+         sameItem[0].aff + ' affixes)');
+    }
+
+    /* 点一行 → 弹说明浮窗（用户要求的那件事 ✓）*/
+    const rp = JSON.parse(await A.eval(
+      'var rows = document.querySelectorAll("#mktList .mktRow");' +
+      'var hit = null;' +
+      'for (var i = 0; i < rows.length; i++) {' +
+      '  var it = rows[i]._it || {};' +
+      '  if (String(it.name) !== ' + JSON.stringify(bagSame.name) + ') { continue; }' +
+      '  hit = rows[i]; break;' +
+      '}' +
+      'if (!hit) { return "NOT-FOUND"; }' +
+      'var b = hit.getBoundingClientRect();' +
+      'return JSON.stringify({ x: Math.round(b.left + b.width / 2),' +
+      ' y: Math.round(b.top + b.height / 2) });'));
+    await A.clickAt(rp.x, rp.y);
+    await sleep(700);
+    const tipTxt = await A.eval(
+      'var b = document.getElementById("bagTipBox");' +
+      'return JSON.stringify({ disp: getComputedStyle(b).display,' +
+      ' txt: String(b.textContent),' +
+      ' acts: [].map.call(b.querySelectorAll("[data-tipact]"), function (x) {' +
+      '         return x.getAttribute("data-tipact"); }) });');
+    console.log('   market tooltip: ' + tipTxt);
+    ok(/"disp":"block"/.test(String(tipTxt)), 'clicking a listing opens the detail tooltip');
+    ok(/耐久|减伤|每秒|词条|武器强度/.test(String(tipTxt)),
+       'the tooltip shows the real stats: ' + tipTxt);
+    /* ★★ round304h（用户："耐久的显示有做吗，如果有词条这些能看到吗"）★★
+       这两条必须单独断言 ✗ 因为它们原来【只给防具显示】✗ 武器一件都看不到 ✓
+       （用户一眼就看出来了 ✗ 我的断言当时只写了"有耐久或减伤或每秒"✗ 太松 ✓）*/
+    ok(/耐久/.test(String(tipTxt)),
+       'a WEAPON tooltip shows durability (it used to be armor-only): ' + tipTxt);
+    ok(/词条/.test(String(tipTxt)),
+       'a WEAPON tooltip lists its affixes (also used to be armor-only)');
+    ok(/\/ *[0-9]+ *次挥砍/.test(String(tipTxt)),
+       'durability says what consumes it (挥砍 for weapons, 挨打 for armor)');
+    /* ★★ 自测绕了四圈才看清：那一行【确实画了按钮】✗ 只是它是【禁用的"你自己的"】
+       → 所以没有 data-tipact 属性 ✗ 只数属性的话会以为"没画按钮"✓
+       ★ 教训：验"有没有动作"要看【按钮本身】✗ 别只数带属性的那种 ✓
+       ★ 下面改成找一件【别人的】商品 ✗ 那才该有能点的"购买" ✓ */
+    const ownRow = await A.eval(
+      'var rows = document.querySelectorAll("#mktList .mktRow");' +
+      'for (var i = 0; i < rows.length; i++) {' +
+      '  var it = rows[i]._it || {};' +
+      '  if (String(it.name) !== ' + JSON.stringify(bagSame.name) + ') { continue; }' +
+      '  var bs = rows[i].querySelectorAll("button"); var t = [];' +
+      '  for (var j = 0; j < bs.length; j++) { t.push(bs[j].textContent + (bs[j].disabled ? "(禁用)" : "")); }' +
+      '  return JSON.stringify(t);' +
+      '}' +
+      'return "NO-ROW";');
+    console.log('   buttons on my own row: ' + ownRow);
+    ok(/你自己的/.test(String(ownRow)),
+       'my own listing shows a (disabled) 你自己的 button, not 购买: ' + ownRow);
+    ok(!/data-tipact="use"/.test(String(tipTxt)) && !/卖给系统/.test(String(tipTxt)),
+       'and it does NOT offer the bag actions (使用 / 卖给系统)');
+    /* 切到"我的上架" ✗ 同一件应该给【下架】（没过期 ✓）*/
+    console.log('   ' + (await A.clickSel('#mktTabMine')));
+    await sleep(1600);
+    const rp2 = JSON.parse(await A.eval(
+      'var rows = document.querySelectorAll("#mktList .mktRow");' +
+      'if (!rows.length) { return "EMPTY"; }' +
+      'var b = rows[0].getBoundingClientRect();' +
+      'return JSON.stringify({ x: Math.round(b.left + b.width / 2),' +
+      ' y: Math.round(b.top + b.height / 2) });'));
+    await A.clickAt(rp2.x, rp2.y);
+    await sleep(700);
+    const tipMine = await A.eval(
+      'var b = document.getElementById("bagTipBox");' +
+      'return JSON.stringify({ acts: [].map.call(b.querySelectorAll("[data-tipact]"), function (x) {' +
+      '  return x.getAttribute("data-tipact"); }),' +
+      ' txt: String(b.textContent).slice(0, 40) });');
+    console.log('   my-listings tooltip: ' + tipMine);
+    ok(/unlist|claim/.test(String(tipMine)),
+       'on 我的上架 the same row offers 下架/取回: ' + tipMine);
+
     /* ★★ 浮窗里的【使用】要真能穿上 ✗ 这一步从前的流程是
        "点格子选中 → 再点面板上的使用"✗ 现在一步就够 ✓ 必须验 ✓ */
+    await A.clickTab('bag');
+    /* ★★ 自测第二次踩到这里：光切页签还不够 ✗
+       切页签只改 SETCFG.setTab + 各 pane 的 display ✓
+       但【整个设置面板】#setPanel 还是 display:none ✗
+       → 格子的 getBoundingClientRect() 全是 0 ✗ 点哪儿都点不到 ✓
+       ★ 两步都要：先切页签（决定显示哪一页 ✓）再 openSet（真的把它显示出来 ✓）*/
     await A.eval('openSet("bag"); bagFetch(bagRender); return 1;');
     await sleep(1500);
     const before = await A.eval(
       'return JSON.stringify({ weapon: BAG.weaponItemId || null,' +
       ' items: (BAG.items || []).length });');
     console.log('   before 使用: ' + before);
+    /* ★ 要挑【没穿着的装备】✗ 第一个格子可能是材料或已穿的（自测踩到 ✓）*/
     const sp2 = JSON.parse(await A.eval(
-      'var s2 = document.querySelector("#bagGrid .slot[data-id]");' +
+      'var all = document.querySelectorAll("#bagGrid .slot[data-id]");' +
+      'var s2 = null;' +
+      'for (var i = 0; i < all.length; i++) {' +
+      '  var id = all[i].getAttribute("data-id");' +
+      '  for (var j = 0; j < (BAG.items || []).length; j++) {' +
+      '    if (String(BAG.items[j].id) !== String(id)) { continue; }' +
+      '    var it = BAG.items[j].item || {};' +
+      '    var eq = (BAG.weaponItemId && String(id) === String(BAG.weaponItemId)) ||' +
+      '             (BAG.armorItemId && String(id) === String(BAG.armorItemId));' +
+      '    if ((it.slot === "weapon" || it.slot === "armor") && !eq) { s2 = all[i]; }' +
+      '  }' +
+      '  if (s2) { break; }' +
+      '}' +
+      'if (!s2) { return "NO-SLOT"; }' +
       'var r2 = s2.getBoundingClientRect();' +
       'return JSON.stringify({ x: Math.round(r2.left + r2.width / 2),' +
       ' y: Math.round(r2.top + r2.height / 2) });'));
@@ -623,13 +1005,233 @@ const BUYER = disposableName('MkB');
     console.log('   tooltip first button now: ' + offTxt);
     ok(/脱/.test(String(offTxt)), 'and it turns into 脱下 once equipped (' + offTxt + ')');
 
-    /* 批量按钮不在浮窗里（它们和"选中哪件"无关 ✗ 该留在面板上 ✓）*/
-    const batchOutside = await A.eval(
+    /* ====== 2c. 耐久条：一眼看出谁在卖"没耐久的装备"（用户点名要的）====== */
+    console.log('\n== 2c. durability bar ==');
+    const bars = await A.eval(
+      'var out = [];' +
+      'var rows = document.querySelectorAll("#mktList .mktRow");' +
+      'for (var i = 0; i < rows.length; i++) {' +
+      '  var it = rows[i]._it || {};' +
+      '  var b = rows[i].querySelector(".durbar");' +
+      '  var f = b ? b.querySelector("i") : null;' +
+      '  out.push({ name: it.name, dur: it.dur, durMax: it.durMax,' +
+      '             hasBar: !!b, width: f ? f.style.width : null,' +
+      '             color: f ? f.style.background : null });' +
+      '}' +
+      'return JSON.stringify(out);');
+    const barList = JSON.parse(bars);
+    console.log('   bars: ' + bars);
+    ok(barList.length >= 1 && barList.every(function (x) { return x.hasBar; }),
+       'every listing row draws a durability bar');
+    const wornRow = barList.filter(function (x) { return x.durMax > 0 && x.dur < x.durMax; })[0];
+    ok(!!wornRow, 'the seller really is offering a WORN item (' +
+       (wornRow ? (wornRow.name + ' ' + wornRow.dur + '/' + wornRow.durMax) : 'none') + ')');
+    if (wornRow) {
+      const fullRow = barList.filter(function (x) { return x.durMax > 0 && x.dur >= x.durMax; })[0];
+      ok(parseFloat(wornRow.width) < 60,
+         'its bar is visibly shorter than a full one (' + wornRow.width + ')');
+      ok(!/7ee08a/.test(String(wornRow.color)),
+         'and it is not green any more (' + wornRow.color + ')');
+      if (fullRow) {
+        ok(parseFloat(fullRow.width) >= 99,
+           'a full-durability item still shows a full bar (' + fullRow.width + ')');
+      }
+    }
+    /* 点开那件磨损的 ✗ 说明里要写清"只剩 30%"（用户："能看到吗"✓）*/
+    /* ★ 指定【那一行】打开浮窗 ✗ 别靠坐标点（自测抓到：点到的是另一行 ✓）
+       ★ "点一行能弹出来"前面已经验过了 ✗ 这里要验的是【磨损那件的文案】✓ */
+    const wpOpen = await A.eval(
+      'var rows = document.querySelectorAll("#mktList .mktRow");' +
+      'for (var i = 0; i < rows.length; i++) {' +
+      '  var it = rows[i]._it || {};' +
+      '  if (!(it.durMax > 0) || !(it.dur < it.durMax)) { continue; }' +
+      '  var b = rows[i].getBoundingClientRect();' +
+      '  mktTipShow(rows[i], Math.round(b.left + b.width / 2),' +
+      '             Math.round(b.top + b.height / 2));' +
+      '  return JSON.stringify({ name: it.name, dur: it.dur, durMax: it.durMax });' +
+      '}' +
+      'return "NOT-FOUND";');
+    console.log('   worn row opened: ' + wpOpen);
+    ok(wpOpen !== 'NOT-FOUND', 'found a worn row to inspect');
+    await sleep(500);
+    const wornTip = await A.eval(
       'var b = document.getElementById("bagTipBox");' +
-      'return JSON.stringify({ inTip: !!b.querySelector("#bagPick"),' +
-      ' inPanel: !!document.getElementById("bagPick") });');
-    ok(/"inTip":false/.test(String(batchOutside)) && /"inPanel":true/.test(String(batchOutside)),
-       'the batch tools stay on the panel (they are not about the hovered item)');
+      'var t = String(b.textContent);' +
+      'return JSON.stringify({ txt: t,' +
+      ' saysPct: /只剩 *[0-9]+%/.test(t), saysFull: /满耐久/.test(t),' +
+      ' hasBar: !!b.querySelector(".durbarTick") });');
+    console.log('   worn tooltip: ' + String(wornTip).slice(0, 200));
+    ok(/"saysPct":true/.test(String(wornTip)),
+       'the tooltip says how worn it is ("只剩 N%"), not just two numbers');
+    ok(/"hasBar":true/.test(String(wornTip)), 'and the tooltip draws the bar too');
+
+    /* ====== 2d. 数量滑条：按数量上架 + 部分购买（用户点名要的）====== */
+    console.log('\n== 2d. quantity sliders ==');
+    await A.clickTab('bag');
+    /* ★★ 自测第二次踩到这里：光切页签还不够 ✗
+       切页签只改 SETCFG.setTab + 各 pane 的 display ✓
+       但【整个设置面板】#setPanel 还是 display:none ✗
+       → 格子的 getBoundingClientRect() 全是 0 ✗ 点哪儿都点不到 ✓
+       ★ 两步都要：先切页签（决定显示哪一页 ✓）再 openSet（真的把它显示出来 ✓）*/
+    await A.eval('openSet("bag"); bagFetch(bagRender); return 1;');
+    await sleep(1500);
+    const matInfo = JSON.parse(await A.eval(
+      'for (var i = 0; i < (BAG.items || []).length; i++) {' +
+      '  var rec = BAG.items[i], it = rec.item || {};' +
+      '  if (it.slot) { continue; }' +
+      '  if (parseInt(rec.stack, 10) < 3) { continue; }' +
+      '  window.__matId = rec.id;' +
+      '  var s2 = document.querySelector("#bagGrid .slot[data-id=\\"" + rec.id + "\\"]");' +
+      '  var r2 = s2.getBoundingClientRect();' +
+      '  return JSON.stringify({ id: rec.id, name: it.name, stack: rec.stack,' +
+      '    x: Math.round(r2.left + r2.width / 2), y: Math.round(r2.top + r2.height / 2) });' +
+      '}' +
+      'return "NO-STACK";'));
+    console.log('   material stack: ' + JSON.stringify(matInfo));
+    ok(matInfo && matInfo.id, 'the seller has a stack to list (' + JSON.stringify(matInfo) + ')');
+    /* ★★ 自测第三次栽在"没显示/被盖住"上 ✗
+       这一次是：上一节留下的【交易所浮窗】还开着 ✗ 正好盖在格子上面 ✓
+       → 鼠标动到 (292,200) 其实落在浮窗里 ✗ 格子的 mousemove 根本没触发 ✓
+       → 读到的还是"上一条浮窗的内容"（下架按钮 ✓）✗
+       ★ 教训：测"悬停"之前要先确认【那一点上是它】✗ 并先把挡路的浮窗收掉 ✓
+         （就跟前面那个"什么盖住了页签"的检查一个道理 ✓）*/
+    await A.eval('bagTipHide(); return 1;');
+    await sleep(200);
+    await A.moveTo(matInfo.x, matInfo.y);
+    await sleep(700);
+    const slider = await A.eval(
+      'var b = document.getElementById("bagTipBox");' +
+      'var q = b.querySelector(".qtyRow");' +
+      'var r = b.querySelector(".qtyRange");' +
+      'return JSON.stringify({ hasRow: !!q, max: r ? r.max : null, val: r ? r.value : null });');
+    console.log('   slider: ' + slider);
+    ok(/"hasRow":true/.test(String(slider)),
+       'a stackable item gets a quantity slider in the tooltip');
+    ok(parseInt(JSON.parse(slider).max, 10) === parseInt(matInfo.stack, 10),
+       'the slider max is exactly how many he owns (' + JSON.parse(slider).max +
+       ' vs ' + matInfo.stack + ')');
+    await A.eval('var b = document.getElementById("bagTipBox");' +
+                 'b.querySelector("input[data-tipprice]").value = "20";' +
+                 'var r = b.querySelector(".qtyRange"); r.value = "4";' +
+                 'r.dispatchEvent(new Event("input", { bubbles: true }));' +
+                 'return 1;');
+    await sleep(400);
+    const afterDrag = await A.eval(
+      'var b = document.getElementById("bagTipBox");' +
+      'return JSON.stringify({ num: b.querySelector(".qtyNum").value,' +
+      ' total: String(b.querySelector(".qtyTotal").textContent) });');
+    console.log('   after dragging to 4: ' + afterDrag);
+    ok(/"num":"4"/.test(String(afterDrag)),
+       'dragging the slider syncs the number box (two-way)');
+    ok(/80/.test(String(afterDrag)), 'and it previews the total 20 x 4 = 80: ' + afterDrag);
+    console.log('   ' + (await A.clickText('#bagTipBox [data-tipact=mkt]', '挂交易所')));
+    await sleep(700);
+    const askQty = await A.eval('return String(document.getElementById("askBody").textContent);');
+    ok(/80/.test(String(askQty)) && /4/.test(String(askQty)),
+       'the confirm dialog states quantity and total: ' + String(askQty).slice(0, 90));
+    await A.clickSel('#askYes');
+    await sleep(2800);
+    const matListed = await A.eval(
+      'var out = null;' +
+      'for (var i = 0; i < (MKT.mine || []).length; i++) {' +
+      '  var m = MKT.mine[i];' +
+      '  if (String(m.name) === ' + JSON.stringify(matInfo.name) + ') {' +
+      '    out = { lid: m.lid, price: m.price, state: m.state }; }' +
+      '}' +
+      'return JSON.stringify(out);');
+    console.log('   listed material (before refresh): ' + matListed);
+    /* ★ 真用户上架时【人就在交易所页】✗ 所以这里也真的切过去 ✓
+       （切页签会把 MKT.open 置真 + 重拉货架 ✓ 顺带验一下"切过来能看到刚挂的"✓）
+       ★ 自测踩到：我原来只 openSet("bag") 切了【页面】✗ 没切 MKT.open ✓
+         于是上架成功后客户端【不会自动重拉我的上架】✗ 读到的是旧快照 ✓ */
+    console.log('   ' + (await A.clickTab('mkt')));
+    await A.eval('openSet("mkt"); return 1;');
+    await sleep(2000);
+    const matListed2 = await A.eval(
+      'var newest = null;' +
+      'for (var i = 0; i < (MKT.mine || []).length; i++) {' +
+      '  var m = MKT.mine[i];' +
+      '  if (String(m.name) !== ' + JSON.stringify(matInfo.name) + ') { continue; }' +
+      '  if (newest === null || +m.lid > +newest.lid) { newest = m; }' +
+      '}' +
+      'return JSON.stringify(newest);');
+    console.log('   material listing after refresh: ' + matListed2);
+    ok(/"lid":[0-9]+/.test(String(matListed2)),
+       'the stack went on the shelf and shows up after switching back: ' + matListed2);
+
+    /* 买家那边：数量滑条应该出现（还剩 4 个 ✗ 单价 20 ✓）*/
+    console.log('   switch to buyer tab…');
+    console.log('   ' + (await B.clickTab('mkt')));
+    await sleep(2800);
+    const buySlider = await B.eval(
+      'var rows = document.querySelectorAll("#mktList .mktRow");' +
+      'for (var i = 0; i < rows.length; i++) {' +
+      '  var it = rows[i]._it || {};' +
+      '  if (String(it.name) !== ' + JSON.stringify(matInfo.name) + ') { continue; }' +
+      '  var bb = rows[i].getBoundingClientRect();' +
+      '  mktTipShow(rows[i], Math.round(bb.left + bb.width / 2),' +
+      '             Math.round(bb.top + bb.height / 2));' +
+      '  var q = document.querySelector("#bagTipBox .qtyRow");' +
+      '  var r = document.querySelector("#bagTipBox .qtyRange");' +
+      '  return JSON.stringify({ found: true, hasRow: !!q,' +
+      '    max: r ? r.max : null, val: r ? r.value : null });' +
+      '}' +
+      'return "NOT-ON-SHELF";');
+    console.log('   buyer slider: ' + buySlider);
+    ok(/"hasRow":true/.test(String(buySlider)),
+       'the buyer sees a quantity slider for a stack listing');
+    ok(JSON.parse(buySlider).max === '4', 'its max is what is left on the shelf (4)');
+    ok(JSON.parse(buySlider).val === '1', 'and it defaults to buying 1');
+
+    /* ====== 2e. 交易记录页（用户要的第二个功能）====== */
+    console.log('\n== 2e. trade history page ==');
+    ok((await A.eval('return !!document.getElementById("mktTabLog");')) === true,
+       'there is a 我的记录 tab');
+    console.log('   ' + (await A.clickSel('#mktTabLog')));
+    await sleep(2000);
+    const logState = await A.eval(
+      'return JSON.stringify({ tab: MKT.tab,' +
+      ' listShown: getComputedStyle(document.getElementById("mktList")).display,' +
+      ' logShown: getComputedStyle(document.getElementById("mktLogWrap")).display,' +
+      ' rows: (document.querySelectorAll("#mktLogList .mktRow") || []).length,' +
+      ' hasPrev: !!document.getElementById("mktLogPrev") });');
+    console.log('   log page: ' + logState);
+    ok(/"tab":"log"/.test(String(logState)), 'clicking 我的记录 switches the tab');
+    ok(/"listShown":"none"/.test(String(logState)),
+       'the product list is hidden while the log is shown');
+    ok(/"logShown":"block"/.test(String(logState)), 'the log page is visible');
+    ok(/"rows":0/.test(String(logState)),
+       'no trades yet for this seller, and it says so (' + logState + ')');
+    /* 买家真买走 2 个 ✗ 卖家的记录里就该出现一笔 ✓ */
+    await B.eval(
+      'var rows = document.querySelectorAll("#mktList .mktRow");' +
+      'for (var i = 0; i < rows.length; i++) {' +
+      '  var it = rows[i]._it || {};' +
+      '  if (String(it.name) !== ' + JSON.stringify(matInfo.name) + ') { continue; }' +
+      '  var bb = rows[i].getBoundingClientRect();' +
+      '  mktTipShow(rows[i], Math.round(bb.left + bb.width / 2),' +
+      '             Math.round(bb.top + bb.height / 2));' +
+      '}' +
+      'var b2 = document.getElementById("bagTipBox");' +
+      'var q = b2.querySelector(".qtyRange");' +
+      'if (q) { q.value = "2"; q.dispatchEvent(new Event("input", { bubbles: true })); }' +
+      'return JSON.stringify({ q: q ? q.value : null });');
+    await sleep(500);
+    console.log('   ' + (await B.clickText('#bagTipBox [data-tipact=buy]', '购 买')));
+    await sleep(800);
+    await B.clickSel('#askYes');
+    await sleep(3200);
+    console.log('   ' + (await A.clickSel('#mktLogSell')));
+    await sleep(2000);
+    const logAfter = await A.eval(
+      'return JSON.stringify({ rows: (document.querySelectorAll("#mktLogList .mktRow") || []).length,' +
+      ' txt: String(document.getElementById("mktLogList").textContent).slice(0, 100),' +
+      ' sum: String((document.getElementById("mktLogSum") || {}).textContent || "") });');
+    console.log('   log after the sale: ' + logAfter);
+    ok(/"rows":1/.test(String(logAfter)), 'the sale shows up in the log');
+    ok(/\+/.test(String(logAfter)), 'a sell row shows the money coming in (+N)');
+    ok(/\u00d72|\u00d7 2/.test(String(logAfter)) || /2/.test(String(logAfter)),
+       'and it records that 2 units were sold');
 
     /* ================= 买家：购买 ================= */
     console.log('\n== 3. 买家：在面板里买走它 ==');
@@ -642,6 +1244,7 @@ const BUYER = disposableName('MkB');
     console.log('   buyer gold (from the tick push) = ' + bGold0);
     ok(bGold0 > 1200, 'the buyer really has money (' + bGold0 + ')');
 
+    await B.clickTab('bag');
     await B.eval('openSet("bag"); bagFetch(bagRender); return 1;');
     await sleep(1200);
     console.log('   switch via nav tab -> ' + (await B.clickTab('mkt')));
@@ -703,6 +1306,9 @@ const BUYER = disposableName('MkB');
     ].join('\n'), []);
     console.log('\nleftover test roles: ' + left);
     console.log('FAILED: ' + fails);
-    process.exit(fails ? 1 : 0);
+    /* ★ 别用 process.exit：它不等 stdout 刷完 ✗ 输出会被截断 ✓
+       自测踩到过：明明跑完了 ✗ 日志只出来一半 ✓
+       → 只设退出码 ✗ 让进程自己结束（Node 会等输出排空 ✓）*/
+    process.exitCode = fails ? 1 : 0;
   }
 })();

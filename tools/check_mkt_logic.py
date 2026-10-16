@@ -514,7 +514,17 @@ ok(bool(lp.get('rows')), 'the browse reply arrived')
 ok(len(lp['rows']) == len(W.mkt['by_lid']), 'it shows every live row (%d)'
    % len(lp['rows']))
 r0 = lp['rows'][0]
-ok(isinstance(r0, list) and len(r0) == 10, 'rows are compact arrays of 10 fields')
+#   ★ round304g：从 10 格变成 11 格 —— 第 11 格是【完整 item_json】✓
+#     为什么必须带上：交易所要拿它画和背包【一模一样】的图标 ✗
+#     还要让玩家点开看到词条/耐久/数值 ✓（用户："不然玩家怎么看装备的属性"✓）
+#     ★ 一页只有 20 件 ✗ 一件多几百字节真不算什么 ✓
+#   ★ round304l：12 格了 —— 第 12 格是【还能买几个】（qty ✓ 做数量滑条要用 ✓）
+#   ★ round304q：13 格了 —— 第 13 格是【原物品 id】（iid ✓ 用来精确认人 ✓）
+ok(isinstance(r0, list) and len(r0) == 13,
+   'rows carry 13 fields (item + qty left + original item id)')
+ok(isinstance(r0[10], dict) and r0[10].get('name') == r0[5],
+   'the 11th field really is that item (name matches): %r' % (r0[10].get('name'),))
+ok(len(r0[9]) >= 4, 'the old icon hint (field 10) is still there as a fallback')
 ok(lp.get('gold') == buyer.gold, 'the reply carries the balance')
 ok(lp.get('total') == len(W.mkt['by_lid']), 'total matches the shelf')
 ok(lp.get('page') == 1 and lp.get('pages') == 1, 'paging says page 1 of 1')
@@ -567,6 +577,108 @@ with dbmod.db(cfg) as c:
     l_after = c.execute('SELECT COUNT(*) FROM listings').fetchone()[0]
 ok(n_before == n_after and l_before == l_after, 'browsing changed nothing in the db')
 ok(W.saves.empty(), 'browsing queued no saves either')
+
+print('--- 13. selling a STACK by quantity (round304l) ---')
+#   ★★ 用户："材料有堆叠数量，这个有注意吗" + "拉动数量条选择数量上架" ★★
+#     这一段就是那两条要求的判据 ✓ 一个都不能少 ✓
+sent[:] = []
+#   给卖家一堆材料（碎玻璃 ×20 ✗ 可堆叠 ✓）
+_mat = {'name': '碎玻璃', 'tier': 0, 'kind': 'material', 'rarity': 'common'}
+stack_iid = give_db_item(seller.role_id, _mat, stack=20)
+load_bag(seller)
+seller.gold = 50000
+W._mkt_do(seller, 'mklist', {'iid': stack_iid, 'price': 20, 'qty': 6})
+ok(d_of('listres')['ok'] is True,
+   'listing 6 out of a stack of 20 is accepted: %s' % d_of('listres').get('msg'))
+run_saves()
+tick()
+with dbmod.db(cfg) as c:
+    left = c.execute('SELECT stack FROM items WHERE id=?', (stack_iid,)).fetchone()
+    lrow = c.execute('SELECT lid, price, qty, state FROM listings WHERE seller=?'
+                     " AND state='on' ORDER BY lid DESC", (seller.role_id,)).fetchone()
+ok(left is not None and int(left[0]) == 14,
+   'the bag stack went 20 -> 14 (only the 6 we listed were taken: %s)'
+   % (left[0] if left else None,))
+ok(lrow is not None and int(lrow[2]) == 6,
+   'the listing row says qty=6 (unit price 3): %s' % (tuple(lrow) if lrow else None,))
+sq_lid = int(lrow[0]) if lrow else 0
+ok(int(lrow[1]) == 20, 'the listing stores the UNIT price (20), not the total 120')
+
+#   买家只买 2 个
+buyer.gold = 5000
+g0b = buyer.gold
+sent[:] = []
+W._mkt_do(buyer, 'buyitem', {'lid': sq_lid, 'qty': 2})
+ok(d_of('listres')['ok'] is True, 'buying just 2 of the 6 is accepted: %s'
+   % d_of('listres').get('msg'))
+ok(buyer.gold == g0b - 40, 'the buyer paid unit x qty = 2 x 20 = 40 gold (%d -> %d)'
+   % (g0b, buyer.gold))
+rowsq = [r for r in W.mkt['by_lid'].values() if int(r['lid']) == sq_lid]
+ok(len(rowsq) == 1 and int(rowsq[0]['qty']) == 4,
+   'the shelf row still exists with qty 4 (partial purchase), got %r'
+   % ([r['qty'] for r in rowsq],))
+run_saves()
+tick()
+with dbmod.db(cfg) as c:
+    lq = c.execute('SELECT qty, state FROM listings WHERE lid=?', (sq_lid,)).fetchone()
+    got = c.execute("SELECT stack FROM items WHERE role_id=?"
+                    " AND json_extract(item_json,'$.name')='碎玻璃'", (buyer.role_id,)).fetchone()
+    tl = c.execute('SELECT qty, price FROM trade_log WHERE lid=? ORDER BY ts DESC',
+                   (sq_lid,)).fetchone()
+ok(int(lq[0]) == 4 and lq[1] == 'on',
+   "the db listing is still 'on' with qty=4: %s" % (tuple(lq),))
+ok(got is not None and int(got[0]) == 2, 'the buyer bag got exactly 2 (%s)'
+   % (got[0] if got else None,))
+ok(tl is not None and int(tl[0]) == 2 and int(tl[1]) == 40,
+   'the trade row records qty=2 and the TOTAL price 40: %s' % (tuple(tl),))
+
+#   买家把剩下的 4 个也买走 → 这一单应该下架
+g0b = buyer.gold
+sent[:] = []
+W._mkt_do(buyer, 'buyitem', {'lid': sq_lid, 'qty': 9})
+ok(d_of('listres')['ok'] is False and '只剩' in d_of('listres')['msg'],
+   'asking for more than is left is refused: %s'
+   % (d_of('listres').get('msg'),))
+ok(sq_lid in W.mkt['by_lid'], 'and the listing stays on the shelf')
+ok(buyer.gold == g0b, 'and nothing was charged')
+sent[:] = []
+W._mkt_do(buyer, 'buyitem', {'lid': sq_lid, 'qty': 4})
+run_saves()
+tick()
+with dbmod.db(cfg) as c:
+    lq2 = c.execute('SELECT qty, state FROM listings WHERE lid=?', (sq_lid,)).fetchone()
+    bs = c.execute("SELECT stack FROM items WHERE role_id=?"
+                   " AND json_extract(item_json,'$.name')='碎玻璃'", (buyer.role_id,)).fetchone()
+ok(int(lq2[0]) == 0 and lq2[1] == 'sold',
+   "buying the rest closes the listing (qty=0, state=sold): %s" % (tuple(lq2),))
+ok(sq_lid not in W.mkt['by_lid'], 'and it is off the shelf in memory too')
+ok(bs is not None and int(bs[0]) == 6,
+   'the buyer bag stacks to 6 (2 + 4, one row): %s' % (bs[0] if bs else None,))
+
+#   装备不许按数量卖（它本来就不堆叠 ✓）
+weap_iid = give_db_item(seller.role_id, item('散件剑', tier=3))
+load_bag(seller)
+sent[:] = []
+W._mkt_do(seller, 'mklist', {'iid': weap_iid, 'price': 100, 'qty': 5})
+run_saves()
+tick()
+wq = None
+for r in W.mkt['by_lid'].values():
+    if int(r['seller']) == seller.role_id and r['name'] == '散件剑':
+        wq = int(r['qty'])
+ok(wq == 1, 'a weapon is forced to qty=1 even if the client asks for 5 (got %r)' % (wq,))
+
+#   数量超过自己拥有的 → 拒（不静默截断 ✓）
+load_bag(seller)
+sent[:] = []
+W._mkt_do(seller, 'mklist', {'iid': stack_iid, 'price': 20, 'qty': 99})
+ok(d_of('listres')['ok'] is False and '只有' in d_of('listres')['msg'],
+   'asking to list more than you own is refused: %s' % d_of('listres')['msg'])
+
+print('--- 14. the trade history payload (round304m) ---')
+with dbmod.db(cfg) as c:
+    n_log = c.execute('SELECT COUNT(*) FROM trade_log').fetchone()[0]
+ok(n_log >= 3, 'the trade log has a row per transaction (%d incl. partials)' % n_log)
 
 # ================================================================ 收尾
 W.running = False

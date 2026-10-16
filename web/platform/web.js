@@ -2038,9 +2038,20 @@ function bagFetch(cb) {
     if (cb) { cb(); }
     return;
   }
+  /* ★★★ round304k：晚到的旧响应不许覆盖新的（自测抓到的真竞态）★★★
+     现象：连着拉两次背包 ✗ 第一次的响应【晚一点才回来】✗
+       → 它把第二次（更新的）结果盖掉了 ✓
+       → 表现：明明刚捡/刚被发了东西 ✗ 背包里少一件 ✓
+     ★ 为什么真机会发生：切页签会拉一次、卖完东西又拉一次、服务器推 me 还会再拉 ✓
+       三次请求乱序回来完全可能 ✓（本地快的时候看不出来 ✓）
+     ★ 修法：给每次请求发一个序号 ✗ 回来时不是最新的就【丢掉】✓
+       （和"防连点/防重复提交"是同一套思路 ✗ 这个项目里迟早都要有 ✓）*/
+  BAG._seq = (BAG._seq || 0) + 1;
+  var _mySeq = BAG._seq;
   fetch('/api/bag', { headers: { 'X-Token': bagToken() } })
     .then(function (r) { return r.json(); })
     .then(function (j) {
+      if (_mySeq !== BAG._seq) { if (cb) { cb(); } return; }   /* 过期了 ✗ 丢掉 ✓ */
       if (!j || !j.ok) { BAG.msg = (j && j.error) || '读背包失败'; }
       else {
         BAG.items = j.items || [];
@@ -2977,6 +2988,8 @@ function mktBindOnce() {
   var tMine = document.getElementById('mktTabMine');
   if (tAll) { tAll.onclick = function () { MKT.tab = 'all'; mktAsk(true); }; }
   if (tMine) { tMine.onclick = function () { MKT.tab = 'mine'; mktAsk(false); }; }
+  var tLog = document.getElementById('mktTabLog');
+  if (tLog) { tLog.onclick = function () { MKT.tab = 'log'; MKT.page = 1; mktLogAsk(0); }; }
   /* 分类 / 阶数 / 排序：一组按钮共用一个处理器（★ 取值一律现算 ✓）*/
   var cats = document.querySelectorAll('#mktCatRow .mktCat');
   for (var i = 0; i < cats.length; i++) {
@@ -3044,6 +3057,20 @@ function mktBindOnce() {
   }
   var rf = document.getElementById('mktRefresh');
   if (rf) { rf.onclick = function () { mktAsk(true); }; }
+  /* ★ round304m：记录页那三个筛选 + 翻页（★ 只在第一次画的时候绑 ✓）*/
+  var lgAll = document.getElementById('mktLogAll');
+  if (lgAll && !lgAll._b) {
+    lgAll._b = true;
+    document.getElementById('mktLogAll').onclick = function () { MKTLOG.side = 'all'; mktLogRender(); };
+    document.getElementById('mktLogBuy').onclick = function () { MKTLOG.side = 'buy'; mktLogRender(); };
+    document.getElementById('mktLogSell').onclick = function () { MKTLOG.side = 'sell'; mktLogRender(); };
+    document.getElementById('mktLogPrev').onclick = function () {
+      if (MKTLOG.page > 0) { mktLogAsk(MKTLOG.page - 1); }
+    };
+    document.getElementById('mktLogNext').onclick = function () {
+      if (MKTLOG.page < MKTLOG.pages - 1) { mktLogAsk(MKTLOG.page + 1); }
+    };
+  }
   mktGridBind();
 }
 
@@ -3074,13 +3101,21 @@ function mktAsk(fresh) {
 }
 
 /* 买 / 下架 / 领取：都要问一次确认（★ 都是花真钱或真东西 ✗ 手一滑就没了 ✓）*/
-function mktBuy(lid, name, price) {
+function mktBuy(lid, name, price, qty) {
   if (MKT.busy) { return; }
+  qty = Math.max(1, parseInt(qty, 10) || 1);
+  /* ★ round304o：price 是【单价】✗ 总价 = 单价 × 数量 ✓
+     ★ 全部在客户端只做"显示"✗ 真正的钱由服务端按同一算法规（unit × qty ✓）*/
+  var total = price * qty;
+  var net = total - Math.floor(total * 5 / 100);
   askConfirm({
     title: '确认购买',
-    lines: ['要买下【' + name + '】吗？',
-            '★ 要花 <b style="color:' + GOLD_COL + '">' + fmtGold(price) + '</b> 金币',
-            '<span style="color:#9aa4b2">卖家到手 ' + fmtGold(price - Math.floor(price * 5 / 100)) +
+    lines: ['要买下【' + name + '】' + (qty > 1 ? (' ×<b>' + qty + '</b> 个') : '') + '吗？',
+            '★ ' + (qty > 1
+              ? ('单价 ' + fmtGold(price) + ' × ' + qty + ' = 要花 <b style="color:' +
+                 GOLD_COL + '">' + fmtGold(total) + '</b> 金币')
+              : ('要花 <b style="color:' + GOLD_COL + '">' + fmtGold(total) + '</b> 金币')),
+            '<span style="color:#9aa4b2">卖家到手 ' + fmtGold(net) +
             '（成交税 5% ✗ 方案定稿）</span>'],
     warn: '买下来就进你的背包 ✗ 退不回去',
     ok: '确认购买'
@@ -3090,7 +3125,7 @@ function mktBuy(lid, name, price) {
     MKT.busy = true;
     MKT.msg = '正在买…';
     mktRender();
-    wsSend('buyitem', { lid: lid, sid: mktSid() });
+    wsSend('buyitem', { lid: lid, qty: qty, sid: mktSid() });
   });
 }
 function mktUnlist(lid, expired) {
@@ -3117,6 +3152,9 @@ function mktList() {
   if (!iid) { toast('先在背包里选中一件'); return; }
   var price = priceEl ? String(priceEl.value || '').replace(/[^0-9]/g, '') : '';
   if (!price) { toast('先填一个价格'); return; }
+  /* ★ round304o：数量从浮窗那条滑条来 ✗ 没有就是 1 ✓
+     （存在 BAG.mktQty ✗ 由浮窗的按钮写进去 ✓）*/
+  var qty = Math.max(1, parseInt(BAG.mktQty, 10) || 1);
   if (MKT.busy) { return; }
   var nm = '';
   for (var i = 0; i < (BAG.items || []).length; i++) {
@@ -3124,17 +3162,23 @@ function mktList() {
   }
   askConfirm({
     title: '确认上架',
-    lines: ['要把【' + nm + '】挂到交易所吗？',
-            '★ 价格 <b style="color:' + GOLD_COL + '">' + fmtGold(price) + '</b> 金币',
+    lines: ['要把【' + nm + '】' + (qty > 1 ? (' ×<b>' + qty + '</b> 个') : '') +
+            '挂到交易所吗？',
+            '★ ' + (qty > 1
+              ? ('单价 <b style="color:' + GOLD_COL + '">' + fmtGold(price) + '</b> × ' +
+                 qty + ' = 共 <b style="color:' + GOLD_COL + '">' + fmtGold(+price * qty) +
+                 '</b> 金币')
+              : ('价格 <b style="color:' + GOLD_COL + '">' + fmtGold(price) + '</b> 金币')),
             '<span style="color:#9aa4b2">手续费 1%（最低 1 ✗ 最高 100 ✗ 余额不足 1000 免）</span>'],
-    warn: '上架期间这件东西【不在背包里】✗ 别人可以买走',
+    warn: '上架期间这' + (qty > 1 ? (qty + ' 个') : '件') +
+          '东西【不在背包里】✗ 别人可以买走',
     ok: '确认上架'
   }, function (yes) {
     if (!yes) { return; }
     MKT.busy = true;
     BAG.msg = '正在上架…';
     bagRender();
-    wsSend('mklist', { iid: iid, price: +price, sid: mktSid() });
+    wsSend('mklist', { iid: iid, price: +price, qty: qty, sid: mktSid() });
   });
 }
 
@@ -3154,14 +3198,23 @@ function bagSellSelId() {
   return null;
 }
 
-/* 行 → 图标单元格（★ 复用背包那套 ✗ 一模一样 ✓ 方案 §8b）*/
-function mktIcon(tier, icon) {
+/* 行 → 图标单元格
+   ★★★ round304g（用户："交易所里物品的图标为什么没有采用原来的"）★★★
+     根因：第一版这里是【自己拼了一个假物品】✗（fake = {tier, slot, look, ...} ✓）
+       而武器图标是按 look + tier 画的 ✗ 少了 base/affixes/dur ✓
+       → 画出来和背包里那把【不是同一个东西】✗ 用户一眼就看出不一样 ✓
+     ★ 正解：服务端现在把【完整 item_json】发过来了（pub_row 第 11 格 ✓）
+       直接把那一份喂给 iconOfItem ✗ 和背包里【同一个函数 + 同一个输入】✓
+       → 零新代码 ✗ 而且换武器模型/加新材料自动跟着变 ✓
+     ★ 老的"图标三要素"那格留着当兜底（万一是旧服务端 ✗ 也不至于画不出来 ✓）*/
+function mktIcon(it, tier, icon) {
+  if (it && (it.slot || it.kind)) {
+    return '<span style="color:' + tierHex(it.tier || tier || 0) + '">' +
+      iconOfItem(it) + '</span>';
+  }
   var fake = { tier: tier | 0, slot: (icon || {}).slot || null,
                look: (icon || {}).look || null, kind: (icon || {}).kind || null,
-               name: '', rarity: (icon || {}).rarity || null };
-  /* ★ 材料要先有名字才画得出材质图 ✗ 这里给个兜底：认不出就用 box ✓
-     （iconOfItem 对认不出的材料本来就返回 box ✗ 所以行为一致 ✓）*/
-  fake.name = mktMatName(icon, tier);
+               name: mktMatName(icon, tier), rarity: (icon || {}).rarity || null };
   return '<span style="color:' + tierHex(tier) + '">' + iconOfItem(fake) + '</span>';
 }
 /* 材料名（★ 服务端把材料名放在 icon.look 里 ✗ 详见它 pub_row 的注释 ✓）
@@ -3193,13 +3246,28 @@ function mktRender() {
   if (af) { af.className = MKT.afford ? 'bagB on mktAfford' : 'bagB mktAfford'; }
   var ta = document.getElementById('mktTabAll');
   var tm = document.getElementById('mktTabMine');
+  var tl = document.getElementById('mktTabLog');
   if (ta) { ta.className = (MKT.tab === 'all') ? 'bagB on' : 'bagB'; }
   if (tm) { tm.className = (MKT.tab === 'mine') ? 'bagB on' : 'bagB'; }
+  if (tl) { tl.className = (MKT.tab === 'log') ? 'bagB on' : 'bagB'; }
   var tip = document.getElementById('mktTabTip');
   if (tip) {
     tip.textContent = (MKT.tab === 'mine')
       ? '你自己挂的东西 ✗ 可下架（上架费不退）✓'
-      : '看别人挂的东西 ✗ 点购买就能买走';
+      : ((MKT.tab === 'log')
+          ? '买到的 + 卖掉的都在这 ✗ 一页 20 条 ✓'
+          : '看别人挂的东西 ✗ 点购买就能买走');
+  }
+  /* ★ round304m：记录页和商品列表【互斥显示】✗ 一起由这里管 ✓
+     （两块的分页语义不同 ✗ 不能塞进同一个列表 ✓ 也不能同时显示 ✓）*/
+  var _isLog = (MKT.tab === 'log');
+  var _logWrap = document.getElementById('mktLogWrap');
+  var _listBox = document.getElementById('mktList');
+  if (_logWrap) { _logWrap.style.display = _isLog ? 'block' : 'none'; }
+  if (_listBox) { _listBox.style.display = _isLog ? 'none' : 'grid'; }
+  if (_isLog) {
+    mktLogRender();
+    return;                       /* 记录页不用管商品那套翻页 ✓ */
   }
   /* 翻页行：只有一页就不显示 ✓ */
   var pg = document.getElementById('mktPager');
@@ -3224,6 +3292,33 @@ function mktRender() {
     h += (MKT.tab === 'mine') ? mktMineRow(rows[i]) : mktRow(rows[i]);
   }
   box.innerHTML = h;
+  /* ★★ round304g：把"这一行是哪个物品"挂到元素上 ✗ 浮窗要用 ✓
+     为什么不用 HTML 属性传：完整 item_json 里有引号/中文 ✗ 塞进属性要转义一堆 ✓
+     挂 JS 属性最省事 ✗ 反正每次重画都重新挂 ✓（不存在闭包记旧值的问题 ✓）
+     ★ 顺手把 __seller / __price 清掉 ✗ 它们是给按钮判断用的 ✓
+       留着会跟着 item 一起进 iconOfItem 之类的函数（那边不认这些键 ✓ 但别留脏数据 ✓）*/
+  var els = box.querySelectorAll('.mktRow');
+  for (var j = 0; j < els.length; j++) {
+    var lid = els[j].getAttribute('data-mktrow');
+    var src = null;
+    var list = (MKT.tab === 'mine') ? MKT.mine : MKT.rows;
+    for (var k = 0; k < (list || []).length; k++) {
+      var lid2 = (MKT.tab === 'mine') ? list[k].lid : list[k][0];
+      if (String(lid2) === String(lid)) { src = list[k]; break; }
+    }
+    var it2 = (MKT.tab === 'mine') ? (src && src.it) : (src && src[10]);
+    /* ★ round304q：把"原来那件物品的 id"（第 13 格 iid ✓）也挂在元素上
+       ✗ 用名字认东西会认错（同名多件 ✗ 同一个名字可能挂了好几单 ✓）*/
+    var _iid2 = (MKT.tab === 'mine') ? (it2 && it2.__iid) : (src && src[12]);
+    if (!it2) { continue; }
+    var clean = {};
+    for (var kk in it2) {
+      if (kk !== '__seller' && kk !== '__price') { clean[kk] = it2[kk]; }
+    }
+    clean.__iid = _iid2 || 0;
+    els[j]._it = clean;
+    els[j]._seller = it2.__seller;
+  }
 }
 
 function mktHilite(sel, attr, val) {
@@ -3244,12 +3339,19 @@ function mktRow(r) {
   var long = (mins >= 1440) ? (Math.floor(mins / 1440) + ' 天')
     : (mins >= 60 ? (Math.floor(mins / 60) + ' 小时') : (mins + ' 分'));
   var isMe = (MKT.myRole && String(seller) === String(MKT.myRole));
+  var it = r[10] || null;                 /* ★ 完整物品（服务端第 11 格 ✓）*/
+  if (it) { it.__seller = seller; it.__price = price; }   /* ★ 浮窗里要判"是不是我的"+ 买价 ✓ */
   var sub = '★' + (tier + 1) + ' 阶' + (lv ? (' · Lv' + lv) : '') +
     (stack > 1 ? (' · ×' + stack) : '') + ' · 卖家 ' + (isMe ? '（你自己）' : ('#' + seller));
-  return '<div class="mktRow" style="border-left-color:' + tierHex(tier) + '">' +
+  return '<div class="mktRow" data-mktrow="' + lid + '"' +
+    ' style="border-left-color:' + tierHex(tier) + '">' +
     '<span class="mktIco" style="background:' + tierRgba(tier, 0.18) + '">' +
-      '<span class="mktTier">' + (tier + 1) + '</span>' + mktIcon(tier, icon) +
-      (stack > 1 ? ('<span class="mktCnt">×' + stack + '</span>') : '') + '</span>' +
+      '<span class="mktTier">' + (tier + 1) + '</span>' + mktIcon(it, tier, icon) +
+      (stack > 1 ? ('<span class="mktCnt">×' + stack + '</span>') : '') +
+      /* ★★ round304j（用户："耐久度的进度条显示在图标下方和背包一样"）★★
+         挪到【图标那一格里】✗ 和背包格子上那条【同一个类、同一个位置、同一套色】✓
+         （原来我放在名字那一行 ✗ 用户要的是和背包一致的观感 ✓）*/
+      durBarHTML(it) + '</span>' +
     '<span class="mktMain"><span class="mktName">' + mktEsc(name) + '</span>' +
       '<span class="mktSub">' + sub + '</span></span>' +
     '<span class="mktPrice">' + fmtGold(price) + '<small>剩 ' + long + '</small></span>' +
@@ -3278,12 +3380,12 @@ function mktMineRow(r) {
     ((mins >= 1440) ? (Math.floor(mins / 1440) + ' 天后过期')
                     : (mins >= 60 ? (Math.floor(mins / 60) + ' 小时后过期')
                                   : (mins + ' 分钟后过期')));
+  if (r.it) { r.it.__seller = MKT.myRole; r.it.__price = price; }
   return '<div class="mktRow' + (expired ? ' gone' : '') +
-    '" style="border-left-color:' + tierHex(tier) + '">' +
+    '" data-mktrow="' + lid + '" style="border-left-color:' + tierHex(tier) + '">' +
     '<span class="mktIco" style="background:' + tierRgba(tier, 0.18) + '">' +
       '<span class="mktTier">' + (tier + 1) + '</span>' +
-      mktIcon(tier, { slot: (r.it || {}).slot, look: (r.it || {}).look,
-                      kind: (r.it || {}).kind }) + '</span>' +
+      mktIcon(r.it, tier, null) + durBarHTML(r.it) + '</span>' +
     '<span class="mktMain"><span class="mktName">' + mktEsc(name) + '</span>' +
       '<span class="mktSub">★' + (tier + 1) + ' 阶 · ' + long +
       ' · 到手 ' + fmtGold(net) + '（税 ' + fmtGold(tax) + '）</span></span>' +
@@ -3301,11 +3403,38 @@ function mktEsc(s) {
     .replace(/"/g, '&quot;');
 }
 
+/* 交易所里弹一行的说明（★ 内容走 bagTipHTML ✗ 和背包里一字不差 ✓）
+   ★ 动作按钮由 acts='market' 决定：购买 / 下架 / 取回 ✓
+   ★ 记住"这个浮窗是给哪一行的"（b._for ✓）→ 同一行不重画 ✗ 点第二次收起来 ✓*/
+function mktTipShow(rowEl, x, y) {
+  if (!rowEl || !rowEl._it) { return; }
+  var src = null;
+  var list = (MKT.tab === 'mine') ? MKT.mine : MKT.rows;
+  for (var i = 0; i < (list || []).length; i++) {
+    var lid = (MKT.tab === 'mine') ? list[i].lid : list[i][0];
+    if (String(lid) === String(rowEl.getAttribute('data-mktrow'))) { src = list[i]; break; }
+  }
+  if (!src) { return; }
+  var it = rowEl._it;
+  var lid2 = (MKT.tab === 'mine') ? src.lid : src[0];
+  /* ★ round304o：把"单价 / 还能买几个"也传进去 ✗ 数量滑条要拿它当最大值 ✓
+     （qty 是第 12 格 ✓ 单价是第 2 格 ✓ 两个都从服务端来 ✓ 客户端不自己算 ✓）*/
+  var sinfo = { seller: rowEl._seller,
+                unit: (MKT.tab === 'mine') ? (src.price || 0) : (src[1] || 0),
+                qty: (MKT.tab === 'mine') ? 1 : (src[11] || 1) };
+  var box = document.getElementById('bagTipBox');
+  bagTipShowAt(x, y, bagTipHTML(it, lid2, 'market', sinfo));
+  if (box) { box._for = rowEl; }
+}
+
 /* 列表的点击：事件委托（★ 行是 innerHTML 拼的 ✗ 每行绑一次会漏 ✓）*/
 function mktGridBind() {
   var box = document.getElementById('mktList');
   if (!box || box._b) { return; }
   box._b = true;
+  /* ★ round304g：点一行先弹/收【说明浮窗】✗ 真正的买/下架在浮窗的按钮里 ✓
+     （用户要求："点击商品时应该弹出悬浮窗口展示详细的商品介绍"✓）
+     ★ 那一行上的【购买】按钮还在 ✗ 想快买的人不用绕 ✓ */
   box.onclick = function (e) {
     var el = e.target;
     while (el && el !== box && !el.getAttribute) { el = el.parentNode; }
@@ -3314,14 +3443,65 @@ function mktGridBind() {
     var un = el.getAttribute('data-mktun');
     if (buy) {
       mktBuy(+buy, el.getAttribute('data-mktname') || '物品',
-             +el.getAttribute('data-mktprice') || 0);
+             +el.getAttribute('data-mktprice') || 0, 1);
       return;
     }
     if (un) {
       mktUnlist(+un, el.getAttribute('data-mktexp') === '1');
       return;
     }
+    /* 点在行上（不是按钮）→ 弹说明 */
+    var row = el;
+    while (row && row !== box && !(row.className && String(row.className).indexOf('mktRow') >= 0)) {
+      row = row.parentNode;
+    }
+    if (!row || row === box) { return; }
+    var b = document.getElementById('bagTipBox');
+    if (b && getComputedStyle(b).display !== 'none' && b._for === row) {
+      bagTipHide();                       /* 再点一下 = 收起来 ✓ */
+      return;
+    }
+    mktTipShow(row, e.clientX, e.clientY);
   };
+  /* 鼠标划过也弹一份（★ 不"停住"✗ 用和背包一样的延时关 ✓）*/
+  box.onmousemove = function (e) {
+    var row = e.target;
+    while (row && row !== box && !(row.className && String(row.className).indexOf('mktRow') >= 0)) {
+      row = row.parentNode;
+    }
+    if (!row || row === box) { bagTipHideSoon(120); return; }
+    if (_mktTipHold) { return; }          /* 鼠标在浮窗上 ✗ 别抢 ✓ */
+    var b = document.getElementById('bagTipBox');
+    if (b && b._for === row) { return; }  /* 已经是这一行了 ✗ 别重画（会闪）✓ */
+    mktTipShow(row, e.clientX, e.clientY);
+  };
+  box.onmouseleave = function () { bagTipHideSoon(200); };
+  /* ★ round304n（用户选的"按你推荐的做"）：翻页按钮之外再给一条【滚动到底自动下一页】✓
+     ★ 为什么要它：手机上翻页按钮要"回到底部再点"✗ 滚到尽头自动续上更顺 ✓
+     ★ 防重复：正在翻 or 已经是最后一页就什么都不做 ✓（_mktScrollBusy）*/
+  var pane = document.querySelector('.tabpane[data-pane=mkt]');
+  if (pane && !pane._sb) {
+    pane._sb = true;
+    pane.addEventListener('scroll', function () {
+      if (MKT.tab !== 'all') { return; }            /* 只有商品列表要自动续 ✓ */
+      if (_mktScrollBusy || MKT.page >= MKT.pages) { return; }
+      if (pane.scrollTop + pane.clientHeight < pane.scrollHeight - 40) { return; }
+      _mktScrollBusy = true;
+      MKT.page++;
+      mktAsk(false);
+      setTimeout(function () { _mktScrollBusy = false; }, 600);
+    });
+  }
+  box.addEventListener('touchstart', function (e) {
+    var row = e.target;
+    while (row && row !== box && !(row.className && String(row.className).indexOf('mktRow') >= 0)) {
+      row = row.parentNode;
+    }
+    if (!row || row === box) { return; }
+    var t = (e.touches && e.touches[0]) || e;
+    bagTipStickyOn();
+    mktTipShow(row, t.clientX, t.clientY);
+  }, { passive: true });
 }
 
 /* ============================================================
@@ -3377,6 +3557,101 @@ function mktOnRes(d) {
     MKT.msg = msg || '处理中…';
     mktRender();
   }
+}
+
+/* ============================================================
+   ★★★ round304m（用户："增加一个购买和卖出记录查看，也要写分页"）★★★
+   我的记录：买到的 + 卖掉的（服务端 /api/trades ✗ 只读 + 分页 ✓）
+   · 数据来自 trade_log ✗ 从交易所第 1 步就在写了 ✓（一直没人读而已 ✓）
+   · 一页 20 条 ✗ 服务端算好 pages ✗ 客户端只管翻 ✓
+   · side='sell' 时显示"到手多少"（扣了税 ✓）· side='buy' 时显示"花了多少"✓
+   ============================================================ */
+var MKTLOG = { rows: [], page: 0, pages: 1, total: 0, side: 'all',
+               busy: false, sumBuy: 0, sumSell: 0 };
+
+function mktLogAsk(page) {
+  if (!NET.on || !WSC.ready) { return; }
+  if (MKTLOG.busy) { return; }
+  MKTLOG.busy = true;
+  var tok = bagToken();
+  var p = Math.max(0, parseInt(page, 10) || 0);
+  fetch('/api/trades?page=' + p, { headers: { 'X-Token': tok } })
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      MKTLOG.busy = false;
+      if (!j || !j.ok) { MKT.msg = (j && j.error) || '读记录失败'; mktRender(); return; }
+      MKTLOG.rows = j.rows || [];
+      MKTLOG.page = +j.page || 0;
+      MKTLOG.pages = +j.pages || 1;
+      MKTLOG.total = +j.total || 0;
+      mktLogRender();
+    })
+    .catch(function () { MKTLOG.busy = false; MKT.msg = '读记录失败（网络）'; mktRender(); });
+}
+
+function mktLogRender() {
+  var wrap = document.getElementById('mktLogWrap');
+  var list = document.getElementById('mktLogList');
+  var pager = document.getElementById('mktLogPager');
+  var txt = document.getElementById('mktLogPageTxt');
+  var sum = document.getElementById('mktLogSum');
+  if (!list) { return; }
+  /* 三个筛选按钮的高亮 */
+  var btns = [['mktLogAll', 'all'], ['mktLogBuy', 'buy'], ['mktLogSell', 'sell']];
+  for (var b = 0; b < btns.length; b++) {
+    var el = document.getElementById(btns[b][0]);
+    if (el) { el.className = (MKTLOG.side === btns[b][1]) ? 'bagB on' : 'bagB'; }
+  }
+  var rows = MKTLOG.rows.filter(function (x) {
+    return (MKTLOG.side === 'all') || (x.side === MKTLOG.side);
+  });
+  var sb = 0, ss = 0;
+  for (var i = 0; i < MKTLOG.rows.length; i++) {
+    if (MKTLOG.rows[i].side === 'buy') { sb += (+MKTLOG.rows[i].price || 0); }
+    else { ss += (+MKTLOG.rows[i].net || 0); }
+  }
+  MKTLOG.sumBuy = sb; MKTLOG.sumSell = ss;
+  if (sum) {
+    sum.textContent = '本页：买到 ' + fmtGold(sb) + ' ✗ 卖出到手 ' + fmtGold(ss) +
+      ' · 共 ' + MKTLOG.total + ' 笔';
+  }
+  if (!rows.length) {
+    list.innerHTML = '<div class="mktEmpty">' +
+      (MKTLOG.total ? '这一类还没有记录' : '还没有交易记录 ✗ 去买卖一笔试试') + '</div>';
+  } else {
+    var h = '';
+    for (var j = 0; j < rows.length; j++) { h += mktLogRow(rows[j]); }
+    list.innerHTML = h;
+  }
+  if (pager) { pager.style.display = (MKTLOG.pages > 1) ? 'flex' : 'none'; }
+  if (txt) { txt.textContent = '第 ' + (MKTLOG.page + 1) + ' / ' + MKTLOG.pages + ' 页'; }
+}
+
+function mktLogRow(r) {
+  var sell = (r.side === 'sell');
+  var t = r.tier || 0;
+  var when = '';
+  try {
+    var d = new Date(r.ts || 0);
+    when = (d.getMonth() + 1) + '/' + d.getDate() + ' ' +
+      ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  } catch (e) { when = ''; }
+  var sub = (sell ? '卖给 ' : '从 ') + mktEsc(r.who || '?') + (sell ? '' : ' 买到') +
+    (r.qty > 1 ? (' · ×' + r.qty + '（单价 ' + fmtGold(r.unit) + '）') : '') +
+    ' · ' + when;
+  return '<div class="mktRow" style="border-left-color:' + tierHex(t) + '">' +
+    '<span class="mktIco" style="background:' + tierRgba(t, 0.18) + '">' +
+      '<span class="mktTier">' + (t + 1) + '</span>' +
+      mktIcon(r.icon && r.icon.slot ? { name: r.name, tier: t, slot: r.icon.slot,
+                                        look: r.icon.look, kind: r.icon.kind,
+                                        dur: r.dur, durMax: r.durMax } : null,
+              t, r.icon) + '</span>' +
+    '<span class="mktMain"><span class="mktName">' + mktEsc(r.name) + '</span>' +
+      '<span class="mktSub">' + sub + '</span></span>' +
+    '<span class="mktPrice" style="color:' + (sell ? GOLD_COL : '#ff9d7a') + '">' +
+      (sell ? ('+' + fmtGold(r.net)) : ('-' + fmtGold(r.price))) +
+      '<small>' + (sell ? ('税 ' + fmtGold(r.tax)) : '买入') + '</small></span>' +
+    '</div>';
 }
 
 /* 服务器在 notice 尾巴上带的约定：见到"（背包已更新）"就去重拉背包 ✓
@@ -3460,12 +3735,44 @@ function bagSellBatch() {
   });
 }
 
-function bagTipAt(e, el) {
-  var box = document.getElementById('bagTipBox');
-  if (!box || !el) { return; }
-  var idx = +el.getAttribute('data-i');
-  var it = (BAG.items[idx] || {}).item;
-  if (!it) { return; }
+/* ★★★ round304g（用户："点击商品时应该弹出悬浮窗口展示详细的商品介绍"）★★★
+   把这段说明拆成【两半】✗ 让背包和交易所【共用同一份】✓
+     · bagTipHTML(it, id, acts) → 说明 + 按钮的 HTML
+     · bagTipShowAt(x, y, html)  → 摆位置 + 显示
+   ★ 为什么必须共用：用户在交易所里看到的属性 ✗ 必须和背包里【一字不差】✓
+     抄一份的话 ✗ 以后改数值显示就要改两处 ✓（这个项目被"两套公式"坑过 ✓）*/
+/* ★★★ round304i（用户："把耐久条做出来吧，这样如果有人卖没有耐久的装备一眼可以看出来"）★★★
+   画一条耐久条（★ 和背包格子上那条长得一样 ✗ 颜色规则也同一套 ✓）
+     · 绿 >50% · 黄 >20% · 红 ≤20%
+     · 没耐久的物品（材料）返回空串 ✗ 免得多一条空的 ✓
+   ★ 为什么做成函数：这条东西现在有【四处】要用（背包格子/装备槽/防具槽/交易所 ✓）
+     原来那三处是各写各的 ✗ 加第四处就该收口了 ✓（免得改颜色要改四个地方 ✓）
+   ★ scale 参数：不同地方宽度不一样 ✗ 默认 8 个字符 ✓*/
+function durBarHTML(it, inline) {
+  if (!it || !(+it.durMax > 0)) { return ''; }
+  var d = (typeof it.dur === 'number') ? it.dur : it.durMax;
+  var k = Math.max(0, Math.min(1, d / it.durMax));
+  var col = (k > 0.5) ? '#7ee08a' : (k > 0.2 ? '#ffd83d' : '#ff7a6a');
+  var w = (k * 100).toFixed(1);
+  /* 破损的：条直接变红 ✗ 而且画满（一眼看出"这条命没了"✓）*/
+  if (it.broken) { col = '#ff7a6a'; w = '100'; }
+  if (inline) {
+    /* 说明浮窗里那种：跟着文字走的小条 ✓ */
+    return '<span class="durbarTick"><i style="width:' + w + '%;background:' +
+      col + '"></i></span>';
+  }
+  /* ★ 图标里那种：和背包格子【同一个类名 durbar】✗ 靠 absolute 贴底 ✓ */
+  return '<span class="durbar"><i style="width:' + w + '%;background:' +
+    col + '"></i></span>';
+}
+/* 说明浮窗里那种（★ 就是那条小条 ✗ 跟在"耐久"那行后面 ✓）*/
+function _durBar(it) {
+  var h = durBarHTML(it, true);      /* true = 文字里那种（inline ✓）*/
+  return h ? (' <span style="opacity:.9">' + h + '</span>') : '';
+}
+
+function bagTipHTML(it, id, acts, seller) {
+  if (!it) { return ''; }
   var s = wStatsOf(it);
   var extra = '';
   if (it.slot === 'weapon') {
@@ -3488,23 +3795,58 @@ function bagTipAt(e, el) {
        用户要求：不用补得特别完整，重要的有就行 ✓
        → 只放四样：减伤 / 生命上限 / 词条条数 / 耐久 ✓ */
     var bA = it.base || {};
-    var afA = it.affixes || [];
     extra += '减伤 <b>' + (Math.round((+bA.dr || 0) * 10) / 10) + '</b> 点 · ' +
       '生命上限 <b>+' + Math.round(+bA.hp || 0) + '</b><br>';
-    if (afA.length) {
-      var afTxt = [];
-      for (var ia = 0; ia < afA.length; ia++) { afTxt.push(afA[ia].text || ''); }
-      extra += '<span style="color:#8ee0ff">词条 ' + afA.length + ' 条：' +
-        afTxt.join(' · ') + '</span><br>';
+  }
+  /* ★★★ round304h（用户："耐久的显示有做吗，如果有词条这些能看到吗"）★★★
+     问出来的真相：词条和耐久这两行原来【只写在防具那个分支里】✗
+       → 武器一件都看不到 ✗ 而武器恰恰是最需要看耐久的（每挥一刀 −1 ✓）
+     ★ 为什么以前没人发现：那段代码是"给防具补信息"时写的（第 107 轮 ✓）
+       写的时候只想着防具 ✗ 顺手把"通用"的东西（词条/耐久）也放进去了 ✓
+       —— 于是它变成了"防具专属"✗ 而看武器的人永远看不到 ✓
+     ★ 修法：挪出来 ✗ 放到"只要它是装备就显示"的位置 ✓
+       而且【耐久和词条对武器防具本来就一样】（都是 dur/durMax + affixes ✓）
+       唯一不同的是那行小提示（穿哪个槽 / 挥刀还是挨打 ✓）*/
+  if (it.slot === 'weapon' || it.slot === 'armor') {
+    var afG = it.affixes || [];
+    if (afG.length) {
+      var afGTxt = [];
+      for (var ig = 0; ig < afG.length; ig++) { afGTxt.push(afG[ig].text || ''); }
+      extra += '<span style="color:#8ee0ff">词条 ' + afG.length + ' 条：' +
+        afGTxt.join(' · ') + '</span><br>';
+    } else {
+      extra += '<span style="opacity:.7">这件没有词条</span><br>';
     }
     if (+it.durMax > 0) {
-      var ddA = (typeof it.dur === 'number') ? it.dur : it.durMax;
-      var kA = ddA / it.durMax;
-      extra += '耐久 <b style="color:' + (kA > 0.5 ? '#7ee08a'
-        : (kA > 0.2 ? '#ffd83d' : '#ff7a6a')) + '">' + ddA + '</b> / ' +
-        it.durMax + ' 次挨打<br>';
+      var ddG = (typeof it.dur === 'number') ? it.dur : it.durMax;
+      var kG = Math.max(0, Math.min(1, ddG / it.durMax));
+      /* ★★★ round304i（用户："出售的如果不是满耐久的能看到吗"）★★★
+         能 ✗ 而且要说清楚"满没满"✗ 光给两个数字玩家还得自己算 ✓
+         · 满耐久 → 绿字"满"
+         · 不满   → 黄/红字"78%" + "（用了 22%）"
+         · 已损坏 → 红字（这件基本上就是废的 ✓ 但交易所允许挂着卖 ✓）
+         ★ 数字旁边永远写清楚"是被什么消耗的"（武器挥砍 / 防具挨打 ✓）*/
+      var _full = (ddG >= it.durMax);
+      var _pct = Math.round(kG * 100);
+      var _colG = it.broken ? '#ff7a6a'
+        : (_full ? '#7ee08a' : (kG > 0.5 ? '#ffd83d' : '#ff7a6a'));
+      extra += '耐久 <b style="color:' + _colG + '">' + ddG + '</b> / ' +
+        it.durMax + ' 次' + (it.slot === 'weapon' ? '挥砍' : '挨打') +
+        ' · <b style="color:' + _colG + '">' +
+        (it.broken ? '已损坏 ✗ 不能用了' : (_full ? '满耐久 ✓' : ('只剩 ' + _pct + '%'))) +
+        '</b>' + _durBar(it) + '<br>';
+    } else {
+      extra += '<span style="opacity:.7">这件没有耐久属性</span><br>';
     }
-    extra += '<span style="opacity:.7">穿在武器槽右边那个槽 · 点下面的【使用】穿上</span><br>';
+    extra += '<span style="opacity:.7">' + (it.slot === 'weapon'
+      ? '拿在手上 · 点下面的【使用】装上'
+      : '穿在武器槽右边那个槽 · 点下面的【使用】穿上') + '</span><br>';
+  } else if (!it.slot) {
+    /* ★ round304g：材料也要说清楚（原来只写"材料（以后做合成用）"✓）*/
+    var rar = it.rarity || '';
+    extra += '材料' + (rar ? (' · 稀有度 ' + rar) : '') +
+      (it.kind ? (' · ' + it.kind) : '') + '<br>';
+    extra += '<span style="opacity:.7">可以【卖给系统】换金币 ✗ 也可以【挂交易所】卖给别人 ✓</span><br>';
   }
   /* ★★ 第 55 轮：等级需求 + 发挥度【写进文案】★★
      用户要求："武器等级需求还是没有显示，把它改到文案里吧，以及发挥度"
@@ -3518,60 +3860,137 @@ function bagTipAt(e, el) {
       ? '<i> · 建议 ' + req5 + ' 级（你 ' + lv5 + ' 级）· 发挥 ' + Math.round(m5 * 100) + '%</i>'
       : '<i> · 建议 ' + req5 + ' 级（已达标 · 发挥 100%）</i>';
   }
-  box.innerHTML = '<b style="color:' + tierHex(it.tier || 0) + '">' + (it.name || '?') + '</b>' +
+  /* ★ 背包那条路要把"一堆有几个"传下去 ✗ 数量滑条要用 ✓
+     （交易所有自己的数量信息 ✗ 两边都在 seller 这个参数里 ✓）*/
+  var _seller = seller;
+  if (acts === 'bag' && typeof BAG !== 'undefined' && BAG.items) {
+    for (var _bi = 0; _bi < BAG.items.length; _bi++) {
+      if (String(BAG.items[_bi].id) === String(id)) {
+        _seller = { stack: Math.max(1, parseInt(BAG.items[_bi].stack, 10) || 1) };
+        break;
+      }
+    }
+  }
+  return '<b style="color:' + tierHex(it.tier || 0) + '">' + (it.name || '?') + '</b>' +
     '<i> · ' + ((it.tier || 0) + 1) + ' 阶' + (it.itemLv ? (' · 物品 ' + it.itemLv + ' 级') : '') +
     '</i>' + lvlTxt + '<br>' + extra +
-    /* ★ 第 97 轮：防具也是能穿的 ✗ 原来只有 weapon 显示"点使用穿上"✗
-       其余一律显示"材料（以后做合成用）"✗✓✓
-       —— 用户说的"防具点开就是材料"就是这一行 ✓ */
-    '<i>' + ((it.slot === 'weapon' || it.slot === 'armor')
-      ? '下面的按钮直接就能用（不用先选中 ✓）' : '材料（以后做合成用）') + '</i>' +
-    bagTipBtns(el);                      /* ★ round304f：动作按钮直接画在浮窗里 ✓ */
+    (acts === 'none' ? '' : bagTipBtnsHTML(it, id, acts, _seller));
+}
+
+/* 摆位置 + 显示（★ 坐标是视口坐标 ✗ 和 fixed 定位配套 ✓）*/
+function bagTipShowAt(x, y, html) {
+  var box = document.getElementById('bagTipBox');
+  if (!box) { return; }
+  box.innerHTML = html;
   box.style.display = 'block';
   /* ★★ round304f：定位要【避开鼠标】✗ 因为鼠标现在要能移进来点按钮 ✓
      · 先按"鼠标右侧 14px"摆 ✗ 摆不下就翻到左边 ✓
-     · 高度也要按实际算（现在里面有按钮 ✗ 比以前高 ✓）*/
+     · 高度按实际算（里面有按钮 ✗ 比以前高 ✓）*/
   var bw = box.offsetWidth || 240, bh = box.offsetHeight || 160;
-  var x = e.clientX + 14;
-  if (x + bw > window.innerWidth - 6) { x = Math.max(6, e.clientX - bw - 14); }
-  var y = e.clientY + 12;
-  if (y + bh > window.innerHeight - 6) { y = Math.max(6, window.innerHeight - bh - 6); }
-  box.style.left = Math.round(x) + 'px';
-  box.style.top = Math.round(y) + 'px';
+  var px = x + 14;
+  if (px + bw > window.innerWidth - 6) { px = Math.max(6, x - bw - 14); }
+  var py = y + 12;
+  if (py + bh > window.innerHeight - 6) { py = Math.max(6, window.innerHeight - bh - 6); }
+  box.style.left = Math.round(px) + 'px';
+  box.style.top = Math.round(py) + 'px';
 }
 
-/* ★★★ round304f（用户："我不是说放到悬浮框里面吗，这个是没有办法做到吗"）★★★
-   把动作按钮画进浮窗 ✗ 这一步就是用户要的 ✓
-   ★ 为什么能做了（原来我说做不到的三个理由，逐个解决 ✓）：
-     ① 浮窗 pointer-events:none → 改成 auto（CSS ✓ 已经改了）
-     ② 鼠标离开格子就关 → 加【延时关】+ 鼠标进浮窗就不关（下面 _mktTipHold ✓）
-     ③ 手机上没 hover → 改成【点一下格子就弹出来停住】✗ 再点按钮 ✓
-   ★ 按钮元素是【每次重画】的 ✗ 所以 onclick 直接挂 ✗ 不存在闭包记住旧 id 的问题 ✓
-     （round301 那个"闭包记住 null"的坑 ✗ 在这里天然不成立 ✓）
-   ★ 材料只有"卖给系统"（穿不上 ✗ 也别给"使用"✓）
-   ★ 浮窗里的按钮点了要【阻止冒泡】✗ 不然 document 那个捕获监听会把窗关掉 ✓*/
-function bagTipBtns(el) {
+/* 背包格子的浮窗（★ 只是"从格子里取物品"✗ 说明本身在 bagTipHTML ✓）*/
+function bagTipAt(e, el) {
   var idx = +el.getAttribute('data-i');
   var rec = BAG.items[idx] || {};
-  var it = rec.item || {};
-  var id = rec.id;
+  if (!rec.item) { return; }
+  bagTipShowAt(e.clientX, e.clientY, bagTipHTML(rec.item, rec.id, 'bag'));
+}
+
+
+/* ★★★ round304o（用户："拉动数量条选择数量上架 / 购买时也是一样"）★★★
+   一条数量滑条（★ 上架和购买共用同一段 HTML ✗ 参数不同而已 ✓）
+     · max = 最多能选几个（上架 = 你那一堆有几个 ✗ 购买 = 货架上还剩几个 ✓）
+     · val = 默认值（上架 = 全挂 ✓ 购买 = 买 1 个 ✓ —— 买一个是最常见的 ✓）
+     · unit = 单价（拖动时实时算总价 ✗ 玩家最需要这个数 ✓）
+   ★ 为什么用 range：手机上是原生控件 ✗ 好拖 ✗ 不用自己写触摸逻辑 ✓
+   ★ 数字框也留着（range 拖不准的时候可以直接填 ✓ 两边【双向同步】✓）*/
+/* 这件东西能不能按数量卖（★ 判据必须和服务端 market.is_stack 一致 ✓）
+   · 有 slot 的（武器/防具）→ 不能堆叠 ✗ 只能 1 件 ✓
+   · 没 slot 的（材料/黄金）→ 能 ✓
+   ★ 为什么不在客户端"猜"：判据只有一条（有没有 slot ✓）✗
+     两端写的是同一句 ✗ 不存在两套规则对不上的问题 ✓ */
+function isStackItem(it) {
+  return !(it && it.slot);
+}
+
+function qtyHTML(max, val, unit) {
+  max = Math.max(1, parseInt(max, 10) || 1);
+  val = Math.max(1, Math.min(max, parseInt(val, 10) || 1));
+  var h = '<div class="qtyRow" data-qtymax="' + max + '" data-qtyunit="' + unit + '">' +
+    '<span class="qtyLab">数量</span>' +
+    '<input type="range" class="qtyRange" min="1" max="' + max + '" value="' + val + '">' +
+    '<input type="number" class="mktInput qtyNum" min="1" max="' + max + '" value="' + val + '">' +
+    '<span class="qtyTotal"></span></div>';
+  return h;
+}
+
+/* 浮窗里那排按钮的 HTML（★ 两处共用 ✗ acts 决定画哪种 ✓）
+   acts = 'bag'    → 使用 / 脱下 / 卖给系统 / 挂交易所 + 价格框（背包里那件 ✓）
+   acts = 'market' → 购买 / 下架 / 取回（交易所里那件 ✓）
+   ★ 为什么不让交易所也显示"卖给系统"：那不是交易所干的事 ✗ 玩家会懵 ✓
+     （用户要看的是"属性 + 词条 + 耐久" ✗ 动作按场景给 ✓）*/
+function bagTipBtnsHTML(it, id, acts, seller) {
+  var h = '<div class="bagTipBtns" data-tipfor="' + (id || '') + '" data-tipacts="' +
+    (acts || 'bag') + '">';
+  if (acts === 'market') {
+    var mine = MKT.tab === 'mine';
+    if (mine) {
+      var expired = false;
+      for (var mi = 0; mi < (MKT.mine || []).length; mi++) {
+        if (String(MKT.mine[mi].lid) === String(id)) { expired = (MKT.mine[mi].state !== 'on'); }
+      }
+      h += '<button class="bagB" data-tipact="' + (expired ? 'claim' : 'unlist') + '">' +
+        (expired ? '取 回' : '下 架') + '</button>';
+    } else if (MKT.myRole && String((seller && seller.seller) || '') === String(MKT.myRole)) {
+      h += '<button class="bagB" disabled>你自己的</button>';
+    } else {
+      h += '<button class="bagB" data-tipact="buy">购 买</button>';
+      /* ★ 货架上还有多个 ✗ 才能选数量（只剩 1 个就别给滑条了 ✓）*/
+      var _avail = Math.max(1, parseInt(seller && seller.qty, 10) || 1);
+      var _aff = Math.floor(((typeof WSC !== 'undefined' && WSC.role &&
+        WSC.role.gold) || 0) / Math.max(1, seller && seller.unit || 1));
+      var _mx = Math.min(_avail, Math.max(1, _aff));
+      if (_avail > 1) {
+        h += qtyHTML(_mx, 1, (seller && seller.unit) || 0);
+      }
+    }
+    h += '<button class="bagB" data-tipact="close">✕</button></div>';
+    return h;
+  }
+  /* ---- 背包那种 ---- */
   var isW = (it.slot === 'weapon' || it.slot === 'armor');
   var equipped = ((BAG.weaponItemId && String(id) === String(BAG.weaponItemId)) ||
                   (BAG.armorItemId && String(id) === String(BAG.armorItemId)));
   var sellable = !!(id && !equipped && it !== DEFAULT_W && !it.broken &&
                     !it.locked_by && !it.locked);
-  var h = '<div class="bagTipBtns" data-tipfor="' + (id || '') + '">';
   if (isW) {
     h += '<button class="bagB" data-tipact="' +
       (equipped ? 'off' : 'use') + '">' + (equipped ? '脱 下' : '使 用') + '</button>';
   }
   if (sellable) {
     h += '<button class="bagB off" data-tipact="sell">卖给系统</button>';
-  }
-  if (sellable) {
+    var _canStack = (typeof isStackItem === 'function') ? isStackItem(it) : !it.slot;
+    /* ★★★ 自测当场抓到的 bug：拆函数时把 rec 留在了外面 ✗
+       而这段代码在 bagTipBtnsHTML 里 ✗ 那里【没有 rec】（它是背包格的记录 ✓）
+       → ReferenceError → 背包浮窗一画就抛错 ✗ 整个悬停都废了 ✓
+       ★ 数从哪来：bagTipHTML 已经把"有几个"算好放在 seller.stack 里 ✓
+         （那边有 rec ✗ 这边没有 ✓ 所以走参数 ✓）
+       ★ 教训：拆函数时【只搬代码不搬变量】= 必然漏一个 ✗
+         而且这种错只在"那条分支被执行到"时才炸 ✗ 很容易漏测 ✓ */
+    var _have = Math.max(1, parseInt((seller && seller.stack) || 1, 10) || 1);
     h += '<button class="bagB off" data-tipact="mkt">挂交易所</button>' +
       '<input class="mktInput" data-tipprice="1" type="text" inputmode="numeric"' +
-      ' placeholder="价格" maxlength="10" value="">';
+      ' placeholder="单价" maxlength="10" value="">';
+    if (_canStack && _have > 1) {
+      h += qtyHTML(_have, _have, 0);   /* 上架默认【全挂】✗ 单价等输入框填了再算 ✓ */
+    }
   }
   h += '<button class="bagB" data-tipact="close">✕</button></div>';
   /* ★★ 价格框要【自动填系统收购价】✗ 自测抓到的：不填就点"挂交易所"
@@ -3593,6 +4012,7 @@ function bagTipBtns(el) {
 }
 
 /* 鼠标有没有停在浮窗上（★ true 时"离开格子"不许关窗 ✓）*/
+var _mktScrollBusy = false;
 var _mktTipHold = false;
 var _mktTipTimer = null;
 
@@ -3621,6 +4041,35 @@ function bagTipStickyOn() {
   if (_mktTipTimer) { clearTimeout(_mktTipTimer); _mktTipTimer = null; }
 }
 
+/* 滑条 / 数字框的双向同步 + 总价预览（★ 事件委托在浮窗上 ✗ 画一次绑一次 ✓）
+   ★ 为什么两向都要同步：滑条拖不准（手机上尤其 ✓）✗ 数字框能精确填 ✓
+     两边要是各管各的 ✗ 玩家会不知道最后按哪个走 ✓ */
+function qtySync(e) {
+  var box = document.getElementById('bagTipBox');
+  if (!box) { return; }
+  var row = e.target && e.target.parentNode;
+  while (row && row !== box && !(row.className && String(row.className).indexOf('qtyRow') >= 0)) {
+    row = row.parentNode;
+  }
+  if (!row || row === box) { return; }
+  var mx = Math.max(1, parseInt(row.getAttribute('data-qtymax'), 10) || 1);
+  var unit = parseFloat(row.getAttribute('data-qtyunit')) || 0;
+  var rng = row.querySelector('.qtyRange');
+  var num = row.querySelector('.qtyNum');
+  var tot = row.querySelector('.qtyTotal');
+  var v = parseInt((e.target === num ? num.value : rng.value), 10);
+  if (isNaN(v)) { v = 1; }
+  v = Math.max(1, Math.min(mx, v));
+  if (rng) { rng.value = String(v); }
+  if (num) { num.value = String(v); }
+  if (tot) {
+    /* ★ 单价还没填（背包上架那条 ✓）就先不显示总价 ✗ 免得显示"0 金币"误导 ✓ */
+    var priceEl = box.querySelector('input[data-tipprice]');
+    var up = unit || (priceEl ? parseFloat(String(priceEl.value).replace(/[^0-9]/g, '')) : 0);
+    tot.textContent = (up > 0 && v > 1) ? ('共 ' + fmtGold(up * v) + ' 金币') : '';
+  }
+}
+
 /* 浮窗里那些按钮的点击（★ 委托在浮窗上 ✗ 画一次绑一次 ✓ 幂等 ✓）*/
 function bagTipBind() {
   var box = document.getElementById('bagTipBox');
@@ -3630,6 +4079,22 @@ function bagTipBind() {
   box.onmouseleave = function () { bagTipHold(false); bagTipHideSoon(120); };
   /* ★ 点在浮窗里【别让 document 那个捕获监听关窗】✗ 也别冒泡到格子 ✓ */
   box.addEventListener('mousedown', function (e) { e.stopPropagation(); }, true);
+  /* ★ 数量滑条：拖 / 填都要同步 + 算总价 ✓（'input' 两种控件都会触发 ✓）*/
+  box.addEventListener('input', function (e) {
+    /* ★ 只关心这三种：滑条 / 数量框 / 单价框 ✗ 别的输入（搜索框之类）别理 ✓ */
+    var t = e.target;
+    if (!t || !t.className) { return; }
+    var cn = String(t.className);
+    var isQty = (cn.indexOf('qtyRange') >= 0) || (cn.indexOf('qtyNum') >= 0);
+    var isPrice = !!(t.getAttribute && t.getAttribute('data-tipprice'));
+    if (!isQty && !isPrice) { return; }
+    /* ★ 单价改了 → 总价那条要重算 ✗ 就借"滑条自己动一下"来触发 ✓
+       （qtySync 里统一算总价 ✗ 只有一份算法 ✓）*/
+    var box2 = document.getElementById('bagTipBox');
+    var rng = (isQty && cn.indexOf('qtyRange') >= 0) ? t
+      : (box2 ? box2.querySelector('.qtyRow .qtyRange') : null);
+    if (rng) { qtySync({ target: rng }); }
+  });
   box.onclick = function (e) {
     e.stopPropagation();
     var el = e.target;
@@ -3640,8 +4105,27 @@ function bagTipBind() {
       row = row.parentNode;
     }
     var id = row ? row.getAttribute('data-tipfor') : null;
+    var kind = row ? row.getAttribute('data-tipacts') : 'bag';
+    var it = (typeof MKT !== 'undefined' && row) ? row._it : null;
     if (act === 'close') { bagTipHide(); return; }
     if (!id) { return; }
+    /* ★★ round304g：交易所那一套（购买 / 下架 / 取回）★★
+       ★ 走的还是原来那两条路（mktBuy / mktUnlist）✗ 没有第二条实现 ✓ */
+    if (kind === 'market') {
+      /* ★★ 自测抓到的：原来这里是无条件先 bagTipHide() ✗
+         而"点一行弹说明"和"点按钮做动作"走的是【同一个处理器】✓
+         → 点头一下就把自己刚弹出的浮窗关掉了 ✗ 表现是"点了没反应"✓
+         ★ 现在：只有真的点了【动作按钮】才关 ✗ 点别的地方（空白）不动它 ✓ */
+      if (act === 'buy') {
+        var qb = box.querySelector('.qtyRow .qtyRange');
+        var nq = qb ? (parseInt(qb.value, 10) || 1) : 1;
+        bagTipHide();
+        mktBuy(+id, (it && it.name) || '物品', (it && it.__price) || 0, nq);
+      }
+      else if (act === 'unlist') { bagTipHide(); mktUnlist(+id, false); }
+      else if (act === 'claim') { bagTipHide(); mktUnlist(+id, true); }
+      return;
+    }
     /* ★ 先把价格从浮窗那个输入框里读出来 ✗ 再交给"挂交易所"用 ✓
        （所以让 _priceEl 的 id 指向它也说得通：但我不改 id ✗
         而是把值【搬进】原来的 #bagMktPrice 再走原路 ✓ 一条路 ✓）*/
@@ -3650,6 +4134,9 @@ function bagTipBind() {
       var dst = document.getElementById('bagMktPrice');
       if (dst && src) { dst.value = String(src.value || ''); }
       BAG.sel = id;                    /* 上架用的是"当前选中"✗ 这里对齐一下 ✓ */
+      /* ★ round304o：滑条上选了几个就挂几个 ✓（没有滑条 = 1 ✓）*/
+      var qr = box.querySelector('.qtyRow .qtyRange');
+      BAG.mktQty = qr ? (parseInt(qr.value, 10) || 1) : 1;
       mktList();
       bagTipHide();
       return;

@@ -13,7 +13,7 @@ import time
 
 # ============================================================ 版本与迁移
 
-SCHEMA_VERSION = 6   # ★ round304：交易所（listings + trade_log ✗ 迁移 v6 在下面）
+SCHEMA_VERSION = 7   # ★ round304l：交易所支持数量（listings.qty / trade_log.qty ✓）
 
 # 每个版本一组 SQL。**新版本往后追加，不要改历史版本** ✓
 MIGRATIONS = {
@@ -322,6 +322,20 @@ MIGRATIONS[6] = [
         ts        INTEGER NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS ix_trade_ts ON trade_log(ts)",
+]
+
+
+# ★★★ round304l：交易所支持【数量】（用户："材料有堆叠数量，这个有注意吗"）★★★
+#   ★ 为什么要加 qty：材料是可堆叠的（碎玻璃 ×30 ✓）
+#     第一版一行只挂 1 个 ✗ 那 30 个碎玻璃就得点 30 次上架 ✓ 显然不合理 ✓
+#   ★ 为什么加在 listings 而不新建表：一行上架单本来就有"还剩几个"这个概念 ✓
+#     （买家可以只买一部分 ✓ 买完 state 才变 sold ✓）
+#   ★ 为什么 trade_log 也要 qty：同一个上架单可能成交多次 ✗
+#     sid 是主键 ✗ 每次成交一个 sid ✓ 所以一行 = 一笔成交 + 它的数量 ✓
+#   ★ 老数据的默认值：qty=1（以前就是一行一个 ✓ 迁移后语义完全一致 ✓）
+MIGRATIONS[7] = [
+    "ALTER TABLE listings  ADD COLUMN qty INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE trade_log ADD COLUMN qty INTEGER NOT NULL DEFAULT 1",
 ]
 
 

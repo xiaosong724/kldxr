@@ -60,13 +60,13 @@ gold_nonzero = c.execute('SELECT COUNT(*) FROM roles WHERE gold <> 0').fetchone(
 c.close()
 print('  copy starts at version %d (roles=%d items=%d gold<>0=%d)'
       % (v_before, roles_before, items_before, gold_nonzero))
-ok(v_before in (5, 6), 'the live db is at a version this migration knows (%d)' % v_before)
+ok(v_before in (5, 6, 7), 'the live db is at a version this migration knows (%d)' % v_before)
 
 v0, v1, ran = dbmod.ensure_tables(cfg)
 print('  ensure_tables -> %d => %d, %d statements' % (v0, v1, ran))
-ok(v1 == 6, 'the db ends up at version 6')
-if v_before == 5:
-    ok(ran > 0, 'a v5 db is actually migrated (%d statements)' % ran)
+ok(v1 == 7, 'the db ends up at version 7')
+if v_before < 7:
+    ok(ran > 0, 'an older db is actually migrated (%d statements)' % ran)
 else:
     ok(ran == 0, 'an already-migrated db runs nothing (idempotent, %d statements)' % ran)
 
@@ -92,8 +92,8 @@ c2.execute('PRAGMA user_version=5')
 c2.commit()
 c2.close()
 v0c, v1c, ranc = dbmod.ensure_tables({'db': down, 'data': tmpdir})
-ok(v0c == 5 and v1c == 6 and ranc > 0,
-   'a forced v5 copy really does 5 -> 6 (%d => %d, %d sql)' % (v0c, v1c, ranc))
+ok(v0c == 5 and v1c == 7 and ranc > 0,
+   'a forced v5 copy really does 5 -> 7 (%d => %d, %d sql)' % (v0c, v1c, ranc))
 
 c = sqlite3.connect(copy)
 tabs = [r[0] for r in c.execute(
@@ -107,12 +107,16 @@ for want in ('ix_listings_state', 'ix_listings_sel', 'ix_listings_on', 'ix_trade
     ok(want in idx, 'index %s exists' % want)
 
 cols = {r[1]: r for r in c.execute('PRAGMA table_info(listings)')}
-ok(set(cols.keys()) == {'lid', 'seller', 'item_json', 'price', 'ts', 'expire', 'state'},
+ok(set(cols.keys()) == {'lid', 'seller', 'item_json', 'price', 'ts', 'expire',
+                        'state', 'qty'},
    'listings columns are exactly the spec (%s)' % sorted(cols.keys()))
+#   ★ round304l：qty 必须是 NOT NULL DEFAULT 1 ✗ 老数据迁移后语义不能变 ✓
+ok(int(cols['qty'][3] or 0) == 1 and int(cols['qty'][4] or 0) == 1,
+   'qty is NOT NULL DEFAULT 1 (%r)' % (cols['qty'],))
 ok(int(cols['lid'][5] or 0) == 1, 'lid is the primary key (pk=%r)' % (cols['lid'][5],))
 
 tcols = {r[1] for r in c.execute('PRAGMA table_info(trade_log)')}
-ok(tcols == {'sid', 'lid', 'seller', 'buyer', 'price', 'tax', 'item_json', 'ts'},
+ok(tcols == {'sid', 'lid', 'seller', 'buyer', 'price', 'tax', 'item_json', 'ts', 'qty'},
    'trade_log columns are exactly the spec (%s)' % sorted(tcols))
 
 # the price CHECK must actually bite
@@ -147,7 +151,7 @@ c.close()
 
 # idempotent
 v0b, v1b, ranb = dbmod.ensure_tables(cfg)
-ok(v0b == 6 and ranb == 0, 're-running executes nothing (%d => %d, %d sql)' % (v0b, v1b, ranb))
+ok(v0b == 7 and ranb == 0, 're-running executes nothing (%d => %d, %d sql)' % (v0b, v1b, ranb))
 
 # the live db must not have moved
 after_live = md5(LIVE)

@@ -86,10 +86,12 @@ const VIEW = disposableName('ShotV');
     }
     return r.token;
   };
-  const give = function (n, kind, tier) {
+  /* ★ extra 可以带 worn= ✗ 截图里就要有一件"没耐久的"给人看 ✓ */
+  const give = function (n, kind, tier, extra) {
+    const body = Object.assign({ act: 'give', name: n, kind: kind, tier: tier }, extra || {});
     return fetch(ORIGIN + '/api/admin/act', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin': at },
-      body: JSON.stringify({ act: 'give', name: n, kind: kind, tier: tier }),
+      body: JSON.stringify(body),
     }).then(x => x.json()).catch(() => null);
   };
 
@@ -98,6 +100,8 @@ const VIEW = disposableName('ShotV');
   for (const t of [7, 5, 3]) { await give(SHOP, 'sword', t); }
   for (const t of [4, 2]) { await give(SHOP, 'armor', t); }
   for (const t of [6, 1]) { await give(SHOP, 'sword', t); }
+  /* ★ 再来一件【磨损到 30%】✗ 让人一眼看到"条短了、变黄了" ✓ */
+  await give(SHOP, 'sword', 4, { worn: 0.28 });
   await give(VIEW, 'sword', 4);
   /* 看客要有钱（"只看买得起"才看得出效果 ✓）→ 先卖一件给系统 ✓ */
   const bagV = await fetch(ORIGIN + '/api/bag', { headers: { 'X-Token': tokView } }).then(x => x.json());
@@ -145,7 +149,10 @@ const VIEW = disposableName('ShotV');
   let pi = 0;
   /* ★ 留一件【不挂】✗ 背包那张图要看"选中之后按钮什么样"✓
      （别再多发一件 ✗ 快照是在那之前拍的 ✓ 直接少挂一件最省事 ✓）*/
-  const keepOne = (bagS.items || [])[0] && (bagS.items || [])[0].id;
+  /* ★ 留哪一件有讲究 ✗ 背包那张图要一件"能挂的"✗ 货架那张图要那件【磨损的】✓
+     → 留第二新的 ✗ 把最新的（= 刚发的磨损那件）挂出去 ✓ */
+  const keepOne = (bagS.items || [])[1] ? (bagS.items || [])[1].id
+    : ((bagS.items || [])[0] || {}).id;
   for (const it of (bagS.items || [])) {
     if (it.id === keepOne) { continue; }        /* 留一件 ✓ */
     const price = [8000, 3000, 1200, 600, 300, 120, 40][pi++] || 100;
@@ -218,6 +225,77 @@ const VIEW = disposableName('ShotV');
     return false;
   };
   await grab('mkt-panel');
+  /* ★ round304j：再来一张【把行放大】的 ✗ 用户要看的是"耐久条在图标下面"那一眼 ✓
+     （整页截图里 44px 的条子太小 ✗ 看不清楚 ✓）*/
+  /* ★ 排序切【最新】✗ 刚挂上去的那件（磨损的）就排第一 ✓ 不用跟滚动较劲 ✓ */
+  await ev('MKT.sort = "new"; MKT.page = 1; mktAsk(false); return 1;');
+  await sleep(1600);
+  /* ★ 滚到那件【磨损的】✗ 这样图里就能直接看出短条 ✓ */
+  console.log('   worn row: ' + await ev(
+    'var rows = document.querySelectorAll("#mktList .mktRow");' +
+    'for (var i = 0; i < rows.length; i++) {' +
+    '  var it = rows[i]._it || {};' +
+    '  if (!(it.durMax > 0) || !(it.dur < it.durMax)) { continue; }' +
+    '  var pane = document.querySelector(".tabpane[data-pane=mkt]");' +
+    '  if (pane) { pane.scrollTop = rows[i].offsetTop - pane.clientHeight / 2; }' +
+    '  var b = rows[i].querySelector(".durbar i");' +
+    '  return JSON.stringify({ name: it.name, dur: it.dur, durMax: it.durMax,' +
+    '    barWidth: b ? b.style.width : null, barColor: b ? b.style.background : null });' +
+    '}' +
+    'return "NO-WORN-ROW";'));
+  /* ★ 为了让图里【一眼看出差别】✗ 在列表最前面插两行同样的样式：
+       一件满耐久 + 一件只剩 12%（红条）✓
+     ★ 用【真的那个渲染函数】画的 ✗ 不是手写假 HTML ✓
+     ★ 插完就还原（不写回文件 ✗ 也不影响测试 ✓）*/
+  await ev(
+    'var rows = document.querySelectorAll("#mktList .mktRow");' +
+    'if (!rows.length) { return 1; }' +
+    'var itA = { name: "样例·满耐久", tier: 4, slot: "weapon", look: "sword",' +
+    '            dur: 3600, durMax: 3600, affixes: [], base: { coeff: 1 } };' +
+    'var itB = { name: "样例·快没耐久了", tier: 4, slot: "weapon", look: "sword",' +
+    '            dur: 432, durMax: 3600, affixes: [], base: { coeff: 1 } };' +
+    'var box = document.getElementById("mktList");' +
+    'var mk = function (it, price, tier) {' +
+    '  var d = document.createElement("div");' +
+    '  d.className = "mktRow";' +
+    '  d.style.borderLeftColor = tierHex(tier);' +
+    '  d.innerHTML = "<span class=\\"mktIco\\" style=\\"background:" +' +
+    '    tierRgba(tier, 0.18) + "\\"><span class=\\"mktTier\\">" + (tier + 1) +' +
+    '    "</span>" + iconOfItem(it) + durBarHTML(it) + "</span>" +' +
+    '    "<span class=\\"mktMain\\"><span class=\\"mktName\\">" + it.name +' +
+    '    "</span><span class=\\"mktSub\\">★" + (tier + 1) + " 阶 · 样例</span></span>" +' +
+    '    "<span class=\\"mktPrice\\">" + price + "<small>剩 7 天</small></span>" +' +
+    '    "<button class=\\"bagB\\">购 买</button>";' +
+    '  return d;' +
+    '};' +
+    'var r0 = rows[0];' +
+    'box.insertBefore(mk(itA, 1200, 3), r0);' +
+    'box.insertBefore(mk(itB, 200, 3), r0);' +
+    'return 1;');
+  await ev('document.getElementById("mktList").style.zoom = "1.7"; return 1;');
+  await sleep(500);
+  await grab('mkt-durability');
+  await ev('document.getElementById("mktList").style.zoom = ""; return 1;');
+  /* ★ round304g：再截一张【交易所里点开一件的详情浮窗】✓
+     （用户要的就是这个：看属性/词条/耐久 ✗ 还有购买按钮 ✓）*/
+  console.log('   detail shot: ' + await ev(
+    'var rows = document.querySelectorAll("#mktList .mktRow");' +
+    'if (!rows.length) { return "NO-ROWS"; }' +
+    'var pick = rows[0];' +
+    'for (var i = 0; i < rows.length; i++) {' +
+    '  var b = rows[i].querySelector("button:not([disabled])");' +
+    '  if (b && b.getAttribute("data-mktbuy")) { pick = rows[i]; break; }' +
+    '}' +
+    'var bb = pick.getBoundingClientRect();' +
+    'mktTipShow(pick, Math.round(bb.left + bb.width / 2),' +
+    '           Math.round(bb.top + bb.height - 6));' +
+    'var t = document.getElementById("bagTipBox");' +
+    'return JSON.stringify({ acts: [].map.call(t.querySelectorAll("[data-tipact]"), function (x) {' +
+    '  return x.getAttribute("data-tipact"); }),' +
+    ' hasDur: String(t.textContent).indexOf("耐久") >= 0,' +
+    ' hasAff: String(t.textContent).indexOf("词条") >= 0 });'));
+  await sleep(700);
+  await grab('mkt-detail');
   /* ★ 再截一张【背包】的（用户提的"按钮有点多"就是这一页 ✓）★
      顺手选中一件 ✗ 这样那张图里"选中之后按钮变成什么样"也看得见 ✓ */
   await ev('openSet("bag"); bagFetch(bagRender); return 1;');

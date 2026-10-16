@@ -303,25 +303,37 @@
 .mktHead{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap}
 .mktGold{color:#ffd83d;font-size:13px}
 .mktGold b{font-size:15px}
-.mktList{margin-top:6px}
-.mktRow{display:flex;align-items:center;gap:8px;padding:5px 6px;margin-bottom:4px;
-  border-radius:6px;background:rgba(255,255,255,.035);border-left:3px solid #666}
+/* ★★ round304n（用户："我希望一排能显示两个商品，可以整体缩小一点"）★★
+   · 列表从"一行一个"改成【两列网格】✗ 一屏能看到的东西翻倍 ✓
+   · 图标 44 → 34 ✗ 整行都要窄下来才能塞进半屏 ✓
+   ★ 手机上 520 宽 ÷ 2 ≈ 250 一格 ✗ 图标 34 + 名字 + 价格 + 按钮刚好 ✓ */
+.mktList{margin-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:5px}
+/* 记录那一页还是【一行一条】（信息多、也不用对比 ✓） */
+#mktLogList{display:block}
+.mktRow{display:flex;align-items:center;gap:6px;padding:4px 5px;
+  border-radius:6px;background:rgba(255,255,255,.035);border-left:3px solid #666;
+  min-width:0;overflow:hidden}
 .mktRow:hover{background:rgba(255,255,255,.075)}
-.mktIco{position:relative;width:44px;height:44px;border-radius:8px;flex:0 0 44px;
+.mktIco{position:relative;width:34px;height:34px;border-radius:7px;flex:0 0 34px;
   display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.09)}
-.mktIco svg{width:34px;height:34px}
+.mktIco svg{width:26px;height:26px}
 .mktTier{position:absolute;left:2px;top:1px;font-size:9px;color:#fff;opacity:.85;
   text-shadow:0 1px 2px #000}
 .mktCnt{position:absolute;right:2px;bottom:1px;font-size:10px;color:#ffe0a0;
   text-shadow:0 1px 2px #000}
 .mktMain{flex:1 1 auto;min-width:0}
-.mktName{display:block;font-size:13px;color:#e8eef6;white-space:nowrap;
+.mktName{display:block;font-size:12px;color:#e8eef6;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
-.mktSub{display:block;font-size:11px;color:#8f9aa8;white-space:nowrap;
+.mktSub{display:block;font-size:10px;color:#8f9aa8;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
-.mktPrice{flex:0 0 auto;text-align:right;color:#ffd83d;font-size:14px;min-width:64px}
-.mktPrice small{display:block;color:#8f9aa8;font-size:10px;font-weight:400}
-.mktRow .bagB{flex:0 0 auto}
+.mktPrice{flex:0 0 auto;text-align:right;color:#ffd83d;font-size:12.5px;min-width:44px}
+.mktPrice small{display:block;color:#8f9aa8;font-size:9.5px;font-weight:400}
+.mktRow .bagB{flex:0 0 auto;padding:3px 7px;font-size:11.5px}
+/* 记录那条信息多 ✗ 给它宽松一点 ✓ */
+#mktLogList .mktRow{padding:6px 8px}
+#mktLogList .mktName{font-size:13px}
+#mktLogList .mktSub{font-size:11px}
+#mktLogList .mktPrice{font-size:14px;min-width:70px}
 .mktRow.gone{opacity:.45}
 .mktEmpty{color:#8f9aa8;font-size:12px;padding:14px 4px;text-align:center}
 .mktInput{width:88px;background:#0b0f14;color:#e8eef6;border:1px solid #ffffff22;
@@ -379,6 +391,16 @@
 .durbar{position:absolute;left:3px;right:3px;bottom:2px;height:3px;border-radius:2px;
   background:rgba(0,0,0,.55);overflow:hidden}
 .durbar i{display:block;height:100%;border-radius:2px}
+/* ★★ round304j（用户："耐久度的进度条显示在图标下方和背包一样"）★★
+   交易所那条耐久条【就用背包格子那一套】✗ 不再单独定样式 ✓
+   · .durbar 本来就是 absolute + 贴底（left:3px right:3px bottom:2px ✓）
+     → 只要它的父元素是 .mktIco（position:relative ✓）就自动贴在图标下面 ✓
+   · 那就是"和背包一样"的字面意思 ✗ 同一套 CSS ✓ 颜色规则也是同一个函数给的 ✓ */
+.mktIco .durbar{left:3px;right:3px;bottom:2px}
+/* 说明浮窗里那种（跟着文字走 ✓ 不是贴底的那种 ✓）*/
+.durbarTick{display:inline-block;width:54px;height:5px;border-radius:2px;
+  background:rgba(0,0,0,.55);overflow:hidden;vertical-align:-1px}
+.durbarTick i{display:block;height:100%;border-radius:2px}
 /* ★ 第 60 轮：武器有几条词条（右上角一个小圆点 ✓）*/
 .slot .affn{position:absolute;right:-2px;top:-3px;min-width:13px;height:13px;line-height:13px;
   text-align:center;border-radius:7px;background:#3a6ea8;color:#eaf4ff;font-size:9px;
@@ -712,6 +734,7 @@
     <div class="bagBtns">
       <button class="bagB on" id="mktTabAll">全部商品</button>
       <button class="bagB" id="mktTabMine">我的上架</button>
+      <button class="bagB" id="mktTabLog">我的记录</button>
       <span class="bagTip" id="mktTabTip">看别人挂的东西 ✗ 点购买就能买走</span>
     </div>
     <div class="bagBtns" id="mktCatRow">
@@ -737,6 +760,23 @@
       <span class="bagTip" id="mktMsg"></span>
     </div>
     <div id="mktList" class="mktList"></div>
+    <!-- ★★ round304m（用户："增加一个购买和卖出记录查看，也要写分页"）★★
+         和商品列表是【两块】✗ 切到记录页时把商品那块藏起来 ✓
+         （用显示切换而不是塞进同一个列表 ✗ 两边的分页语义完全不同 ✓）-->
+    <div id="mktLogWrap" style="display:none">
+      <div class="bagBtns">
+        <button class="bagB on" id="mktLogAll">全部</button>
+        <button class="bagB" id="mktLogBuy">我买到的</button>
+        <button class="bagB" id="mktLogSell">我卖掉的</button>
+        <span class="bagTip" id="mktLogSum"></span>
+      </div>
+      <div id="mktLogList" class="mktList"></div>
+      <div class="bagBtns" id="mktLogPager" style="display:none">
+        <button class="bagB" id="mktLogPrev">‹ 上一页</button>
+        <span class="bagTip" id="mktLogPageTxt" style="min-width:120px;text-align:center">1 / 1</span>
+        <button class="bagB" id="mktLogNext">下一页 ›</button>
+      </div>
+    </div>
     <div class="bagBtns" id="mktPager" style="display:none">
       <button class="bagB" id="mktPrev">‹ 上一页</button>
       <span class="bagTip" id="mktPageTxt" style="min-width:120px;text-align:center">1 / 1</span>

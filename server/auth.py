@@ -445,27 +445,30 @@ def market_rows_of(cfg, role_id, all_sellers=True):
     try:
         with dbmod.db(cfg) as c:
             if all_sellers:
+                # ★ round304l：qty 一起读（还剩几个 ✓ 买家可以只买一部分 ✓）
                 rows = c.execute(
-                    "SELECT lid, seller, price, item_json, ts, expire FROM listings"
+                    "SELECT lid, seller, price, item_json, ts, expire, qty FROM listings"
                     " WHERE state='on' ORDER BY lid LIMIT ?",
                     (int(valuemod.MKT_SHELF_MAX),)).fetchall()
             else:
                 rows = c.execute(
-                    "SELECT lid, seller, price, item_json, ts, expire FROM listings"
+                    "SELECT lid, seller, price, item_json, ts, expire, qty FROM listings"
                     " WHERE seller=? AND state='on' ORDER BY lid",
                     (int(role_id),)).fetchall()
     except Exception:
         return out
-    for lid, seller, price, js, ts, expire in rows:
+    for rec in rows:
+        lid, seller, price, js, ts, expire = (rec[0], rec[1], rec[2], rec[3],
+                                              rec[4], rec[5])
+        qty = rec[6] if len(rec) > 6 else 1
         try:
             it = json.loads(js)
         except Exception:
             continue
         if not isinstance(it, dict):
             continue
-        # ★ 上架单只有一件（材料也是一件一件挂的 ✗ 和背包 stack 无关 ✓）
         out.append((int(lid), int(seller), int(price), js, int(ts or 0),
-                    int(expire or 0), 1))
+                    int(expire or 0), max(1, int(qty or 1))))
     return out
 
 

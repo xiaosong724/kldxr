@@ -412,5 +412,8 @@ function dbGold(name) {
   }
   console.log('');
   console.log('FAILED: ' + fails);
-  process.exit(fails ? 1 : 0);
+  /* ★ 别用 process.exit：它不等 stdout 刷完 ✗ 输出会被截断 ✓
+       自测踩到过：明明跑完了 ✗ 日志只出来一半 ✓
+       → 只设退出码 ✗ 让进程自己结束（Node 会等输出排空 ✓）*/
+    process.exitCode = fails ? 1 : 0;
 })().catch(function (e) { console.error('FATAL ' + (e && e.stack || e)); process.exit(1); });

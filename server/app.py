@@ -198,6 +198,12 @@ class Api(BaseHTTPRequestHandler):
         #     客户端自己算一遍 = 两套公式 ✗ 迟早对不上 ✓（项目的老毛病 ✓）
         if path == '/api/sellquote':
             return self.api_sellquote()
+        # ★★ round304m（用户："增加一个购买和卖出记录查看，也要写分页"）★★
+        #   ★ 为什么走 HTTP 而不是 WS：它是【只读 + 分页】✗ 和背包接口同一类 ✓
+        #     走 tick 的话要在内存里再存一份流水 ✗ 没必要 ✓
+        #     （流水是【历史】✗ 不像货架那样要参与成交判定 ✓ 查库完全没问题 ✓）
+        if path == '/api/trades':
+            return self.api_trades()
         if path == '/ws-config.js':
             return self.ws_config()
         if path.startswith('/api/'):
@@ -648,7 +654,25 @@ class Api(BaseHTTPRequestHandler):
         #   ★ 这里不再自己写一遍入库，而是复用下面现成的"写 items + 通知"那段 ✓
         #     （上次我在这里调了个不存在的 _admin_deliver ✗ 和 _equipped 一个毛病 ✗）
         _is_armor = ((d.get('kind') or '') == 'armor') or ((d.get('slot') or '') == 'armor')
-        if _is_armor:
+        # ★ round304p：管理端也能发【材料】（可堆叠 ✗ 交易所有数量滑条要拿它验 ✓）
+        #   ★ 为什么要这个：材料只在打怪掉落里出现 ✗
+        #     要造"一堆碎玻璃"来验按数量上架 ✗ 靠打怪太不确定 ✓
+        #   ★ kind='material' 时 name 可以指定（不给就随机一个能掉的 ✓）
+        if (d.get('kind') or '') == 'material':
+            import drops as dropsmod
+            _pool = [m for m in dropsmod.MATERIALS if m[1] <= max(0, int(d.get('matTier') or 0))]
+            if not _pool:
+                _pool = list(dropsmod.MATERIALS)
+            # ★ 注意：d['name'] 是【角色名】（上面用过了 ✗ 不能复用 ✓）
+            #   材料名走 matName ✗ 自测踩到过：用 name 传结果角色名变成了材料名 ✓
+            if d.get('matName'):
+                w = {'name': str(d['matName']), 'tier': int(d.get('tier') or 0),
+                     'kind': 'material'}
+            else:
+                _n, _t = _pool[int(d.get('pick') or 0) % len(_pool)]
+                w = {'name': _n, 'tier': _t, 'kind': 'material'}
+            _is_armor = False
+        elif _is_armor:
             import armor as armormod2
             w = armormod2.make_armor(tier, max(1, lvl // 4 + 1))
         else:
@@ -664,14 +688,48 @@ class Api(BaseHTTPRequestHandler):
                 w['affixes'] = afmod.roll_affixes(tier, (_sl,))[:affn]
         except Exception:
             pass
+        # ★★ round304i：可选地发一件【磨损的】装备 ✗ 给验证用 ✓
+        #   为什么需要：交易所有一条要求是"有人卖没耐久的装备要一眼看出来"✗
+        #     而正常玩法里造一件磨损的装备只能【真去打怪】✗ 一刀一刀砍到 30% ✓
+        #     （能验 ✗ 但没法在自动测试里做 ✓ 太慢且不确定 ✓）
+        #   → 加一个可选参数 worn=0.3（= 只剩 30% ✓）/ dur=绝对次数 ✓
+        #   ★ 不传就完全不变 ✗ 管理页和现有脚本一个字都不用改 ✓
+        try:
+            _worn = d.get('worn')
+            _dur = d.get('dur')
+            if _worn is not None or _dur is not None:
+                import weapons as _wm2
+                _wm2.ensure_dur(w)
+                _mx = int(w.get('durMax') or 0)
+                if _mx > 0:
+                    if _dur is not None:
+                        _d = int(_dur)
+                    else:
+                        _d = int(round(_mx * float(_worn)))
+                    w['dur'] = max(0, min(_mx, _d))
+                    if w['dur'] <= 0 and _is_armor is False:
+                        w['broken'] = True      # ★ 归零 = 损坏（和游戏里那条规则一致 ✓）
+                    if w['dur'] <= 0 and _is_armor:
+                        w['broken'] = True
+        except Exception:
+            pass
         # ★ 第 56 轮：不再强制 reqLevel=1 ✗ —— 那会让背包显示「建议 1 级」
         #   看着像 bug ✗（用户就是被这个误导的 ✓）
         #   现在保留真实建议等级 ✓ 反正现在也不拦穿戴 ✓
         try:
+            # ★ round304p：count 可以一次给一堆（★ 只有材料能堆 ✓ 装备永远 1 ✓）
+            #   ★ 为什么要：验"按数量上架"要有一堆材料 ✗ 一条条发会变成 N 行各 1 个 ✓
+            _cnt = 1
+            try:
+                _cnt = max(1, min(999, int(d.get('count') or 1)))
+            except Exception:
+                _cnt = 1
+            if w.get('slot'):
+                _cnt = 1          # ★ 装备不堆叠（和 market.is_stack 同一条判据 ✓）
             with dbmod.db(self.cfg) as c:
                 c.execute('INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
-                          ' VALUES(?,0,-1,1,?,?)',
-                          (rid, json.dumps(w, ensure_ascii=False), dbmod.now_ms()))
+                          ' VALUES(?,0,-1,?,?,?)',
+                          (rid, _cnt, json.dumps(w, ensure_ascii=False), dbmod.now_ms()))
         except Exception as e:
             return self._send(500, {'ok': False, 'error': '写背包失败：%s' % e})
         # 在线的话顺手告诉他（离线也无所谓，打开背包就能看到 ✓）
@@ -746,6 +804,90 @@ class Api(BaseHTTPRequestHandler):
         return self._send(200, {'ok': True, 'sold': sold, 'total': int(total),
                                 'failed': int(failed)})
 
+
+    def api_trades(self):
+        """我的成交记录（买入 + 卖出）→ 分页
+
+        ★★ round304m（用户："增加一个购买和卖出记录查看，也要写分页"）★★
+        ★ 数据来源：trade_log（从交易所第 1 步就在写了 ✓ 只是以前没人读 ✓）
+        ★ 线程：这是【只读 HTTP】✗ 不占 tick 线程 ✓（和 /api/bag 一个路子 ✓）
+        ★ 一条记录给两边看，但字段不一样：
+            我买 → 我花了多少（price）· 卖家是谁 · 税是卖家的事
+            我卖 → 我到手多少（price - tax）· 买家是谁
+          → 所以在服务端就把 side / 名字都算好 ✗ 客户端只管显示 ✓
+        ★ 记录【永久保留】✗ 不像 listings 会过期 ✓（账目不该被清掉 ✓）
+        """
+        import json
+        ok, r = authmod.check_token(self.cfg, self._token())
+        if not ok:
+            return self._send(401, {'ok': False, 'error': r})
+        rid = int(r['role']['id'])
+        # 手工切 ?page=N（和上面 /api/sellquote 同一个写法 ✓ 本文件没有 query 解析器）
+        page = 0
+        if '?' in self.path:
+            for kv in self.path.split('?', 1)[1].split('&'):
+                if kv.startswith('page='):
+                    try:
+                        page = int(urllib.parse.unquote(kv[5:]) or 0)
+                    except Exception:
+                        page = 0
+                    break
+        per = 20
+        if page < 0:
+            page = 0
+        try:
+            with dbmod.db(self.cfg) as c:
+                total = int(c.execute(
+                    'SELECT COUNT(*) FROM trade_log WHERE buyer=? OR seller=?',
+                    (rid, rid)).fetchone()[0])
+                rows = c.execute(
+                    'SELECT t.ts, t.lid, t.qty, t.price, t.tax, t.item_json,'
+                    '       t.seller, t.buyer, rs.name, rb.name'
+                    '  FROM trade_log t'
+                    '  LEFT JOIN roles rs ON rs.id = t.seller'
+                    '  LEFT JOIN roles rb ON rb.id = t.buyer'
+                    ' WHERE t.buyer=? OR t.seller=?'
+                    ' ORDER BY t.ts DESC, t.sid DESC LIMIT ? OFFSET ?',
+                    (rid, rid, per, page * per)).fetchall()
+        except Exception as e:
+            return self._send(500, {'ok': False, 'error': '读成交记录失败：%r' % (e,)})
+        out = []
+        for rec in rows:
+            ts, lid, qty, price, tax, js, seller, buyer, sname, bname = (
+                rec[0], rec[1], rec[2], rec[3], rec[4], rec[5], rec[6], rec[7],
+                rec[8], rec[9])
+            name = ''
+            try:
+                it = json.loads(js)
+                name = str((it or {}).get('name') or '')
+                tier = int((it or {}).get('tier') or 0)
+                slot = (it or {}).get('slot')
+                look = (it or {}).get('look')
+                kind = (it or {}).get('kind')
+                dur = (it or {}).get('dur')
+                durMax = (it or {}).get('durMax')
+            except Exception:
+                tier, slot, look, kind, dur, durMax = 0, None, None, None, 0, 0
+            me_sell = (int(seller or 0) == rid)
+            q = max(1, int(qty or 1))
+            out.append({
+                'side': 'sell' if me_sell else 'buy',
+                'lid': int(lid or 0), 'qty': q,
+                'unit': int(round(float(price or 0) / q)) if q else int(price or 0),
+                'price': int(price or 0),          # 这一笔的总价
+                'tax': int(tax or 0),
+                'net': int(price or 0) - int(tax or 0),   # 卖家到手（卖出时才有意义）
+                'name': name, 'tier': tier,
+                'who': str((sname if me_sell else bname) or '?'),   # 对手方名字
+                'ts': int(ts or 0),
+                # 图标要用的（★ 和背包/货架同一个 iconOfItem 输入 ✓）
+                'icon': {'slot': slot, 'look': (name if not slot else look),
+                         'kind': kind, 'rarity': None, 'broken': 0},
+                'dur': int(dur or 0), 'durMax': int(durMax or 0),
+            })
+        pages = max(1, (total + per - 1) // per)
+        return self._send(200, {'ok': True, 'rows': out, 'total': total,
+                                'page': page, 'pages': pages, 'pageSize': per})
 
     def api_sellquote(self):
         """报价：这些背包装备【现在】卖给系统能拿多少钱（round303 只读 ✓）。
