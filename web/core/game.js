@@ -2193,7 +2193,27 @@ function netClkUpdate(st, localNow, remoteT) {
      于是 raw = localNow - remoteT 越来越大 → late 虚增（实测能到 1 秒）✗
      → 抖动缓冲被顶到 maxDelay 上限、而且来回变 → 画面一顿一冲。
      同一份时间戳只校准一次就够了 ✓ */
-  if (st.lastT !== undefined && remoteT <= st.lastT) { return st; }
+  /* ★★★ 第 282 轮修的真 bug（用户："只要刷新了位置又会回到正确的位置"）★★★
+     病根就在下面这句守卫 ✗
+       · 客户端上报的 t 是 performance.now()/1000 ✗ 也就是【页面加载起的秒数】✓
+       · 对方只要【刷新过页面】✗ 这个数就从几千秒掉回 0 ✓
+       · 而这里判 "remoteT <= st.lastT" 就当成重复包 ✗ 直接 return ✓
+         → 时钟偏移永远停在旧值 ✗ 再也不会被修正 ✓
+         → 渲染时刻算错 ✗ 位置按错误的速度播放 → ★ 飞快 ✓✓
+         → ★★ 自己刷新一下重置了本地状态 ✗ 又正常 ✓✓ 和用户观察完全一致 ✓
+     ★ 修：检测到时间戳【大幅倒退】（超过 60 秒 ✓）就认为对方重新加载过 ✗
+       把这一路的时钟状态清空 ✗ 让它重新校准 ✓
+       → 自动恢复 ✗ 再也不用刷新 ✓✓
+     ★ 为什么用 60 秒：正常的乱序/重复包最多差几毫秒 ✗
+       只有"页面重新加载"才会一次倒退几十秒以上 ✓ */
+  if (st.lastT !== undefined && remoteT <= st.lastT) {
+    if (st.lastT - remoteT > 60) {
+      st.off = undefined; st.late = 0; st.n = 0; st.delay = 0; st.lastT = undefined;
+      /* ★ 清空后继续往下走 ✓ 这次会重新取基准 ✓ */
+    } else {
+      return st;
+    }
+  }
   st.lastT = remoteT;
   var raw = localNow - remoteT;
   st.n++;
