@@ -1993,6 +1993,29 @@ class World(object):
             #   修：分经验时【替他也排一次存档】✓
             try:
                 self._save_player(q)
+                # ★★★ 第 242 轮修的真 bug（用户：有玩家反馈重新进掉了等级）★★★
+
+                #   病根：上面那句 _save_player 存的是【坐标/朝向/血/气】✗
+
+                #         它的 SQL 里【没有 level 和 exp】✗✗
+
+                #         → 队友蹭经验升了级 ✓ 但等级和经验一直没写库 ✓
+
+                #         → 一重新登录读回旧值 → ★ 掉级 ✓✓ 和玩家反馈一致 ✓
+
+                #   ★ 第 86 轮修「分经验不落库」时加的就是 _save_player ✗
+
+                #     意图是对的（分经验也要替他存一次 ✓）但存错了函数 ✓
+
+                #   ★ 该调的是 _save_role —— 它的 SQL 是 level=?, exp=? ✓
+
+                #   ★ 实测（离线跑真逻辑）：
+
+                #     队友差 3 点升级 → 分到 6 点 → 等级 10 变 11 ✓
+
+                #     但排队写库的操作里【没有 level=?】✗✓ 所以一定会掉级 ✓
+
+                self._save_role(q)
             except Exception:
                 pass
             #   ★ 顺手给他飘一个（用户要求：获得经验时头上显示"队伍经验分享 +N"✓）
@@ -2334,7 +2357,8 @@ class World(object):
             if take > 0:
                 lrole['exp'] = have - take
                 got_exp = take
-                self._gain_exp(stealer, take)         # ★ 走正常升级检查 ✓
+                self._gain_exp(stealer, take)
+                self._save_role(stealer)   # 第 242 轮：抢来的经验也要落库         # ★ 走正常升级检查 ✓
                 self.post_save('UPDATE roles SET exp=? WHERE id=?',
                                (int(lrole['exp']), loser.role_id))
             else:
