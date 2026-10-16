@@ -2470,8 +2470,15 @@ function addOther(w, t) {
      修法：位置没变也照样塞一个【保持包】（位置不变、时间前进），
            缓冲尾跟着他的钟一起前进 → 渲染时刻永远在缓冲里 → 不做无谓外推 ✓
            （外推只留给真正的丢包 ✓）为了省内存，静止时按半速塞就够了 ✓ */
-  if (moved || !lp || ct > lp.t + NET.rate * 0.5) {
-    netPush(o.buf, w.x, w.z, w.yaw || 0, ct);              // ★ 用他的钟排队 ✓
+  /* round285: this used a bare `ct` which is NOT declared in this scope.
+     The checker (tools/check_free_vars.js) flagged it; at runtime it throws a
+     ReferenceError, so the whole "hold packet" branch below never ran - the
+     buffer tail stops advancing while the player stands still, and netSample
+     extrapolates up to 12 segments ahead (the old "drawn 1.1m in front" bug).
+     Use w.ct, exactly like the rest of this file. */
+  var _ct2 = (typeof w.ct === 'number' && w.ct > 0) ? w.ct : 0;
+  if (_ct2 > 0 && (moved || !lp || _ct2 > lp.t + NET.rate * 0.5)) {
+    netPush(o.buf, w.x, w.z, w.yaw || 0, _ct2);          // ★ 用他的钟排队 ✓
   }
   return o;
 }
@@ -2902,6 +2909,18 @@ var _ov3 = null;
 function netRenderAt(o, localNow, dt) {
   var oc = o.clk || {};
   var want = localNow - (oc.off || 0) - (oc.delay || 0.06);
+  /* ★★★ round285（审查报告 §1.9 第二优先）：给 rt 加一道锚 ★★★
+     为什么：如果时钟基准出错（对方刷新/重连 ✓ 或者热身的棘轮被污染 ✓）
+       → want 会比缓冲尾的时间键【大几千秒】✗
+       → netSample 取不到区间 ✗ 被顶到外推上限 ✗ 位置按 12 倍速播放 ✓
+     ★ 有了这道锚：want 最多只比缓冲尾大 0.25 秒 ✓
+       时钟再错 ✗ 也只会"卡一下"✗ 绝不可能变成倍速 ✓
+     ★ 副作用（可接受 ✓）：真丢包时表现为短暂停顿 ✗ 而不是飞出去 ✓
+       体感更像"网络卡"✗ 比"瞬移"好得多 ✓ */
+  if (o.buf && o.buf.length) {
+    var _tail = o.buf[o.buf.length - 1].t;
+    if (want > _tail + 0.25) { want = _tail; }
+  }
   if (o.rtS === undefined || o.rtLast === undefined) {
     o.rtS = want; o.rtLast = localNow; return want;
   }
