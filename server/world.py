@@ -1966,35 +1966,13 @@ class World(object):
 
     @staticmethod
     def _mkt_exp_s(row):
-        """内存行里的到期时刻 → 【秒】（★ 唯一的换算口 ✗ 别再散在别处 ✓）
-
-        ★★ 为什么必须有这么一个函数（自测被这个单位坑了三次 ✗ 记下来）★★
-          内存行的 exp 有【两个可能的量级】：
-            · 乐观入货架时是 now_s()（秒 ✓ ~1.79e9）
-            · 落库回灌如果带了毫秒（~1.79e12）就会大一千倍 ✓
-          以前每一处各算各的（_mkt_rows_of / _mkt_mine / 客户端 ✓）
-          → 一处按秒、一处按毫秒 → 界面显示"剩 20729077 天后过期"✓✓
-          ★ 正解：进来先归一化 ✗ 大数（>1e11）一律当成毫秒 ✓
-            1e11 秒 = 公元 5138 年 ✗ 不可能有那种上架 ✓ 所以这个判据是安全的 ✓
-        """
-        try:
-            v = float(row.get('exp') or 0)
-        except Exception:
-            return 0.0
-        if v > 1e11:          # 毫秒（★ 秒不可能是这个量级 ✓）
-            v /= 1000.0
-        return v
+        """内存行里的到期时刻 → 秒（★ 换算口只有一处 ✗ 在 market.exp_s ✓）"""
+        return mkmod.exp_s(row)
 
     @staticmethod
     def _mkt_ts_s(row):
-        """同上：内存行里的上架时刻 → 秒"""
-        try:
-            v = float(row.get('ts') or 0)
-        except Exception:
-            return 0.0
-        if v > 1e11:
-            v /= 1000.0
-        return v
+        """同上：内存行里的上架时刻 → 秒（★ 同一套判据 ✗ 一起归一化 ✓）"""
+        return mkmod.exp_s({'exp': row.get('ts')})
 
     def _mkt_rows_of(self, mkt, seller, now=None):
         """我的上架（含过期待领取的 ✓ 方案 §9 第二条 ✓）"""

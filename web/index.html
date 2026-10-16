@@ -297,7 +297,14 @@
    · 每行 44×44 图标 ✗ 底色 = 品阶色 0.18 ✗ 左边 3px 品阶色条（和地上掉落同一套色 ✓）
    · 一页最多 20 行 ✗ 几十字节的内联 SVG ✗ 完全无压力 ✓（方案 §8b 性能注意 ✓）
    ★ 面板是 absolute 定位 ✗ 所以背包那一格必须是 relative ✓
-     不然它会以【整个设置面板】为基准 ✗ 一开就盖住旁边的页签 ✓ */
+     不然它会以【整个设置面板】为基准 ✗ 一开就盖住旁边的页签 ✓
+   ★ 按钮行必须能换行 ✗ 手机上 520 宽那一行塞不下 5 个分类 ✓
+     （自测截图看到的：按钮挤成一团 ✗ 标签还压到了金币上 ✓）*/
+.tabpane[data-pane="bag"]{position:relative}
+#mktPanel .bagBtns{flex-wrap:wrap;gap:6px}
+#mktPanel .bagB{padding:4px 8px;font-size:12px}
+#mktPanel .mktHead{position:relative;padding-right:4px}
+#mktPanel .setLabel{display:inline-block}
 .tabpane[data-pane="bag"]{position:relative}
 .mktPanel{display:none;position:absolute;inset:0;z-index:6;background:#0d1219f2;
   border:1px solid #ffd83d33;border-radius:8px;padding:10px;overflow:auto}

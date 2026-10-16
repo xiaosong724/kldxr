@@ -234,12 +234,30 @@ def browse(mkt, cat='all', q='', tier_lo=None, tier_hi=None, afford=None,
     return {'rows': out[lo:lo + per], 'total': total, 'page': page, 'pages': pages}
 
 
+def exp_s(row):
+    """内存行里的到期时刻 → 【秒】（★ 全项目唯一的换算口 ✗ 详见 value.now_s() 注释 ✓）
+
+    ★★ 为什么必须有它（这个单位坑了自测三次 ✗ 记下来）★★
+      内存行的 exp 有【两个量级】并存：
+        · 乐观入货架 / 落库回灌后 → 秒（~1.79e9）
+        · 老数据 / 别处漏进来的毫秒（~1.79e12）
+      → 每个调用点各算各的 = 迟早有一处按越大一千倍算 ✓
+        表现：界面上写"剩 20729080 天后过期"✓（真机上截图看到的 ✓）
+      ★ 判据为什么安全：1e11 秒 = 公元 5138 年 ✗ 不会有那种上架 ✓
+    """
+    try:
+        v = float(row.get('exp') or 0)
+    except Exception:
+        return 0.0
+    if v > 1e11:
+        v /= 1000.0
+    return v
+
+
 def _now():
     import time
     return time.time()
 
-
-# ---------------------------------------------------------------- 网络行
 
 def pub_row(row):
     """内存行 → 发客户端的紧凑行（★ 不带完整 item_json ✗ 那是买家点开才要的 ✓）
@@ -252,6 +270,7 @@ def pub_row(row):
         → 如果这里不带名字 ✗ 客户端就得自己再存一份材料图标表 ✓
           两张表迟早不同步 ✗（方案 §8b 明写"图标必须和背包里一致"✓）
         → 带过去之后：客户端只做一次查表 ✗ 服务器加新材料也不用改客户端 ✓
+    ★ 单位：第 8 格 left 是【秒】✗ 名字就代表单位 ✓（客户端除 60 得分钟 ✓）
     """
     it = row.get('it') or {}
     is_mat = not it.get('slot')
@@ -259,7 +278,7 @@ def pub_row(row):
             'look': (it.get('name') if is_mat else it.get('look')),
             'kind': it.get('kind'), 'rarity': it.get('rarity'),
             'broken': 1 if it.get('broken') else 0}
-    left = int(max(0, row.get('exp', 0) - _now()))
+    left = int(max(0, exp_s(row) - _now()))     # ★ 归一化 ✗ 别直接减 ✓
     return [row['lid'], row['price'], row['cat'], row['tier'], row['lv'],
             row['name'], row['seller'], left, row.get('stack') or 1, icon]
 
