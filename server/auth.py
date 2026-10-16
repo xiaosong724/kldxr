@@ -19,6 +19,7 @@ import threading
 import time
 
 import db as dbmod
+import value as valuemod   # round304c: 全服货架装载要一个上限常量（纯字典 ✗ 无副作用 ✓）
 import weapons
 
 # ---------------------------------------------------------------- 参数
@@ -425,24 +426,34 @@ def armor_of(cfg, role_id):
     return ar, row[0]
 
 
-def market_rows_of(cfg, role_id):
-    """读出这个角色【正在出售】的上架单 → [(lid, seller, price, item_json, ts, expire, stack), ...]
+def market_rows_of(cfg, role_id, all_sellers=True):
+    """读出【在售】的上架单 → [(lid, seller, price, item_json, ts, expire, stack), ...]
 
     round304b: 交易所的货架要在内存里（tick 线程不许读库 ✗），
-    所以登录时在【网络线程】把库读出来，交给 tick 只做内存装配（和 weapon_of 同一个套路 ✓）。
+    所以由【网络线程】把库读出来，交给 tick 只做内存装配（和 weapon_of 同一个套路 ✓）。
 
-    ★ 为什么只读 seller=自己：浏览别人的商品时是"内存里已经有全量"才对的 ✗
-      而现在内存里的全量还没有来源（界面那一轮要补一条"全服货架装载"✓）
-      → 这里先保证【自己的东西上线就能看到/能下架】✗ 不假装有别人的 ✓
+    round304c: all_sellers=True（默认）读【全服在售】✗ 不再只读自己的 ✓
+      ★ 为什么必须全量：内存货架就是"别人也能看见"的唯一来源 ✓
+        只装自己的话 ✗ 面板一打开是空的 ✓（自测当场就是这个现象 ✓）
+      ★ 代价：每次读都在网络线程扫一遍 listings ✗
+        预期量级几百~几千行（方案 v9 §9）✗ 一次全表读完全可接受 ✓
+      ★ 什么时候读：① 登录时 ② 玩家点开交易所时（低频 ✗ 见 net.py ✓）
     ★ state='on' 才算货架上的（sold/cancelled/expired 是历史 ✗ 不进内存 ✓）
     """
     import json
     out = []
     try:
         with dbmod.db(cfg) as c:
-            rows = c.execute(
-                "SELECT lid, seller, price, item_json, ts, expire FROM listings"
-                " WHERE seller=? AND state='on' ORDER BY lid", (int(role_id),)).fetchall()
+            if all_sellers:
+                rows = c.execute(
+                    "SELECT lid, seller, price, item_json, ts, expire FROM listings"
+                    " WHERE state='on' ORDER BY lid LIMIT ?",
+                    (int(valuemod.MKT_SHELF_MAX),)).fetchall()
+            else:
+                rows = c.execute(
+                    "SELECT lid, seller, price, item_json, ts, expire FROM listings"
+                    " WHERE seller=? AND state='on' ORDER BY lid",
+                    (int(role_id),)).fetchall()
     except Exception:
         return out
     for lid, seller, price, js, ts, expire in rows:

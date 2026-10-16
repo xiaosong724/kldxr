@@ -245,10 +245,18 @@ def pub_row(row):
     """内存行 → 发客户端的紧凑行（★ 不带完整 item_json ✗ 那是买家点开才要的 ✓）
 
     [lid, price, cat, tier, lv, name, seller, 剩余秒, stack, 图标字段]
-    ★ 图标要用的字段放最后一格（slot/look/kind/rarity ✗ 客户端 iconOfItem 认这个 ✓）
+    ★ 图标要用的字段放最后一格（客户端 iconOfItem 认的就是这些名字 ✓）
+    ★★ 材料把【名字】放在 look 里 ✗ 这是个刻意的复用（round304c）★★
+      为什么：材料图标是客户端按【名字】查表画出来的（MAT_ICON_BY_NAME ✓）
+        而装备只要 slot/look 就够（武器模型是按 look 画的 ✓）
+        → 如果这里不带名字 ✗ 客户端就得自己再存一份材料图标表 ✓
+          两张表迟早不同步 ✗（方案 §8b 明写"图标必须和背包里一致"✓）
+        → 带过去之后：客户端只做一次查表 ✗ 服务器加新材料也不用改客户端 ✓
     """
     it = row.get('it') or {}
-    icon = {'slot': it.get('slot'), 'look': it.get('look'),
+    is_mat = not it.get('slot')
+    icon = {'slot': it.get('slot'),
+            'look': (it.get('name') if is_mat else it.get('look')),
             'kind': it.get('kind'), 'rarity': it.get('rarity'),
             'broken': 1 if it.get('broken') else 0}
     left = int(max(0, row.get('exp', 0) - _now()))

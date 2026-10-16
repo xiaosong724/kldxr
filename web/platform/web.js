@@ -2711,6 +2711,67 @@ function bagRender() {
       ? '点格子勾选 ✓ 再点【批量出售】'
       : '勾选多件一起卖（5 阶以上会再确认一次）';
   }
+  /* ============================================================
+     round304c：交易所那一行（★ 只在这里算"亮/灰"✗ 判定一律现算 ✓）
+     ★ 为什么把【挂交易所】放在这一段里：它和【卖给系统】是同一类判断
+       （选中了一件 + 这件能不能动 ✓）→ 共用同一个 sellable ✓
+       分两处各算一遍 ✗ 迟早出现"卖系统的亮着、挂交易所灰着"✓
+     ★ 闭包教训（round301 ✗ 这个文件里最贵的一课）：
+       这里只设 disabled / 文案 ✗ click 里现取 id ✗ 绝不捕获 ✓
+     ============================================================ */
+  var mktBtn = document.getElementById('bagMkt');
+  if (mktBtn) {
+    mktBtn.disabled = !sellable;
+    mktBtn.className = sellable ? 'bagB' : 'bagB off';
+    if (!mktBtn._b) {
+      mktBtn._b = true;
+      var _mktGo = function () {
+        if (mktBtn.disabled) { return; }
+        var _now2 = Date.now();
+        if (mktBtn._t && _now2 - mktBtn._t < 600) { return; }
+        mktBtn._t = _now2;
+        mktList();
+      };
+      /* ★ 和卖系统同一个套路：pointerdown + click 双绑 ✗ 防被拖动处理器吞掉 ✓ */
+      mktBtn.addEventListener('pointerdown', function (e) { e.preventDefault(); _mktGo(); });
+      mktBtn.onclick = function () { _mktGo(); };
+    }
+    /* 参考价：换了一件就问一次它的【系统收购价】✗ 填进输入框 ✓
+       ★ 只在"换了另一件"时覆盖 ✗ 免得玩家刚改完价格就被冲掉 ✓ */
+    var _priceEl = document.getElementById('bagMktPrice');
+    if (_priceEl && sellable && String(mktBtn._sid) !== String(sellId)) {
+      mktBtn._sid = String(sellId);
+      _priceEl.value = '';
+      if (typeof sellQuote === 'function') {
+        sellQuote([sellId], function (total) {
+          /* ★ 问价回来时可能已经换了别的格子 ✗ 再对一次 ✓（round301 的教训 ✓）*/
+          if (!_priceEl) { return; }
+          if (String(mktBtn._sid) !== String(sellIdNow())) { return; }
+          if (total > 0 && !_priceEl.value) { _priceEl.value = String(total); }
+        });
+      }
+    }
+  }
+  /* 打开交易所面板（★ 这是面板的【唯一入口】✗ 方案 §8：放进背包里 ✓）
+     ★ 每次进游戏都重绑一次是安全的 ✗ _b 守着 ✓ 但里面绝不捕获任何会变的值 ✓ */
+  var mktOpenBtn = document.getElementById('bagMktOpen');
+  if (mktOpenBtn && !mktOpenBtn._b) {
+    mktOpenBtn._b = true;
+    var _mktOpenGo = function () {
+      var now = Date.now();
+      if (mktOpenBtn._t && now - mktOpenBtn._t < 500) { return; }
+      mktOpenBtn._t = now;
+      mktOpen();
+    };
+    mktOpenBtn.addEventListener('pointerdown', function (e) { e.preventDefault(); _mktOpenGo(); });
+    mktOpenBtn.onclick = function () { _mktOpenGo(); };
+  }
+  var _mktTip = document.getElementById('bagMktSendTip');
+  if (_mktTip) {
+    _mktTip.textContent = sellable
+      ? '填价格（默认已填系统收购价 ✗ 挂交易所一般能卖出好几倍）✓'
+      : '先选中背包里的一件 → 填价格 → 挂上去';
+  }
   /* round299 step 3: the click. Only asks the server - the price comes back from
      /api/sell (value.py). On success the bag refreshes and `me` carries the new
      balance on the next push, so the HUD updates by itself. */
@@ -2876,6 +2937,458 @@ function sellItems(ids, isBatch) {
     if (typeof bagRender === 'function') { bagRender(); }
     if (multiBtn) { multiBtn.disabled = !(typeof BAG !== 'undefined' && BAG.pick && BAG.pick.length); }
   });
+}
+
+/* ============================================================
+   round304c: 交易所（客户端）—— 方案 v3 §8 / §8b 的落地
+   ------------------------------------------------------------
+   ★ 服务端已经在跑（round304b ✗ 95+41 项验证过 ✓），这里只做界面 ✓
+   ★ 三条设计口径（都是方案里定死的 ✗ 别改）：
+     ① 面板放进【背包】里 ✗ 不新增菜单标签（菜单那一行刚好够 ✓）
+     ② 图标直接复用 iconOfItem()：交易所里的和背包里的【必须一模一样】✓
+        换武器模型 / 加新材料时自动跟着变 ✗ 不用改两处 ✓
+     ③ 文案一律由【服务器】写（listres.msg ✗ 客户端不编 ✓）
+        这里是显示层 ✗ 不自己拼"上架成功"这种话 ✓
+   ★ 两种消息的分工（服务端定的 ✗ 别搞混）：
+     mktopen = 打开面板 / 刚捡了东西 → 服务器【重读库】✓ 慢一点没关系（低频 ✓）
+     lists   = 翻页/换分类/搜索   → 服务器只用【内存】✓ 快（高频 ✓）
+   ★ 回执是 [lid, price, cat, tier, lv, name, seller, left, stack, icon]
+     （紧凑数组 ✗ 一条省几十字节 ✗ 一页 20 条就省下不少 ✓）
+   ============================================================ */
+
+var MKT = {
+  /* open = 面板开着吗 ✗ tab = 'all' | 'mine' ✗ rows = 当前页 ✓ */
+  open: false, tab: 'all', rows: [], mine: [],
+  total: 0, page: 1, pages: 1, pageSize: 20, on: 0, onMax: 10,
+  gold: 0, msg: '', busy: false, afford: false,
+  /* 筛选条件（★ 换分类不重置搜索词 ✗ 方案 §8b 明确要求 ✓）*/
+  cat: 'all', sort: 'price', tier: 0, q: ''
+};
+
+/* 面板 DOM 是不是第一次用（★ 绑定只做一次 ✗ 但取值一律现算 ✓
+   —— 这就是 round301 那个"闭包记住 null"的教训 ✓）*/
+function mktBindOnce() {
+  /* ★ 我自己的角色 id：用来标"这是你自己的商品"✗ 从 WSC.role 现取 ✓ */
+  MKT.myRole = (WSC.role && WSC.role.id) ? WSC.role.id : null;
+  var p = document.getElementById('mktPanel');
+  if (!p || p._b) { return; }
+  p._b = true;
+  var close = document.getElementById('mktClose');
+  if (close) { close.onclick = mktClose; }
+  var tAll = document.getElementById('mktTabAll');
+  var tMine = document.getElementById('mktTabMine');
+  if (tAll) { tAll.onclick = function () { MKT.tab = 'all'; mktAsk(true); }; }
+  if (tMine) { tMine.onclick = function () { MKT.tab = 'mine'; mktAsk(false); }; }
+  /* 分类 / 阶数 / 排序：一组按钮共用一个处理器（★ 取值一律现算 ✓）*/
+  var cats = document.querySelectorAll('#mktCatRow .mktCat');
+  for (var i = 0; i < cats.length; i++) {
+    cats[i].onclick = function () {
+      MKT.cat = this.getAttribute('data-cat') || 'all';
+      MKT.page = 1;
+      mktAsk(false);
+    };
+  }
+  var tiers = document.querySelectorAll('#mktSortRow .mktTier');
+  for (var j = 0; j < tiers.length; j++) {
+    tiers[j].onclick = function () {
+      MKT.tier = +(this.getAttribute('data-tier') || 0);
+      MKT.page = 1;
+      mktAsk(false);
+    };
+  }
+  var sorts = document.querySelectorAll('#mktSortRow .mktSort');
+  for (var k = 0; k < sorts.length; k++) {
+    sorts[k].onclick = function () {
+      MKT.sort = this.getAttribute('data-sort') || 'price';
+      MKT.page = 1;
+      mktAsk(false);
+    };
+  }
+  var af = document.getElementById('mktAfford');
+  if (af) {
+    af.onclick = function () {
+      MKT.afford = !MKT.afford;
+      MKT.page = 1;
+      mktAsk(false);
+    };
+  }
+  var se = document.getElementById('mktSearch');
+  if (se) {
+    se.onclick = function () {
+      var q = document.getElementById('mktQ');
+      MKT.q = q ? String(q.value || '').trim() : '';
+      MKT.page = 1;
+      mktAsk(false);
+    };
+  }
+  var qEl = document.getElementById('mktQ');
+  if (qEl) {
+    /* 回车 = 搜索 ✓（手机上"搜索"键也是回车 ✓）*/
+    qEl.onkeydown = function (e) {
+      if (e && (e.key === 'Enter' || e.keyCode === 13)) {
+        MKT.q = String(qEl.value || '').trim();
+        MKT.page = 1;
+        mktAsk(false);
+      }
+    };
+  }
+  var pv = document.getElementById('mktPrev');
+  if (pv) {
+    pv.onclick = function () {
+      if (MKT.page > 1) { MKT.page--; mktAsk(false); }
+    };
+  }
+  var nx = document.getElementById('mktNext');
+  if (nx) {
+    nx.onclick = function () {
+      if (MKT.page < MKT.pages) { MKT.page++; mktAsk(false); }
+    };
+  }
+  var rf = document.getElementById('mktRefresh');
+  if (rf) { rf.onclick = function () { mktAsk(true); }; }
+  mktGridBind();
+}
+
+/* 打开/关闭（★ 打开 = mktopen ✗ 服务器会重读库 ✓）*/
+function mktOpen() {
+  var p = document.getElementById('mktPanel');
+  if (!p) { return; }
+  mktBindOnce();
+  MKT.open = true;
+  p.classList.add('on');
+  MKT.tab = 'all';
+  MKT.page = 1;
+  mktAsk(true);
+}
+function mktClose() {
+  var p = document.getElementById('mktPanel');
+  MKT.open = false;
+  if (p) { p.classList.remove('on'); }
+}
+
+/* 问一次服务器（fresh=true 走 mktopen ✗ 否则走纯内存的 lists ✓）*/
+function mktAsk(fresh) {
+  if (!NET.on || !WSC.ready) { MKT.msg = '单机模式没有交易所（联机才有 ✓）'; mktRender(); return; }
+  var b = { cat: MKT.cat, sort: MKT.sort, tier: MKT.tier, page: MKT.page,
+            q: MKT.q };
+  if (MKT.afford) { b.afford = 1; }
+  if (MKT.tab === 'mine') { MKT.msg = ''; wsSend('mylists', {}); return; }
+  MKT.msg = fresh ? '正在读货架…' : '';
+  var ok = wsSend(fresh ? 'mktopen' : 'lists', b);
+  if (!ok) { MKT.msg = '没连上服务器'; }
+  mktRender();
+}
+
+/* 买 / 下架 / 领取：都要问一次确认（★ 都是花真钱或真东西 ✗ 手一滑就没了 ✓）*/
+function mktBuy(lid, name, price) {
+  if (MKT.busy) { return; }
+  askConfirm({
+    title: '确认购买',
+    lines: ['要买下【' + name + '】吗？',
+            '★ 要花 <b style="color:' + GOLD_COL + '">' + fmtGold(price) + '</b> 金币',
+            '<span style="color:#9aa4b2">卖家到手 ' + fmtGold(price - Math.floor(price * 5 / 100)) +
+            '（成交税 5% ✗ 方案定稿）</span>'],
+    warn: '买下来就进你的背包 ✗ 退不回去',
+    ok: '确认购买'
+  }, function (yes) {
+    if (!yes) { return; }
+    /* sid = 幂等键 ✗ 服务器拿它挡重复成交（方案 v3 §5 ✓）*/
+    MKT.busy = true;
+    MKT.msg = '正在买…';
+    mktRender();
+    wsSend('buyitem', { lid: lid, sid: mktSid() });
+  });
+}
+function mktUnlist(lid, expired) {
+  if (MKT.busy) { return; }
+  askConfirm({
+    title: expired ? '取回过期的商品' : '确认下架',
+    lines: [expired ? '这件已经过期了 ✗ 取回背包吗？' : '要把这件从货架上拿下来吗？'],
+    warn: expired ? '' : '★ 上架费不退（方案定稿）',
+    ok: '确 定'
+  }, function (yes) {
+    if (!yes) { return; }
+    MKT.busy = true;
+    MKT.msg = '处理中…';
+    mktRender();
+    wsSend(expired ? 'listclaim' : 'unlist', { lid: lid });
+  });
+}
+
+/* 上架（★ 价格是玩家填的 ✗ 客户端不做任何"合不合法"的判断 ✓
+   服务器说"最低 10 金币"就照它说的显示 ✓ 两套规则迟早对不上 ✓）*/
+function mktList() {
+  var priceEl = document.getElementById('bagMktPrice');
+  var iid = bagSellSelId();
+  if (!iid) { toast('先在背包里选中一件'); return; }
+  var price = priceEl ? String(priceEl.value || '').replace(/[^0-9]/g, '') : '';
+  if (!price) { toast('先填一个价格'); return; }
+  if (MKT.busy) { return; }
+  var nm = '';
+  for (var i = 0; i < (BAG.items || []).length; i++) {
+    if (String(BAG.items[i].id) === String(iid)) { nm = (BAG.items[i].item || {}).name || '物品'; break; }
+  }
+  askConfirm({
+    title: '确认上架',
+    lines: ['要把【' + nm + '】挂到交易所吗？',
+            '★ 价格 <b style="color:' + GOLD_COL + '">' + fmtGold(price) + '</b> 金币',
+            '<span style="color:#9aa4b2">手续费 1%（最低 1 ✗ 最高 100 ✗ 余额不足 1000 免）</span>'],
+    warn: '上架期间这件东西【不在背包里】✗ 别人可以买走',
+    ok: '确认上架'
+  }, function (yes) {
+    if (!yes) { return; }
+    MKT.busy = true;
+    BAG.msg = '正在上架…';
+    bagRender();
+    wsSend('mklist', { iid: iid, price: +price, sid: mktSid() });
+  });
+}
+
+/* 幂等键：'c' + 毫秒 + 序号（★ 服务端的格式要求是"唯一"✗ 客户端只要不撞就行 ✓）*/
+var _mktSidSeq = 0;
+function mktSid() {
+  _mktSidSeq++;
+  return 'c' + Date.now().toString(36) + '.' + _mktSidSeq;
+}
+
+/* 当前选中的那件在【数据库里的 id】（★ 现算 ✗ 绝不进闭包 ✓ round301 的教训 ✓）*/
+function bagSellSelId() {
+  if (typeof BAG === 'undefined' || !BAG || !BAG.items || !BAG.sel) { return null; }
+  for (var i = 0; i < BAG.items.length; i++) {
+    if (String(BAG.items[i].id) === String(BAG.sel)) { return BAG.items[i].id; }
+  }
+  return null;
+}
+
+/* 行 → 图标单元格（★ 复用背包那套 ✗ 一模一样 ✓ 方案 §8b）*/
+function mktIcon(tier, icon) {
+  var fake = { tier: tier | 0, slot: (icon || {}).slot || null,
+               look: (icon || {}).look || null, kind: (icon || {}).kind || null,
+               name: '', rarity: (icon || {}).rarity || null };
+  /* ★ 材料要先有名字才画得出材质图 ✗ 这里给个兜底：认不出就用 box ✓
+     （iconOfItem 对认不出的材料本来就返回 box ✗ 所以行为一致 ✓）*/
+  fake.name = mktMatName(icon, tier);
+  return '<span style="color:' + tierHex(tier) + '">' + iconOfItem(fake) + '</span>';
+}
+/* 材料名（★ 服务端把材料名放在 icon.look 里 ✗ 详见它 pub_row 的注释 ✓）
+   ★ 为什么不让客户端自己认：材料图标表在 MAT_ICON_BY_NAME 里 ✓
+     在这里复制一份 = 两张表 ✗ 以后加材料必然不同步 ✓（方案 §8b 的原话 ✓）
+   → 服务器把它自己的名字带过来 ✗ 客户端只做一次查表 ✓ 永远同步 ✓*/
+function mktMatName(icon, tier) {
+  if (!icon) { return ''; }
+  if (icon.slot === 'weapon' || icon.slot === 'armor') { return ''; }
+  return String(icon.look || '');
+}
+
+/* ============================================================
+   渲染
+   ============================================================ */
+function mktRender() {
+  if (!MKT.open) { return; }
+  var g = document.getElementById('mktGold');
+  if (g) { g.textContent = fmtGold(MKT.gold || 0); }
+  var mm = document.getElementById('mktMine');
+  if (mm) { mm.textContent = '我的上架 ' + (MKT.on || 0) + '/' + (MKT.onMax || 10); }
+  var msg = document.getElementById('mktMsg');
+  if (msg) { msg.textContent = MKT.msg || ''; }
+  /* 按钮高亮：分类 / 阶数 / 排序 / 只看买得起（★ 全部现算 ✓）*/
+  mktHilite('#mktCatRow .mktCat', 'data-cat', MKT.cat);
+  mktHilite('#mktSortRow .mktTier', 'data-tier', String(MKT.tier));
+  mktHilite('#mktSortRow .mktSort', 'data-sort', MKT.sort);
+  var af = document.getElementById('mktAfford');
+  if (af) { af.className = MKT.afford ? 'bagB on mktAfford' : 'bagB mktAfford'; }
+  var ta = document.getElementById('mktTabAll');
+  var tm = document.getElementById('mktTabMine');
+  if (ta) { ta.className = (MKT.tab === 'all') ? 'bagB on' : 'bagB'; }
+  if (tm) { tm.className = (MKT.tab === 'mine') ? 'bagB on' : 'bagB'; }
+  var tip = document.getElementById('mktTabTip');
+  if (tip) {
+    tip.textContent = (MKT.tab === 'mine')
+      ? '你自己挂的东西 ✗ 可下架（上架费不退）✓'
+      : '看别人挂的东西 ✗ 点购买就能买走';
+  }
+  /* 翻页行：只有一页就不显示 ✓ */
+  var pg = document.getElementById('mktPager');
+  if (pg) { pg.style.display = (MKT.pages > 1) ? 'flex' : 'none'; }
+  var pt = document.getElementById('mktPageTxt');
+  if (pt) {
+    pt.textContent = '第 ' + MKT.page + ' / ' + MKT.pages + ' 页 · 共 ' +
+      MKT.total + ' 件';
+  }
+  /* 列表 */
+  var box = document.getElementById('mktList');
+  if (!box) { return; }
+  var rows = (MKT.tab === 'mine') ? MKT.mine : MKT.rows;
+  if (!rows || !rows.length) {
+    box.innerHTML = '<div class="mktEmpty">' +
+      (MKT.tab === 'mine' ? '你还没挂东西 ✗ 在背包里选中一件 → 填价格 → 挂交易所'
+                          : '货架是空的 ✗ 去【我的上架】挂一件试试') + '</div>';
+    return;
+  }
+  var h = '';
+  for (var i = 0; i < rows.length; i++) {
+    h += (MKT.tab === 'mine') ? mktMineRow(rows[i]) : mktRow(rows[i]);
+  }
+  box.innerHTML = h;
+}
+
+function mktHilite(sel, attr, val) {
+  var list = document.querySelectorAll(sel);
+  for (var i = 0; i < list.length; i++) {
+    var base = list[i].className.replace(/\s*on/g, '');
+    list[i].className = (String(list[i].getAttribute(attr)) === String(val))
+      ? (base + ' on') : base;
+  }
+}
+
+/* 一行商品（★ 左边 3px 品阶色条 ✗ 44×44 图标 ✗ 名字/阶数/等级/卖家/剩余 ✓）*/
+function mktRow(r) {
+  var lid = r[0], price = r[1], tier = r[3], lv = r[4], name = r[5];
+  var seller = r[6], left = r[7], stack = r[8], icon = r[9] || {};
+  /* 浏览行里的 left 是【秒】（服务端 pub_row 算好的 ✓ 单位就这一种 ✓）*/
+  var mins = Math.round((+left || 0) / 60);
+  var long = (mins >= 1440) ? (Math.floor(mins / 1440) + ' 天')
+    : (mins >= 60 ? (Math.floor(mins / 60) + ' 小时') : (mins + ' 分'));
+  var isMe = (MKT.myRole && String(seller) === String(MKT.myRole));
+  var sub = '★' + (tier + 1) + ' 阶' + (lv ? (' · Lv' + lv) : '') +
+    (stack > 1 ? (' · ×' + stack) : '') + ' · 卖家 ' + (isMe ? '（你自己）' : ('#' + seller));
+  return '<div class="mktRow" style="border-left-color:' + tierHex(tier) + '">' +
+    '<span class="mktIco" style="background:' + tierRgba(tier, 0.18) + '">' +
+      '<span class="mktTier">' + (tier + 1) + '</span>' + mktIcon(tier, icon) +
+      (stack > 1 ? ('<span class="mktCnt">×' + stack + '</span>') : '') + '</span>' +
+    '<span class="mktMain"><span class="mktName">' + mktEsc(name) + '</span>' +
+      '<span class="mktSub">' + sub + '</span></span>' +
+    '<span class="mktPrice">' + fmtGold(price) + '<small>剩 ' + long + '</small></span>' +
+    (isMe
+      ? '<button class="bagB" disabled>你自己的</button>'
+      : ('<button class="bagB" data-mktbuy="' + lid + '" data-mktname="' +
+         mktEsc(name) + '" data-mktprice="' + price + '">购 买</button>')) +
+    '</div>';
+}
+
+/* 我的上架那一行（★ 多显示"到手多少"✗ 卖家最关心这个 ✓）*/
+function mktMineRow(r) {
+  var lid = r.lid, price = r.price, tier = r.tier || 0, name = r.name || '';
+  var st = r.state || 'on', net = r.net || 0, tax = r.tax || 0;
+  var expired = (st !== 'on');
+  /* ★★ 服务端【没发 left】✗ 自测当场把这个坑照出来了★★
+     坏样子：界面显示"剩 20729074 天后过期"✓（因为 +r.left 是 undefined → 0 ✓
+     而下面又拿它当秒数算 ✗ 两个口径混在一起）
+     ★ 正解：用服务端回灌的【绝对到期时刻】exp（毫秒 ✗ 和 Date.now() 同一把尺子 ✓）
+       没有 exp 才退回 left（秒 ✗ 单位写清楚 ✓）*/
+  var leftMs = (typeof r.exp === 'number' && r.exp > 0)
+    ? (r.exp - Date.now())          /* exp 是毫秒 ✗ 和 Date.now() 同一把尺子 ✓ */
+    : ((+r.left || 0) * 1000);      /* left 是秒 ✗ 只在服务端没给 exp 时才走这条 ✓ */
+  var mins = Math.max(0, Math.round(leftMs / 60000));
+  var long = expired ? '已过期' :
+    ((mins >= 1440) ? (Math.floor(mins / 1440) + ' 天后过期')
+                    : (mins >= 60 ? (Math.floor(mins / 60) + ' 小时后过期')
+                                  : (mins + ' 分钟后过期')));
+  return '<div class="mktRow' + (expired ? ' gone' : '') +
+    '" style="border-left-color:' + tierHex(tier) + '">' +
+    '<span class="mktIco" style="background:' + tierRgba(tier, 0.18) + '">' +
+      '<span class="mktTier">' + (tier + 1) + '</span>' +
+      mktIcon(tier, { slot: (r.it || {}).slot, look: (r.it || {}).look,
+                      kind: (r.it || {}).kind }) + '</span>' +
+    '<span class="mktMain"><span class="mktName">' + mktEsc(name) + '</span>' +
+      '<span class="mktSub">★' + (tier + 1) + ' 阶 · ' + long +
+      ' · 到手 ' + fmtGold(net) + '（税 ' + fmtGold(tax) + '）</span></span>' +
+    '<span class="mktPrice">' + fmtGold(price) + '<small>' +
+      (expired ? '待取回' : '在售') + '</small></span>' +
+    '<button class="bagB" data-mktun="' + lid + '" data-mktexp="' +
+      (expired ? 1 : 0) + '">' + (expired ? '取 回' : '下 架') + '</button>' +
+    '</div>';
+}
+
+/* 名字里有 < > & 就直接拼进 HTML ✗ 必须转义（★ 玩家名字/物品名都可能带 ✓）*/
+function mktEsc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/* 列表的点击：事件委托（★ 行是 innerHTML 拼的 ✗ 每行绑一次会漏 ✓）*/
+function mktGridBind() {
+  var box = document.getElementById('mktList');
+  if (!box || box._b) { return; }
+  box._b = true;
+  box.onclick = function (e) {
+    var el = e.target;
+    while (el && el !== box && !el.getAttribute) { el = el.parentNode; }
+    if (!el || el === box) { return; }
+    var buy = el.getAttribute('data-mktbuy');
+    var un = el.getAttribute('data-mktun');
+    if (buy) {
+      mktBuy(+buy, el.getAttribute('data-mktname') || '物品',
+             +el.getAttribute('data-mktprice') || 0);
+      return;
+    }
+    if (un) {
+      mktUnlist(+un, el.getAttribute('data-mktexp') === '1');
+      return;
+    }
+  };
+}
+
+/* ============================================================
+   收到服务器的两条交易所消息
+   ============================================================ */
+function mktOnPage(d) {
+  mktBindOnce();
+  /* ★ 金币以服务器给的为准 ✗ 没带就用 me.gold（同一个来源 ✓）*/
+  if (typeof d.gold !== 'number' && WSC.role && typeof WSC.role.gold === 'number') {
+    MKT.gold = WSC.role.gold;
+  }
+  if (d.mine) {
+    /* "我的上架"（mylists 或 mktopen 顺带发的那条 ✓）*/
+    MKT.mine = d.rows || [];
+    MKT.on = +(d.on || 0);
+    MKT.onMax = +(d.max || 10);
+    if (typeof d.gold === 'number') { MKT.gold = d.gold; }
+    mktRender();
+    return;
+  }
+  MKT.rows = d.rows || [];
+  MKT.total = +(d.total || 0);
+  MKT.page = +(d.page || 1);
+  MKT.pages = +(d.pages || 1);
+  MKT.pageSize = +(d.pageSize || 20);
+  if (typeof d.gold === 'number') { MKT.gold = d.gold; }
+  MKT.busy = false;
+  MKT.msg = '';
+  mktRender();
+}
+
+function mktOnRes(d) {
+  mktBindOnce();
+  MKT.busy = false;
+  /* ★ 那句尾巴是给 wsOnMessage 认的记号 ✗ 玩家不该看到它 ✓ */
+  var msg = String(d.msg || '').replace('（背包已更新）', '');
+  if (!d.ok) {
+    MKT.msg = '✗ ' + msg;
+    toast('✗ ' + msg);
+    mktRender();
+    /* 失败可能是"这东西已经不在背包了"→ 顺手把背包刷新一下 ✓ */
+    if (msg.indexOf('背包') >= 0) { bagFetch(bagRender); }
+    return;
+  }
+  if (d.refresh) {
+    /* ★ 最终回执（落库之后那条 ✓）才刷新界面 ✗ 乐观那条不刷 ✓
+       为什么：乐观那条只是"正在上架…"✗ 刷了反而闪并且 lid 还没有 ✓ */
+    MKT.msg = msg || '完成';
+    toast(msg || '完成');
+    if (typeof bagFetch === 'function') { bagFetch(bagRender); }
+    if (MKT.open) { mktAsk(false); }
+  } else {
+    MKT.msg = msg || '处理中…';
+    mktRender();
+  }
+}
+
+/* 服务器在 notice 尾巴上带的约定：见到"（背包已更新）"就去重拉背包 ✓
+   （服务端 _mkt_ack 里写死的 ✗ 两边必须一致 ✓ 改一边要改另一边 ✓）*/
+function mktNoticeSaysRefresh(text) {
+  return String(text || '').indexOf('（背包已更新）') >= 0;
 }
 
 /* round303b: 问服务器【这批东西现在能卖多少钱】✗ 只读 ✓ 不卖 ✓
@@ -3584,6 +4097,13 @@ function wsOnMessage(raw) {
   if (t === 'ticker') { tkPush(d.text, d.kind); return; }
   if (t === 'error' || t === 'notice') {
     var _tx = d.msg || d.text || '';
+    /* ★ round304c：交易所的最终回执会在 notice 尾巴上带这个记号 ✗
+       见到就去重拉背包 ✓（服务端 _mkt_ack 写死的 ✗ 两边必须一致 ✓）
+       ★ 为什么用"约定一个尾巴"这种土办法：notice 本来就是【服务器写文案】的通道 ✓
+         为这一件事新加一种消息 ✗ 协议表就得多一条 ✓ 不值得 ✓ */
+    if (typeof mktNoticeSaysRefresh === 'function' && mktNoticeSaysRefresh(_tx)) {
+      if (typeof bagFetch === 'function') { bagFetch(bagRender); }
+    }
     /* ★ 第 52 轮：服务器说"等级不够"这类拒绝，除了 toast 还要【留在背包面板里】✓
        （toast 一闪而过，玩家会以为"点了没反应"✗）*/
     if (_tx.indexOf('等级不够') >= 0 || _tx.indexOf('不是武器') >= 0 ||
@@ -3695,6 +4215,15 @@ function wsOnMessage(raw) {
     if (typeof d.x === 'number' && typeof d.z === 'number') {
       P.x = d.x; P.z = d.z;          /* 位置由服务器说了算（传送这一下）✓ */
     }
+    return;
+  }
+  /* ★★ round304c：交易所的两条下行（listpage = 一页货架 ✗ listres = 操作结果）★★ */
+  if (t === 'listpage') {
+    if (typeof mktOnPage === 'function') { mktOnPage(d); }
+    return;
+  }
+  if (t === 'listres') {
+    if (typeof mktOnRes === 'function') { mktOnRes(d); }
     return;
   }
   if (t === 'mq') {              // ★ 第 152 轮：服务器告诉我魔气变了 ✓

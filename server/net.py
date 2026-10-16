@@ -109,6 +109,26 @@ class Net(object):
         err = P.check_c2s(t, d)
         if err:
             return conn.push_text(P.pack('error', msg=err))
+        # ★★ round304c：打开交易所 = "给我最新的一份"（★ 要读库 ✗ 所以在这一层做 ✓）★★
+        #   ★ 为什么不能让 tick 自己去读：tick 线程不许碰磁盘（铁律 ✓）
+        #   ★ 为什么不复用 lists：lists 是【纯内存浏览】✗ 它读的是 tick 手里的货架 ✓
+        #     而货架会过期/会被人买走 ✗ 玩家还可能刚捡了东西想上架 ✓
+        #     → 所以"打开面板"这条必须有【重新读库】的语义 ✓ 单独一条 mktopen ✓
+        #   ★ 两步都读：① 全服在售（别人的商品）② 他现在的背包（上架要用 item id ✓）
+        #     这两样正是"面板一打开是空的"和"刚捡的东西挂不上去"的解药 ✓
+        if t == 'mktopen':
+            role = self.authed.get(conn.cid) or {}
+            rid = role.get('id')
+            rows, bag = [], []
+            try:
+                import auth as authmod5
+                rows = authmod5.market_rows_of(self.cfg, rid)      # 全服在售 ✓
+                bag = authmod5.bag_of(self.cfg, rid)              # 他此刻的背包 ✓
+            except Exception as e:
+                print('  [ws] 交易所装载失败：%r' % (e,))
+            self.world.post_intent(conn.cid, 'mktopen', {'rows': rows, 'bag': bag,
+                                                         'req': d or {}})
+            return
         # ★ 高频消息一律入队，交给 tick 线程 —— 这里绝不碰世界状态
         # ★★ 第 47 轮：装备是【罕见操作 + 要查库】→ 在网络线程做，tick 线程不碰磁盘 ✓
         #   服务器自己查这件是不是他的、是不是武器、等级够不够（见 auth.equip_weapon ✓）

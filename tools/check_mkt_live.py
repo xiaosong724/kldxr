@@ -375,14 +375,31 @@ try:
     ok(got is not None, 'gold after listing = %s' % got)
 
     print('== 3. 买家看货架（纯内存 ✓）==')
-    ws_b.send('lists', cat='all', sort='price')
-    lp = ws_b.wait('listpage', timeout=10)
+    # ★★ round304c：先走 mktopen（= 面板上点开交易所 ✓ 会重读库 ✓）★★
+    #   为什么必须验这条：内存货架以前【只有卖家=自己】那一份 ✗
+    #   → 买家打开面板会是空的 ✓（自测当场就是这个现象 ✓）
+    ws_b.send('mktopen', cat='all', sort='price')
+    ws_b.collect('listpage', 2.0)          # 先收掉可能还在路上的旧页 ✓
+    ws_b.send('mktopen', cat='all', sort='price')
+    lp = None
+    end = time.time() + 10
+    while time.time() < end and lp is None:
+        cand = ws_b.wait('listpage', timeout=2)
+        if cand and cand.get('rows') is not None and cand.get('mine') == 1:
+            continue                        # ★ mktopen 会先发浏览页 ✗ 再发"我的上架"✓
+        lp = cand
     ok(lp is not None and lp.get('rows') is not None, 'the buyer got a listpage', lp)
     mine = [r for r in (lp or {}).get('rows', []) if r[0] == lid]
-    ok(len(mine) == 1, 'the fresh listing is on the shelf (%d of %d)'
+    ok(len(mine) == 1,
+       "the SELLER's listing is visible to the BUYER (the whole shelf was loaded): %d of %d"
        % (len(mine), len((lp or {}).get('rows') or [])))
     ok(lp.get('gold') == gold_of(BUYER), 'the page carries the buyer balance (%s vs %s)'
        % (lp.get('gold'), gold_of(BUYER)))
+    #   ★ 顺手验"背包快照会刷新"：买家刚把东西全卖了 ✗ 此刻的背包应该是空的 ✓
+    #     （★ 别拿 bag_b 当"现在"✗ 那是卖东西【之前】读的 ✓ 自测踩过这个 ✓）
+    st, bag_now = http('GET', '/api/bag', token=tok_b)
+    now_ids = [x['id'] for x in (bag_now.get('items') or [])]
+    ok(not now_ids, 'the buyer bag really is empty now (%d left)' % len(now_ids))
 
     print('== 4. 购买（真成交 + 5% 税）==')
     b_gold0 = gold_of(BUYER)

@@ -292,11 +292,41 @@
 #loginCard .tip{margin-top:12px;font-size:11.5px;color:#63768a}
 
 /* ---- 背包 / 装备面板（第 47 轮）---- */
-/* ★★ 第 48 轮：格子背包（像 MC）★★
-   格子的"内凹 + 左上亮边"是 MC 那种质感的关键 ✓
-   图标是 SVG 描边（currentColor）→ 由品阶色着色 ✓ 不加任何素材 ✓ */
-.bagHead{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px}
-/* ★ 第 171 轮（用户 #4）：8 列 → 7 列（宽 7 ✓）每页 35 格 = 5×7 ✓ */
+/* ★★ round304c：交易所（方案 v3 §8b —— 图标和背包里【完全一致】✗ 一眼认得出 ✓）★★
+   · 面板盖在背包上 ✗ 右上角一个关闭 ✓（不新增菜单标签 ✓ 方案 §8 定稿）
+   · 每行 44×44 图标 ✗ 底色 = 品阶色 0.18 ✗ 左边 3px 品阶色条（和地上掉落同一套色 ✓）
+   · 一页最多 20 行 ✗ 几十字节的内联 SVG ✗ 完全无压力 ✓（方案 §8b 性能注意 ✓）
+   ★ 面板是 absolute 定位 ✗ 所以背包那一格必须是 relative ✓
+     不然它会以【整个设置面板】为基准 ✗ 一开就盖住旁边的页签 ✓ */
+.tabpane[data-pane="bag"]{position:relative}
+.mktPanel{display:none;position:absolute;inset:0;z-index:6;background:#0d1219f2;
+  border:1px solid #ffd83d33;border-radius:8px;padding:10px;overflow:auto}
+.mktPanel.on{display:block}
+.mktHead{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.mktGold{color:#ffd83d;font-size:13px}
+.mktGold b{font-size:15px}
+.mktList{margin-top:6px}
+.mktRow{display:flex;align-items:center;gap:8px;padding:5px 6px;margin-bottom:4px;
+  border-radius:6px;background:rgba(255,255,255,.035);border-left:3px solid #666}
+.mktRow:hover{background:rgba(255,255,255,.075)}
+.mktIco{position:relative;width:44px;height:44px;border-radius:8px;flex:0 0 44px;
+  display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.09)}
+.mktIco svg{width:34px;height:34px}
+.mktTier{position:absolute;left:2px;top:1px;font-size:9px;color:#fff;opacity:.85;
+  text-shadow:0 1px 2px #000}
+.mktCnt{position:absolute;right:2px;bottom:1px;font-size:10px;color:#ffe0a0;
+  text-shadow:0 1px 2px #000}
+.mktMain{flex:1 1 auto;min-width:0}
+.mktName{font-size:13px;color:#e8eef6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mktSub{font-size:11px;color:#8f9aa8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mktPrice{flex:0 0 auto;text-align:right;color:#ffd83d;font-size:14px;min-width:64px}
+.mktPrice small{display:block;color:#8f9aa8;font-size:10px;font-weight:400}
+.mktRow .bagB{flex:0 0 auto}
+.mktRow.gone{opacity:.45}
+.mktEmpty{color:#8f9aa8;font-size:12px;padding:14px 4px;text-align:center}
+.mktInput{width:88px;background:#0b0f14;color:#e8eef6;border:1px solid #ffffff22;
+  border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit}
+.mktInput::placeholder{color:#5b6675}
 .bagGrid{display:grid;grid-template-columns:repeat(7,40px);gap:4px;
   max-height:34vh;overflow:auto;padding:2px}
 .slot{position:relative;width:40px;height:40px;border-radius:4px;
@@ -574,6 +604,61 @@
    <div class="bagBtns"><button id="bagPick" class="bagB">批量选择</button>
    <button id="bagSellMulti" class="bagB off" disabled>批量出售</button>
      <span class="bagTip" id="bagPickTip">勾选多件一起卖（5 阶以上要再确认一次）</span></div>
+
+   <!-- ★★ round304c：交易所（方案 v3 §8 定稿：放进背包面板里 ✗ 不新增菜单标签 ✓）★★
+        上面那两行是"卖给系统"（有系统收购价 ✓ 一点就走 ✓）
+        这一行是"挂交易所"（价格玩家自己定 ✗ 别人能买走 ✓ 收 1% 上架费）
+        ★ 为什么价格要玩家【手填】：交易所的价格是玩家定的 ✗ 系统价只是参考 ✓
+          → 输入框会自动填好系统收购价（点格子时算的 ✓ 方案 v3：成交价 ≈ 系统价 3.3 倍 ✓）-->
+   <div class="bagBtns"><button id="bagMkt" class="bagB off" disabled>挂交易所</button>
+     <input id="bagMktPrice" class="mktInput" type="text" inputmode="numeric"
+            placeholder="价格" maxlength="10">
+     <button id="bagMktOpen" class="bagB">交易所</button>
+     <span class="bagTip" id="bagMktSendTip">先选中背包里的一件 → 填价格 → 挂上去</span></div>
+
+   <!-- 交易所子面板（盖在背包上 ✗ 带关闭按钮 ✓ 方案 §8）-->
+   <div id="mktPanel" class="mktPanel">
+    <div class="mktHead">
+      <span class="setLabel" style="margin:0">交 易 所</span>
+      <span class="mktGold">金币 <b id="mktGold">0</b></span>
+      <span class="bagTip" id="mktMine">我的上架 0/10</span>
+      <button class="bagB" id="mktClose" style="margin-left:auto">关 闭</button>
+    </div>
+    <div class="bagBtns">
+      <button class="bagB on" id="mktTabAll">全部商品</button>
+      <button class="bagB" id="mktTabMine">我的上架</button>
+      <span class="bagTip" id="mktTabTip">看别人挂的东西 ✗ 点购买就能买走</span>
+    </div>
+    <div class="bagBtns" id="mktCatRow">
+      <button class="bagB on mktCat" data-cat="all">全部</button>
+      <button class="bagB mktCat" data-cat="weapon">武器</button>
+      <button class="bagB mktCat" data-cat="armor">防具</button>
+      <button class="bagB mktCat" data-cat="material">材料</button>
+      <button class="bagB mktCat" data-cat="other">其他</button>
+    </div>
+    <div class="bagBtns" id="mktSortRow">
+      <button class="bagB on mktTier" data-tier="0">全阶</button>
+      <button class="bagB mktTier" data-tier="1">1-3 阶</button>
+      <button class="bagB mktTier" data-tier="2">4-6 阶</button>
+      <button class="bagB mktTier" data-tier="3">7-9 阶</button>
+      <button class="bagB mktSort" data-sort="price">价格↑</button>
+      <button class="bagB mktSort" data-sort="price_desc">价格↓</button>
+      <button class="bagB mktSort" data-sort="new">最新</button>
+      <button class="bagB mktAfford" id="mktAfford">只看买得起</button>
+    </div>
+    <div class="bagBtns">
+      <input id="mktQ" class="mktInput" type="text" placeholder="搜索名字" maxlength="16">
+      <button class="bagB" id="mktSearch">搜 索</button>
+      <span class="bagTip" id="mktMsg"></span>
+    </div>
+    <div id="mktList" class="mktList"></div>
+    <div class="bagBtns" id="mktPager" style="display:none">
+      <button class="bagB" id="mktPrev">‹ 上一页</button>
+      <span class="bagTip" id="mktPageTxt" style="min-width:120px;text-align:center">1 / 1</span>
+      <button class="bagB" id="mktNext">下一页 ›</button>
+      <button class="bagB" id="mktRefresh">刷 新</button>
+    </div>
+   </div>
 
    <!-- ★★ 第 56 轮（用户第 5 条）：以前这几行挂在"装备"标题下面 ✗
         点别的武器时它就跟着变 → 看着像"已装备的数值变了"✗ 多余

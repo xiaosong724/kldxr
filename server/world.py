@@ -1048,6 +1048,9 @@ class World(object):
                                          text='调试：背包里多了一件【%s】—— 打开背包就能穿上 ✓' % w['name']))
         elif t == 'party':
             self._party_op(p, d)          # ★ 第 81 轮：组队 ✓
+        elif t == 'mktopen':
+            # round304c：网络线程刚读了库（全服在售 + 我此刻的背包 ✓）
+            self._mkt_open_fresh(p, d)
         elif t in ('lists', 'mylists', 'mklist', 'buyitem', 'unlist', 'listclaim'):
             self._mkt_do(p, t, d)         # ★ round304b：交易所（纯内存 ✓）
         elif t == 'armorset':
@@ -1904,26 +1907,94 @@ class World(object):
                 d[k] = v
         self._send_cid(p.cid, P.pack('listres', **d))
 
-    def _mkt_load(self, role_id, rows):
-        """上线时把货架读进内存（网络线程已经查好了 ✗ 这里只入内存 ✓）"""
+    def _mkt_load(self, role_id, rows, replace=False):
+        """把（网络线程读好的）货架装进内存（★ tick 只装配 ✗ 一步都不查库 ✓）
+
+        role_id : 是谁在装载（只在 replace=False 时用来筛"他自己的单"✓）
+        rows    : auth.market_rows_of() 读出来的行 ✓
+        replace : round304c ★ 全量替换（打开交易所时用 ✓）
+                  False = 登录时那条老路（只补自己的 ✗ 不动已有的 ✓）
+        """
         n = 0
+        seen = set()
         now = now_s()
+        if replace:
+            # ★ 全量替换：先清空 ✗ 但【正在上架中的占位行】不能丢 ✓
+            #   （那些行是负数 lid ✗ 库里还没有它们 ✓ 清掉就等于玩家白点了一下 ✓）
+            keep = {l: r for l, r in self.mkt['by_lid'].items() if int(l) < 0}
+            for l in list(self.mkt['by_lid'].keys()):
+                if int(l) >= 0:
+                    mkmod.drop(self.mkt, l)
+            for l, r in keep.items():
+                mkmod.add(self.mkt, r)
         for row in mkmod.load_rows(rows):
-            if int(row.get('seller') or 0) != int(role_id):
-                continue
             if int(row.get('lid') or 0) < 0:
                 # ★ 负数 lid 是【内存占位】（正在上架 ✗ 还没落库 ✓）不入内存 ✓
-                #   不然会把占位行从库里"载入"一遍 ✗ 出现两行同一件东西 ✓
+                continue
+            if not replace and int(row.get('seller') or 0) != int(role_id):
+                # 登录那条老路只认自己的（★ 默认现在是全量读 ✗ 所以这个分支少走 ✓）
                 continue
             if float(row.get('exp') or 0) <= now:
                 # ★ 已经过期的：不进内存 ✗ 直接排一条"退回过期"✓
                 self.post_save(('MKT', 'exp', {'lid': int(row['lid']),
-                                               'seller': int(role_id)}))
+                                               'seller': int(row.get('seller') or 0)}))
                 continue
             mkmod.add(self.mkt, row)
+            seen.add(int(row['lid']))
             n += 1
-        if n:
-            print('[mkt] role %s loaded %d listing(s)' % (role_id, n))
+        if n or replace:
+            print('[mkt] %s loaded %d listing(s), shelf now %d'
+                  % ('reload' if replace else ('role %s' % role_id), n,
+                     len(self.mkt['by_lid'])))
+
+    def _mkt_open_fresh(self, p, d):
+        """round304c：打开交易所 = 网络线程刚读了库 ✗ 这里只装配 + 回第一页 ✓"""
+        try:
+            bag = d.get('bag')
+            if isinstance(bag, list):
+                # ★ 背包快照刷新（方案 §9 那条"刚捡的东西挂不上去"的解药 ✓）
+                p.role['bag'] = bag
+        except Exception as e:
+            print('[mkt] bag refresh failed: %r' % (e,))
+        try:
+            self._mkt_load(p.role_id, d.get('rows') or [], replace=True)
+        except Exception as e:
+            print('[mkt] reload failed: %r' % (e,))
+        self._mkt_browse(p, d.get('req') or {})
+        # ★ 顺手把"我的上架"也给一份：面板上"我的上架 N/10"那个角标要立刻有数 ✓
+        self._mkt_mine(p)
+
+    @staticmethod
+    def _mkt_exp_s(row):
+        """内存行里的到期时刻 → 【秒】（★ 唯一的换算口 ✗ 别再散在别处 ✓）
+
+        ★★ 为什么必须有这么一个函数（自测被这个单位坑了三次 ✗ 记下来）★★
+          内存行的 exp 有【两个可能的量级】：
+            · 乐观入货架时是 now_s()（秒 ✓ ~1.79e9）
+            · 落库回灌如果带了毫秒（~1.79e12）就会大一千倍 ✓
+          以前每一处各算各的（_mkt_rows_of / _mkt_mine / 客户端 ✓）
+          → 一处按秒、一处按毫秒 → 界面显示"剩 20729077 天后过期"✓✓
+          ★ 正解：进来先归一化 ✗ 大数（>1e11）一律当成毫秒 ✓
+            1e11 秒 = 公元 5138 年 ✗ 不可能有那种上架 ✓ 所以这个判据是安全的 ✓
+        """
+        try:
+            v = float(row.get('exp') or 0)
+        except Exception:
+            return 0.0
+        if v > 1e11:          # 毫秒（★ 秒不可能是这个量级 ✓）
+            v /= 1000.0
+        return v
+
+    @staticmethod
+    def _mkt_ts_s(row):
+        """同上：内存行里的上架时刻 → 秒"""
+        try:
+            v = float(row.get('ts') or 0)
+        except Exception:
+            return 0.0
+        if v > 1e11:
+            v /= 1000.0
+        return v
 
     def _mkt_rows_of(self, mkt, seller, now=None):
         """我的上架（含过期待领取的 ✓ 方案 §9 第二条 ✓）"""
@@ -1933,24 +2004,31 @@ class World(object):
         for row in mkt['by_lid'].values():
             if int(row.get('seller') or 0) != int(seller):
                 continue
-            exp = float(row.get('exp') or 0)
+            exp = self._mkt_exp_s(row)
             state = 'on' if exp > now else 'expired'
             if state == 'on':
                 n_on += 1
             out.append({'state': state, 'row': row})
-        out.sort(key=lambda x: -float(x['row'].get('ts') or 0))
+        out.sort(key=lambda x: -self._mkt_ts_s(x['row']))
         return out, n_on
 
     def _mkt_mine(self, p):
         """推"我的上架"给本人（★ 一页 20 条够用 ✗ 每人最多 10 件 ✓）"""
         rows, n_on = self._mkt_rows_of(self.mkt, p.role_id)
         body = []
+        _now = now_s()
         for x in rows[:20]:
             r = x['row']
+            _exp = self._mkt_exp_s(r)          # ★ 一律先归一化成秒 ✓
             body.append({'lid': int(r['lid']), 'price': int(r['price']),
                          'tier': int(r['tier']), 'lv': int(r['lv']),
                          'name': r['name'], 'state': x['state'],
-                         'left': int(max(0, float(r['exp']) - now_s())),
+                         # ★ left 单位 = 【秒】（和列表页同一个口径 ✓）
+                         'left': int(max(0, _exp - _now)),
+                         # ★ exp 给的是【毫秒】（★ 客户端拿它直接和 Date.now() 比 ✓）
+                         #   为什么这里给毫秒：JS 那边 Date.now() 就是毫秒 ✗
+                         #   让它自己去 /1000 就是又造一个单位混用的机会 ✓
+                         'exp': int(_exp * 1000),
                          'tax': mkmod.tax_of(r['price']),
                          'net': mkmod.net_of(r['price']),
                          'it': r['it']})
@@ -2066,9 +2144,10 @@ class World(object):
         #   而玩家可能已经在"我的上架"里找它了 ✓（体验 ✗ 不是正确性 ✓）
         lid_tmp = -iid
         try:
+            _t0 = valuemod.now_s()
             mkmod.add(self.mkt, mkmod.row_of(
-                lid_tmp, p.role_id, int(price), it, now_s(),
-                now_s() + int(valuemod.MKT_DAYS) * 86400, int(stack)))
+                lid_tmp, p.role_id, int(price), it, _t0,
+                _t0 + int(valuemod.MKT_DAYS) * 86400, int(stack)))
         except Exception as e:
             print('[mkt] optimistic add failed: %r' % (e,))
         self.post_save(('MKT', 'list', {'sid': str(d.get('sid') or ''),
@@ -2277,10 +2356,22 @@ class World(object):
                         tmp = int(ex.get('lid_tmp') or 0)
                         if tmp:
                             mkmod.drop(self.mkt, tmp)
+                        # ★★ 到期时刻必须用 saver 回灌的那份 ✗ 别用乐观那个占位 ✓
+                        #   自测抓到的：面板显示"剩 20729074 天后过期"✓
+                        #   根因：上架那一刻 exp 还是 0（要落库才知道）✓
+                        #     → 0 - now = 负数 ✗ 界面把它当成小数天 ✓
+                        #   ★ 单位：_mkt_save_list 回灌的 ts/exp 已经是【秒】✓
+                        #     （它自己做过 now_ms()/1000 ✓ 和内存行的口径一致 ✓）
+                        _ts = float(ex.get('ts') or 0)
+                        _exp = float(ex.get('exp') or 0)
+                        if _ts <= 0:
+                            _ts = now_s()
+                        if _exp <= _ts:
+                            _exp = _ts + int(valuemod.MKT_DAYS) * 86400
                         mkmod.add(self.mkt, mkmod.row_of(
                             int(ex.get('lid') or 0), rid, int(ex.get('price') or 0),
-                            ex.get('it') or {}, ex.get('ts') or now_s(),
-                            ex.get('exp') or 0, int(ex.get('stack') or 1)))
+                            ex.get('it') or {}, _ts, _exp,
+                            int(ex.get('stack') or 1)))
                         self.mkt_locking.discard((rid, int(ex.get('iid') or 0)))
                         # ★ 为什么不把这一件从 role['bag'] 快照里删掉：
                         #   那个快照是【打开交易所那一刻的】副本 ✗ 不跟背包刷新 ✓
@@ -3991,9 +4082,13 @@ class World(object):
         #   内存那一行是上架时乐观加进去的 ✗ 那时还没有 ts/expire ✓
         #   不回灌的话 exp=0 ✗ → 刚上架的东西当场算"已过期"✓✓
         #     表现：买家一点就说"已过期"✗ 5 秒后清扫还会把它退回来 ✓
+        #   ★ 单位：内存行里的 ts/exp 一律【秒】✗ 详见 value.now_s() 的注释 ✓
+        #     这里原来写的是 now_ms()/1000.0（毫秒换算过来 ✓ 数值对得上）
+        #     但和 _mkt_list 里乐观写进去的 now_s() 是【两个来源】✓ → 迟早错 ✓
+        _now = valuemod.now_s()
         row['lid'] = lid
-        row['ts'] = dbmod.now_ms() / 1000.0
-        row['exp'] = (dbmod.now_ms() + int(valuemod.MKT_DAYS) * 86400000) / 1000.0
+        row['ts'] = _now
+        row['exp'] = _now + int(valuemod.MKT_DAYS) * 86400
         # ② 从背包里删掉（★ rowcount=1 才算成功 ✗ 这是"东西还在不在"的唯一判据 ✓）
         cur2 = db.execute('DELETE FROM items WHERE id=? AND role_id=? AND in_storage=0',
                           (iid, seller))
