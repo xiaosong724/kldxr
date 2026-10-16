@@ -57,7 +57,7 @@ DMG_FLOOR = 0.30
 #   表现：点传送没反应、界面上也不出读条 ✓（因为客户端永远收不到 tpcast ✓）
 TELEPORT_CAST = 6.0            # 传送回安全区的读条秒数               # 减伤地板：至少吃原来伤害的 30%（第 118 轮 ✓）
 PARTY_SHARE_DIST = 9999999.0   # round 241: user wants NO distance limit for party exp
-PARTY_INVITE_DIST = 20.0      # 邀请的距离（防全图骚扰 ✗）
+PARTY_INVITE_DIST = 9999999.0   # round259: user wants NO party distance limit at all (was 20)
 PARTY_INVITE_TTL = 60.0       # ★ 第 82 轮用户改：10 秒 → 1 分钟 ✓
                               #   （原因：弹窗没看到就没了 ✗
                               #    现在界面里也有待处理列表 ✓ 给一分钟才够用 ✓）

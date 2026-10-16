@@ -3006,6 +3006,18 @@ function tkTick(first) {
   }
   TK.last = now;
   tkMaybeRows();
+  /* ★ 第 259 轮修 bug（用户："滚动条消息播放后，没有内容了很久才消失"）
+     病根：只有"显示"（remove off）✗ 从来没有"隐藏"（add off）✓
+     → 消息滚完之后条子还空着挂在那里 ✓ 用户看到的就是"没内容但一直不消失"✓
+     ★ 修：队列空 + 两条轨道都空 → 收起来并停掉 rAF ✓ */
+  var _empty = (TK.q.length === 0 && !TK.lane[0] && !TK.lane[1]);
+  if (_empty && TK.on) {
+    TK.on = false;
+    var _e2 = document.getElementById("ticker");
+    if (_e2) { _e2.classList.add("off"); }
+    tkSyncToastTop();
+    return;                          /* ★ 停掉 rAF ✗ 不再空转 ✓ */
+  }
   if (TK.on) { requestAnimationFrame(function () { tkTick(false); }); }
 }
 
