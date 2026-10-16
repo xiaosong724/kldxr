@@ -442,15 +442,6 @@
   <!-- ★ 分类导航：点不同分类切不同面板（第 31 轮）-->
   <div id="setTabsWrap"><div id="setTabs">
    <div class="tab" data-page="1" data-tab="bag">背包</div>
-   <!-- ★★★ 第 268 轮：恢复最初那版（用户："你还记得最开始的按钮方案吗"）★★★
-        最初这版是【可用】的 ✓ 用户当时确认过 ✓
-        要点：按钮在 setTabs 【外面】✗ 不参与导航栏布局 ✓
-              而导航栏本身【一个字都不改】✓ 所以它不会变糟 ✓ -->
-   <div class="tab" id="tabMore" style="margin:6px 8px 0;display:block;
-        text-align:center;color:#ffd83d;background:#ffd83d1a;border:1px solid #ffd83d55"
-        onpointerdown="try{window._moreTap&&window._moreTap(event);}catch(e){}"
-        ontouchstart="try{window._moreTap&&window._moreTap(event);}catch(e){}"
-        onclick="try{window._moreTap&&window._moreTap(event);}catch(e){}">更多 ▸</div>
    <div class="tab" data-page="1" data-tab="party">组队</div>
    <div class="tab" data-page="1" data-tab="stat">属性</div>
    <div class="tab" data-page="1" data-tab="talent">天赋</div>
@@ -463,7 +454,16 @@
    <div class="tab" data-page="2" data-tab="wiki">百科</div>
    <div class="tab" data-page="2" data-tab="about">信息</div>
   </div><!-- ★ 第 169 轮（用户 #3）：这个箭头提示"右边还有页签，可以滑" ✓
-            滑到最右（或者不用滑）时 JS 会给外层加 on 类 → 箭头和渐隐都淡出 ✓ --></div>
+            滑到最右（或者不用滑）时 JS 会给外层加 on 类 → 箭头和渐隐都淡出 ✓ -->
+   <!-- ★★★ 第 268 轮：恢复最初那版（用户："你还记得最开始的按钮方案吗"）★★★
+        最初那版是【可用】的 ✓ 用户确认过 ✓
+        要点：按钮在 #setTabs 【外面】✗ 不参与导航栏布局 ✓
+              导航栏本身【一个字都不改】✓ 所以不会变糟 ✓ -->
+   <div class="tab" id="tabMore" style="margin:6px 8px 0;display:block;
+        text-align:center;color:#ffd83d;background:#ffd83d1a;border:1px solid #ffd83d55"
+        onpointerdown="try{window._moreTap&&window._moreTap(event);}catch(e){}"
+        ontouchstart="try{window._moreTap&&window._moreTap(event);}catch(e){}"
+        onclick="try{window._moreTap&&window._moreTap(event);}catch(e){}">更多 ▸</div></div>
 
   <div class="tabpane" data-pane="bag">
    <!-- ★ 第 48 轮：改成【格子背包】（用户要求：像我的世界那样用图标，不要纯文字）✓
