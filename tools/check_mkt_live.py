@@ -25,8 +25,18 @@ DB = os.path.join(ROOT, 'server', 'game.db')
 API = 'http://127.0.0.1:8899'
 WS_HOST, WS_PORT = '127.0.0.1', 8900
 PW = 'abc123456'
-SELLER = 'MktLive卖'
-BUYER = 'MktLive买'
+# ★★ round304s：名字必须【每次都不一样】★★
+#   自测抓到的真坑：名字固定 → 角色已存在 → 第二次 register 失败
+#     → 脚本退回 login ✗ 于是两个 token 是【同一个角色】✓
+#     → 所有"两边看到的东西不一样"的断言全错（记录里 who 变成自己 ✓）
+#     → 表现是"记录页把对手方写成了自己"✗ 我差点当成服务端 bug 去改 ✓
+#   ★ 判据：凡是"两个账号确实不同"的测试 ✗ 建号后要断言 id 不同 ✓
+import random as _rnd
+#   ★ 名字还有长度限制（2~10 个字符 ✗ 服务端会挡 ✓）→ 后缀只能短 ✓
+#     自测踩到：我加了 5 个字符 ✗ 一共 11 个 → 注册直接 400 ✓
+_SUF = ''.join(_rnd.choice('abcdefghijkmnpqrstuvwxyz') for _ in range(3))
+SELLER = 'Mkt卖' + _SUF
+BUYER = 'Mkt买' + _SUF
 
 fails = []
 
@@ -205,6 +215,11 @@ def purge():
     try:
         for nm in (SELLER, BUYER):
             row = c.execute('SELECT id, account_id FROM roles WHERE name=?', (nm,)).fetchone()
+            if row is None:
+                # ★ 名字每次都不一样 ✗ 顺手把【以前几轮留下的】也清掉 ✓
+                row = c.execute("SELECT id, account_id FROM roles"
+                                " WHERE name LIKE 'Mkt卖%' OR name LIKE 'Mkt买%'"
+                                " ORDER BY id LIMIT 1").fetchone()
             if not row:
                 continue
             rid, aid = row
@@ -303,6 +318,9 @@ try:
     st, j = http('POST', '/api/register', {'name': BUYER, 'password': PW})
     ok(st == 200 and j.get('token'), 'registered the buyer (%s)' % st, j)
     tok_b = j['token']
+    ok(role_of(SELLER)[0] != role_of(BUYER)[0],
+       'the two accounts are really different roles (%s vs %s)'
+       % (role_of(SELLER)[0], role_of(BUYER)[0]))
     st, j = http('POST', '/api/admin/login', {'password': 'xiuxian-admin'})
     at = j.get('token')
     ok(bool(at), 'admin login ok', j)
@@ -430,6 +448,76 @@ try:
                       (role_of(BUYER)[0], (bag['items'][0]['item'].get('name') or '')))
     ok(got_item[0] == 1, 'the item is in the buyer bag (%s)' % (got_item[0],))
     ok(gone[0] == 0, 'the item is not in the seller bag')
+
+    # ============================================================
+    # ★★★ round304m（用户："增加一个购买和卖出记录查看，也要写分页"）★★★
+    #   交易记录接口 /api/trades：真库 + 真 token + 真分页 ✓
+    #   ★ 为什么放在这里：这一节刚刚【真的成交了一笔】✗
+    #     记录页要读的正是它 ✓ 用真成交去验，比造假数据可信 ✓
+    # ============================================================
+    print('\n== 4b. 成交记录 /api/trades ==')
+    # ★ http() 返回的是 (状态码, 解析好的 dict) ✗ 自测踩到：直接 .get 会 AttributeError ✓
+    _st, rj = http('GET', '/api/trades', token=tok_b)
+    ok(_st == 200 and (rj or {}).get('ok') is True,
+       'the trades endpoint answers (HTTP %s): %s' % (_st, str(rj)[:80]))
+    rows_b = (rj or {}).get('rows') or []
+    # ★ 对手方名字拿【库里真实的名字】比 ✗ 别用脚本开头的常量
+    #   （自测踩到：常量是重建前的旧名字 ✗ 而库里已经换了一批 ✓）
+    _names = db_one('SELECT (SELECT name FROM roles WHERE id=t.seller),'
+                    ' (SELECT name FROM roles WHERE id=t.buyer)'
+                    ' FROM trade_log t WHERE t.lid=?', (lid,))
+    real_seller, real_buyer = (_names[0], _names[1]) if _names else (None, None)
+    # ★ 卖家那一份（同一个接口 ✗ 只是换了 token ✓）
+    _st_s, rj_s = http('GET', '/api/trades', token=tok_s)
+    print('   seller sees: %s' % json.dumps(
+        [(x.get('side'), x.get('who')) for x in ((rj_s or {}).get('rows') or [])],
+        ensure_ascii=False))
+    print('   roles: seller=%r buyer=%r' % (role_of(SELLER)[0], role_of(BUYER)[0]))
+    print('   page fields: page=%r pageSize=%r pages=%r total=%r'
+          % ((rj or {}).get('page'), (rj or {}).get('pageSize'),
+             (rj or {}).get('pages'), (rj or {}).get('total')))
+    ok(len(rows_b) >= 1, 'the buyer has at least one record (%d)' % len(rows_b))
+    mine = [x for x in rows_b if x.get('lid') == lid]
+    ok(len(mine) == 1, 'the trade the test just made is in there (lid=%s)' % lid)
+    if mine:
+        r0 = mine[0]
+        ok(r0.get('side') == 'buy', "it is marked as a BUY for the buyer (got %r)" % r0.get('side'))
+        ok(int(r0.get('price') or 0) == 1000, 'it records what the buyer paid (1000)')
+        ok(int(r0.get('tax') or 0) == tax, 'and the tax (%d)' % tax)
+        ok(r0.get('name') and '【' not in str(r0.get('name')),
+           'it names the item: %r' % (r0.get('name'),))
+        ok(str(r0.get('who') or '') == real_seller,
+           'and the counterparty is the seller (%r vs %r)' % (r0.get('who'), real_seller))
+        ok(int(r0.get('qty') or 0) == 1, 'this one was a single item (qty=1)')
+    _st_s, rj_s = http('GET', '/api/trades', token=tok_s)
+    rows_s = (rj_s or {}).get('rows') or []
+    mine_s = [x for x in rows_s if x.get('lid') == lid]
+    ok(len(mine_s) == 1, 'the SELLER sees the same trade')
+    if mine_s:
+        s0 = mine_s[0]
+        ok(s0.get('side') == 'sell', "it is marked as a SELL for the seller (got %r)"
+           % s0.get('side'))
+        ok(int(s0.get('net') or 0) == net, 'the seller sees the money after tax (%d)' % net)
+        ok(str(s0.get('who') or '') == real_buyer,
+           'and its counterparty is the buyer (%r vs %r)' % (s0.get('who'), real_buyer))
+    # 分页：页大小 20 ✗ 只有一笔时 pages 必须是 1（不是 0 ✗ 也不是负数 ✓）
+    ok(int((rj or {}).get('pageSize') or 0) == 20, 'the page size is 20')
+    ok(int((rj or {}).get('pages') or 0) >= 1, 'pages is at least 1 even with few records')
+    # ★ 自测踩到：`or -1` 把 0 吃掉了 ✗ Python 里 0 是假值 ✓
+    #   （和 JS 一个坑 ✗ 两边都得用 is None 判 ✓）
+    _pg = (rj or {}).get('page')
+    ok(_pg is not None and int(_pg) == 0,
+       'page 0 is the first page (got %r)' % (_pg,))
+    # 翻到第 2 页：不该崩 ✓ 也不该重复第 1 页的内容 ✓
+    _st2, rj2 = http('GET', '/api/trades?page=1', token=tok_b)
+    ok(_st2 == 200 and (rj2 or {}).get('ok') is True, 'asking for page 1 works too')
+    _pg2 = (rj2 or {}).get('page')
+    ok(_pg2 is not None and int(_pg2) == 1,
+       'and it reports page 1 back (got %r)' % (_pg2,))
+    # 没 token 必须被挡（记录里有别人的名字 ✗ 不能裸奔 ✓）
+    _st3, rj3 = http('GET', '/api/trades')
+    ok(_st3 == 401 or (rj3 or {}).get('ok') is not True,
+       'without a token it is refused (HTTP %s)' % _st3)
 
     print('== 5. 重复买同一件（幂等 / 已售）==')
     ws_b.send('buyitem', lid=lid, sid='live-buy-2')

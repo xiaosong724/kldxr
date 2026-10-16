@@ -1329,7 +1329,20 @@ const BUYER = disposableName('MkB');
     const seen = await B.eval(
       'return JSON.stringify({ total: MKT.total, rows: (MKT.rows || []).length,' +
       ' has: (MKT.rows || []).some(function (r) { return String(r[0]) === String(' + listedLid + '); }) });');
+    console.log('   (our listing row) ' + rpc([
+      'import sqlite3, sys',
+      'c = sqlite3.connect("file:game.db?mode=ro", uri=True)',
+      'r = c.execute("SELECT lid, qty, state, price FROM listings WHERE lid=?", (int(sys.argv[1]),)).fetchone()',
+      'print("   row: %s" % (tuple(r),) if r else "   GONE FROM DB")',
+      'rows = c.execute("SELECT lid, state FROM listings ORDER BY lid DESC LIMIT 5").fetchall()',
+      'print("   newest rows: %s" % ([tuple(x) for x in rows],))',
+    ].join(String.fromCharCode(10)), [String(listedLid)]));
     console.log('   buyer sees: ' + seen + '  (our listing lid=' + listedLid + ')');
+    console.log('   lids on the buyer page: ' + await B.eval(
+      'return JSON.stringify({ rows: (MKT.rows || []).length, total: MKT.total,' +
+      ' page: MKT.page, pages: MKT.pages, sort: MKT.sort, cat: MKT.cat,' +
+      ' afford: MKT.afford, q: MKT.q,' +
+      ' lids: (MKT.rows || []).map(function (r) { return [r[0], r[5], r[1]]; }) });'));
     ok(/"has":true/.test(String(seen)),
        'the BUYER can see OUR listing (the whole shelf loaded)');
     const iconSvg = await B.eval(

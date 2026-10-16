@@ -841,8 +841,14 @@ class Api(BaseHTTPRequestHandler):
                     'SELECT COUNT(*) FROM trade_log WHERE buyer=? OR seller=?',
                     (rid, rid)).fetchone()[0])
                 rows = c.execute(
+                    #   ★ 2026-10-17 修：这里原来把【买家的名字】写在前面 ✗
+                    #     而下面解包是 `... seller, buyer, sname, bname` ✓
+                    #     → sname 拿到买家、bname 拿到卖家 ✗
+                    #     → 记录页把"对手方"显示成【自己】（买家和卖家都看到自己 ✓）
+                    #   ★ 这类"位置对不上"的错【不报错】✗ 只是安静地给错数据 ✓
+                    #     判据：side='buy' 的那一行，who 必须是【卖家】✓
                     'SELECT t.ts, t.lid, t.qty, t.price, t.tax, t.item_json,'
-                    '       t.seller, t.buyer, rs.name, rb.name'
+                    '       t.seller, t.buyer, rb.name, rs.name'
                     '  FROM trade_log t'
                     '  LEFT JOIN roles rs ON rs.id = t.seller'
                     '  LEFT JOIN roles rb ON rb.id = t.buyer'
