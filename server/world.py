@@ -2323,6 +2323,9 @@ class World(object):
 
     def _pvp_killed(self, killer, victim):
         """玩家击杀玩家：魔气 +2 / 被杀 −1（用户确认 ✓）+ 防刷判定 ✓"""
+        # ★ 第 250 轮（用户要求）：击杀玩家进弹幕（谁杀了谁 ✓）
+        #   僵尸打死玩家【不进】弹幕（用户明确说不需要 ✓）
+        self._broadcast(P.pack('ticker', text='%s 击杀了 %s' % (killer.name, victim.name), kind='kill'))
         # ★ 防刷：这一对 10 分钟内只算一次 ✗（不然开小号互刷 ✓）
         counted = self._pvp_pair_ok(killer, victim, 'mq')       # ★ 魔气那把锁（10 分钟 ✓）
         steal_ok = self._pvp_pair_ok(killer, victim, 'steal')   # ★ 第 167 轮：夺取另一把锁（1 分钟 ✓）
@@ -2814,6 +2817,15 @@ class World(object):
         if (e['x'] - p.x) ** 2 + (e['z'] - p.z) ** 2 > drops.PICK_RANGE ** 2:
             return                      # 太远 → 不认（防"隔空捡"✗）
         it = e['item']
+        # ★ 第 250 轮（用户要求）：捡到 5 阶及以上要播报
+        #   tier_no() 是 0 基的（内部 0 = 显示 1 阶）✗ 所以判断用 >= 4 ✓
+        try:
+            if int(it.get('tier') or 0) >= 4:
+                self._ticker('%s 拾取到 %d 阶 · %s' % (
+                    p.name, int(it.get('tier') or 0) + 1, it.get('name') or '装备'),
+                    'tier', tag='tier:%d' % p.role_id)
+        except Exception as _e3:
+            print('[ticker] 拾取播报失败：%r' % (_e3,))
         self.loot.pop(lid, None)
         self.loot_seq += 1
         import json
