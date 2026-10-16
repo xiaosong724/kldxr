@@ -3081,6 +3081,25 @@ function toast(msg) {
 }
 
 /* ---------- wsUrl ---------- */
+/* ★ round286（审查报告 §1.9-③）：给上报时间戳算一个【跨刷新不变】的基准
+   = 墙钟秒数 − 页面已运行秒数 ✓
+   ★ 存 sessionStorage ✗ 所以 F5 之后基准不变 ✗
+     于是 基准 + performance.now() 会【继续往上走】✗ 不再倒退 ✓✓
+   ★ 这一行必须在 platform 层 ✗ 因为 core 不许碰浏览器 API ✓（分层闸门会拦 ✓） */
+(function netTimeBaseInit() {
+  try {
+    var v = +(sessionStorage.getItem('xiuxian_tbase') || 0);
+    if (!v) {
+      v = Date.now() / 1000 - performance.now() / 1000;
+      sessionStorage.setItem('xiuxian_tbase', String(v));
+      console.log('[sync] 时间基准已建立：' + v.toFixed(3));
+    }
+    NET_TIME_BASE = v;
+  } catch (e) {
+    NET_TIME_BASE = 0;    /* 拿不到 sessionStorage 就退回旧行为 ✓（不会更糟 ✓） */
+  }
+})();
+
 function wsUrl() {
   var port = window.WS_PORT || 8900;
   var proto = (location.protocol === 'https:') ? 'wss:' : 'ws:';

@@ -248,6 +248,16 @@ var SFX_FILES_WAV = {
 /* ★ 第 71 轮：箭速（必须和 server/world.py 的 ARROW_SPEED 一致 ✓）*/
 var ARROW_SPEED = 14.0;
 
+/* ★★★ round286（审查报告 §1.9-③ "治根"）：上报时间戳要【跨刷新单调】★★★
+   病根：现在上报的 t = performance.now()/1000 是【页面加载起的秒数】✗
+     → 谁按一次 F5 ✗ 他的时间戳就从几千秒掉回 0 ✓
+     → 所有还在看他的客户端都被这个"倒退的基准"毒化 ✓（→ 飞快/冻住 ✓）
+   ★ 修：在 performance.now() 上加一个【跨刷新不变的基准】✗
+     基准由 platform 层算并写进这个变量 ✓
+     （core 不许碰 sessionStorage ✗ 分层铁律 ✓ 所以这里只声明 ✗ 不初始化 ✓）
+   ★ 效果：刷新页面时间戳【继续往上走】✗ 再也不倒退 ✓ 污染从根上消失 ✓✓ */
+var NET_TIME_BASE = 0;
+
 var NET = {  on: false, token: '', lastPost: 0, lastGet: 0,
   arrows: {},               // ★ 第 69 轮：在飞的箭（id → mesh ✓）
   rate: 0.0333,              // ★ 30Hz（33ms 一包 ✓）
@@ -2324,7 +2334,9 @@ function netSync() {
     x: +P.x.toFixed(2),
     z: +P.z.toFixed(2),
     yaw: +P.yaw.toFixed(3),
-    t: +now.toFixed(3),          // ★ 我的钟（别人据此排队 → 不受网络抖动影响 ✓）
+    /* round286: 加上跨刷新不变的基准 ✗
+       不再用纯的 performance.now()（刷新归零 ✗ 会毒化别人 ✓）*/
+    t: +(NET_TIME_BASE + now).toFixed(3),
     hp: Math.max(0, Math.round(HP)),
     atk: NET.atkSeq
   });
