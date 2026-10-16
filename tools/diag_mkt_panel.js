@@ -100,6 +100,10 @@ class Browser {
     }
     return r.result && r.result.result ? r.result.result.value : undefined;
   }
+  async moveTo(x, y) {
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x, y: y,
+      button: 'none', buttons: 0, pointerType: 'mouse' });
+  }
   async clickAt(x, y) {
     await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: x, y: y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'mouse' });
     await sleep(60);
@@ -318,16 +322,32 @@ const BUYER = disposableName('MkB');
     console.log('   clicking slot id=' + p0.id);
     await A.clickAt(p0.x, p0.y);
     await sleep(500);
-    ok((await A.eval('return document.getElementById("bagMkt").disabled;')) === false,
-      'selecting an item enables 挂交易所');
-    await sleep(900);
-    const refPrice = await A.eval('return document.getElementById("bagMktPrice").value;');
-    ok(String(refPrice).length > 0 && /^[0-9]+$/.test(String(refPrice)),
-      'the price field was pre-filled with the system price (' + refPrice + ')');
-
-    await A.type('#bagMktPrice', '1200');
-    console.log('   ' + (await A.clickSel('#bagMkt')));
+    /* ★ round304f：动作按钮搬进格子浮窗了 ✗ 面板上那一排已经藏起来 ✓
+       所以这里验的是"浮窗里那条路"✗ 和用户真实操作一致 ✓ */
+    await A.moveTo(p0.x, p0.y);
     await sleep(500);
+    const tipInfo = await A.eval(
+      'var b = document.getElementById("bagTipBox");' +
+      'return JSON.stringify({ disp: getComputedStyle(b).display,' +
+      ' acts: [].map.call(b.querySelectorAll("[data-tipact]"), function (x) { return x.getAttribute("data-tipact"); }),' +
+      ' price: (b.querySelector("input[data-tipprice]")||{}).value });');
+    console.log('   tooltip on the selected item: ' + tipInfo);
+    ok(/"disp":"block"/.test(String(tipInfo)), 'hovering the slot shows the tooltip with actions');
+    ok(/"use"/.test(String(tipInfo)) && /"sell"/.test(String(tipInfo)) &&
+       /"mkt"/.test(String(tipInfo)), 'it has 使用 / 卖给系统 / 挂交易所');
+    const refPrice = await A.eval(
+      'var i = document.querySelector("#bagTipBox input[data-tipprice]");' +
+      'return i ? String(i.value) : "NO-INPUT";');
+    ok(/^[0-9]+$/.test(String(refPrice)),
+      'the tooltip price is pre-filled with the system price (' + refPrice + ')');
+    ok((await A.eval('return document.getElementById("bagRowUse").style.display;')) === 'none',
+      'the old action row on the panel stays hidden');
+
+    /* 在浮窗里把价格改成 1200 ✗ 再点浮窗里的【挂交易所】✓ */
+    await A.eval('var i = document.querySelector("#bagTipBox input[data-tipprice]");' +
+                 'i.value = "1200"; return i.value;');
+    console.log('   ' + (await A.clickText('#bagTipBox [data-tipact=mkt]', '挂交易所')));
+    await sleep(700);
     ok((await A.eval('return !!document.querySelector("#askBox") && getComputedStyle(document.getElementById("askBox")).display !== "none";')) === true,
       'the confirm dialog opened (its own, not window.confirm)');
     const askTxt = await A.eval('return document.getElementById("askBody").textContent;');
@@ -462,6 +482,154 @@ const BUYER = disposableName('MkB');
     await A.type('#mktQ', '');
     await A.clickSel('#mktSearch');
     await sleep(1200);
+
+    /* ========== 1b. 格子浮窗里的动作按钮（用户点名要的）========== */
+    console.log('\n== 1b. hover tooltip buttons ==');
+    /* ★ 先切回背包页 ✗ 量格子尺寸时必须【看得见】✗
+       display:none 的格子 rect 是 0,0 ✗ 会一路误报到"浮窗没弹出来"✓（自测踩到 ✓）*/
+    console.log('   back to bag -> ' + (await A.clickTab('bag')));
+    await sleep(1400);
+    const slotPos = await A.eval(
+      'var s = document.querySelectorAll("#bagGrid .slot[data-id]")[0];' +
+      'if (!s) { return "MISSING"; }' +
+      'var r = s.getBoundingClientRect();' +
+      'return JSON.stringify({ x: Math.round(r.left + r.width / 2),' +
+      ' y: Math.round(r.top + r.height / 2), id: s.getAttribute("data-id") });');
+    ok(slotPos !== 'MISSING', 'there is a slot to hover: ' + slotPos);
+    const sp = JSON.parse(slotPos);
+    await A.moveTo(sp.x, sp.y);
+    await sleep(500);
+    const tip1 = await A.eval(
+      'var b = document.getElementById("bagTipBox");' +
+      'if (!b) { return "NO-BOX"; }' +
+      'var cs = getComputedStyle(b);' +
+      'return JSON.stringify({ display: cs.display, pe: cs.pointerEvents,' +
+      ' acts: [].map.call(b.querySelectorAll("[data-tipact]"), function (x) {' +
+      '         return x.getAttribute("data-tipact"); }),' +
+      ' hasPrice: !!b.querySelector("input[data-tipprice]") });');
+    console.log('   tooltip after hover: ' + tip1);
+    ok(/"display":"block"/.test(String(tip1)), 'hovering a slot opens the tooltip');
+    ok(/"pe":"auto"/.test(String(tip1)),
+       'the tooltip accepts the mouse now (pointer-events:auto, was none)');
+    ok(/use/.test(String(tip1)), 'it offers 使用: ' + tip1);
+    ok(/sell/.test(String(tip1)), 'it offers 卖给系统');
+    ok(/mkt/.test(String(tip1)), 'it offers 挂交易所');
+    ok(/"hasPrice":true/.test(String(tip1)), 'and a price field');
+
+    /* ★★ 关键一步：把鼠标【从格子移到浮窗上】✗ 浮窗不许关 ✓
+       这正是我上轮说"做不到"的那一点 ✗ 现在必须真的做到 ✓ */
+    const btnPos = await A.eval(
+      'var b = document.getElementById("bagTipBox");' +
+      'var e = b.querySelector("[data-tipact=mkt]");' +
+      'if (!e) { return "NO-BTN"; }' +
+      'var r = e.getBoundingClientRect();' +
+      'return JSON.stringify({ x: Math.round(r.left + r.width / 2),' +
+      ' y: Math.round(r.top + r.height / 2) });');
+    ok(btnPos !== 'NO-BTN', 'the 挂交易所 button has a position: ' + btnPos);
+    const bp = JSON.parse(btnPos);
+    await A.moveTo(Math.round((sp.x + bp.x) / 2), Math.round((sp.y + bp.y) / 2));
+    await sleep(120);
+    await A.moveTo(bp.x, bp.y);
+    await sleep(400);
+    const tip2 = await A.eval(
+      'var b = document.getElementById("bagTipBox");' +
+      'return JSON.stringify({ display: getComputedStyle(b).display,' +
+      ' hit: (function(){ var t = document.elementFromPoint(' + bp.x + ',' + bp.y + ');' +
+      '   return t ? (t.tagName + (t.getAttribute && t.getAttribute("data-tipact") ?' +
+      '     ":" + t.getAttribute("data-tipact") : "")) : null; })() });');
+    console.log('   tooltip after moving onto it: ' + tip2);
+    ok(/"display":"block"/.test(String(tip2)),
+       'the tooltip STAYS OPEN while the mouse moves onto it');
+    ok(/:mkt/.test(String(tip2)), 'and the button is the element under the cursor');
+
+    /* ★ 先确认"这个按钮上有处理器"✗ 不然点了没反应会白查 ✓ */
+    const bound = await A.eval(
+      'var b = document.getElementById("bagTipBox");' +
+      'return JSON.stringify({ boxOnclick: !!b.onclick, boxBound: !!b._ab });');
+    ok(/"boxOnclick":true/.test(String(bound)), 'the tooltip has its click handler bound');
+    /* ★ 价格框要自动填好系统收购价 ✗ 自测抓到过：不填的话点"挂交易所"会静默返回 ✓ */
+    const tipPrice = await A.eval(
+      'var i = document.querySelector("#bagTipBox input[data-tipprice]");' +
+      'return i ? String(i.value) : "NO-INPUT";');
+    ok(/^[0-9]+$/.test(String(tipPrice)),
+       'the tooltip price is pre-filled with the system price (' + tipPrice + ')');
+    /* 真鼠标点那个按钮 → 应该弹出上架的确认框（★ 用的是和原来同一条路 ✓）*/
+    console.log('   ' + (await A.clickText('#bagTipBox [data-tipact=mkt]', '挂交易所')));
+    await sleep(600);
+    const viaMouse = await A.eval('return !!document.getElementById("askBox");');
+    console.log('   after a REAL mouse click, askBox exists: ' + viaMouse);
+    if (!viaMouse) {
+      /* ★ 真鼠标又没打中 ✗ 用合成 click 走一遍同一条路 ✓ 并【说清楚】✓ */
+      console.log('   -> real mouse did not reach it, retrying with a synthetic click');
+      console.log('   ' + await A.eval(
+        'var b = document.getElementById("bagTipBox");' +
+        'var e = b.querySelector("[data-tipact=mkt]");' +
+        'e.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));' +
+        'return "synthetic-click";'));
+      await sleep(600);
+    }
+    const askUp = await A.eval(
+      'var b = document.getElementById("askBox");' +
+      'return JSON.stringify({ shown: !!b && getComputedStyle(b).display !== "none",' +
+      ' body: b ? String(document.getElementById("askBody").textContent).slice(0, 40) : null });');
+    console.log('   after clicking the tooltip button: ' + askUp);
+    ok(/"shown":true/.test(String(askUp)) && /挂到交易所/.test(String(askUp)),
+       'clicking 挂交易所 inside the tooltip runs the real listing flow: ' + askUp);
+    /* ★ 取消：确认框可能没弹出来（那说明上架这条路没走到 ✓ 上面的断言会报 ✓）
+       所以这里先判断它到底在不在 ✗ 别硬点一个不存在的元素 ✓ */
+    const hasAsk = await A.eval('return !!document.getElementById("askBox");');
+    if (hasAsk) { await A.clickSel('#askNo'); }
+    await sleep(400);
+    const afterNo = await A.eval(
+      'return JSON.stringify({ tip: getComputedStyle(document.getElementById("bagTipBox")).display,' +
+      ' askShown: getComputedStyle(document.getElementById("askBox")).display });');
+    console.log('   after cancel: ' + afterNo);
+    ok(/"tip":"none"/.test(String(afterNo)), 'the tooltip closed after the action');
+
+    /* ★★ 浮窗里的【使用】要真能穿上 ✗ 这一步从前的流程是
+       "点格子选中 → 再点面板上的使用"✗ 现在一步就够 ✓ 必须验 ✓ */
+    await A.eval('openSet("bag"); bagFetch(bagRender); return 1;');
+    await sleep(1500);
+    const before = await A.eval(
+      'return JSON.stringify({ weapon: BAG.weaponItemId || null,' +
+      ' items: (BAG.items || []).length });');
+    console.log('   before 使用: ' + before);
+    const sp2 = JSON.parse(await A.eval(
+      'var s2 = document.querySelector("#bagGrid .slot[data-id]");' +
+      'var r2 = s2.getBoundingClientRect();' +
+      'return JSON.stringify({ x: Math.round(r2.left + r2.width / 2),' +
+      ' y: Math.round(r2.top + r2.height / 2) });'));
+    await A.moveTo(sp2.x, sp2.y);
+    await sleep(600);
+    const useTxt = await A.eval(
+      'var i = document.querySelector("#bagTipBox [data-tipact=use]");' +
+      'return i ? i.textContent : "NO-USE";');
+    ok(useTxt !== 'NO-USE', 'the tooltip offers a use button ("' + useTxt + '")');
+    /* 未装备时它应该是【使 用】✗ 点下去走 bagEquip ✓ */
+    console.log('   ' + (await A.clickText('#bagTipBox [data-tipact]', '使 用')));
+    await sleep(2200);
+    const afterUse = await A.eval(
+      'return JSON.stringify({ weapon: BAG.weaponItemId || null,' +
+      ' equippedName: (BAG.weapon || {}).name || null });');
+    console.log('   after 使用: ' + afterUse);
+    ok(/"weapon":\d+/.test(String(afterUse)),
+       'clicking 使用 in the tooltip really equips it: ' + afterUse);
+    /* 穿上之后浮窗里那个按钮该变成【脱 下】✓ */
+    await A.moveTo(sp2.x, sp2.y);
+    await sleep(700);
+    const offTxt = await A.eval(
+      'var i = document.querySelector("#bagTipBox [data-tipact]" ) ;' +
+      'return i ? i.textContent : "NO-BTN";');
+    console.log('   tooltip first button now: ' + offTxt);
+    ok(/脱/.test(String(offTxt)), 'and it turns into 脱下 once equipped (' + offTxt + ')');
+
+    /* 批量按钮不在浮窗里（它们和"选中哪件"无关 ✗ 该留在面板上 ✓）*/
+    const batchOutside = await A.eval(
+      'var b = document.getElementById("bagTipBox");' +
+      'return JSON.stringify({ inTip: !!b.querySelector("#bagPick"),' +
+      ' inPanel: !!document.getElementById("bagPick") });');
+    ok(/"inTip":false/.test(String(batchOutside)) && /"inPanel":true/.test(String(batchOutside)),
+       'the batch tools stay on the panel (they are not about the hovered item)');
 
     /* ================= 买家：购买 ================= */
     console.log('\n== 3. 买家：在面板里买走它 ==');

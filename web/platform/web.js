@@ -2843,11 +2843,10 @@ function bagRender() {
   /* ★★ round304e：这一行提示是【唯一】的 ✗ 别在两处各写一遍 ✓
      自测踩到：我新加的那一段先写、这里又覆盖回去 ✗ 结果提示永远停在默认那句 ✓
      （★ 同一个节点被两处赋值 ✗ 谁在后面谁赢 ✗ 这类 bug 看着像"没生效"✓）*/
-  /* ★ round304e（用户嫌按钮多）：没选中东西时【那一排动作按钮直接藏起来】✓
-     ★ 为什么不能只靠 disabled：灰着的按钮还是占地方 ✗ 用户说的就是"多"✓
-     ★ 藏起来的是【跟选中有关】的那一排 ✗ 批量那一排永远在（它和选中无关 ✓）*/
-  var _rowUse = document.getElementById('bagRowUse');
-  if (_rowUse) { _rowUse.style.display = (selItem || BAG.multi) ? 'flex' : 'none'; }
+  /* ★ round304f：这一排【整排都不显示了】✗ 动作搬进格子浮窗 ✓
+     它的元素留着（程序要往里写状态、上架要读价格 ✓）✗ 但用户看不见 ✓
+     ★ 别再改成"选中时才显示" ✗ 那会和浮窗里那套重复 ✓
+       两处都能点同一件事 ✗ 迟早一边忘了同步状态 ✓ */
   var selTip = document.getElementById('bagSelTip');
   if (selTip) {
     if (isW8) {
@@ -3505,7 +3504,7 @@ function bagTipAt(e, el) {
         : (kA > 0.2 ? '#ffd83d' : '#ff7a6a')) + '">' + ddA + '</b> / ' +
         it.durMax + ' 次挨打<br>';
     }
-    extra += '<span style="opacity:.7">穿在武器槽右边那个槽 · 点【使用】穿上</span><br>';
+    extra += '<span style="opacity:.7">穿在武器槽右边那个槽 · 点下面的【使用】穿上</span><br>';
   }
   /* ★★ 第 55 轮：等级需求 + 发挥度【写进文案】★★
      用户要求："武器等级需求还是没有显示，把它改到文案里吧，以及发挥度"
@@ -3526,14 +3525,147 @@ function bagTipAt(e, el) {
        其余一律显示"材料（以后做合成用）"✗✓✓
        —— 用户说的"防具点开就是材料"就是这一行 ✓ */
     '<i>' + ((it.slot === 'weapon' || it.slot === 'armor')
-      ? '选中后点「使用」穿上' : '材料（以后做合成用）') + '</i>';
+      ? '下面的按钮直接就能用（不用先选中 ✓）' : '材料（以后做合成用）') + '</i>' +
+    bagTipBtns(el);                      /* ★ round304f：动作按钮直接画在浮窗里 ✓ */
   box.style.display = 'block';
-  box.style.left = Math.min(window.innerWidth - 260, e.clientX + 14) + 'px';
-  box.style.top = Math.min(window.innerHeight - 120, e.clientY + 12) + 'px';
+  /* ★★ round304f：定位要【避开鼠标】✗ 因为鼠标现在要能移进来点按钮 ✓
+     · 先按"鼠标右侧 14px"摆 ✗ 摆不下就翻到左边 ✓
+     · 高度也要按实际算（现在里面有按钮 ✗ 比以前高 ✓）*/
+  var bw = box.offsetWidth || 240, bh = box.offsetHeight || 160;
+  var x = e.clientX + 14;
+  if (x + bw > window.innerWidth - 6) { x = Math.max(6, e.clientX - bw - 14); }
+  var y = e.clientY + 12;
+  if (y + bh > window.innerHeight - 6) { y = Math.max(6, window.innerHeight - bh - 6); }
+  box.style.left = Math.round(x) + 'px';
+  box.style.top = Math.round(y) + 'px';
+}
+
+/* ★★★ round304f（用户："我不是说放到悬浮框里面吗，这个是没有办法做到吗"）★★★
+   把动作按钮画进浮窗 ✗ 这一步就是用户要的 ✓
+   ★ 为什么能做了（原来我说做不到的三个理由，逐个解决 ✓）：
+     ① 浮窗 pointer-events:none → 改成 auto（CSS ✓ 已经改了）
+     ② 鼠标离开格子就关 → 加【延时关】+ 鼠标进浮窗就不关（下面 _mktTipHold ✓）
+     ③ 手机上没 hover → 改成【点一下格子就弹出来停住】✗ 再点按钮 ✓
+   ★ 按钮元素是【每次重画】的 ✗ 所以 onclick 直接挂 ✗ 不存在闭包记住旧 id 的问题 ✓
+     （round301 那个"闭包记住 null"的坑 ✗ 在这里天然不成立 ✓）
+   ★ 材料只有"卖给系统"（穿不上 ✗ 也别给"使用"✓）
+   ★ 浮窗里的按钮点了要【阻止冒泡】✗ 不然 document 那个捕获监听会把窗关掉 ✓*/
+function bagTipBtns(el) {
+  var idx = +el.getAttribute('data-i');
+  var rec = BAG.items[idx] || {};
+  var it = rec.item || {};
+  var id = rec.id;
+  var isW = (it.slot === 'weapon' || it.slot === 'armor');
+  var equipped = ((BAG.weaponItemId && String(id) === String(BAG.weaponItemId)) ||
+                  (BAG.armorItemId && String(id) === String(BAG.armorItemId)));
+  var sellable = !!(id && !equipped && it !== DEFAULT_W && !it.broken &&
+                    !it.locked_by && !it.locked);
+  var h = '<div class="bagTipBtns" data-tipfor="' + (id || '') + '">';
+  if (isW) {
+    h += '<button class="bagB" data-tipact="' +
+      (equipped ? 'off' : 'use') + '">' + (equipped ? '脱 下' : '使 用') + '</button>';
+  }
+  if (sellable) {
+    h += '<button class="bagB off" data-tipact="sell">卖给系统</button>';
+  }
+  if (sellable) {
+    h += '<button class="bagB off" data-tipact="mkt">挂交易所</button>' +
+      '<input class="mktInput" data-tipprice="1" type="text" inputmode="numeric"' +
+      ' placeholder="价格" maxlength="10" value="">';
+  }
+  h += '<button class="bagB" data-tipact="close">✕</button></div>';
+  /* ★★ 价格框要【自动填系统收购价】✗ 自测抓到的：不填就点"挂交易所"
+     会静默返回（mktList 里"先填一个价格"那句只 toast ✗ 看起来就是没反应 ✓）
+     ★ 注意：这里只填【浮窗里那个输入框】✗ 不管 #bagMktPrice ✓
+       真正点击时 bagTipBind 会把值搬过去 ✓（一条路 ✓）*/
+  if (sellable && typeof sellQuote === 'function') {
+    var _bid = id;
+    sellQuote([_bid], function (total) {
+      var b2 = document.getElementById('bagTipBox');
+      if (!b2 || getComputedStyle(b2).display === 'none') { return; }
+      var row2 = b2.querySelector('[data-tipfor="' + _bid + '"]');
+      var inp = row2 ? row2.querySelector('input[data-tipprice]') : null;
+      /* ★ 回来时可能已经换了另一格 ✗ 对一下再填 ✓（round301 的教训 ✓）*/
+      if (inp && total > 0 && !inp.value) { inp.value = String(total); }
+    });
+  }
+  return h;
+}
+
+/* 鼠标有没有停在浮窗上（★ true 时"离开格子"不许关窗 ✓）*/
+var _mktTipHold = false;
+var _mktTipTimer = null;
+
+/* 手机：点一下格子 = 浮窗【停住】✗ 直到点按钮或点别处 ✓
+   （★ 手机上没有 hover ✗ 不停住的话按钮根本点不到 ✓）*/
+var _mktTipSticky = false;
+
+function bagTipHold(on) {
+  _mktTipHold = !!on;
+  if (on && _mktTipTimer) { clearTimeout(_mktTipTimer); _mktTipTimer = null; }
+}
+
+/* 延时关窗（★ 给鼠标一点时间从格子挪到浮窗上 ✓）*/
+function bagTipHideSoon(ms) {
+  if (_mktTipHold || _mktTipSticky) { return; }
+  if (_mktTipTimer) { clearTimeout(_mktTipTimer); }
+  _mktTipTimer = setTimeout(function () {
+    _mktTipTimer = null;
+    if (!_mktTipHold && !_mktTipSticky) { bagTipHide(); }
+  }, (ms === undefined) ? 180 : ms);
+}
+
+/* 停住（点格子时用 ✓ 顺便把鼠标那句免掉）*/
+function bagTipStickyOn() {
+  _mktTipSticky = true;
+  if (_mktTipTimer) { clearTimeout(_mktTipTimer); _mktTipTimer = null; }
+}
+
+/* 浮窗里那些按钮的点击（★ 委托在浮窗上 ✗ 画一次绑一次 ✓ 幂等 ✓）*/
+function bagTipBind() {
+  var box = document.getElementById('bagTipBox');
+  if (!box || box._ab) { return; }
+  box._ab = true;
+  box.onmouseenter = function () { bagTipHold(true); };
+  box.onmouseleave = function () { bagTipHold(false); bagTipHideSoon(120); };
+  /* ★ 点在浮窗里【别让 document 那个捕获监听关窗】✗ 也别冒泡到格子 ✓ */
+  box.addEventListener('mousedown', function (e) { e.stopPropagation(); }, true);
+  box.onclick = function (e) {
+    e.stopPropagation();
+    var el = e.target;
+    var act = el && el.getAttribute ? el.getAttribute('data-tipact') : null;
+    if (!act) { return; }
+    var row = el;
+    while (row && row !== box && !(row.getAttribute && row.getAttribute('data-tipfor'))) {
+      row = row.parentNode;
+    }
+    var id = row ? row.getAttribute('data-tipfor') : null;
+    if (act === 'close') { bagTipHide(); return; }
+    if (!id) { return; }
+    /* ★ 先把价格从浮窗那个输入框里读出来 ✗ 再交给"挂交易所"用 ✓
+       （所以让 _priceEl 的 id 指向它也说得通：但我不改 id ✗
+        而是把值【搬进】原来的 #bagMktPrice 再走原路 ✓ 一条路 ✓）*/
+    if (act === 'mkt') {
+      var src = box.querySelector('input[data-tipprice]');
+      var dst = document.getElementById('bagMktPrice');
+      if (dst && src) { dst.value = String(src.value || ''); }
+      BAG.sel = id;                    /* 上架用的是"当前选中"✗ 这里对齐一下 ✓ */
+      mktList();
+      bagTipHide();
+      return;
+    }
+    if (act === 'sell') { sellItems([id], false); bagTipHide(); return; }
+    if (act === 'use') { bagEquip(id); bagTipHide(); return; }
+    if (act === 'off') { bagUnequip(); bagTipHide(); return; }
+  };
 }
 function bagTipHide() {
   var box = document.getElementById('bagTipBox');
   if (box) { box.style.display = 'none'; }
+  /* ★ 顺手清掉"停住"和"鼠标在上面"✗ 不然下一次划过格子行为会很怪 ✓ */
+  _mktTipSticky = false;
+  _mktTipHold = false;
+  if (_mktTipTimer) { clearTimeout(_mktTipTimer); _mktTipTimer = null; }
 }
 
 /* ★ 第 67 轮：按【部位】决定发哪条装备消息（防具走 equiparmor ✓）*/
@@ -3601,6 +3733,7 @@ function bindBag() {
      → 把它 appendChild 到 body 下，fixed 才真的是相对视口 ✓ */
   var tip = document.getElementById('bagTipBox');
   if (tip && tip.parentNode !== document.body) { document.body.appendChild(tip); }
+  bagTipBind();      /* ★ round304f：浮窗里那排动作按钮（幂等 ✓ 只绑一次 ✓）*/
   /* ★ 第 56 轮（用户第 6 条）：点别的地方要自动关掉介绍框 ✓
      用捕获阶段监听 document —— 点格子之外任何地方（包括面板外）都收起来 ✓
      ★ 点格子本身不关（mousemove 会重新弹出来 ✓）*/
@@ -3651,12 +3784,30 @@ function bindBag() {
       bagRender();
     };
     grid.onmousemove = function (e) {
+      /* ★ round304f：鼠标或手指【回到格子上】就取消"准备关"✗ 浮窗继续留着 ✓
+         为什么需要：鼠标从格子挪到浮窗的路上会经过别的格子 ✗
+           没有这一句的话，路上每停一下都会重画浮窗（闪）✓ */
+      bagTipHold(false);
+      if (_mktTipTimer) { clearTimeout(_mktTipTimer); _mktTipTimer = null; }
       var el = e.target;
       while (el && el !== grid && !(el.getAttribute && el.getAttribute('data-id'))) { el = el.parentNode; }
-      if (!el || el === grid || !el.getAttribute) { bagTipHide(); return; }
+      if (!el || el === grid || !el.getAttribute) { bagTipHideSoon(120); return; }
       bagTipAt(e, el);
     };
-    grid.onmouseleave = bagTipHide;
+    /* ★ 离开整个格子区 → 延时关 ✗ 不再"立刻关" ✓
+       为什么：鼠标要能挪到浮窗上点按钮 ✗ 立刻关就永远点不到 ✓ */
+    grid.onmouseleave = function () { bagTipHideSoon(200); };
+    /* ★ 手机：点一下格子 = 浮窗停住（★ 没有 hover ✗ 这是手机唯一能点到按钮的路 ✓）
+       ★ 用 touchstart 而不是 click ✗ 因为 click 太晚（组件里别的处理器也吃它 ✓）
+       ★ preventDefault 不能加：加了格子那个"选中"就没了 ✓ */
+    grid.addEventListener('touchstart', function (e) {
+      var el = e.target;
+      while (el && el !== grid && !(el.getAttribute && el.getAttribute('data-id'))) { el = el.parentNode; }
+      if (!el || el === grid || !el.getAttribute) { return; }
+      bagTipStickyOn();
+      var t = (e.touches && e.touches[0]) || e;
+      bagTipAt({ clientX: t.clientX, clientY: t.clientY }, el);
+    }, { passive: true });
   }
   /* ★ 使用 / 脱下 按钮（第 54 轮 用户要求：点武器出现"使用"，穿上后变"脱下"）*/
   var useBtn = document.getElementById('bagUse');

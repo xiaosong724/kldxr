@@ -236,6 +236,21 @@ const VIEW = disposableName('ShotV');
   console.log('   bag selection: ' + selInfo);
   await sleep(900);
   await grab('bag-panel');
+  /* ★ 再截一张【浮窗里有按钮】的（用户这一轮点名要看的就是这个 ✓）
+     直接调 bagTipAt ✗ 给它一个格子中心坐标 ✓ 不依赖无头浏览器的 hover ✓ */
+  await ev(
+    'var s2 = document.querySelector("#bagGrid .slot[data-id]");' +
+    'var r2 = s2.getBoundingClientRect();' +
+    'bagTipAt({ clientX: Math.round(r2.left + r2.width / 2),' +
+    '           clientY: Math.round(r2.top + r2.height / 2) }, s2);' +
+    'return 1;');
+  await sleep(1400);
+  console.log('   tooltip shot: ' + await ev(
+    'var b = document.getElementById("bagTipBox");' +
+    'return JSON.stringify({ disp: getComputedStyle(b).display,' +
+    ' acts: [].map.call(b.querySelectorAll("[data-tipact]"), function (x) { return x.getAttribute("data-tipact"); }),' +
+    ' price: (b.querySelector("input[data-tipprice]")||{}).value });'));
+  await grab('bag-tip');
   try { spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { stdio: 'ignore' }); } catch (e) { }
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { }
   await sleep(400);

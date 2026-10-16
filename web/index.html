@@ -427,9 +427,18 @@
 .bagStat s{text-decoration:none;color:#ffd83d;font-weight:700}
 .bagTip{color:#7b8794;font-size:11px}
 .bagEmpty{color:#7b8794;font-size:11px;padding:6px 0}
-.bagTipBox{position:fixed;z-index:80;display:none;pointer-events:none;max-width:220px;
+/* ★★★ round304f（用户："我不是说放到悬浮框里面吗"）★★★
+   浮窗里要放【能点的按钮】✗ 所以两件事必须改（原来是给"纯文字提示"设计的 ✓）
+   ① pointer-events 从 none 改成 auto ✗ 不然按钮点不到 ✓
+   ② 宽度放开到 300 ✗ 原来 220 放不下"使用/卖给系统/挂交易所"✓
+   ★ 鼠标从格子移到浮窗上的那段路要【不关窗】✗ 那是 JS 那边管的（_mktTipHold ✓）*/
+.bagTipBox{position:fixed;z-index:80;display:none;pointer-events:auto;max-width:300px;
   background:rgba(10,8,6,.97);border:1px solid #6a5a44;border-radius:6px;padding:7px 10px;
   font-size:12px;line-height:1.6;color:#e8eef6;box-shadow:0 6px 20px #000b}
+.bagTipBtns{display:flex;flex-wrap:wrap;gap:5px;align-items:center;
+  margin-top:7px;padding-top:6px;border-top:1px solid #ffffff1a}
+.bagTipBtns .bagB{padding:4px 9px;font-size:12px}
+.bagTipBtns .mktInput{width:66px;padding:4px 6px;font-size:12px}
 .bagTipBox b{color:#ffd83d}
 .bagTipBox i{font-style:normal;color:#9aa4b2}
 /* ★★ 第 91 轮（用户要求）★★
@@ -617,7 +626,13 @@
         · #bagRowBatch = 跟选中无关的批量工具（批量选择 / 批量出售）
         ★ 为什么要分这两类：前者该"跟着选中走"✗ 后者跟选中完全无关 ✓
           以前三行混在一起 ✗ 看着就是一坨 ✓ -->
-   <div id="bagRowUse" class="bagBtns bagRow">
+   <!-- ★★★ round304f（用户："我不是说放到悬浮框里面吗"）★★★
+        动作按钮【搬到格子上的浮窗里】了 ✗ 这一排不再显示 ✓
+        下面这几个 id 是【程序用的】（bagRender 往里写状态 / 上架读价格 ✓）
+        所以它们不能删 ✗ 只是藏起来（display:none ✓ 不占地方也不显眼 ✓）
+        ★ 哪个是"用户点的"哪个是"程序用的" ✗ 这一行就是分界线 ✓
+        ★ 批量那两个留在外面：它们和"选中哪一件"无关 ✗ 浮窗里放不下也不合适 ✓ -->
+   <div id="bagRowUse" class="bagBtns bagRow" style="display:none">
     <button id="bagUse" class="bagB" disabled>使 用</button>
     <button id="bagSell" class="bagB off" disabled>卖给系统</button>
     <button id="bagMkt" class="bagB off" disabled>挂交易所</button>
@@ -625,7 +640,7 @@
            placeholder="价格" maxlength="10">
    </div>
    <div class="bagTip" id="bagSelTip" style="margin-top:4px">
-     点上面的格子选中一件装备（武器或防具）</div>
+     停在（或点一下）格子上的装备 ✗ 说明和按钮会弹在它旁边</div>
 
    <div id="bagRowBatch" class="bagBtns bagRow">
     <button id="bagPick" class="bagB">批量选择</button>
