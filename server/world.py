@@ -910,8 +910,24 @@ class World(object):
                 ww['durMax'] = p.wDurMax
             self._send_cid(p.cid, P.pack('weapon', w=ww))
         elif t == 'pvp':
-            self.pvp = bool(d.get('on')) if 'on' in d else self.pvp
-            self._broadcast(P.pack('notice', text='PvP 已%s' % ('开' if self.pvp else '关')))
+            # ★★★ 第 243 轮修的真 bug（用户："我测试了开了pvp好像还是无法攻击玩家"）★★★
+            #   病根：这里原来写的是 self.pvp = ... ✗
+            #     而 self 是【World 世界对象】✗ 不是这个玩家 ✓
+            #     → 玩家点开关只改了世界身上一个没人读的字段 ✓
+            #     → 玩家自己的 PVP 状态从来没被设上 ✓✓
+            #   而判定能不能打人的 _pvp_on(q) 读的是：
+            #     · pvp_of[role_id]（单人覆盖 ✓）
+            #     · pvp_all（管理页的全局开关 ✓）
+            #     → 玩家自己那个开关跟这两个都没关系 ✓✓
+            #   → 结果：你开了 PVP ✗ 服务器眼里你还是没开 → 打不到人 ✓
+            #   ★ 修法：把玩家自己的开关写进 pvp_of（单人覆盖 ✓）
+            #     → 三层关系变成：
+            #         单人覆盖 > 全局开关 ✓（管理页那两层照旧有效 ✓）
+            _pv_on = bool(d.get('on')) if 'on' in d else not self._pvp_on(p)
+            self.pvp_of[getattr(p, 'role_id', None)] = _pv_on
+            self._send_cid(p.cid, P.pack('notice', text='PvP 已%s' % ('开' if _pv_on else '关')))
+            # ★ 顺便告诉客户端一声 ✓ 让界面上的开关状态跟服务器一致 ✓
+            self._send_cid(p.cid, P.pack('pvp', on=1 if _pv_on else 0))
         elif t == 'revive':
             # ★★ 第 56 轮：复活真正实装 ★★
             #   以前这是纯客户端行为 ✗ —— 服务器不知道 → 也就给不了无敌 ✓
