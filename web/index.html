@@ -661,9 +661,15 @@
     if (!m || m._bound) { return !!m; }
     m._bound = true;
     /* direct binding - no delegation, nothing in between can swallow it */
-    m.addEventListener('click', toggle, true);
-    m.addEventListener('touchend', toggle, true);
-    m.addEventListener('touchstart', function (e) { e.stopPropagation(); }, true);
+    /* round257d - the real fix:
+       the tab bar has a drag handler that calls preventDefault() on
+       pointerdown, which suppresses the follow-up click event. That is why
+       .click() worked in tests but a real finger/mouse tap did nothing.
+       -> listen on pointerdown/mousedown/touchstart instead of click. */
+    m.addEventListener('pointerdown', toggle, true);
+    m.addEventListener('mousedown', toggle, true);
+    m.addEventListener('touchstart', toggle, true);
+    m.addEventListener('click', function (e) { e.stopPropagation(); }, true);
     /* the old drag guard would eat this click - switch it off */
     var b = bar();
     if (b) { Object.defineProperty(b, '_swallow', { get: function () { return false; }, set: function () { } }); }
