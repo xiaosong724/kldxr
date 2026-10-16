@@ -3676,7 +3676,13 @@ function autoTick(dt) {
 }
 
 
+/* ★ 第 246 轮：主循环"心跳"（给 platform 的看门狗用 ✓）
+   core 不碰任何浏览器 API ✗ 所以这里只存一个时间戳 ✗
+   由 platform 决定"多久算卡死、要不要刷新" ✓ */
+var LAST_FRAME_MS = 0;
+
 function frame(ts) {
+  LAST_FRAME_MS = Date.now();   /* ★ 每帧都打一下卡 ✗ 看门狗靠它判断有没有卡死 ✓ */
   UI.raf(frame);
   if (!loadedOk) { return; }
   /* ★ 第 183 轮：还没登录就【不跑世界】✗

@@ -3308,6 +3308,83 @@ function bindDead() {
    ============================================================================ */
 
 /* 揭开加载动画（能玩了才揭 ✓）*/
+/* ============================================================================
+   ★★★ 第 246 轮（用户："有玩家玩着玩着会白屏"）★★★
+
+   白屏的现象（用户截图）：
+     · 3D 世界全白 ✗ 没有地面、没有人物
+     · 但 HUD 正常 ✓ 僵尸的名字和血条也正常 ✓（那些是 DOM ✓）
+   → 说明【WebGL 画布死了 ✗ DOM 还活着】✓✓
+
+   代码里原来【完全没有处理】✗ 所以一旦丢了就永久白屏 ✓
+
+   两条保护：
+     ① 渲染看门狗：主循环 5 秒没跑 → 自动刷新一次
+        （WebGL 丢失 / 主循环抛异常 / 渲染卡死 都能兜住 ✓）
+     ② WebGL 上下文丢失：先提示 ✗ 5 秒没恢复 → 刷新 ✓
+   ★ 两种都复用现成的 20 秒防抖（sessionStorage ✓）不会刷成死循环 ✓
+   ============================================================================ */
+window._renderStalls = 0;
+
+(function renderWatchdog() {
+  var lastReload = 0;
+  function softReload(why) {
+    var now = Date.now();
+    if (now - lastReload < 20000) { return; }
+    lastReload = now;
+    window._renderStalls++;
+    try {
+      var k = +(sessionStorage.getItem('autoReloadAt') || 0);
+      if (now - k < 20000) { return; }        /* 和"断线重连"那套共用一个防抖 ✓ */
+      sessionStorage.setItem('autoReloadAt', String(now));
+    } catch (e) { }
+    console.log('[render] ' + why + ' → 自动刷新一次');
+    location.reload();
+  }
+  setInterval(function () {
+    /* ★ 标签页在后台时 rAF 本来就会停 ✗ 别误判 ✓ */
+    if (document.visibilityState !== 'visible') { return; }
+    if (typeof WSC === 'undefined' || !WSC.ready) { return; }   /* 没进游戏前不管 ✓ */
+    if (typeof LAST_FRAME_MS === 'undefined' || !LAST_FRAME_MS) { return; }
+    var gap = (Date.now() - LAST_FRAME_MS) / 1000;
+    if (gap > 5) { softReload('主循环卡住 ' + gap.toFixed(1) + ' 秒'); }
+  }, 2000);
+
+  /* ---- ② WebGL 上下文丢失 ---- */
+  var cv = document.getElementById('cv');
+  if (cv) {
+    cv.addEventListener('webglcontextlost', function (e) {
+      e.preventDefault();                      /* ★ 不阻止的话浏览器不会尝试恢复 ✓ */
+      console.log('[render] WebGL 上下文丢失了（画面会白 ✗ 正在等恢复）');
+      showCanvasDead('画面恢复中…');
+      setTimeout(function () {
+        /* 5 秒还没恢复 → 刷新（比一直白着强 ✓） */
+        if (document.getElementById('cvDead')) { softReload('WebGL 没恢复'); }
+      }, 5000);
+    }, false);
+    cv.addEventListener('webglcontextrestored', function () {
+      console.log('[render] WebGL 恢复了 ✓');
+      hideCanvasDead();
+    }, false);
+  }
+})();
+
+/* 白屏期间给玩家一个说明（不让他以为是死机 ✓） */
+function showCanvasDead(msg) {
+  if (document.getElementById('cvDead')) { return; }
+  var d = document.createElement('div');
+  d.id = 'cvDead';
+  d.style.cssText = 'position:fixed;left:0;right:0;top:38%;text-align:center;z-index:60;' +
+    'color:#ffd83d;font-size:15px;font-weight:700;letter-spacing:1px;' +
+    'text-shadow:0 2px 6px #000;pointer-events:none';
+  d.textContent = msg || '画面恢复中…';
+  document.body.appendChild(d);
+}
+function hideCanvasDead() {
+  var d = document.getElementById('cvDead');
+  if (d && d.parentNode) { d.parentNode.removeChild(d); }
+}
+
 function bootDone() {
   var b = document.getElementById('boot');
   if (!b || b._gone) { return; }

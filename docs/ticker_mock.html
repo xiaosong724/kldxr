@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>弹幕通知 · 设计稿</title>
+<style>
+  html,body{margin:0;height:100%;background:#1a1208;font-family:system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased}
+  /* 假的世界背景（示意用） */
+  .world{position:absolute;inset:0;background:
+    linear-gradient(180deg,#5a4a3a 0%,#7a6a55 35%,#8a7a62 60%,#3a2e22 100%);
+    opacity:.55}
+  .world:after{content:'';position:absolute;inset:0;
+    background:repeating-linear-gradient(90deg,#00000010 0 60px,#00000000 60px 120px),
+               repeating-linear-gradient(0deg,#00000010 0 60px,#00000000 60px 120px)}
+  .mob{position:absolute;width:26px;height:34px;background:#c96;border-radius:4px;top:58%;left:22%;
+    box-shadow:0 2px 6px #0006}
+  .mob2{position:absolute;width:26px;height:34px;background:#b85;border-radius:4px;top:62%;left:60%;
+    box-shadow:0 2px 6px #0006}
+  /* HUD（示意） */
+  .hud{position:absolute;left:10px;top:10px;padding:6px 12px;border-radius:10px;
+    background:linear-gradient(180deg,#2a1f14e0,#1a1208e0);border:1px solid #ffd9a855;color:#f2e8d8;font-size:13px}
+  .hud b{color:#ffd83d}
+  .bar{margin-top:4px;height:12px;border-radius:6px;background:#0006;overflow:hidden;position:relative;width:190px}
+  .bar i{display:block;height:100%;width:62%;background:linear-gradient(90deg,#5fd07a,#8ee08a)}
+  .bar span{position:absolute;inset:0;font-size:10px;line-height:12px;text-align:center;color:#fff;text-shadow:0 1px 2px #000}
+  .menu{position:absolute;right:10px;top:10px;padding:8px 16px;border-radius:10px;
+    background:#0000004d;border:1px solid #ffffff22;color:#f2e8d8;font-size:14px}
+  /* ★★★ 弹幕通知条（这次要做的）★★★ */
+  .ticker{
+    position:absolute;left:0;right:0;top:96px;height:34px;
+    background:linear-gradient(180deg,#12161ce8,#0a0d11f0);
+    border-top:2px solid #ffd83d66;border-bottom:2px solid #ffd83d66;
+    box-shadow:0 2px 10px #0009,inset 0 0 22px #00000066;
+    overflow:hidden;display:flex;align-items:center
+  }
+  /* 左右两端加一点渐隐（字滚进来/滚出去更自然） */
+  .ticker:before,.ticker:after{content:'';position:absolute;top:0;bottom:0;width:44px;z-index:2;pointer-events:none}
+  .ticker:before{left:0;background:linear-gradient(90deg,#0a0d11,transparent)}
+  .ticker:after{right:0;background:linear-gradient(270deg,#0a0d11,transparent)}
+  .roll{white-space:nowrap;font-size:14px;font-weight:700;letter-spacing:.5px;
+    text-shadow:0 1px 3px #000;will-change:transform}
+  .roll em{font-style:normal;padding:0 3px}
+  /* 四种颜色的示例（下面静态摆出来给设计稿看） */
+  .k-up{color:#ffd83d}        /* 升级 */
+  .k-kill{color:#ff6a5a}      /* 击杀玩家 */
+  .k-tier{color:#c99dff}      /* 高阶装备 */
+  .k-sys{color:#9fd8ff}       /* 系统/管理 */
+  .k-mq{color:#ff8a6a}        /* 魔气夺取 */
+  .sep{color:#ffffff33;padding:0 10px}
+  /* 下面这几条是"排队等着滚"的示意 */
+  .queue{position:absolute;left:12px;top:136px;display:flex;flex-direction:column;gap:5px}
+  .q{font-size:12px;opacity:.5;padding:3px 10px;border-radius:8px;background:#00000055;
+     border:1px solid #ffffff14;width:max-content}
+  .label{position:absolute;right:12px;top:60px;font-size:11px;color:#ffd83dcc;letter-spacing:1px}
+  .note{position:absolute;left:12px;bottom:14px;font-size:11px;color:#ffffff88;line-height:1.7}
+</style></head>
+<body>
+  <div class="world"></div>
+  <div class="mob"></div><div class="mob2"></div>
+
+  <div class="hud">慕殇 <b>炼气 5 层</b>
+    <div class="bar"><i></i><span>28 / 244</span></div>
+  </div>
+  <div class="menu">☰ 菜单</div>
+
+  <div class="label">▼ 弹幕通知（新）</div>
+
+  <!-- ★ 这就是要做的：一条向左滚动的通知带 · 上下有描边 -->
+  <div class="ticker">
+    <div class="roll" style="margin-left:40px">
+      <span class="k-up">🎉 慕殇 升到了 <em>炼气 5 层</em></span>
+      <span class="sep">|</span>
+      <span class="k-kill">⚔ 半个六道 击杀了 魔气乙</span>
+      <span class="sep">|</span>
+      <span class="k-tier">💎 慕殇 拾取到 <em>11 阶 · 神品重铠</em></span>
+      <span class="sep">|</span>
+      <span class="k-mq">👿 半个六道 夺取了 慕殇 的魔气</span>
+      <span class="sep">|</span>
+      <span class="k-sys">📢 [管理] 刷怪上限改为 30 只</span>
+    </div>
+  </div>
+
+  <!-- 排队中的（示意） -->
+  <div class="queue">
+    <div class="q">↑ 正在滚的那一条</div>
+    <div class="q">排队 1 · ⚔ 白领 击杀了 工人</div>
+    <div class="q">排队 2 · 💎 道友 拾取到 6 阶 · 秘银布衣</div>
+  </div>
+
+  <div class="note">
+    设计要点：<br>
+    · 从右往左匀速滚 · 速度固定（像素/秒）✗ 长句子不会滚得更快<br>
+    · 一条滚完再滚下一条 · 不重叠不抢位<br>
+    · 五类颜色区分：升级 金 · 击杀 红 · 高阶装备 紫 · 魔气 橙 · 系统 蓝<br>
+    · 上下各一条描边（金色半透明）+ 两端渐隐
+  </div>
+</body></html>

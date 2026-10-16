@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  html,body{margin:0;height:100%;background:#1a1208;font-family:system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
+  .world{position:absolute;inset:0;background:linear-gradient(180deg,#5a4a3a,#7a6a55 35%,#8a7a62 60%,#3a2e22);opacity:.5}
+  .hud{position:absolute;left:8px;top:8px;padding:5px 10px;border-radius:9px;
+    background:linear-gradient(180deg,#2a1f14e0,#1a1208e0);border:1px solid #ffd9a855;color:#f2e8d8;font-size:12px}
+  .hud b{color:#ffd83d}
+  .bar{margin-top:3px;height:11px;border-radius:6px;background:#0006;overflow:hidden;position:relative;width:170px}
+  .bar i{display:block;height:100%;width:62%;background:linear-gradient(90deg,#5fd07a,#8ee08a)}
+  .bar span{position:absolute;inset:0;font-size:9px;line-height:11px;text-align:center;color:#fff}
+  .menu{position:absolute;right:8px;top:8px;padding:6px 14px;border-radius:9px;background:#0000004d;
+    border:1px solid #ffffff22;color:#f2e8d8;font-size:13px}
+  .ticker{position:absolute;left:0;right:0;background:linear-gradient(180deg,#12161ceb,#0a0d11f2);
+    border-top:2px solid #ffd83d66;border-bottom:2px solid #ffd83d66;box-shadow:0 2px 8px #0009;overflow:hidden}
+  .ticker.one{top:62px;height:26px}
+  .ticker.two{height:52px}
+  .row{height:26px;display:flex;align-items:center;overflow:hidden}
+  .row + .row{border-top:1px solid #ffd83d2e}
+  .roll{white-space:nowrap;font-size:12.5px;font-weight:700;letter-spacing:.3px;text-shadow:0 1px 2px #000}
+  .k-up{color:#ffd83d}.k-kill{color:#ff6a5a}.k-tier{color:#c99dff}.k-sys{color:#9fd8ff}.k-mq{color:#ff8a6a}
+  .sep{color:#ffffff30;padding:0 8px}
+  .tag{position:absolute;left:8px;font-size:10px;color:#ffd83dcc;letter-spacing:.5px}
+  .note{position:absolute;left:10px;top:340px;font-size:11px;color:#ffffffa8;line-height:1.8}
+  .note b{color:#ffd83d}
+</style></head>
+<body>
+  <div class="world"></div>
+  <div class="hud">慕殇 <b>炼气 5 层</b><div class="bar"><i></i><span>28 / 244</span></div></div>
+  <div class="menu">☰ 菜单</div>
+
+  <div class="tag" style="top:46px">① 正常 · 单行（26px 高 ✗ 12.5px 字）</div>
+  <div class="ticker one"><div class="row">
+    <div class="roll" style="margin-left:26px">
+      <span class="k-up">🎉 慕殇 升到了 炼气 5 层</span><span class="sep">|</span><span class="k-kill">⚔ 半个六道 击杀了 魔气乙</span></div>
+  </div></div>
+
+  <div class="tag" style="top:104px">② 排队 &gt; 5 条 · 开两行（总高 52px ✗ 两条同时滚）</div>
+  <div class="ticker two" style="top:122px">
+    <div class="row"><div class="roll" style="margin-left:26px">
+      <span class="k-up">🎉 慕殇 升到了 炼气 5 层</span><span class="sep">|</span><span class="k-kill">⚔ 半个六道 击杀了 魔气乙</span></div></div>
+    <div class="row"><div class="roll" style="margin-left:26px">
+      <span class="k-tier">💎 慕殇 拾取到 11 阶 · 神品重铠</span><span class="sep">|</span><span class="k-sys">📢 [管理] 刷怪上限改为 30 只</span></div></div>
+  </div>
+
+  <div class="tag" style="top:190px">③ 排队 &gt; 10 条 · 两行 + 提速到 190 像素/秒</div>
+  <div class="ticker two" style="top:208px">
+    <div class="row"><div class="roll" style="margin-left:26px">
+      <span class="k-mq">👿 半个六道 夺取了 慕殇 的魔气</span><span class="sep">|</span><span class="k-kill">⚔ 道友 击杀了 白领</span></div></div>
+    <div class="row"><div class="roll" style="margin-left:26px">
+      <span class="k-tier">💎 工人 拾取到 6 阶 · 秘银布衣</span><span class="sep">|</span><span class="k-up">🎉 半个六道 升到了 炼气 14 层</span></div></div>
+  </div>
+
+  <div class="note">
+    <b>改小了：</b>单行 26px（原 34）· 字 12.5px（原 14）· 速度 110 像素/秒<br>
+    <b>排队 &gt; 5</b> → 开两行（两条同时滚 ✗ 消化速度翻倍 ✓ 不用变速 ✓）<br>
+    <b>排队 &gt; 10</b> → 两行 + 提速到 190（最后手段 ✓）<br>
+    <b>收回单行</b> → 队列 ≤ 2 才收（<b>迟滞</b>：不然会在单/双行之间反复跳）<br>
+    <b>每行时长</b> ≈ (文字宽 + 屏宽) ÷ 速度 → 短 4.5 秒 · 长 7 秒
+  </div>
+</body></html>
