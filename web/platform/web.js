@@ -2851,7 +2851,20 @@ function wsOnMessage(raw) {
   try { m = JSON.parse(raw); } catch (e) { return; }
   var t = m.t, d = m.d || {};
   if (t === 'welcome') { wsWelcome(d); return; }
-  if (t === 'world') { window._lastWorldT = Date.now(); wsApplyWorld(d); return; }
+  if (t === 'world') {
+    window._lastWorldT = Date.now();
+    wsApplyWorld(d);
+    /* ★ 第 219 轮：兜住"假死"（用户实测："别人看你已经死了，自己看还活着"）✗
+       服务器本来会发一条 dead 消息 ✓ 但它只在【状态翻转那一刻】发一次 ✗
+       万一那次丢了 / 被别的东西盖住了 → 客户端就永远显示活着 ✓✓
+       → 这里每帧看一眼：服务器说你没血了 + 我这边还活着 → 补一次死亡 ✓
+       （走现成的 playerDie ✓ 和收到 dead 消息是同一条路 ✓ 不会两套逻辑 ✓）*/
+    if (window._lastWorldT && d && d.me && typeof d.me.hp === 'number' &&
+        d.me.hp <= 0 && !dead && typeof playerDie === 'function') {
+      playerDie('');
+    }
+    return;
+  }
   if (t === 'pong') { WSC.rtt = (performance.now() / 1000 - WSC.lastPing) * 1000; return; }
   if (t === 'kick') {
     WSC.on = false; WSC.ready = false;
