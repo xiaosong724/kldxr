@@ -3369,7 +3369,14 @@ var AUTO = {
   on: false, tgt: '', phase: 'find', t: 0,
   pauseUntil: 0, stuckT: 0, lastX: 0, lastZ: 0,
   deaths: [], reviveT: 0, info: '', kills: 0, setInput: false,
-  lootOn: true                /* 自动捡东西（菜单里可关 ✓）*/
+  lootOn: true,               /* 自动捡东西（菜单里可关 ✓）*/
+  /* ★★ 第 211 轮：卡建筑检测 + 安全区不进 ★★ */
+  lastHitT: 0,                /* 上一次"打中"（目标掉血 ✓）的时刻 */
+  lastHp: -1,                 /* 目标上一帧的血量 ✓ 用来判有没有打中 */
+  detourT: 0,                 /* 侧向绕行还剩多久 */
+  detourDir: 1,               /* 往哪边绕（左/右 ✓ 随机）*/
+  stuckTries: 0,              /* 这个目标已经绕了几次 */
+  skipMid: '', skipUntil: 0   /* 暂时放弃的目标（绕 3 次还打不到 ✓）*/
 };
 var AUTO_RANGE = 30.0;
 var AUTO_LOOT_R = 12.0;      /* 没怪时去捡东西的搜索半径 ✓ */
@@ -3378,6 +3385,11 @@ var AUTO_STUCK_MOVE = 0.12;
 
 function autoFacing(dx, dz) {
   return Math.atan2(dx, dz * G.FLIP_Z);   /* ★ 和主循环同一个公式 ✓ */
+}
+function autoSafeMargin() {
+  /* 安全区外再留一圈缓冲（米）✗
+     不然会贴着边界反复试探 ✓ 而且僵尸也可能站在边界外侧 ✓ */
+  return (typeof SAFE_HALF === 'number') ? SAFE_HALF : 15.0;
 }
 function autoInSafe(x, z) {
   return (typeof SAFE_HALF === 'number') &&
@@ -3391,7 +3403,10 @@ function autoPickTarget() {
     if (!m || !m.alive || !(m.hp > 0) || m.dying >= 0) { continue; }
     var dx = m.cur.x - P.x, dz = m.cur.z - P.z;
     var d2 = dx * dx + dz * dz;
+    /* ★ 第 211 轮：安全区内/贴边的僵尸不选 ✗
+       （服务器禁止在区内攻击 ✓ 选了也是白追 ✓ 还会把人带进区里 ✓）*/
     if (autoInSafe(m.cur.x, m.cur.z)) { continue; }
+    if (mid === AUTO.skipMid && performance.now() < AUTO.skipUntil) { continue; }
     if (m.atkT >= 0 && d2 < threatD) { threat = mid; threatD = d2; }
     if (d2 < bestD) { best = mid; bestD = d2; }
   }
@@ -3433,6 +3448,15 @@ function autoRelease() {
 
 function autoTick(dt) {
   var now = performance.now();
+  /* ★ 第 211 轮：如果人已经在安全区里（比如刚传送回来 ✓）
+     → 原地待命 ✗ 不主动出去送死 ✓
+     出去（手动走两步）之后自动继续 ✓ */
+  if (AUTO.on && autoInSafe(P.x, P.z) && !dead) {
+    jx = 0; jy = 0; if (AUTO.setInput) { AUTO.setInput = false; }
+    atkHeld = false;
+    AUTO.info = '自动战斗：在安全区内待命（走出去就继续）';
+    return;
+  }
   if (!AUTO.on) { autoRelease(); return; }
   /* ---- 手动操作检测（自己判 ✗ 不用平台层加钩子 ✓）----
      上一帧我没写 jx/jy ✓ 而这一帧它们有值 → 说明是玩家在推摇杆 ✓
@@ -3492,6 +3516,42 @@ function autoTick(dt) {
   }
   var reach = (G.ATK_RANGE || 2.4) * 0.92;
   AUTO.t += dt;
+
+  /* ★★ 第 211 轮（用户）："长时间没攻击到僵尸，可能是被建筑卡住了" ★★
+     怎么知道打没打中：盯着目标的血 ✓
+       血掉了 = 打中了 → 记时刻 + 清掉"绕行次数"✓
+       超过 3 秒血没掉 = 大概率被挡住 → 侧向绕一下 ✓
+       绕 3 次还是打不到 → 放弃它，换一个（暂时拉黑 6 秒 ✓）*/
+  var nowMs = now;
+  if (m.hp < AUTO.lastHp - 0.5) {
+    AUTO.lastHitT = nowMs; AUTO.stuckTries = 0; AUTO.detourT = 0;
+  }
+  AUTO.lastHp = m.hp;
+  if (!AUTO.lastHitT) { AUTO.lastHitT = nowMs; }
+  if (AUTO.detourT <= 0 && (nowMs - AUTO.lastHitT) > 3000) {
+    AUTO.detourT = 0.8;
+    AUTO.detourDir = Math.random() < 0.5 ? -1 : 1;   /* 左右随机 ✓ 免得每次都撞同一边 */
+    AUTO.stuckTries++;
+    AUTO.lastHitT = nowMs;                            /* 重新计时 ✓ */
+    if (AUTO.stuckTries >= 3) {
+      AUTO.skipMid = AUTO.tgt; AUTO.skipUntil = nowMs + 6000;
+      AUTO.tgt = ''; AUTO.phase = 'find'; AUTO.stuckTries = 0;
+      AUTO.info = '自动战斗：这个目标打不到，换一个';
+      jx = 0; jy = 0; AUTO.setInput = true;
+      return;
+    }
+    AUTO.info = '自动战斗：好像被挡住了，绕一下';
+  }
+  if (AUTO.detourT > 0) {
+    /* 侧向绕行：把"朝目标"的方向转 70 度 ✓ 走一小段再转回来 ✓ */
+    AUTO.detourT -= dt;
+    var ang = Math.atan2(dx, dz) + AUTO.detourDir * 1.22;
+    var sx = Math.sin(ang), sz = Math.cos(ang);
+    jx = sx; jy = sz; AUTO.setInput = true;
+    P.yaw = autoFacing(dx, dz);
+    atkHeld = false;
+    return;
+  }
   var lvTxt = m.lv ? ('Lv.' + m.lv + ' ') : '';
 
   if (AUTO.phase === 'find') { AUTO.phase = 'approach'; AUTO.t = 0; }
@@ -3503,6 +3563,16 @@ function autoTick(dt) {
       P.yaw = autoFacing(dx, dz);
       atkHeld = true;
     } else {
+      /* ★★ 第 211 轮：★ 根本不进安全区 ★
+         不是"进去了怎么办"✗ 是"这一步就别踩进去"✓
+         人在区里时服务器禁止攻击 ✓ 追进去只会站着发呆 ✓ */
+      var stepX = P.x + (dx / d) * 0.6, stepZ = P.z + (dz / d) * 0.6;
+      if (autoInSafe(stepX, stepZ)) {
+        jx = 0; jy = 0; AUTO.setInput = true;
+        atkHeld = false;
+        AUTO.info = '自动战斗：前面是安全区，不过去';
+        return;
+      }
       jx = dx / d; jy = dz / d; AUTO.setInput = true;
       atkHeld = false;
     }
