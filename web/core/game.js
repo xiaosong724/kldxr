@@ -1917,7 +1917,9 @@ function terrainV(dt) {
     P.lavaT = (P.lavaT || 0) - dt;
     if (P.lavaT <= 0) {
       P.lavaT = 0.5;
-      if (typeof dmg === 'function') { dmg('-5', P.x, P.y + 1.15, P.z, false); }
+      /* ★ round322（用户："我进岩浆掉血会显示两个伤害飘字，保留红色的就行"）
+         ★ 根因：这里本地又弹了一个（白字），服务端 hurts 回来还会再弹一个（红字）✓
+         ★ 修：本地不弹数字 ✗ 只发请求 ✓ 让服务端的红字来显示 ✓ */
       shake = 0.18;
       wsSend('falldmg', { d: 5 });
     }
