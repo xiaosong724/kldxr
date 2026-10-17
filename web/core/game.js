@@ -5048,6 +5048,7 @@ var AUTO_LOOT_R = 12.0;      /* 没怪时去捡东西的搜索半径 ✓ */
    ★ 0.30 秒 ≈ 0.9 米 ✗ 刚够离开僵尸的攻击距离 ✓ 又不会跑开太远 ✓
    ★ 不能压太狠：僵尸蓄力 0.45 秒 ✗ 没退出去会被打到 ✓
      → 0.28~0.32 是安全区间 ✓ */
+var _yawLockUntil = 0;      // 挥刀锁朝向的截止时刻（ms ✓）
 var AUTO_RETREAT = 0.30;
 var AUTO_STUCK_MOVE = 0.12;
 
@@ -5169,7 +5170,11 @@ function autoTick(dt) {
     AUTO.info = '自动战斗：走出安全区';
     return;
   }
-  if (!AUTO.on) { autoRelease(); return; }
+  if (!AUTO.on) {
+    AUTO.faceLock = false;          // ★ 关掉时一定要解锁 ✓ 不然人就转不了身 ✓
+    autoRelease();
+    return;
+  }
   /* ★★★ round363（用户："掉落物五阶以上，优先去捡，再继续打怪"）★★★
      ★ 为什么放在【选目标之前】：要压过"打架"✗ 而不只是"没怪时去捡"✓
      ★ 半径给大一点（AUTO_LOOT_R）✗ 高级掉落值得跑一趟 ✓
@@ -5459,7 +5464,21 @@ function frame(ts) {
          → 看着像背对着怪打 ✓
        ★ 修：自动战斗锁朝向时（faceLock）跳过这里 ✗ 保持它自己设的朝向 ✓
          → 后撤 = 【面朝怪、往后滑】✓ 和格斗游戏的后跳一样 ✓ */
-    if (!(typeof AUTO !== 'undefined' && AUTO.faceLock)) {
+    /* ★★★ round368（用户："手动打的时候也有这个问题"）★★★
+       ★ 手动的情况和自动战斗不同：
+         自动战斗是 AI 主动改朝向 ✗ 手动的朝向本来是对的 ✓
+         但【挥刀动画还在播】时人已经转身了 ✓
+         → 挥到一半朝向变了 180° ✗ 看着就像在打后面 ✓
+       ★ 修：挥刀前 0.32 秒（= 真正"挥出去"的那段）锁住朝向 ✓
+         之后是收刀动作 ✗ 可以自由转向 ✓ 不会影响手感 ✓ */
+    /* ★★★ round369（用户："有时候人物动画无法转向"）★★★
+       ★ 根因：上一版用 atkT 判"在挥刀"✗
+         而 atkT 在某些路径下【不会推进】（被打断/死亡/自动战斗切阶段 ✓）
+         → 一直停在 0~0.32 ✗ 朝向永远锁住 ✓ 人就转不了身 ✓
+       ★ 修：换成【时间戳上限】✗ 锁最多 0.32 秒 ✗ 到点必解 ✓
+         就算动画状态乱了也不会把人锁死 ✓ */
+    var _swingLock = (performance.now() < (_yawLockUntil || 0));
+    if (!_swingLock && !(typeof AUTO !== 'undefined' && AUTO.faceLock)) {
       P.yaw = Math.atan2(nx, nz * G.FLIP_Z);   // ★ 朝向跟着【输入】走（滑行时不会乱转）
     }
   } else {
@@ -5559,6 +5578,7 @@ function frame(ts) {
   if (dead) { atkHeld = false; }   // ★ 倒下了不能挥剑 ✓
   if (atkHeld && atkCd <= 0 && atkT < 0 && !dead) {
     atkT = 0; atkCd = (G.ATK_CD || 0.62);
+    _yawLockUntil = performance.now() + 320;   // ★ 挥刀前 0.32 秒锁朝向 ✓
     /* ★★★ round310（P1 破坏）：挥刀【先判地形】✗ 方案 §5.1 ✓
        规则：正前方一格（1 格远 + 扇形内）有比脚下高的地形 → 打它 ✓
        ★ 为什么先判地形：不然站在墙前面打僵尸 ✗ 墙永远拆不掉 ✓
