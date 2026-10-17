@@ -856,8 +856,12 @@ function propApplyEdits(cells) {
       delete propDmg[k];
       // ★ 先让【独立模型】倒下去 ✗ 再重建块（把原来的挪走）✓
       var _fk2 = propAt[k] || '';
-      if (_fk2.indexOf('tree') === 0 || _fk2 === 'dead' || _fk2.indexOf('fence') === 0) {
-        propFallAnim(_fk2, gx, gz);      // ★ 树/围栏才倒 ✗ 房子直接碎 ✓
+      /* ★ round345（用户："这个也做一下倒下的动画" —— 指断墙 ruin）
+         ★ 断墙是立着的砖结构 ✗ 倒下去很自然 ✓
+         ★ 房子仍然是"碎掉"✗ 一整栋楼倒下来反而怪 ✓（要的话说一声 ✓）*/
+      if (_fk2.indexOf('tree') === 0 || _fk2 === 'dead' || _fk2.indexOf('fence') === 0 ||
+          _fk2 === 'ruin') {
+        propFallAnim(_fk2, gx, gz);
       }
       // ★ 木屑/石屑（复用破坏的碎块 ✓ 换成木头色 ✓）
       terDebris(gx, gz, 'dirt', terH(gx, gz));
