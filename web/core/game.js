@@ -4284,16 +4284,14 @@ function netUpdate(dt) {
            → 看起来是"继续走"✗ 而不是"卡住"✓
        ★ 这只是把"冻住"变成"顺滑"✗ 根因（为什么拿不到采样）还没定位 ✓
          但不管根因是什么，外推都能让画面不跳 ✓ */
-    if (!netSample(rm.buf, srvRender, rm.cur)) {
-      if (rm.vx === undefined) { continue; }
-      rm.exT = (rm.exT || 0) + dt;
-      if (rm.exT > 0.35) { continue; }
-      rm.g.position.x += rm.vx * dt;
-      rm.g.position.z += rm.vz * dt;
-      if (rm.shadow) { rm.shadow.position.x = rm.g.position.x; rm.shadow.position.z = rm.g.position.z; }
-      continue;
-    }
-    rm.exT = 0;
+    /* ★★★ round328（用户："一直跳的话僵尸走路像抽帧一样"）
+       ★ 上一轮我加的"采样断流就按速度外推"是【错的方向】✗
+         外推之后新采样一到，位置又跳回真值 ✗ 一帧一顿 ✓
+       ★ 现在改成：采样位置只当【目标】✗ 视觉位置每帧朝它平滑追 ✓
+         - 采样 30Hz、渲染 60Hz 也顺 ✓
+         - 偶尔丢一帧采样 ✗ 平滑追让画面看不出来 ✓
+         - 新采样和当前差得远 ✗ 也是平滑追过去 ✗ 不会跳 ✓ */
+    if (!netSample(rm.buf, srvRender, rm.cur)) { continue; }
     var rx = rm.cur.x, rz = rm.cur.z;
     if (rm.px !== undefined && dt > 0.0001) {
       var _dvx = (rx - rm.px) / dt, _dvz = (rz - rm.pz) / dt;
@@ -4337,9 +4335,19 @@ function netUpdate(dt) {
     }
     if (rm.jumpCd > 0) { rm.jumpCd -= dt; }
     rm.lastGY = _mgy;
-    rm.g.position.set(rx, _jy, rz);
+    /* ★ 平滑跟随：追得快（dt*22）✗ 几乎看不出延迟 ✓ 但能吃掉所有跳变 ✓ */
+    if (rm.g.position.x === 0 && rm.g.position.z === 0) {
+      rm.g.position.set(rx, _jy, rz);            // 刚出现：直接落位 ✓
+    } else {
+      var _k = Math.min(1, dt * 22);
+      rm.g.position.x += (rx - rm.g.position.x) * _k;
+      rm.g.position.z += (rz - rm.g.position.z) * _k;
+      rm.g.position.y = _jy;
+    }
     rm.g.rotation.y = rm.cur.yaw;
-    if (rm.shadow) { rm.shadow.position.set(rx, _mgy + 0.02, rz); }
+    if (rm.shadow) {
+      rm.shadow.position.set(rm.g.position.x, _mgy + 0.02, rm.g.position.z);
+    }
     /* ★ 第 44 轮：只给 30 米内的僵尸投影 —— 更远的影子在地平线上只有几个像素，看不出来 ✓
        只要状态没变就不重复写 castShadow（写它会让 three.js 重建阴影列表 ✗）*/
     if (rm.hh.casters) {
