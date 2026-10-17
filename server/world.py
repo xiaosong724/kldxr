@@ -1786,6 +1786,13 @@ class World(object):
                 # ★ 外卖骑手：残血就逃（方案 §3.3"移速最快，会逃跑"）
                 if m.kind == '外卖' and m.fleeT <= 0 and m.hp < m.mhp * mobs.FLEE_HP:
                     m.fleeT = mobs.FLEE_TIME
+                    # ★ round348（用户："外卖僵尸逃跑时播放逃跑音效"）
+                    #   只发给 30 格内的人 ✓ 太远听不到也没意义 ✓
+                    for _pf in self.players.values():
+                        _dxf = m.x - _pf.x
+                        _dzf = m.z - _pf.z
+                        if _dxf * _dxf + _dzf * _dzf <= 900:
+                            self._add_pend(_pf.cid, 'flee', {'mid': m.mid})
                 if m.fleeT > 0:
                     m.fleeT -= dt
                     m.yaw = math.atan2(m.x - near.x, m.z - near.z)   # 背对着人 ✓

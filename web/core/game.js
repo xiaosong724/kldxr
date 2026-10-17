@@ -863,6 +863,12 @@ function propFallTick(dt) {
   }
 }
 
+/* ★ round348：外卖僵尸开始逃跑 → 播逃跑音效（按 mob id 分频道 ✓）*/
+function fleePlay(mid) {
+  if (typeof sfx !== 'function') { return; }
+  sfx('flee', 0.95, 'flee_' + mid);
+}
+
 /* ★ round329：服务端说"这几棵树没了" → 记下来 + 重建那一片 ✓ */
 function propApplyEdits(cells) {
   if (!cells || !cells.length) { return; }
@@ -1051,6 +1057,8 @@ var SFX_FILES = {
   break: ['break1.mp3'],
   /* ★ round314：落地（用户提供 ✗ 立体声转单声道 ✓）*/
   land: ['land1.mp3'],
+  /* ★ round348：外卖僵尸逃跑（用户提供 ✗ 立体声 44.1k 压成单声道 22.05k ✓ 204KB→51KB）*/
+  flee: ['flee1.mp3'],
   zhurt: ['zhurt1.mp3', 'zhurt2.mp3'],
 };
 var SFX_FILES_OGG = {
@@ -1066,6 +1074,8 @@ var SFX_FILES_OGG = {
   break: ['break1.ogg'],
   /* ★ round314：落地（用户提供 ✗ 立体声转单声道 ✓）*/
   land: ['land1.ogg'],
+  /* ★ round348：外卖僵尸逃跑（用户提供 ✗ 立体声 44.1k 压成单声道 22.05k ✓ 204KB→51KB）*/
+  flee: ['flee1.ogg'],
   zhurt: ['zhurt1.ogg', 'zhurt2.ogg'],
 };
 var SFX_FILES_WAV = {
@@ -1081,6 +1091,8 @@ var SFX_FILES_WAV = {
   break: ['break1.wav'],
   /* ★ round314：落地（用户提供 ✗ 立体声转单声道 ✓）*/
   land: ['land1.wav'],
+  /* ★ round348：外卖僵尸逃跑（用户提供 ✗ 立体声 44.1k 压成单声道 22.05k ✓ 204KB→51KB）*/
+  flee: ['flee1.wav'],
   zhurt: ['zhurt1.wav', 'zhurt2.wav'],
 };
 
@@ -3845,6 +3857,8 @@ function addWorldMob(arr, t) {
 }
 
 function removeWorldMob(mid) {
+  /* ★ round348：这只僵尸没了（被打死/走远）→ 掐掉它的逃跑音效 ✓ */
+  if (typeof sfxStop === 'function') { sfxStop('flee_' + mid); }
   var rm = NET.rmobs[mid];
   if (!rm) { return; }
   scene.remove(rm.g);

@@ -323,7 +323,18 @@ function _sfxFallback(key, buf, mime, label, attempt) {
      关了就不卡 → 确实是音频问题 ✓ 我再想别的方法
      关了还卡 → 不是音频 ✗ 我去查别的（下一个怀疑：每帧投影血条）
 */
-function sfx(name, volScale) {
+/* ★ round348（用户："如果没来得及逃跑或者没放完就死了要把音效停止"）
+   ★ 按【频道】播放：同频道再播会先掐掉旧的 ✗ 可以单独 stop ✓
+   ★ 为什么不用全局 stop：会把打斗音效一起掐掉 ✓ */
+var SFX_CH = {};
+function sfxStop(ch) {
+  var e = SFX_CH[ch];
+  if (!e) { return; }
+  try { e.src.stop(0); } catch (e2) { }
+  try { e.gn.disconnect(); } catch (e3) { }
+  delete SFX_CH[ch];
+}
+function sfx(name, volScale, ch) {
   if (!SFX_ON) { return; }
   /* ★★ 第 183 轮（用户："游戏还没有登录就有打斗的声音了"）★★
      原因：登录框是【盖在游戏画面上的一个层】✗
@@ -357,7 +368,14 @@ function sfx(name, volScale) {
       gn.gain.value = vol;
       src.connect(gn); gn.connect(ac2.destination);
       _aVoices++;
-      src.onended = function () { _aVoices = Math.max(0, _aVoices - 1); };
+      src.onended = function () {
+        _aVoices = Math.max(0, _aVoices - 1);
+        if (ch && SFX_CH[ch] && SFX_CH[ch].src === src) { delete SFX_CH[ch]; }
+      };
+      if (ch) {
+        sfxStop(ch);                     // ★ 同频道正在播的 → 先掐掉 ✓
+        SFX_CH[ch] = { src: src, gn: gn };
+      }
       src.start(0);
     } catch (e4) { SFX_ERR.push(name + ':webaudio 异常'); }
     return;
@@ -5103,6 +5121,11 @@ function wsOnMessage(raw) {
   /* ★ round310（P1 破坏）：服务端说"这几格变了"→ 改覆盖 + 重建那几片瓦片 ✓ */
   /* ★ F1：流体变了（流动 ✓）→ 改覆盖 + 重建那几片瓦片 ✓ */
   /* ★ round329：树/石被砍掉了 → 重建那一块 ✓ */
+  /* ★ round348：外卖僵尸开始逃跑 → 播逃跑音效 ✓ */
+  if (t === 'flee') {
+    if (typeof fleePlay === 'function') { fleePlay(d && d.mid); }
+    return;
+  }
   if (t === 'propedit') {
     if (typeof propApplyEdits === 'function') { propApplyEdits(d && d.cells); }
     return;
