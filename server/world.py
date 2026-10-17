@@ -4203,22 +4203,24 @@ class World(object):
                 dv = max(1, int(round(dv * mobs.BLOCK_MUL)))
                 blocked = True
             m.hp -= dv
-            self._add_pend(p.cid, 'mhits', {'mid': m.mid, 'dmg': dv, 'crit': bool(crit),
-                                            'block': blocked, 'back': back,
-                                            # ★ 第 62 轮：背击倍率 → 客户端能算出"额外打了多少"✓
-                                            'mb': round(backMul, 2) if back else None,
-                                            'heal': _heal,
-                                            'x': round(m.x, 2), 'z': round(m.z, 2)})
-
-            # ★★ 第 60 轮：吸血词条 —— 按造成的伤害回血 ✓
+            # ★★★ round361 修的真 bug（用户："打僵尸的受伤音效没有了"）★★★
+            #   根因：我上次把 'heal': _heal 塞进 mhits ✗
+            #         而 _heal 是在【这行之后】才赋值的 ✓
+            #         → NameError → 整段攻击处理中断 ✗
+            #         → mhits 根本没发出去 ✗ 客户端既没有伤害数字也没有受伤音效 ✓
+            #   修：先把吸血算完 ✗ 再发 mhits ✓（顺序反了就是崩溃 ✓）
             _ls = _T.get('lifesteal', 0.0)
             _heal = 0
             if _ls > 0:
                 hpm = self._hp_max(p)     # ★ 第 67 轮：含防具加成 ✓
                 _heal = max(1, int(round(dv * _ls / 100.0)))
                 p.hp = min(hpm, int(p.hp) + _heal)
-                # ★ round352（用户："吸血要飘绿字"）：把数值塞进 mhits ✓
-                #   （客户端在同一个循环里就能拿到 ✓ 不用新事件通道 ✓）
+            self._add_pend(p.cid, 'mhits', {'mid': m.mid, 'dmg': dv, 'crit': bool(crit),
+                                            'block': blocked, 'back': back,
+                                            # ★ 第 62 轮：背击倍率 → 客户端能算出"额外打了多少"✓
+                                            'mb': round(backMul, 2) if back else None,
+                                            'heal': _heal,
+                                            'x': round(m.x, 2), 'z': round(m.z, 2)})
 
             # ★★ 命中后按武器类型触发机制 ★★
             self._weapon_fx(p, m, fx, dv)
