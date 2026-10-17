@@ -2956,6 +2956,10 @@ function wsApplyWorld(d) {
     var etxt = String(edv) + (e2.crit ? ' 暴击' : '') + (e2.block ? ' 格挡' : '') +
                (e2.back ? ' 背击' : '') + (e2.splash ? ' 溅射' : '');
     dmg(etxt, +e2.x, 2.4, +e2.z, !!e2.crit);
+    /* ★ round324（用户："僵尸进岩浆受伤，为什么我的屏幕也会抖动"）
+       env=1 = 环境伤害（岩浆烧僵尸）✗ 只是"别人在掉血"✓
+       → 不震屏、不顿帧、不出打击音效 ✓ 只飘数字 ✓ */
+    if (e2.env) { continue; }
     if (e2.back && +e2.mb > 1.0) {
       // 额外 = 总额 - 不背击时的那一份（服务器给了倍率 ✓ 客户端不用自己猜公式 ✓）
       var extra = Math.max(1, Math.round(edv - edv / (+e2.mb)));
@@ -4265,8 +4269,29 @@ function netUpdate(dt) {
   // ★ 世界妖兽：插值显示 + 走路/攻击/倒地动画（动作由服务器的状态驱动 ✓）
   for (var mid in NET.rmobs) {
     var rm = NET.rmobs[mid];
-    if (!netSample(rm.buf, srvRender, rm.cur)) { continue; }   // ★ 妖兽用服务器钟 ✓
+    /* ★★★ round324（用户："跳动的时候僵尸会停顿下来"）
+       现象：某一帧拿不到采样时，僵尸【原地冻住】✗ 下一帧又跳回去 ✓
+       修：拿不到采样就按【最后一次的速度】继续外推（最多 0.2 秒）
+           → 看起来是"继续走"✗ 而不是"卡住"✓
+       ★ 这只是把"冻住"变成"顺滑"✗ 根因（为什么拿不到采样）还没定位 ✓
+         但不管根因是什么，外推都能让画面不跳 ✓ */
+    if (!netSample(rm.buf, srvRender, rm.cur)) {
+      if (rm.vx === undefined) { continue; }
+      rm.exT = (rm.exT || 0) + dt;
+      if (rm.exT > 0.2) { continue; }
+      rm.g.position.x += rm.vx * dt;
+      rm.g.position.z += rm.vz * dt;
+      if (rm.shadow) { rm.shadow.position.x = rm.g.position.x; rm.shadow.position.z = rm.g.position.z; }
+      continue;
+    }
+    rm.exT = 0;
     var rx = rm.cur.x, rz = rm.cur.z;
+    if (rm.px !== undefined && dt > 0.0001) {
+      var _dvx = (rx - rm.px) / dt, _dvz = (rz - rm.pz) / dt;
+      // ★ 只在速度合理时记录（防瞬移把速度记成天文数字 ✗）
+      if (Math.abs(_dvx) < 12 && Math.abs(_dvz) < 12) { rm.vx = _dvx; rm.vz = _dvz; }
+    }
+    rm.px = rx; rm.pz = rz;
     /* ★★★ round306：僵尸也要站在地形上 ✗ 而且上台阶要"跳"一下 ✓
        自测踩到（用户："僵尸怎么无视方块可以直接穿模了"）：
          ① 服务端 _mob_step 完全没查地形高度 ✗ 僵尸直接走上峭壁 ✓（已修 ✓）

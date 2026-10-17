@@ -1575,9 +1575,13 @@ class World(object):
                             _dx3 = m.x - _p3.x
                             _dz3 = m.z - _p3.z
                             if _dx3 * _dx3 + _dz3 * _dz3 <= 900:
+                                # ★ round324（用户："僵尸进岩浆受伤，为什么我的屏幕也会抖动"）
+                                #   根因：mhits 默认是"我砍中了"✗ 会触发震屏 + 顿帧 ✓
+                                #   修：加 env=1 标记 ✗ 客户端看到就不震屏（只飘字+音效）✓
                                 self._add_pend(_p3.cid, 'mhits',
                                                {'dmg': 5, 'x': round(m.x, 2),
-                                                'z': round(m.z, 2), 'mid': m.mid})
+                                                'z': round(m.z, 2), 'mid': m.mid,
+                                                'env': 1})
             # ★ 第 59 轮：武器机制的状态衰减（先衰减再判断行为 ✓）
             if m.stunImmune > 0:
                 m.stunImmune = max(0.0, m.stunImmune - dt)
