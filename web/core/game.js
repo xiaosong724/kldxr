@@ -553,7 +553,7 @@ var _flashClones = [];
 function flashCloneMesh(obj) {
   if (!obj) { return; }
   var wm = new THREE.MeshBasicMaterial({
-    color: 0xffffff, transparent: true, opacity: 0.8,
+    color: 0xffffff, transparent: true, opacity: 0.34,
     depthWrite: false, blending: THREE.AdditiveBlending });
   var c;
   try { c = obj.clone(true); } catch (e) { return; }
@@ -582,7 +582,7 @@ function flashCloneTick(dt) {
       f.m.dispose();
       _flashClones.splice(i, 1);
     } else {
-      f.m.opacity = 0.8 * (1 - k);
+      f.m.opacity = 0.34 * (1 - k);
     }
   }
 }
@@ -591,13 +591,15 @@ var _blockFlashGeo = null;
 function flashBlock(gx, gz) {
   if (!_blockFlashGeo) { _blockFlashGeo = new THREE.BoxGeometry(TER.LEVEL_H, TER.LEVEL_H, TER.LEVEL_H); }
   var wm = new THREE.MeshBasicMaterial({
-    color: 0xffffff, transparent: true, opacity: 0.7,
+    color: 0xffffff, transparent: true, opacity: 0.30,
     depthWrite: false, blending: THREE.AdditiveBlending });
   var m = new THREE.Mesh(_blockFlashGeo, wm);
   m.position.set((gx + 0.5) * TER.LEVEL_H,
                  (terH(gx, gz) - 0.5) * TER.LEVEL_H,
                  (gz + 0.5) * TER.LEVEL_H);
-  m.rotation.y = 0.6;
+  /* ★ 不能旋转 ✗ 转了方块就和格子的边对不上（用户报"没和方块重叠"）✓
+     ★ 稍微放大 2% ✗ 盖住和地形之间的接缝 ✓ */
+  m.scale.setScalar(1.02);
   scene.add(m);
   _flashClones.push({ o: m, t: 0, m: wm });
 }
