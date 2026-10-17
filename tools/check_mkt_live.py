@@ -213,7 +213,7 @@ class WS(object):
 def purge():
     c = sqlite3.connect(DB, timeout=8)
     try:
-        for nm in (SELLER, BUYER):
+        for nm in (SELLER, BUYER, 'MktOff' + _SUF):
             row = c.execute('SELECT id, account_id FROM roles WHERE name=?', (nm,)).fetchone()
             if row is None:
                 # ★ 名字每次都不一样 ✗ 顺手把【以前几轮留下的】也清掉 ✓
@@ -524,8 +524,118 @@ try:
     d = ws_b.wait('listres', timeout=10)
     ok(d is not None and d.get('ok') is False, 'buying it twice is refused: %s'
        % (d or {}).get('msg'), d)
-    ok(abs((gold_of(BUYER) or 0) - (b_gold0 - 1000)) <= 1,
-       'the buyer was not charged twice (%s -> %s)' % (b_gold0, gold_of(BUYER)))
+    # ★★ round304z：这一段原来有一条【会误报】的断言（偶发红 ✓ 查清了）★★
+    #   原来写的是 abs((gold_of(BUYER) or 0) - (b_gold0 - 1000)) <= 1
+    #     · gold_of() 读不到时返回 None ✗ `or 0` 把它当 0 ✓ → 差 1000 → 红 ✓
+    #     · 而且打印的 "b_gold0 -> 现在" 两个数【都是扣完之后的】
+    #       （b_gold0 是上面那段读的 ✗ 不是扣钱前的 ✓）
+    #       → 显示成 "1493 -> 493"✗ 看着像被扣了两次 ✓ 其实是显示错了 ✓
+    #   ★ 现在改成【直接验服务端的账】✗ 这比读内存余额更硬 ✓：
+    #     ① 这一单在 trade_log 里只能有【一行】（重复购买不能多记一笔 ✓）
+    #     ② 上架单必须是 sold 且 qty 已经归零 ✓
+    #     ③ 钱用 retry 读（内存余额是异步推的 ✗ 读一次可能还没到 ✓）
+    #   ★ 落库是异步的（saver 线程 ✓）→ 这两条也要 retry ✗
+    #     拿"刚好还没写进去"的那一瞬当结论 = 偶发误报 ✓
+    nl = None
+    for _i in range(12):
+        nl = db_one('SELECT COUNT(*) FROM trade_log WHERE lid=?', (lid,))
+        if nl is not None and int(nl[0]) >= 1:
+            break
+        time.sleep(0.25)
+    ok(nl is not None and int(nl[0]) == 1,
+       'the refused second buy wrote NO extra trade row (%s row(s))'
+       % (nl[0] if nl else None))
+    st2 = None
+    for _i in range(12):
+        st2 = db_one('SELECT state, qty FROM listings WHERE lid=?', (lid,))
+        if st2 is not None and st2[0] == 'sold' and int(st2[1] or 0) == 0:
+            break
+        time.sleep(0.25)
+    ok(st2 is not None and st2[0] == 'sold' and int(st2[1] or 0) == 0,
+       'the listing is sold and empty exactly once: %s' % (tuple(st2) if st2 else None,))
+    #   钱：等到"余额稳定"再判 ✗ 别拿一次读数当准 ✓
+    _g = None
+    for _i in range(12):
+        _g = gold_of(BUYER)
+        if _g is not None and abs(_g - (b_gold0 - 1000)) <= 1:
+            break
+        time.sleep(0.25)
+    ok(_g is not None and abs(_g - (b_gold0 - 1000)) <= 1,
+       'the buyer paid for it once: expected %s, got %s (before the buy it was %s)'
+       % (b_gold0 - 1000, _g, b_gold0))
+
+    # ============================================================
+    # ★★ round305：离线入账（pending_gold 那条路）★★
+    #   用户脚本里踩到的现象："号里明明卖过东西 ✗ 余额却是 0"✓
+    #   查下来【不是 bug】（钱入账了 ✓）但这次踩坑暴露了两件事：
+    #     ① 入库是异步的（saver 线程 ✓）→ 断言必须 retry ✗ 不能读一次就下结论 ✓
+    #     ② 登录那一帧 welcome 里的 gold 是【入账前】的快照 ✓
+    #        真正到账看的是之后服务器推的 me ✓（真客户端会收，stub 不会 ✓）
+    #   所以这条测试【用数据库当判据】✗ 这是最硬的 ✓
+    # ============================================================
+    print('\n== 5b. 离线卖东西的钱必须到账 ==')
+    _off = 'MktOff' + _SUF
+    _r = http('POST', '/api/register', {'name': _off, 'password': PW})
+    _tok_off = (_r[1] or {}).get('token')
+    ok(bool(_tok_off), 'registered an offline seller (%s)' % _off)
+    http('POST', '/api/admin/act', {'act': 'give', 'name': _off, 'kind': 'sword',
+                                    'tier': 4}, admin=at)
+    _st, _bag = http('GET', '/api/bag', token=_tok_off)
+    _iid = ((_bag or {}).get('items') or [{}])[0].get('id')
+    _st, _sold = http('POST', '/api/sell', {'iids': [_iid]}, token=_tok_off)
+    _earn = int((_sold or {}).get('total') or 0)
+    ok(_earn > 0, 'he sold one item while offline for %d gold' % _earn)
+    # ★ 这一笔必须先进 pending_gold（人不在线 ✗ tick 没处入账 ✓）
+    _pg = None
+    for _i in range(16):
+        _pg = db_one('SELECT COUNT(*) FROM pending_gold WHERE role='
+                     '(SELECT id FROM roles WHERE name=?) AND done=0', (_off,))
+        if _pg is not None and int(_pg[0]) >= 1:
+            break
+        time.sleep(0.25)
+    ok(_pg is not None and int(_pg[0]) >= 1,
+       'it landed in pending_gold while he was offline (%s)' % (_pg[0] if _pg else None))
+    #   ★★ 自测踩到：登录时读的余额快照必须【已经是落库后的】✗
+    #     否则：快照=0 ✗ tick 入账 +479 ✗ 落库就是 479 ✓ 而不是 479+0 ✓
+    #     而 pending 那一行是【刚写的】✗ saver 可能还没落 ✓ → 先等它落 ✓
+    _g0 = None
+    for _i in range(16):
+        _g0 = db_one('SELECT gold FROM roles WHERE name=?', (_off,))
+        if _g0 is not None:
+            break
+        time.sleep(0.25)
+    time.sleep(0.6)
+    # ★ 上线 → tick 入账 → saver 落库（retry ✗ 因为落库是异步的 ✓）
+    _ws_off = WS()
+    _ws_off.send('hello', token=_tok_off, ver=1)
+    _ws_off.wait('welcome', timeout=10)
+    _g = None
+    for _i in range(20):
+        time.sleep(0.4)
+        _g = db_one('SELECT gold FROM roles WHERE name=?', (_off,))
+        if _g is not None and int(_g[0]) >= _earn:
+            break
+    if not (_g is not None and int(_g[0]) >= _earn):
+        time.sleep(2.0)
+        _g = db_one('SELECT gold FROM roles WHERE name=?', (_off,))
+        print('   (after another 2s the gold reads %s)'
+              % (_g[0] if _g else None,))
+    ok(_g is not None and int(_g[0]) >= _earn,
+       'the money was credited after he logged in (gold=%s, expected >= %d)'
+       % (_g[0] if _g else None, _earn))
+    _pg2 = None
+    for _i in range(16):
+        _pg2 = db_one('SELECT COUNT(*) FROM pending_gold WHERE role='
+                      '(SELECT id FROM roles WHERE name=?) AND done=0', (_off,))
+        if _pg2 is not None and int(_pg2[0]) == 0:
+            break
+        time.sleep(0.25)
+    ok(_pg2 is not None and int(_pg2[0]) == 0,
+       'and the pending row was closed out (%s left)' % (_pg2[0] if _pg2 else None))
+    try:
+        _ws_off.close()
+    except Exception:
+        pass
 
     print('== 6. 下架（退回背包）==')
     ws_s.send('mklist', iid=ids[1], price=500, sid='live-2')

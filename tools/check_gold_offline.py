@@ -147,6 +147,13 @@ ok(any('pending_gold SET done=1' in s for s, _ in queued),
 for sql, params in queued:
     try:
         with dbmod.db(cfg) as c:
+            # ★ round305：余额是"值 + 代号"的写法 ✗ 这里也要认（共用 world 的函数 ✓）
+            _gs = W.gold_sql_split(sql)
+            if _gs is not None:
+                if w.gold_write_ok(_gs, params[0]):
+                    c.execute('UPDATE roles SET gold=? WHERE id=?',
+                              (int(params[1]), int(params[0])))
+                continue
             c.execute(sql, params)
     except Exception:
         pass
@@ -156,6 +163,12 @@ w._save_player(p)
 while not w.saves.empty():
     sql, params = w.saves.get_nowait()
     with dbmod.db(cfg) as c:
+        _gs = W.gold_sql_split(sql)
+        if _gs is not None:
+            if w.gold_write_ok(_gs, params[0]):
+                c.execute('UPDATE roles SET gold=? WHERE id=?',
+                          (int(params[1]), int(params[0])))
+            continue
         c.execute(sql, params)
 
 c = sqlite3.connect(copy)

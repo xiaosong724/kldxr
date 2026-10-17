@@ -89,6 +89,34 @@ MKT_BAG_MAX = 2000          # 背包行数上限（防背包无限涨 ✗ 不是
 #     行数才是内存/查询的真实开销 ✓
 MKT_ROW_MAX = 4000          # 内存行数硬上限（超过就不让再上架 ✗ 保护 tick ✓）
 
+# ★★★ round305：余额的写法（"值 + 代号"）✗ 收成一个函数 ★★★
+#   为什么需要代号：gold 是【内存权威】✗ 而存档是【半秒攒一批】的 ✓
+#     排队那一刻的值随时可能过期 ✓
+#     真 bug（用户脚本踩出来的）：新号离线卖东西 → 马上登录 →
+#       登录排的存档里 gold=0 ✗ 同一拍 tick 把 pending 入账 535 ✓
+#       存档线程随后把 0 写回库 ✗ 钱就没了 ✓
+#   做法：每次钱变 → 序号 +1 ✗ 并把 (值, 序号) 排进队列 ✓
+#     存档时比一下序号 ✗ 对不上就【作废这一笔】✓（新的那笔一定会跟着来 ✓）
+#   ★ 收成函数是因为【离线测试会自己跑一遍队列】✗
+#     它们要是各写一份 ✗ 迟早和我这里不一致 ✓（这次就是这么炸的 ✓）
+GOLD_SQL_PREFIX = 'GOLD:'
+
+
+def gold_sql(seq, role_id, gold):
+    """排一笔"带代号的余额写入"（★ 全项目只有这一个地方拼这条 ✗ 别在别处手写 ✓）"""
+    return (GOLD_SQL_PREFIX + str(int(seq)), (int(role_id), int(gold)))
+
+
+def gold_sql_split(sql):
+    """'GOLD:<seq>' → seq ✗ 不是这种写法就返回 None ✓（给存档线程和测试共用 ✓）"""
+    if isinstance(sql, str) and sql.startswith(GOLD_SQL_PREFIX):
+        try:
+            return int(sql[len(GOLD_SQL_PREFIX):] or 0)
+        except Exception:
+            return 0
+    return None
+
+
 # ★★ round302：金币的"内存权威"要给重连让路 ★★
 #   问题：刷新页面时【新会话】在登录那一步就把 roles.gold 读进来了 ✗
 #     而旧会话（幽灵）的金币要先落库 ✗ 落库又是异步的 ✓
@@ -330,6 +358,10 @@ class World(object):
         self._spawn_acc = 0.0           # 刷怪节流
         self.pvp = False                # ★ PvP 总开关（服务器权威；客户端只是请求开/关 ✓）
         self._pend = {}                 # cid -> {'hurts': [...], 'mhits': [...], 'me': {...}}
+        # ★ round305：余额的"代号"（role_id -> 递增序号 ✗ 每改一次钱 +1 ✓）
+        #   存档线程拿它判断"这一笔排队之后钱有没有又被改过"✓
+        #   （过期的写入直接作废 ✗ 不给它把新值盖回去的机会 ✓）
+        self._gold_seq = {}
         self._ticker_last = {}          # 第 247 轮：同类弹幕最后发送时间（1 秒合并）
         self._ticker_dup = {}           # 被合并掉了几条
         # ★ 本 tick 的治疗事件（第 46 轮）：[[医生x, 医生z, 目标x, 目标z, 回了多少], ...]
@@ -2611,6 +2643,28 @@ class World(object):
             except Exception as e:
                 print('[gold] bullion convert failed: %r' % (e,))
         q.goldDirty = True
+        # ★★★ round305 修的真 bug：钱只在内存里 ✗ 会被一次"早排队的存档"盖掉 ★★★
+        #   用户脚本踩到的现象："号里卖过东西 ✗ 余额却是 0"✓
+        #   复现：离线卖东西（写 pending_gold）→ 【马上】登录 →
+        #     ① 登录时排了一次存档（那一刻 gold=0 ✓）
+        #     ② 同一拍 tick 把 pending 入账 535 ✗ 只改了内存 ✓
+        #     ③ 存档线程随后把 ① 那份（0）写回库 ✓ → 钱没了①
+        #     等 3 秒再登录就不会中（①已经写完 ✗ ②之后 15 秒的定时存档才写 ✓）
+        #   ★ 根因：gold 的落库【只有一条路】= _save_player（15 秒 / 下线）
+        #     而这条路上的值是【排队那一刻】的快照 ✗ 入账比它晚就丢 ✓
+        #   ★ 修法（两处都要 ✗ 少一处都还会丢）：
+        #     ① 这里【顺手把存档也排上】✗ 让钱的改动自己触发落库 ✓
+        #     ② _save_player 取【当前】内存值 ✗ 不用过期快照 ✓
+        try:
+            _rid = int(getattr(q, 'role_id', 0) or 0)
+            if _rid:
+                if isinstance(getattr(q, 'role', None), dict):
+                    q.role['gold'] = int(q.gold or 0)      # 内存里那份也跟着对 ✓
+                _seq = int(self._gold_seq.get(_rid, 0)) + 1
+                self._gold_seq[_rid] = _seq
+                self.post_save(*gold_sql(_seq, _rid, q.gold))
+        except Exception as e:
+            print('[gold] flush queue failed: %r' % (e,))
         # round302: 记住内存余额 ✗ 让【刷新后的新会话】也能拿到最新值 ✓
         #   （只影响重连时的取值 ✗ 落库那条路一点没变 ✓）
         try:
@@ -4011,9 +4065,26 @@ class World(object):
         # so this is a FULL OVERWRITE - idempotent, and it cannot fight the periodic
         # save. Without it every logout/restart threw the whole balance away.
         self.post_save(
-            'UPDATE roles SET x=?, z=?, yaw=?, hp=?, qi=?, gold=?, updated_at=? WHERE id=?',
-            (p.x, p.z, p.yaw, p.hp, p.qi, int(getattr(p, 'gold', 0) or 0),
-             dbmod.now_ms(), p.role_id))
+            'UPDATE roles SET x=?, z=?, yaw=?, hp=?, qi=?, updated_at=? WHERE id=?',
+            (p.x, p.z, p.yaw, p.hp, p.qi, dbmod.now_ms(), p.role_id))
+        # ★ round305：余额【单独】写 ✗ 而且带代号 ✓
+        #   ★ 为什么不能跟上面那条 SQL 一起写：
+        #     那条里的 gold 是【排队那一刻】的值 ✗ 半秒后可能已经过期 ✓
+        #     （登录时排 0 ✗ 同一拍入账 535 ✗ 存档把 0 写下去 → 钱没了 ✓）
+        _rid2 = int(getattr(p, 'role_id', 0) or 0)
+        if _rid2 and isinstance(getattr(p, 'role', None), dict):
+            p.role['gold'] = int(getattr(p, 'gold', 0) or 0)
+        self.post_save(*gold_sql(self._gold_seq.get(_rid2, 0), _rid2,
+                                  getattr(p, 'gold', 0) or 0))
+
+    def gold_write_ok(self, seq, role_id):
+        """这一笔余额写入【还有效吗】（★ 存档线程和离线测试共用同一条判据 ✓）
+
+        ★ round305：gold 是内存权威 ✗ 而存档半秒攒一批 ✗ 排队快照会过期 ✓
+          判据：这一笔带的序号 == 该角色当前的序号 ✓
+          对不上 = 排队之后钱又被改过 ✗ 这一笔作废（新的那笔马上就来 ✓）
+        """
+        return int(self._gold_seq.get(int(role_id), 0)) == int(seq)
 
     def _run_saver(self):
         import db as dbmod
@@ -4038,6 +4109,20 @@ class World(object):
             try:
                 with dbmod.db(self.cfg) as db:
                     for sql, params in batch:
+                        _gseq = gold_sql_split(sql)
+                        if _gseq is not None:
+                            # ★★ round305：带"代号"的余额写入 ★★
+                            #   sql = 'GOLD:<seq>' ✗ params = (role_id, gold) ✓
+                            #   ★ 只有当【这一笔不是在它排队之后又被改过】才写 ✓
+                            #     排队时是 0 ✗ 之后入账成 535 ✓ → 这一笔作废 ✓
+                            #     （入账自己会排一笔新的 ✗ 值一定是新的 ✓）
+                            #   ★ 为什么要这么绕：gold 是全项目唯一"内存权威"的字段 ✗
+                            #     而存档是【半秒攒一批】的 ✗ 排队快照随时可能过期 ✓
+                            if not self.gold_write_ok(_gseq, params[0]):
+                                continue
+                            db.execute('UPDATE roles SET gold=?, updated_at=? WHERE id=?',
+                                       (int(params[1]), dbmod.now_ms(), int(params[0])))
+                            continue
                         if isinstance(sql, tuple):
                             # ★★ round304b：交易所事务在队列里是 (('MKT', kind, {...})) ★★
                             #   ★ 是【元组】不是字符串 ✗（自测当场抓到：

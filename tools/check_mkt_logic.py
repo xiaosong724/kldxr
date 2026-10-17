@@ -190,6 +190,14 @@ def run_saves():
             except Exception:
                 break
             n += 1
+            # ★ round305：余额是"值 + 代号"的写法 ✗ 这里也要认 ✓
+            #   （存档线程和测试【共用】world.gold_sql_split ✓ 免得两边不一致 ✓）
+            _gs = worldmod.gold_sql_split(sql)
+            if _gs is not None:
+                if W.gold_write_ok(_gs, params[0]):
+                    db.execute('UPDATE roles SET gold=? WHERE id=?',
+                               (int(params[1]), int(params[0])))
+                continue
             if isinstance(sql, tuple):
                 # ★ 交易所的事务在队列里【整条就是那个元组】✗
                 #   语句是 ('MKT', 'list'|..., {...}) ✗ params 什么都不是 ✓

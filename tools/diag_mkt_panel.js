@@ -310,6 +310,19 @@ const BUYER = disposableName('MkB');
     body: JSON.stringify({ act: 'give', name: SELLER, kind: 'sword', tier: 3 }),
   }).then(x => x.json()).catch(() => null);
 
+  /* ★★ round304z：给第 3 节一件【专属且唯一命名】的装备 ★★
+     为什么非这样不可：第 3 节原来买的是"我们某一单"✗ 而那一单可能已经被
+       前面的小节（1 / 2b / 2d / 2e）挂走或买走 ✓ → 恒定红 ✓
+       我在这上面来回打了好几轮补丁 ✗ 根因一直是"认东西靠名字/序号"✓
+     现在：名字唯一 → 一定找得到 ✗ 也一定没被别人用过 ✓
+     （管理端的 tag= 就是为它加的 ✗ 只给测试用 ✓）*/
+  const BUYME = 'BX' + Math.random().toString(36).slice(2, 5).toUpperCase();
+  await fetch(ORIGIN + '/api/admin/act', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin': at },
+    body: JSON.stringify({ act: 'give', name: SELLER, kind: 'sword', tier: 3, tag: BUYME }),
+  }).then(x => x.json()).catch(() => null);
+  console.log('   reserved for section 3: ' + BUYME);
+
   /* buyer needs real money: he sells three items to the system BEFORE logging in
      (that credits him in memory on login - selling later can land in pending_gold) */
   for (const t of [4, 4, 4]) { await give(BUYER, t); }
@@ -930,8 +943,11 @@ const BUYER = disposableName('MkB');
       '}' +
       'return "NO-ROW";');
     console.log('   buttons on my own row: ' + ownRow);
-    ok(/你自己的/.test(String(ownRow)),
-       'my own listing shows a (disabled) 你自己的 button, not 购买: ' + ownRow);
+    /* ★★ round304t 之后：行里【一个按钮都没有】了 ✗
+       原来那条断言是"行里应该有禁用的【你自己的】"✗ 现在不成立了 ✓
+       改验【详情浮窗】里的动作 ✗ 那才是现在给动作的地方 ✓ */
+    ok(/\[\]/.test(String(ownRow)) || String(ownRow) === '[]',
+       'rows carry no buttons any more (buying moved into the detail panel): ' + ownRow);
     ok(!/data-tipact="use"/.test(String(tipTxt)) && !/卖给系统/.test(String(tipTxt)),
        'and it does NOT offer the bag actions (使用 / 卖给系统)');
     /* 切到"我的上架" ✗ 同一件应该给【下架】（没过期 ✓）*/
@@ -1292,6 +1308,52 @@ const BUYER = disposableName('MkB');
 
     /* ================= 买家：购买 ================= */
     console.log('\n== 3. 买家：在面板里买走它 ==');
+    /* ★★ round304z：卖家先把那件【专属且唯一命名】的装备挂上去 ★★
+       为什么：这一节原来买的是"我们某一单"✗ 而那一单可能已经被
+         前面的小节（1 / 2b / 2d / 2e）挂走或买走 ✓ → 恒定红 ✓
+       现在按【唯一名字】认 ✗ 找得到、也一定没被别人用过 ✓ */
+    await A.clickTab('bag');
+    await A.eval('openSet("bag"); bagFetch(bagRender); return 1;');
+    await sleep(1600);
+    /* ★ 只查背包数据里有没有它 ✗ 别一上来就找格子 ✓
+       （自测踩到：报 NOT-IN-BAG ✗ 但包里其实有 ✓ 是格子那一层没对上 ✓）*/
+    console.log('   bag has it? ' + await A.eval(
+      'var hit = null;' +
+      'for (var i = 0; i < (BAG.items || []).length; i++) {' +
+      '  var it = BAG.items[i].item || {};' +
+      '  if (String(it.name) === ' + JSON.stringify(BUYME) + ') {' +
+      '    hit = { id: BAG.items[i].id, name: it.name, slot: it.slot }; }' +
+      '}' +
+      'return JSON.stringify({ hit: hit, bagN: (BAG.items || []).length,' +
+      '  slots: document.querySelectorAll("#bagGrid .slot[data-id]").length,' +
+      '  names: (BAG.items || []).map(function (x) { return (x.item || {}).name; }) });'));
+    console.log('   ' + (await A.eval(
+      'var all = document.querySelectorAll("#bagGrid .slot[data-id]");' +
+      'for (var i = 0; i < all.length; i++) {' +
+      '  var id = all[i].getAttribute("data-id");' +
+      '  for (var j = 0; j < (BAG.items || []).length; j++) {' +
+      '    if (String(BAG.items[j].id) !== String(id)) { continue; }' +
+      '    var it = BAG.items[j].item || {};' +
+      '    if (String(it.name) !== ' + JSON.stringify(BUYME) + ') { continue; }' +
+      '    var r = all[i].getBoundingClientRect();' +
+      '    bagTipHide();' +
+      '    bagTipAt({ clientX: Math.round(r.left + r.width / 2),' +
+      '               clientY: Math.round(r.top + r.height / 2) }, all[i]);' +
+      '    return "opened the tooltip for " + it.name;' +
+      '  }' +
+      '}' +
+      'return "NOT-IN-BAG";')));
+    await sleep(600);
+    await A.eval('var i = document.querySelector("#bagTipBox input[data-tipprice]");' +
+                 'if (i) { i.value = "1200"; } return 1;');
+    console.log('   ' + (await A.clickText('#bagTipBox [data-tipact=mkt]', '挂交易所')));
+    await sleep(800);
+    await A.clickSel('#askYes');
+    await sleep(3200);
+    ok((await A.eval('return (MKT.mine || []).some(function (m) {' +
+      '  return String(m.name) === ' + JSON.stringify(BUYME) + '; });')) === true,
+      'the reserved item is on the shelf for section 3 (' + BUYME + ')');
+
     ok(await B.waitReady('buyer'), 'the buyer is in the world');
     const bGold0 = await B.eval('return (WSC.role && WSC.role.gold) || 0;');
     console.log('   buyer gold (from the tick push) = ' + bGold0);
