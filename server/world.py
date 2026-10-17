@@ -4374,7 +4374,9 @@ class World(object):
                 _dist = (_vx * _vx + _vz * _vz) ** 0.5
                 if _dist > _d or _dist < 0.01:
                     continue
-                if (_vx * _dxs + _vz * _dzs) / _dist < 0.94:
+                # ★ round394（用户："触发时攻击范围再宽一点"）
+                #   0.94 ≈ 20° → 0.80 ≈ 37°（窄锥变宽锥 ✗ 但仍然像"一条"✓）
+                if (_vx * _dxs + _vz * _dzs) / _dist < 0.80:
                     continue
                 sdv = max(1, int(round(dv * 0.8)))
                 o.hp -= sdv
