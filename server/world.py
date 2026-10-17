@@ -381,6 +381,10 @@ class World(object):
         self.FLUID_BC = []               # 本 tick 要广播的流体变化
         self.TER_REGEN_MS = 20 * 60 * 1000     # 20 分钟完全恢复（方案 §5.7 ✓）
         self._ter_bc = []                      # 本 tick 要广播的破坏事件
+        # ★ round329：树/石的破坏（和地形同一套思路 ✗ 只存"和生成值不同"的 ✓）
+        self.prop_hp = {}
+        self.prop_dead = set()
+        self._prop_bc = []
         self._ter_load()                       # ★ 启动时读一次（这是 boot ✗ 不是 tick ✓）
         self._ticker_last = {}          # 第 247 轮：同类弹幕最后发送时间（1 秒合并）
         self._ticker_dup = {}           # 被合并掉了几条
@@ -737,6 +741,7 @@ class World(object):
             print('[fluid] tick failed: %r' % (_fe,))
         try:
             self._ter_flush(0)
+            self._prop_flush(0)
         except Exception as _te:
             print('[ter] flush failed: %r' % (_te,))
         self._ter_acc = getattr(self, '_ter_acc', 0.0) + TICK_DT
@@ -1171,6 +1176,8 @@ class World(object):
                                          text=('穿上：%s' % nm) if nm else '脱下防具'))
             self._send_cid(p.cid, P.pack('armor', a=p.armor or None,
                                          hpm=self._hp_max(p)))
+        elif t == 'mineprop':
+            self._prop_mine(p, d)
         elif t == 'mine':
             self._ter_mine(p, d)
         elif t == 'falldmg':
@@ -1372,6 +1379,66 @@ class World(object):
             self.post_save('DELETE FROM terrain_damage WHERE x=? AND z=?',
                            (int(k[0]), int(k[1])))
             self._ter_bc.append([k[0], k[1], -999])   # -999 = 恢复了（客户端删覆盖 ✓）
+
+    def _prop_mine(self, p, d):
+        """砍一棵树 / 砸一块石头（★ round329 ✓ 方案 §5.4）
+
+        ★ 服务端怎么知道"这一格真的长着树"：
+          worldgen.kind_at(哈希) 是纯函数 ✗ 和服务端生成用的是同一套 ✓
+          所以它自己算一遍就知道 ✗ 不用信客户端 ✓
+        """
+        try:
+            gx = int((d or {}).get('gx'))
+            gz = int((d or {}).get('gz'))
+        except Exception:
+            return
+        px, pz = termod.cell_of_world(p.x, p.z)
+        if max(abs(gx - px), abs(gz - pz)) > self.TER_REACH:
+            return
+        if abs(p.x) <= mqmod.SAFE_HALF and abs(p.z) <= mqmod.SAFE_HALF:
+            return
+        # ★ 让 worldgen 算一遍"这一格是什么"（和客户端同一个哈希 ✓）
+        try:
+            kind = worldgen.kind_of_cell(gx, gz)
+        except Exception:
+            kind = None
+        if not kind:
+            return
+        if kind.startswith('tree') or kind == 'dead':
+            need = 2                       # 木头：2 下
+        elif kind.startswith('fence'):
+            need = 2
+        elif kind.startswith('rock') or kind == 'rubble':
+            need = 3                       # 石头：3 下
+        else:
+            return                         # 房子/车/桶：这一轮不做
+        key = (gx, gz)
+        got = self.prop_hp.get(key, 0) + 1
+        if got < need:
+            self.prop_hp[key] = got
+            self._prop_bc.append([gx, gz, 0, got, need])
+            return
+        self.prop_hp.pop(key, None)
+        self.prop_dead.add(key)
+        self._prop_bc.append([gx, gz, 1, 0, 0])
+
+    def _prop_flush(self, now):
+        if not self._prop_bc:
+            return
+        batch = self._prop_bc
+        self._prop_bc = []
+        for p in self.players.values():
+            near = []
+            for c in batch:
+                ddx = c[0] * termod.LEVEL_H - p.x
+                ddz = c[1] * termod.LEVEL_H - p.z
+                if ddx * ddx + ddz * ddz <= 3600:
+                    near.append(c)
+            if near:
+                try:
+                    self._send_cid(p.cid, P.pack('propedit', cells=near))
+                except Exception:
+                    pass
 
     def _ter_mine(self, p, d):
         """打一格地形（★ 服务端权威 ✗ 客户端只是"请求"✓）"""

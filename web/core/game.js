@@ -433,6 +433,7 @@ function terSlope(gx, gz) { return 0; }
 function terGroundY(gx, gz, fx, fz) { return terH(gx, gz) * TER.LEVEL_H; }
 /* 裂纹进度（客户端本地记 ✗ 只为了"看得出还要几刀"✓ 服务端有自己的计数 ✓） */
 var terDmg = {};
+var propDmg = {};      // 树打了几下（只为了立刻给反馈 ✗ 权威在服务端 ✓）
 
 /* ============================================================================
    ★★★ 破坏的表现（方案 §5.6 的第②③④层）★★★
@@ -654,6 +655,35 @@ function terDebTick(dt) {
 
 /* ★ 收到服务端的破坏广播：改覆盖 + 清缓存 + 只重建受影响的瓦片 ✓
    ★ 为什么不全部重建：一片 16×16 格 ✗ 全重建要 20ms ✓ 只重建 1~4 片 ✓ */
+/* ★ round329：服务端说"这几棵树没了" → 记下来 + 重建那一片 ✓ */
+function propApplyEdits(cells) {
+  if (!cells || !cells.length) { return; }
+  var dirty = {};
+  for (var i = 0; i < cells.length; i++) {
+    var gx = cells[i][0], gz = cells[i][1], dead = cells[i][2];
+    var k = gx + ',' + gz;
+    if (dead) {
+      propDead[k] = 1;
+      delete propDmg[k];
+      if (typeof sfx === 'function') {
+        var _d2 = Math.pow(gx * TER.LEVEL_H - P.x, 2) + Math.pow(gz * TER.LEVEL_H - P.z, 2);
+        var _dv = 1 - Math.min(1, _d2 / (30 * 30));
+        if (_dv > 0.05) { sfx('break', 0.8 * _dv); }
+      }
+      // ★ 找到这一格属于哪个块 ✗ 整块重建（块只有 32 格 ✗ 重建很快 ✓）
+      var ci = Math.floor(gx / PROP_CHUNK), cj = Math.floor(gz / PROP_CHUNK);
+      dirty[ci + ',' + cj] = 1;
+    } else {
+      propDmg[k] = cells[i][3] | 0;
+    }
+  }
+  for (var key in dirty) {
+    if (!_chunkMesh[key]) { continue; }
+    dropChunk(key);
+    buildChunk(parseInt(key.split(',')[0], 10), parseInt(key.split(',')[1], 10));
+  }
+}
+
 /* ★ F1：服务端说"这些格子的水变了" → 改覆盖 + 重建那几片 ✓ */
 function fluApplyEdits(cells) {
   if (!cells || !cells.length) { return; }
@@ -1466,6 +1496,8 @@ function mergeGeos(list) {
    （终局是"服务端按世界种子算"，见方案 §15.1；那时也是同一套分块逻辑，所以这一步不白做 ✓）*/
 var PROP_CHUNK = 32;      // 每块 32 格（≈20 米）
 var PROP_HALO = 8;        // 生成时往外扩 8 格（必须 ≥ 房子的 ±7 ✓）
+var propAt = {};          // "gx,gz" -> kind（能砍的物件 ✓）
+var propDead = {};        // "gx,gz" -> 1（已经被砍掉 ✓ 服务端说了算）
 var _chunkMesh = {};      // "i,j" -> [THREE.Mesh, ...] 一块一组，整块好卸 ✓
 var _chunkSolid = {};     // "i,j" -> [{x,z,hw,hd}, ...]
 var _propTotal = 0;       // 当前一共多少个物件（统计用）
@@ -1520,6 +1552,7 @@ function buildChunk(ci, cj) {
       // ★ 只有【真正属于本块】的格子才落地；光环里的格子只负责"占位" ✓
       if (gx2 < x0 || gx2 >= x0 + PROP_CHUNK || gz2 < z0 || gz2 >= z0 + PROP_CHUNK) { continue; }
 
+      if (propDead[gx2 + ',' + gz2]) { continue; }   // ★ 已经被砍掉了 ✓
       var parts = (PROP_PARTS && PROP_PARTS[kind]) || PROP_PARTS.tree;
       if (!parts || !parts.length) { continue; }
       var s = G.PROP_SCALE;
@@ -1539,6 +1572,12 @@ function buildChunk(ci, cj) {
       else if (kind === 'ruin') { hw = 1.90; hd = 1.50; }      // 废墟墙：断墙挺占地方，碰撞箱给足一点
       else { hw = 1.95; hd = 1.60; }
       sol.push({ x: wx2, z: wz2, hw: hw * s, hd: hd * s });
+      /* ★ round329（P1 树木破坏）：记下"这一格长着什么"✗ 攻击时要查 ✓
+         ★ 只记【能砍的】（树 / 石头 / 栅栏 ✗ 房子以后再说 ✓）*/
+      if (kind.indexOf('tree') === 0 || kind === 'dead' || kind === 'rock' ||
+          kind === 'rubble' || kind === 'rock3' || kind.indexOf('fence') === 0) {
+        propAt[gx2 + ',' + gz2] = kind;
+      }
       placed++;
     }
   }
@@ -5093,6 +5132,13 @@ function frame(ts) {
       var _agx = Math.floor(P.x / TER.LEVEL_H), _agz = Math.floor(P.z / TER.LEVEL_H);
       var _fx = Math.floor((P.x + Math.sin(P.yaw) * TER.LEVEL_H * 1.2) / TER.LEVEL_H);
       var _fz = Math.floor((P.z + Math.cos(P.yaw) * TER.LEVEL_H * 1.2) / TER.LEVEL_H);
+      /* ★ 先判树（比地形优先 ✗ 站在树前面砍 ✗ 应该砍树 ✓）*/
+      var _pk = propAt[_fx + ',' + _fz] || propAt[_agx + ',' + _agz];
+      if (_pk && !propDead[_fx + ',' + _fz]) {
+        wsSend('mineprop', { gx: _fx, gz: _fz });
+        propDmg[_fx + ',' + _fz] = (propDmg[_fx + ',' + _fz] || 0) + 1;
+        return;                       // ★ 打了树就不打地形/怪 ✓
+      }
       var _curH = terH(_agx, _agz), _tgtH = terH(_fx, _fz);
       if (_tgtH > _curH + 0.5) {
         wsSend('mine', { gx: _fx, gz: _fz });

@@ -76,6 +76,21 @@ def kind_at(q):
     return None
 
 
+def kind_of_cell(gx, gz):
+    """这一格长着什么（★ 只给"能不能砍"用 ✓ 不追求和客户端 100% 一致 ✓）
+
+    ★ 和客户端 buildChunk 的差别：那边还有【占位表】（房子占了 ±7 格、
+      树占了 ±3 格，会互相排斥）✗ 这里没做那一层 ✓
+    ★ 为什么可以接受：这里只用于【服务端校验"这一格真的有东西可砍"】
+      多认了几格 → 玩家砍空气 ✗ 视觉上没有树 ✗ 影响很小 ✓
+      少认了 → 树砍不动 ✗ 那个更糟 ✓ 所以宁可宽松一点 ✓
+    """
+    q = cell_hash(gx, gz)
+    if q % PROP_DENSITY != 0:
+        return None
+    return kind_at(q)
+
+
 def solid_of(kind):
     """碰撞盒半宽半深（格）—— 和 buildChunk 里那串 if 逐字对应 ✓（最后统一乘 PROP_SCALE）"""
     if kind.startswith('tree') or kind == 'dead':

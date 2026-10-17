@@ -5096,6 +5096,11 @@ function wsOnMessage(raw) {
   }
   /* ★ round310（P1 破坏）：服务端说"这几格变了"→ 改覆盖 + 重建那几片瓦片 ✓ */
   /* ★ F1：流体变了（流动 ✓）→ 改覆盖 + 重建那几片瓦片 ✓ */
+  /* ★ round329：树/石被砍掉了 → 重建那一块 ✓ */
+  if (t === 'propedit') {
+    if (typeof propApplyEdits === 'function') { propApplyEdits(d && d.cells); }
+    return;
+  }
   if (t === 'fluedit') {
     if (typeof fluApplyEdits === 'function') { fluApplyEdits(d && d.cells); }
     return;
