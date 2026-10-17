@@ -1232,6 +1232,17 @@ class World(object):
             #   （tick 线程不许碰磁盘 ✗ 所以查库那步在 net.py 做）
             w = d.get('weapon')
             self._flush_dur(p)                       # ★ 换武器前先把旧的耐久落库 ✓
+            # ★★★ round380（用户："文案记得改"）★★★
+            #   ★ 根因：武器特性 fx 是【生成物品时】写进物品数据的 ✗
+            #     所以旧剑存的还是"招架" ✗ 不只是文案旧 ✗
+            #     **实际战斗也走旧特性**（_weapon_fx 读的是物品里的 fx ✓）
+            #   ★ 修：装备时【按 look+tier 重算一次】✗ 不信任存档里的 ✓
+            #     → 所有旧装备立刻跟随最新的武器表 ✓ 不用跑数据迁移 ✓
+            if w:
+                try:
+                    w['fx'] = weapons.fx_of(w.get('look'), int(w.get('tier') or 0))
+                except Exception:
+                    pass
             p.weapon = w or dict(weapons.FIST)   # ★ 第 58 轮：空手 ✓
             p.weaponItemId = d.get('itemId')
             # ★★ 第 59 轮：读出手上这把的耐久（没记录就从上限开始 ✓）
