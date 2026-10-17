@@ -1889,25 +1889,34 @@ class World(object):
                                    round(m.x, 2), round(m.z, 2), real])
 
     def _mob_blocked(self, x, z, hw):
-        """僵尸的碰撞（★ round350：砍掉的物件不该再挡僵尸 ✓）
+        """僵尸的碰撞（★ round351：只忽略【已经被砍掉】的物件 ✓）
 
-        ★ 自测踩到：用户报"我破坏掉的东西碰撞箱还在，僵尸过不来"
-          —— 客户端那边我修过 propSolids ✗ 但僵尸的碰撞是【服务端】算的 ✓
-          服务端只问 worldgen.blocked ✗ 它不知道 prop_dead ✓
+        ★★ 自测踩到两次：
+           ① 第一版没改 → 砍掉的物件还挡僵尸（用户报"僵尸过不来"）
+           ② 第二版写"这格没东西就放行" → 太宽松 ✗
+              **连站着的物件也被无视了**（用户报"我都还没砍掉就穿过去了"）
+           ★ 现在逐盒判定：
+             盒子中心 = (i*TS, j*TS) ✗ 反推格子 ✓
+             那一格在 prop_dead 里 → 跳过这个盒子（不挡 ✓）
+             否则 → 挡 ✓
         """
-        if not worldgen.blocked(x, z, hw, hw):
-            return False
-        # ★ 挡住的东西如果是【已经砍掉】的物件 → 放行 ✓
         try:
-            cx, cz = termod.cell_of_world(x, z)
-            if (cx, cz) in self.prop_dead:
-                return False
-            k = worldgen.kind_of_cell(cx, cz)
-            if k is None:
-                return False
+            boxes = worldgen.solids_near(x, z, 3.0)
         except Exception:
-            pass
-        return True
+            boxes = ()
+        for (sx, sz, shw, shd) in boxes:
+            if not (x + hw > sx - shw and x - hw < sx + shw and
+                    z + hw > sz - shd and z - hw < sz + shd):
+                continue
+            try:
+                i = int(round(sx / termod.LEVEL_H))
+                j = int(round(sz / termod.LEVEL_H))
+            except Exception:
+                return True
+            if (i, j) in self.prop_dead:
+                continue          # ★ 这件已经被砍掉了 → 不挡 ✓
+            return True           # ★ 站着的物件 → 照常挡 ✓
+        return False
 
     def _move_mob(self, m, dx, dz):
         """僵尸移动 —— ★ 会被建筑挡住（第 41 轮，用户要求"僵尸不应该穿墙"）
