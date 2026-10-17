@@ -102,6 +102,7 @@ var jumpHeld = 0;          // 跳跃键按住的时刻（0 = 没按 ✓）
 var jumpCD = 0;            // 跳跃冷却剩余（秒 ✓）
 var FALL_MIN = 3;          // 落差 ≥3 格才掉血 ✓
 var _camY = 0;             // 相机当前的高度（缓动跟随【地面】✗ 跳跃才看得出来 ✓）
+var lastLandSfx = 0;       // 上一次落地音的时刻（点得快时节流 ✓）
 var _waterT = 0;           // 溅涟漪的节流（秒 ✓）
 var MOV = { vx: 0, vz: 0, tx: 0, tz: 0 };   // 移动速度（★ 为了冰面的惯性 ✗ 原来直接改位移 ✓）
 var FALL_DMG = 5;          // 每格 5 点（用户 2026-10-17 定 ✓）
@@ -1881,7 +1882,15 @@ function terrainV(dt) {
         /* ★ round315（用户：落地声有点小，要拉满才听得见）：两个原因一起修 ——
            ① 音频文件本身峰值只有 -4.5dB ✓ 已归一到 -0.4dB（和现有音效一致）
            ② 这里音量给太低（0.45 起）✓ 抬到 0.85 起 ✓ */
-        sfx('land', Math.min(1.0, 0.85 + drop * 0.05));
+        /* ★ round327（用户："点得越好越明显"→ 开销按点击次数累加）
+           ★ 每跳一次就播一次落地音 ✗ 点得越快音频节点建得越密 ✓
+           ★ 加 150ms 节流：连点时不每次都建新节点 ✓
+             （150ms 内的第二次落地本来也听不出来 ✓）*/
+        var _nowMs = performance.now();
+        if (_nowMs - (lastLandSfx || 0) > 150) {
+          lastLandSfx = _nowMs;
+          sfx('land', Math.min(1.0, 0.85 + drop * 0.05));
+        }
       }
       if (drop >= FALL_MIN && !dead) {
         var n = Math.floor(drop) - 2;              // 落差 3 → 1 格 ✓
