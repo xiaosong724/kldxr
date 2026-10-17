@@ -2595,12 +2595,12 @@ function autoBindAtk() {
   var b = document.getElementById('atk');
   if (!b || b._autoB) { return; }
   b._autoB = true;
+  /* ★★★ round379（用户："长按自动战斗的设定删了，现在有单独按钮"）★★★
+     ★ 只保留"按下攻击键 = 手动操作 → 暂停自动战斗 3 秒"✓
+       （那个是有用的：你手打的时候 AI 让位 ✓）
+     ★ 长按 3 秒开自动战斗 → 删掉 ✓ 免得和按钮重复/互相打架 ✓ */
   var down = function () {
-    if (_autoHold) { return; }
-    _autoHold = setTimeout(function () {
-      _autoHold = null;
-      autoToggle();
-    }, AUTO_LONG_PRESS);
+    autoPauseManual();
   };
   var up = function () {
     if (_autoHold) { clearTimeout(_autoHold); _autoHold = null; }

@@ -4264,6 +4264,16 @@ class World(object):
                 m.stunT = fx['value']
                 m.stunImmune = weapons.STUN_IMMUNE
                 self._send_cid(p.cid, P.pack('fx', kind='stun', mid=m.mid))
+        elif nm == '连刺':
+            # ★ round379（用户："单手剑改成连刺，概率造成两次伤害"）
+            #   ★ 触发时【再结算一次 dv】✗ 不是把 dv 翻倍 ✓
+            #     （分开报两次 mhits ✗ 玩家能看到"两下"✓）
+            extra = max(1, int(round(dv * fx['value'])))
+            m.hp -= extra
+            self._add_pend(p.cid, 'mhits', {'mid': m.mid, 'dmg': extra, 'crit': False,
+                                            'back': False, 'mb': None, 'heal': 0,
+                                            'x': round(m.x, 2), 'z': round(m.z, 2)})
+            # ★ 不在这里判死 ✗ 交给调用方（它在本函数之后统一判 hp<=0 ✓）
         elif nm == '溅射':
             # ★★★ round378（用户："斧头溅射应该由品阶决定，最低 2 个，12 阶可以 13 个"）★★★
             #   ★ 规则：1 阶 = 2 个 ✗ 每多 1 阶多 1 个 ✗ 12 阶 = 13 个 ✓
