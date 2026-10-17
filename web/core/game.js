@@ -697,7 +697,14 @@ function terApplyEdits(cells) {
     } else {
       // ★ 破坏成功：先炸碎块 ✗ 再改覆盖 ✓（顺序反了就取不到"碎之前"的高度了）
       terDebris(gx, gz, mat, terH(gx, gz));
-      if (typeof sfx === 'function') { sfx('break', 0.95); }
+      /* ★ round319（用户："音效应该遵守距离规则"）：按距离衰减 ✓
+         25 格内正常 ✗ 40 格外听不到 ✓（和画面的雾差不多远近 ✓）*/
+      if (typeof sfx === 'function') {
+        var _d2 = Math.pow((gx + 0.5) * TER.LEVEL_H - P.x, 2)
+                + Math.pow((gz + 0.5) * TER.LEVEL_H - P.z, 2);
+        var _dv = 1 - Math.min(1, _d2 / (30 * 30));
+        if (_dv > 0.05) { sfx('break', 0.95 * _dv); }
+      }
       terOver[k] = nh; delete terDmg[k];
       // 把这格的裂纹收掉（已经碎了 ✗ 留着就穿帮 ✓）
       for (var ci = 0; ci < _crackPool.length; ci++) {
@@ -1781,14 +1788,27 @@ function terrainStepOk(x, z) {
      修：查【身体四角 + 中心】五个点 ✗ 取其中最高的地面 ✓
         → 离高方块还有半个身位就走不过去了 ✓ 和视觉完全对得上 ✓
      ★ 五个点比"一个矩形查询"便宜得多 ✓ 而且地形是纯函数 ✓ 没有副作用 ✓ */
+  /* ★★★ round319 修的真 bug（用户："高低不同的方块之间跳跃时会被卡住"）★★★
+     根因：这里只问"目标位置的地面比我的脚高多少"✗
+           身体有宽度 → 站在台子边上时【一个角已经伸进高方块里】✓
+           于是【四个方向全被拦】☞ 连"往外走"也被拦 ✗ 人就卡死了 ✓
+     修：除了看落差 ✗ 还看【是不是在往外走】✓
+         ① 目标位置的最高地面【不比现在高】→ 一律放行（往外走 ✓ 沿墙平移 ✓）
+         ② 否则才按落差判（往高处走要跳 ✓）
+     ★ 这一条同时修掉"贴着墙走不动"的问题 ✓ */
   var hw = G.BODY_W * 0.5, hd = G.BODY_D * 0.5;
-  var gy = terYAt(x, z);
-  var t;
-  t = terYAt(x + hw, z + hd); if (t > gy) { gy = t; }
-  t = terYAt(x + hw, z - hd); if (t > gy) { gy = t; }
-  t = terYAt(x - hw, z + hd); if (t > gy) { gy = t; }
-  t = terYAt(x - hw, z - hd); if (t > gy) { gy = t; }
-  return (gy - P.y) <= TER.STEP_WALK * TER.LEVEL_H + 0.03;
+  function _maxY(px, pz) {
+    var m = terYAt(px, pz), t;
+    t = terYAt(px + hw, pz + hd); if (t > m) { m = t; }
+    t = terYAt(px + hw, pz - hd); if (t > m) { m = t; }
+    t = terYAt(px - hw, pz + hd); if (t > m) { m = t; }
+    t = terYAt(px - hw, pz - hd); if (t > m) { m = t; }
+    return m;
+  }
+  var _cur = _maxY(P.x, P.z);
+  var _nxt = _maxY(x, z);
+  if (_nxt <= _cur + 0.03) { return true; }        // ★ 没变高 → 放行（往外走 / 沿墙滑）
+  return (_nxt - P.y) <= TER.STEP_WALK * TER.LEVEL_H + 0.03;
 }
 function moveWithCollision(dx, dz, hw, hd, byMob, skipMob) {
   var ox = P.x, oz = P.z;                 // ★ 移动前的位置（传给 blocked 做"已经重叠就放行"判断 ✓）

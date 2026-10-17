@@ -568,6 +568,24 @@ class World(object):
             except Exception:
                 pass
             _np = Player(conn.cid, role)
+            # ★★★ round320 修的真 bug（自测挖不动方块才发现）★★★
+            #   根因：服务端记着"这几格已经被挖过"（内存 + 库）✗
+            #         但客户端【登录时从来没收到过】这份状态 ✓
+            #         → 玩家看到原始地形 ✗ 挖的时候服务端说"已经到底了"✗ 拒绝 ✓
+            #         → 表现："这块地我明明没挖过，却挖不动"✓
+            #   修：进世界时把当前的破坏 + 流体覆盖【全量】发一次 ✓
+            #   ★ 为什么可以全量：只存"和生成值不同"的格子 ✗ 平时是空的 ✓
+            try:
+                if self._ter_bc is not None and False:
+                    pass
+                _to = [[k[0], k[1], v[0]] for k, v in self.ter_over.items()]
+                if _to:
+                    self._send_cid(conn.cid, P.pack('teredit', cells=_to))
+                _fo = self._flux()
+                if _fo:
+                    self._send_cid(conn.cid, P.pack('fluedit', cells=_fo))
+            except Exception as _ov:
+                print('[ter] initial override send failed: %r' % (_ov,))
             # round304b: 上线时读好的货架（网络线程读 ✓ 这里只入内存 ✓）
             #   ★ 为什么不走 intent：那一整行货架有十几 KB ✗
             #     走 intent 会占限流额度 ✗ 而且和玩家操作抢 tick ✓
@@ -1322,34 +1340,40 @@ class World(object):
                     return
         if lv < 0:
             return
-        # ② 源头不动（★ 只有玩家倒水/地形变了才会变 ✓）
+        _mx = self.FLUID_MAXLV.get(kind, 7)
+        # ★★★ round319：缺了"横向铺" ★★★
+        #   自测踩到：只往【更低】的格子流 ✗ 而挖出来的坑水深和水面一样（都是 −1）
+        #            → 一格都不流 ✓ 用户："水和岩浆都不会流动"✓
+        #   MC 的规则是：同高度也会横向铺 ✗ 每铺一格等级 +1 ✓ 铺到 7 为止 ✓
+        #   ★ 为什么不会淹掉整片沼泽：沼泽四周是【岸】（高度 0 > −1）
+        #     水只往"不比自己高"的格子去 ✓ 所以只在坑里蔓延 ✓
+        # ★ 先散发（往下 / 往平）
+        for (dx, dz) in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nx, nz = gx + dx, gz + dz
+            nh = self.ter_h_at(nx, nz)
+            if nh > h + 0.01:
+                continue                      # ★ 不往高处流 ✓
+            nk, nl = self.fstate(nx, nz)
+            if nk != 0 and nk != kind:
+                continue                      # 不和水混（地火遇水走上面那条 ✓）
+            # 往下：直接给满（0）✗ 平着铺：等级 +1 ✓
+            give = 0 if nh < h - 0.01 else min(_mx, lv + 1)
+            if give > _mx:
+                give = _mx
+            if nk == 0 or nl > give:
+                self.fput(nx, nz, kind, give)
+        # ② 源头不再需要额外处理（上面已经铺过了 ✓）
         if lv == 0:
-            # ★ 但源头要负责【往下倒】—— 下面空着就把下面填成满的 ✓
-            for (dx, dz) in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                nh = self.ter_h_at(gx + dx, gz + dz)
-                if nh < h - 0.01:
-                    nk, nl = self.fstate(gx + dx, gz + dz)
-                    if nk == 0 or nl > 0:
-                        self.fput(gx + dx, gz + dz, kind, 0)
             return
-        # ③ 流动格：等级 = 邻居最小值 + 1 ✗ 没有就变浅 ✓
+        # ③ 流动格平衡：等级 = 邻居最小值 + 1 ✗ 没来源就变浅 ✓
         best = 9
-        low_nb = None
         for (dx, dz) in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             nk, nl = self.fstate(gx + dx, gz + dz)
-            nh = self.ter_h_at(gx + dx, gz + dz)
             if nk == kind and nl < best:
                 best = nl
-            # ★ 邻居那边更低 → 水会往那边掉（那边会自己变成源头 ✓）
-            if nh < h - 0.01 and (nk == 0 or nk == kind):
-                self.fput(gx + dx, gz + dz, kind,
-                          0 if lv == 0 else min(self.FLUID_MAXLV.get(kind, 7), lv))
-                low_nb = True
-        if low_nb:
-            return
-        want = min(self.FLUID_MAXLV.get(kind, 7), best + 1)
-        if want >= 8:
-            self.fput(gx, gz, 0, -1)          # ★ 没来源了 → 干掉 ✓
+        want = min(_mx, best + 1)
+        if want >= 8 or want > lv:
+            self.fput(gx, gz, 0, -1)          # ★ 没来源 → 干掉 ✓
         elif want != lv:
             self.fput(gx, gz, kind, want)
 
@@ -1463,6 +1487,12 @@ class World(object):
         # ★ 落库（只存被打过的格子 ✗ 平时这张表是空的 ✓）
         self.post_save('INSERT OR REPLACE INTO terrain_damage(x, z, h, ts)'
                        ' VALUES(?,?,?,?)', (int(gx), int(gz), float(nh), int(_ts)))
+        # ★★★ round319 修的真 bug（用户："水和岩浆都不会流动"）★★★
+        #   根因：_fluid_tick 只处理【活跃集合】里的格子 ✗
+        #         而整个项目里【没有任何地方往集合里加】✗
+        #         → 集合永远是空的 → 水流逻辑一次都没执行过 ✓
+        #   修：地形一变就把这一格和四邻激活（水要重新找平衡 ✓）
+        self.factivate(gx, gz)
         # ★ 广播给附近的人（★ 用 _evt_near ✗ 和现有的特效/音效同一套 ✓）
         self._ter_bc.append([gx, gz, nh])
         # ★ 掉东西（P1 先不掉 ✗ 等背包/掉落接进来 ✓ 方案 §5.2 写着 ✓）
@@ -1501,9 +1531,21 @@ class World(object):
         _ = now
         batch = self._ter_bc
         self._ter_bc = []
+        # ★ round319（用户："我破坏方块为什么离得远的玩家也能听到"）
+        #   根因：这里【发给了所有人】✗ 客户端收到就播破坏音 ✓
+        #   修：只发给【附近】的人（方案 §13 兴趣管理 ✓）
+        #   ★ 为什么按 60 格：比一个画面略大 ✓ 保证画面里的人都收得到 ✓
         for p in self.players.values():
+            near = []
+            for c in batch:
+                ddx = c[0] * termod.LEVEL_H - p.x
+                ddz = c[1] * termod.LEVEL_H - p.z
+                if ddx * ddx + ddz * ddz <= 3600:      # 60 格
+                    near.append(c)
+            if not near:
+                continue
             try:
-                self._send_cid(p.cid, P.pack('teredit', cells=batch))
+                self._send_cid(p.cid, P.pack('teredit', cells=near))
             except Exception:
                 pass
 
