@@ -13,7 +13,7 @@ import time
 
 # ============================================================ 版本与迁移
 
-SCHEMA_VERSION = 7   # ★ round304l：交易所支持数量（listings.qty / trade_log.qty ✓）
+SCHEMA_VERSION = 8   # ★ round311：地形破坏（terrain_damage 表 ✓）
 
 # 每个版本一组 SQL。**新版本往后追加，不要改历史版本** ✓
 MIGRATIONS = {
@@ -336,6 +336,21 @@ MIGRATIONS[6] = [
 MIGRATIONS[7] = [
     "ALTER TABLE listings  ADD COLUMN qty INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE trade_log ADD COLUMN qty INTEGER NOT NULL DEFAULT 1",
+]
+
+# ★★★ round311：地形破坏（P1 破坏 · 存库）★★★
+#   ★ 只存【被破坏的格子】✗ 天然地形是种子算出来的 ✓ 不用存 ✓
+#   ★ 表平时是【空的】✗ 只有玩家真挖过的格子才有一行 ✓ 不会暴涨 ✓
+#   ★ ts = 破坏时刻 ✗ 服务端按它算"什么时候恢复"（20 分钟 ✓ 方案 §5.7）
+MIGRATIONS[8] = [
+    """CREATE TABLE IF NOT EXISTS terrain_damage (
+        x   INTEGER NOT NULL,
+        z   INTEGER NOT NULL,
+        h   REAL    NOT NULL,
+        ts  INTEGER NOT NULL,
+        PRIMARY KEY (x, z)
+    )""",
+    "CREATE INDEX IF NOT EXISTS ix_terrain_damage_ts ON terrain_damage(ts)",
 ]
 
 

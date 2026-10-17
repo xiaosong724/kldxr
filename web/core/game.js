@@ -374,22 +374,149 @@ function terGroundY(gx, gz, fx, fz) { return terH(gx, gz) * TER.LEVEL_H; }
 /* 裂纹进度（客户端本地记 ✗ 只为了"看得出还要几刀"✓ 服务端有自己的计数 ✓） */
 var terDmg = {};
 
+/* ============================================================================
+   ★★★ 破坏的表现（方案 §5.6 的第②③④层）★★★
+   ② 碎屑粒子  【每一刀】…… 这里先做"碎块"④（第②层要按刀生成 ✗ 量大 ✗ P1.5 再说）
+   ③ 裂纹贴图  【过阈值】打一半时在格子上画几道黑色的裂缝 ✓
+   ④ 碎裂+尘烟 【最后一下】炸成几块飞出去 ✓
+   ★ 全部用【对象池】✗ 不在运行时 new Mesh ✓（手机上 new 一个 mesh 要 1~2ms ✓）
+   ============================================================================ */
+var CRACK_MAX = 180, DEB_MAX = 90;
+var _crackPool = [], _debPool = [], _deb = [], _poolReady = false;
+
+function terPoolInit() {
+  if (_poolReady) { return; }
+  _poolReady = true;
+  // ③ 裂纹：一片很细的黑条，两个交叉着放就是一道裂缝 ✓
+  var cg = new THREE.PlaneGeometry(0.30, 0.035);
+  var cm = new THREE.MeshBasicMaterial({ color: 0x14110e, transparent: true,
+    opacity: 0.72, depthWrite: false });
+  for (var i = 0; i < CRACK_MAX; i++) {
+    var m = new THREE.Mesh(cg, cm);
+    m.rotation.x = -Math.PI / 2;
+    m.visible = false;
+    m.renderOrder = 3;
+    scene.add(m);
+    _crackPool.push(m);
+  }
+  // ④ 碎块：小方块（按材质上色 ✗ 共用一个几何 ✓）
+  var dg = new THREE.BoxGeometry(1, 1, 1);
+  for (var j = 0; j < DEB_MAX; j++) {
+    var mm = new THREE.Mesh(dg, new THREE.MeshBasicMaterial({ color: 0x8a8064 }));
+    mm.visible = false;
+    scene.add(mm);
+    _debPool.push(mm);
+    _deb.push({ on: 0, vx: 0, vy: 0, vz: 0, t: 0, life: 0, sc: 1 });
+  }
+}
+
+/* 在某一格上画 got 道裂纹（★ 位置按格子的哈希定 ✗ 同一格每次都一样 ✓）*/
+function terCrack(gx, gz, got, need) {
+  terPoolInit();
+  var key = _terKey(gx, gz);
+  // 先把这一格旧的全收回去 ✗ 再按新的进度重画 ✓
+  for (var i = 0; i < _crackPool.length; i++) {
+    if (_crackPool[i].visible && _crackPool[i]._k === key) { _crackPool[i].visible = false; }
+  }
+  var h = terH(gx, gz) * TER.LEVEL_H;
+  var n = Math.min(got, 5);                 // 最多画 5 道（再多也看不出来 ✓）
+  var placed = 0;
+  for (var c = 0; c < _crackPool.length && placed < n; c++) {
+    var m = _crackPool[c];
+    if (m.visible) { continue; }
+    var a = (terRand01(gx, gz, 200 + placed) * Math.PI);
+    var fx = 0.25 + terRand01(gx, gz, 210 + placed) * 0.5;
+    var fz = 0.25 + terRand01(gx, gz, 220 + placed) * 0.5;
+    m.position.set((gx + fx) * TER.LEVEL_H, h + 0.012, (gz + fz) * TER.LEVEL_H);
+    m.rotation.z = a;
+    m.scale.set(0.55 + 0.45 * (got / Math.max(1, need)), 1, 1);
+    m.visible = true;
+    m._k = key;
+    placed++;
+  }
+}
+
+/* 碎块：从这一格炸出去 ✓ */
+function terDebris(gx, gz, mat) {
+  terPoolInit();
+  var col = TER_COL[mat] || TER_COL.grass;
+  var h = terH(gx, gz) * TER.LEVEL_H;
+  var want = 8, made = 0;
+  for (var i = 0; i < _deb.length && made < want; i++) {
+    var d = _deb[i];
+    if (d.on) { continue; }
+    var m = _debPool[i];
+    d.on = 1; d.t = 0; d.life = 0.75;
+    d.sc = 0.05 + terRand01(gx, gz, 300 + i) * 0.07;
+    var ang = terRand01(gx, gz, 320 + i) * Math.PI * 2;
+    var sp = 1.2 + terRand01(gx, gz, 340 + i) * 1.6;
+    d.vx = Math.cos(ang) * sp;
+    d.vz = Math.sin(ang) * sp;
+    d.vy = 2.2 + terRand01(gx, gz, 360 + i) * 1.4;
+    m.position.set((gx + 0.5) * TER.LEVEL_H, h + 0.1, (gz + 0.5) * TER.LEVEL_H);
+    m.scale.setScalar(d.sc);
+    m.material.color.setRGB(col[0] * 0.9, col[1] * 0.9, col[2] * 0.9);
+    m.visible = true;
+    made++;
+  }
+}
+
+/* 每帧推进碎块（★ 只在有活的碎块时才跑 ✓ 平时零开销 ✓）*/
+function terDebTick(dt) {
+  var any = 0;
+  for (var i = 0; i < _deb.length; i++) {
+    var d = _deb[i];
+    if (!d.on) { continue; }
+    any++;
+    d.t += dt;
+    if (d.t >= d.life) { d.on = 0; _debPool[i].visible = false; continue; }
+    var m = _debPool[i];
+    d.vy -= 12 * dt;
+    m.position.x += d.vx * dt;
+    m.position.y += d.vy * dt;
+    m.position.z += d.vz * dt;
+    m.rotation.x += dt * 6;
+    m.rotation.z += dt * 4;
+    var k = 1 - (d.t / d.life);
+    m.scale.setScalar(d.sc * k);
+  }
+  if (!any) { return; }
+}
+
 /* ★ 收到服务端的破坏广播：改覆盖 + 清缓存 + 只重建受影响的瓦片 ✓
    ★ 为什么不全部重建：一片 16×16 格 ✗ 全重建要 20ms ✓ 只重建 1~4 片 ✓ */
 function terApplyEdits(cells) {
   if (!cells || !cells.length) { return; }
   var dirty = {};
+  var needRebuild = false;
   for (var i = 0; i < cells.length; i++) {
     var gx = cells[i][0], gz = cells[i][1], nh = cells[i][2];
     var k = _terKey(gx, gz);
-    if (nh === -999) { delete terOver[k]; delete terDmg[k]; }
-    else { terOver[k] = nh; delete terDmg[k]; }
+    // ★ cells[i][2] === null → 这是"打了一半"的裂纹进度 ✗ 不用重建地形 ✓
+    if (nh === null || nh === undefined) {
+      terCrack(gx, gz, cells[i][3] | 0, cells[i][4] | 0);
+      continue;
+    }
+    needRebuild = true;
+    var mat = terMat(gx, gz);
+    if (nh === -999) {
+      delete terOver[k]; delete terDmg[k];
+    } else {
+      // ★ 破坏成功：先炸碎块 ✗ 再改覆盖 ✓（顺序反了就取不到"碎之前"的高度了）
+      terDebris(gx, gz, mat);
+      terOver[k] = nh; delete terDmg[k];
+      // 把这格的裂纹收掉（已经碎了 ✗ 留着就穿帮 ✓）
+      for (var ci = 0; ci < _crackPool.length; ci++) {
+        if (_crackPool[ci].visible && _crackPool[ci]._k === k) { _crackPool[ci].visible = false; }
+      }
+    }
     var ti = Math.floor(gx / TER.TILE), tj = Math.floor(gz / TER.TILE);
     // 相邻瓦片也要重建（边上的格子会影响邻居的侧面 ✓）
     for (var di = -1; di <= 1; di++) {
       for (var dj = -1; dj <= 1; dj++) { dirty[(ti + di) + ',' + (tj + dj)] = 1; }
     }
   }
+  if (!needRebuild) { return; }
   terHClear();
   for (var key in dirty) {
     if (!_terTiles[key]) { continue; }
@@ -4495,6 +4622,7 @@ function frame(ts) {
   /* ★ 第 306 轮：竖直方向（跳 / 掉 / 掉血）✗ 必须在移动之后算 ✓
      因为要用【移动后】的 x/z 去问脚下有多高 ✓ */
   terrainV(dt);
+  if (typeof terDebTick === 'function') { terDebTick(dt); }
   if (atkT < 0) {
     /* ★ 跳跃的"视觉加高"：只有【从地面跳起来】才加（摔下去不加 ✓）
        加的量 = 当前离地高度 × 0.9 → 顶点 0.713 格时多看 0.64 格

@@ -373,6 +373,7 @@ class World(object):
         self.ter_hp = {}
         self.TER_REGEN_MS = 20 * 60 * 1000     # 20 分钟完全恢复（方案 §5.7 ✓）
         self._ter_bc = []                      # 本 tick 要广播的破坏事件
+        self._ter_load()                       # ★ 启动时读一次（这是 boot ✗ 不是 tick ✓）
         self._ticker_last = {}          # 第 247 轮：同类弹幕最后发送时间（1 秒合并）
         self._ticker_dup = {}           # 被合并掉了几条
         # ★ 本 tick 的治疗事件（第 46 轮）：[[医生x, 医生z, 目标x, 目标z, 回了多少], ...]
@@ -1237,6 +1238,31 @@ class World(object):
             return ov[0]
         return termod.height(gx, gz)
 
+    def _ter_load(self):
+        """启动时把上次的破坏读回内存（★ 只读一次 ✗ 不进 tick ✓）"""
+        try:
+            with dbmod.db(self.cfg) as c:
+                rows = c.execute(
+                    'SELECT x, z, h, ts FROM terrain_damage').fetchall()
+        except Exception:
+            return
+        now = dbmod.now_ms()
+        n = 0
+        for x, z, h, ts in rows:
+            # ★ 已经过期的不读（启动时就把它清掉 ✓ 免得白占内存）
+            if now - int(ts) >= self.TER_REGEN_MS:
+                try:
+                    with dbmod.db(self.cfg) as c:
+                        c.execute('DELETE FROM terrain_damage WHERE x=? AND z=?',
+                                  (int(x), int(z)))
+                except Exception:
+                    pass
+                continue
+            self.ter_over[(int(x), int(z))] = [float(h), int(ts)]
+            n += 1
+        if n:
+            print('[ter] 读回 %d 格破坏记录' % n)
+
     def _ter_sweep(self, now):
         """自愈：过期的破坏全部撤销（★ 惰性 ✗ 不在每格上跑定时器 ✓）
 
@@ -1252,6 +1278,8 @@ class World(object):
                 dead.append(k)
         for k in dead:
             self.ter_over.pop(k, None)
+            self.post_save('DELETE FROM terrain_damage WHERE x=? AND z=?',
+                           (int(k[0]), int(k[1])))
             self._ter_bc.append([k[0], k[1], -999])   # -999 = 恢复了（客户端删覆盖 ✓）
 
     def _ter_mine(self, p, d):
@@ -1279,13 +1307,19 @@ class World(object):
         got = self.ter_hp.get(key, 0) + 1
         if got < need:
             self.ter_hp[key] = got
-            return                                  # 还没碎 ✓ 只记住进度 ✓
+            # ★ 广播裂纹进度（方案 §5.6 第③层：让玩家看得出还要几刀 ✓）
+            self._ter_bc.append([gx, gz, None, got, need])
+            return
         # ③ 碎了：高度 −1（用户：往下只能破坏一层 ✓ 从 0 到 −1 就到底）
         self.ter_hp.pop(key, None)
         nh = cur - 1.0
         if nh < -1.0:
             nh = -1.0
-        self.ter_over[key] = [nh, dbmod.now_ms()]
+        _ts = dbmod.now_ms()
+        self.ter_over[key] = [nh, _ts]
+        # ★ 落库（只存被打过的格子 ✗ 平时这张表是空的 ✓）
+        self.post_save('INSERT OR REPLACE INTO terrain_damage(x, z, h, ts)'
+                       ' VALUES(?,?,?,?)', (int(gx), int(gz), float(nh), int(_ts)))
         # ★ 广播给附近的人（★ 用 _evt_near ✗ 和现有的特效/音效同一套 ✓）
         self._ter_bc.append([gx, gz, nh])
         # ★ 掉东西（P1 先不掉 ✗ 等背包/掉落接进来 ✓ 方案 §5.2 写着 ✓）
