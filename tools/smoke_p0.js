@@ -96,6 +96,23 @@ const PW = 'abc123456';
   await sleep(900);
   await ev('jx = 0; jy = 0; return 1;');
   await sleep(200);
+  // ★ 自动战斗按钮 + 可拖动
+  const uiTest = await ev([
+    'var a = document.getElementById("auto");',
+    'var has = !!a;',
+    'var cls0 = has ? a.className : "";',
+    'if (typeof autoToggle === "function") { autoToggle(); }',
+    'var onAfter = (typeof AUTO !== "undefined") ? !!AUTO.on : null;',
+    'if (typeof autoUiUpd === "function") { autoUiUpd(); }',
+    'var cls1 = has ? a.className : "";',
+    'if (typeof autoToggle === "function") { autoToggle(); }',
+    'var draggers = 0;',
+    '["atk","jmp","auto"].forEach(function(id){ var e = document.getElementById(id); if (e && e._dragInit) draggers++; });',
+    'return JSON.stringify({ hasAuto: has, clsBefore: cls0, clsAfterOn: cls1,',
+    '  autoOn: onAfter, draggable: draggers });',
+  ].join(''));
+  console.log('  界面: ' + uiTest);
+
   const ripple = await ev([
     'var live = 0;',
     'for (var i = 0; i < _ripple.length; i++) { if (_ripple[i].on) { live++; } }',

@@ -2412,6 +2412,91 @@ function autoUiUpd() {
   }
   var chk = document.getElementById('setAuto');
   if (chk) { chk.checked = !!AUTO.on; }
+  /* ★ round353：屏幕上那个自动战斗按钮的状态（绿框 + 呼吸 ✓）*/
+  var ab = document.getElementById('auto');
+  if (ab) {
+    if (AUTO.on) { ab.classList.add('on'); } else { ab.classList.remove('on'); }
+  }
+}
+
+/* ★★★ round353（用户："攻击/跳跃/自动战斗按钮改成可移动的"）★★★
+   ★ 做法：pointerdown 记起点 ✗ 移动超过 8px 就开始拖 ✓
+     → 位置存 localStorage ✗ 刷新后还在 ✓
+   ★ 为什么不用 HTML5 拖放：手机上不认 ✗ pointer 事件两端通用 ✓
+   ★ 拖动阈值 8px：手指微抖不会误判成拖动 ✓ */
+function makeDraggable(id) {
+  var el = document.getElementById(id);
+  if (!el || el._dragInit) { return; }
+  el._dragInit = true;
+  var KEY = 'uiPos_' + id;
+  // ★ 先恢复上次的位置（用 left/top 定位 ✗ 覆盖掉 right/bottom ✓）
+  try {
+    var saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (saved && typeof saved.l === 'number') {
+      el.style.left = saved.l + 'px';
+      el.style.top = saved.t + 'px';
+      el.style.right = 'auto';
+      el.style.bottom = 'auto';
+    }
+  } catch (e) { }
+  var st = null;
+  el.addEventListener('pointerdown', function (e) {
+    if (e && e.preventDefault) { e.preventDefault(); }
+    var r = el.getBoundingClientRect();
+    st = { x: e.clientX, y: e.clientY, l: r.left, t: r.top, moved: false, id: e.pointerId };
+    try { el.setPointerCapture(e.pointerId); } catch (e2) { }
+  });
+  el.addEventListener('pointermove', function (e) {
+    if (!st) { return; }
+    var dx = e.clientX - st.x, dy = e.clientY - st.y;
+    if (!st.moved) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) { return; }   // ★ 还没到阈值 ✓
+      st.moved = true;
+      el.classList.add('uiDrag');
+    }
+    // ★ 夹在屏幕内 ✗ 别拖出去找不回来 ✓
+    var w = el.offsetWidth, h = el.offsetHeight;
+    var nl = Math.max(0, Math.min(window.innerWidth - w, st.l + dx));
+    var nt = Math.max(0, Math.min(window.innerHeight - h, st.t + dy));
+    el.style.left = nl + 'px';
+    el.style.top = nt + 'px';
+    el.style.right = 'auto';
+    el.style.bottom = 'auto';
+  });
+  function end(e) {
+    if (!st) { return; }
+    var moved = st.moved;
+    st = null;
+    el.classList.remove('uiDrag');
+    if (moved) {
+      el._dragged = true;                  // ★ 让点击处理知道"这是拖动"✓
+      setTimeout(function () { el._dragged = false; }, 250);
+      try {
+        var r = el.getBoundingClientRect();
+        localStorage.setItem(KEY, JSON.stringify({ l: Math.round(r.left), t: Math.round(r.top) }));
+      } catch (e3) { }
+    }
+  }
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+}
+function uiDragInit() {
+  makeDraggable('atk');
+  makeDraggable('jmp');
+  makeDraggable('auto');
+  autoBind();
+}
+
+/* ★ round353：自动战斗按钮绑定（点一下开/关 ✓ 拖动时不触发 ✓ 见 makeDraggable）*/
+function autoBind() {
+  var b = document.getElementById('auto');
+  if (!b || b._bound) { return; }
+  b._bound = true;
+  b.addEventListener('pointerdown', function (e) {
+    if (e && e.preventDefault) { e.preventDefault(); }
+    if (b._dragged) { b._dragged = false; return; }   // ★ 刚拖过 → 不算点击 ✓
+    autoToggle();
+  });
 }
 
 function autoToggle() {
@@ -5550,7 +5635,8 @@ function bindLogin() {
     window.TP_BOOT_DONE = true;
     try { tpBind(); } catch (e) { }
     TPCAST.at = performance.now() / 1000;
-    setInterval(function () { tpEnsureBtn(); tpBarRender(); autoBindAtk(); jumpBind(); autoUiUpd(); }, 100);   /* 100ms 一次 ✓ 便宜 ✓ 而且顺带保证按钮一定挂上 ✓ */
+    setInterval(function () { tpEnsureBtn(); tpBarRender(); autoBindAtk(); jumpBind(); autoUiUpd();
+      if (typeof uiDragInit === 'function') { uiDragInit(); } }, 100);   /* 100ms 一次 ✓ 便宜 ✓ 而且顺带保证按钮一定挂上 ✓ */
     tpBarRender();                      /* 先画一次，把按钮恢复成正常样子 ✓ */
   }
   if (typeof document === 'undefined') { return; }
