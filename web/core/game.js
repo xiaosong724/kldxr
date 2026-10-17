@@ -1790,7 +1790,7 @@ function buildChunk(ci, cj) {
       /* ★ round339（用户："房子掉砖头"）：房子也要能被选中 ✗ 不然砍不到 ✓ */
       if (kind.indexOf('tree') === 0 || kind === 'dead' || kind === 'rock' ||
           kind === 'rubble' || kind === 'rock3' || kind.indexOf('fence') === 0 ||
-          kind.indexOf('house') === 0) {
+          kind.indexOf('house') === 0 || kind === 'ruin') {   // ★ 断墙 ✓
         propAt[gx2 + ',' + gz2] = kind;
       }
       placed++;

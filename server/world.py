@@ -1431,8 +1431,10 @@ class World(object):
             need, drop = 2, '木材'
         elif kind.startswith('rock') or kind == 'rubble':
             need, drop = 3, '石块'
-        elif kind.startswith('house'):
-            need, drop = 4, '砖头'        # ★ 房子最硬（一整栋 ✗ 拆起来费劲 ✓）
+        elif kind.startswith('house') or kind == 'ruin':
+            # ★ round344（用户发图指明："我说的这个围墙" = 断墙 ruin）
+            #   它之前【两边都没列进可破坏】✗ 所以完全打不动 ✓
+            need, drop = 4, '砖头'        # ★ 房子/断墙最硬（砖结构 ✓）
         else:
             return                         # 车 / 桶：这一轮不做
         key = (gx, gz)
