@@ -5627,7 +5627,15 @@ function frame(ts) {
          后面半秒是收刀动作 ✗ 那段时间人就转身了 ✓ 看着还是像打后面 ✓
        ★ 现在锁满整个挥刀动画（0.86 秒 ✓）
          ★ 仍有时间上限 ✗ 不会因为动画状态异常而永久卡死 ✓ */
-    _yawLockUntil = performance.now() + 860;
+    /* ★★★ round375（用户："按武器攻速决定锁转时间会不会更好"）★★★
+       ★ 对：每把武器的动作长度本来就不同 ✓
+           刺（dagger/spear）0.58 秒 · 单手剑 0.62 · 横扫 0.78 · 劈 0.86 · 弓 0.90
+         固定 860ms 的话 ✗ 快武器会【多锁半秒】✗ 手感发滞 ✓
+       ★ 现在直接读这把武器的动作总时长 ✗ 一秒不差 ✓ */
+    var _archN = atkArchOf(MY_WEAPON && MY_WEAPON.look);
+    var _ttN = ATK_T[_archN];
+    var _durN = _ttN ? _ttN[_ttN.length - 1] : 0.86;
+    _yawLockUntil = performance.now() + _durN * 1000;
     /* ★★★ round310（P1 破坏）：挥刀【先判地形】✗ 方案 §5.1 ✓
        规则：正前方一格（1 格远 + 扇形内）有比脚下高的地形 → 打它 ✓
        ★ 为什么先判地形：不然站在墙前面打僵尸 ✗ 墙永远拆不掉 ✓

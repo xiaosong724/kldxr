@@ -196,6 +196,18 @@ const PW = 'abc123456';
   ].join(''));
   console.log('  动作: ' + animTest);
 
+  // ★ 每把武器的锁转时长应该等于它的动作总时长
+  const lockTest = await ev([
+    'var looks = ["sword","dagger","spear","axe","hammer","saber","bow"];',
+    'var rows = {};',
+    'for (var i = 0; i < looks.length; i++) {',
+    '  var a = atkArchOf(looks[i]); var tt = ATK_T[a];',
+    '  rows[looks[i]] = { arch: a, lockMs: Math.round(tt[tt.length - 1] * 1000) };',
+    '}',
+    'return JSON.stringify(rows);',
+  ].join(''));
+  console.log('  锁转时长: ' + lockTest);
+
   const ripple = await ev([
     'var live = 0;',
     'for (var i = 0; i < _ripple.length; i++) { if (_ripple[i].on) { live++; } }',
