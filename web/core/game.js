@@ -5524,7 +5524,21 @@ function frame(ts) {
              var el2 = document.getElementById('setFps');
          和上面的 st 一样：那只是"元素不存在就别写"的 DOM 判断，
          现在归平台层了（UI.text 内部就是 getElementById + if (e) ✓），core 里不该再留 ✗ */
-      UI.text('fps', Math.round(1000 / ms) + ' FPS · ' + ms.toFixed(1) + 'ms');
+      /* ★ round334：临时诊断 —— 直接在 FPS 后面显示"其他玩家"的真实数据 ✓
+         ★ 为什么加这个：我连续三轮靠读代码猜 ✗ 猜错了 ✗
+           这三个数（人数 / 他的 y / 他的跳跃偏移）能一次定位问题在哪一层 ✓
+         ★ 定位完就删掉 ✓ */
+      var _dbgO = '(无)';
+      if (NET.on && NET.others) {
+        var _ks = Object.keys(NET.others);
+        if (_ks.length) {
+          var _o0 = NET.others[_ks[0]];
+          _dbgO = _ks.length + '人 y=' +
+            (_o0 && _o0.g ? _o0.g.position.y.toFixed(2) : '?') +
+            ' jy=' + (_o0 ? (+_o0.tgtJy || 0).toFixed(2) : '?');
+        } else { _dbgO = '0人'; }
+      } else { _dbgO = 'OFF'; }
+      UI.text('fps', Math.round(1000 / ms) + ' FPS · ' + ms.toFixed(1) + 'ms ｜ ' + _dbgO);
       if (UI.visible('infoBox')) { UI.text('infoBox', infoText()); }
       UI.text('setFps', Math.round(1000 / ms) + ' FPS');
     }
