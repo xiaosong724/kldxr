@@ -113,6 +113,24 @@ const PW = 'abc123456';
   ].join(''));
   console.log('  界面: ' + uiTest);
 
+  // ★ 键位调整模式
+  const editTest = await ev([
+    'var b = document.getElementById("uiEdit");',
+    'var t0 = b ? b.textContent : "";',
+    'if (typeof uiEditToggle === "function") { uiEditToggle(); }',
+    'var t1 = b ? b.textContent : "";',
+    'var editing = (typeof UI_EDIT !== "undefined") ? UI_EDIT : null;',
+    'var atkBefore = (typeof atkHeld !== "undefined") ? atkHeld : null;',
+    'var ab = document.getElementById("atk");',
+    'if (ab) { ab.dispatchEvent(new PointerEvent("pointerdown", {bubbles:true})); }',
+    'var atkDuring = (typeof atkHeld !== "undefined") ? atkHeld : null;',
+    'if (typeof uiEditToggle === "function") { uiEditToggle(); }',
+    'var t2 = b ? b.textContent : "";',
+    'return JSON.stringify({ txt0: t0, txt1: t1, editing: editing,',
+    '  atkBlocked: (atkBefore === false && atkDuring === false), txt2: t2 });',
+  ].join(''));
+  console.log('  键位: ' + editTest);
+
   const ripple = await ev([
     'var live = 0;',
     'for (var i = 0; i < _ripple.length; i++) { if (_ripple[i].on) { live++; } }',

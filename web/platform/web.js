@@ -618,7 +618,7 @@ function bindInput() {
   }
   document.addEventListener('touchstart', firstTouch, { passive: true });
   document.addEventListener('mousedown', firstTouch);
-  function atkDown(e) { if (e) { e.preventDefault(); } atkHeld = true; }
+  function atkDown(e) { if (e) { e.preventDefault(); } if (UI_EDIT) { return; } atkHeld = true; }
   function atkUp(e) { if (e) { e.preventDefault(); } atkHeld = false; }
   if (atk) {
     atk.addEventListener('touchstart', atkDown, { passive: false });
@@ -2491,6 +2491,37 @@ function makeDraggable(id) {
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);
 }
+/* ★★★ round355（用户："键位按钮：点一下进入调整，再点保存；调整时三个键不能用"）★★★
+   ★ 为什么调整时要禁用功能：三点
+     ① 拖跳跃键会顺手跳一下 ✗ 位置还没定就先跳了 ✓
+     ② 拖攻击键会一直挥刀 ✗ 还可能打到怪 ✓
+     ③ 拖自动键会开关自动战斗 ✗ 越调越乱 ✓ */
+var UI_EDIT = false;
+function uiEditToggle() {
+  UI_EDIT = !UI_EDIT;
+  var b = document.getElementById('uiEdit');
+  if (b) {
+    b.textContent = UI_EDIT ? '保存' : '键位';
+    if (UI_EDIT) { b.classList.add('on'); } else { b.classList.remove('on'); }
+  }
+  // ★ 退出时把"按住"的状态清掉 ✗ 免得正好卡在按下 ✓
+  if (!UI_EDIT) {
+    try { atkHeld = false; } catch (e) { }
+    try { jumpHeld = 0; } catch (e2) { }
+  }
+  /* ★ 提示用【按钮自己的文字】表达 ✗ 不依赖别的提示组件 ✓
+     （这里原来写了个 notice() ✗ 项目里没有这个函数 ✗ 被自由变量闸门抓到了 ✓）*/
+}
+function uiEditBind() {
+  var b = document.getElementById('uiEdit');
+  if (!b || b._bound) { return; }
+  b._bound = true;
+  b.addEventListener('pointerdown', function (e) {
+    if (e && e.preventDefault) { e.preventDefault(); }
+    uiEditToggle();
+  });
+}
+
 function uiDragInit() {
   makeDraggable('atk');
   makeDraggable('jmp');
@@ -2506,6 +2537,7 @@ function autoBind() {
   b.addEventListener('pointerdown', function (e) {
     if (e && e.preventDefault) { e.preventDefault(); }
     if (b._dragged) { b._dragged = false; return; }   // ★ 刚拖过 → 不算点击 ✓
+    if (UI_EDIT) { return; }                          // ★ 调整模式：不切换自动战斗 ✓
     autoToggle();
   });
 }
@@ -2570,6 +2602,7 @@ function jumpBind() {
      ★ 现在完全不碰 DOM ✗ 按下效果交给 CSS 的 :active ✓ */
   var press = function (e) {
     if (e && e.preventDefault) { e.preventDefault(); }
+    if (UI_EDIT) { return; }                          // ★ 调整模式：不跳 ✓
     if (typeof jumpHeld !== 'undefined') { jumpHeld = 1; }
   };
   b.addEventListener('pointerdown', press);
@@ -5647,7 +5680,8 @@ function bindLogin() {
     try { tpBind(); } catch (e) { }
     TPCAST.at = performance.now() / 1000;
     setInterval(function () { tpEnsureBtn(); tpBarRender(); autoBindAtk(); jumpBind(); autoUiUpd();
-      if (typeof uiDragInit === 'function') { uiDragInit(); } }, 100);   /* 100ms 一次 ✓ 便宜 ✓ 而且顺带保证按钮一定挂上 ✓ */
+      if (typeof uiDragInit === 'function') { uiDragInit(); }
+      if (typeof uiEditBind === 'function') { uiEditBind(); } }, 100);   /* 100ms 一次 ✓ 便宜 ✓ 而且顺带保证按钮一定挂上 ✓ */
     tpBarRender();                      /* 先画一次，把按钮恢复成正常样子 ✓ */
   }
   if (typeof document === 'undefined') { return; }

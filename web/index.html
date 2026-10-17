@@ -50,6 +50,10 @@
  #hud{left:8px;bottom:8px;padding:4px 9px;font-size:10px;color:#d8c8b0}
  #setBtn{right:8px;top:8px;padding:6px 12px;font-size:12px;cursor:pointer;user-select:none}
  #setBtn:active{transform:scale(.95)}
+ /* ★ round355（用户："菜单旁边加一个键位按钮，点了调位置，再点保存"）*/
+ #uiEdit{right:74px;top:8px;padding:6px 12px;font-size:12px;cursor:pointer;user-select:none}
+ #uiEdit:active{transform:scale(.95)}
+ #uiEdit.on{background:#8ee0a833;border-color:#8ee0a8aa;color:#b8f0c8}
  /* ★ 攻击键（第 33 轮：用户从 5 个候选里选了「① 锈铁圆扣」，并要求半透明）
     设计要点：
       · 【纯图标、不放文字】—— 中间就一把剑（内联 SVG，不加图片素材 ✓）
@@ -637,6 +641,7 @@
  <div id="diag">诊断…</div>
 </div>
 <div id="hud" class="pane">左半屏拖动 = 走 · 右下 = 攻击<br><span style="color:#8ee0a8">长按攻击键 3 秒 = 自动战斗（再长按 3 秒 = 取消）</span></div>
+<div id="uiEdit" class="pane">键位</div>
 <div id="setBtn" class="pane">☰ 菜单</div>
 
 <!-- ★ 第 185 轮：传送回安全区（常驻按钮 ✓ 不占菜单 ✓ 点了自动关菜单 ✓）-->
