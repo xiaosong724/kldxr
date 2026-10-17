@@ -4175,10 +4175,10 @@ function hurtPlayer(dv, fx, fz, kind, byName) {
            而服务器每帧会推真实值过来 ✗ 不会扣两次 ✓）*/
   if (dv <= 0) { return; }
   HP -= dv; shake = 0.4;
-  /* ★ round352（用户："玩家受伤的声音和僵尸一样"）
-     ★ 原来用的是 zhurt（僵尸受伤 ✓）✗ 玩家挨打也放它 ✓
-     ★ 换成 groan（人声呻吟）✗ 和僵尸明显区分 ✓ */
-  sfx('groan', 0.85);
+  /* ★ round360：用户听过后认为 groan 不对 ✗ 先改回 zhurt ✓
+     （原始需求是"不要和僵尸一样"，但可选的替换音效听起来更差 ✓
+       要真正区分需要一个新的受伤音效文件 ✓）*/
+  sfx('zhurt', 0.9);
   if (!isFinite(fx)) { fx = P.x; }
   if (!isFinite(fz)) { fz = P.z; }
   /* ★★ 第 146 轮（用户："把僵尸对自己造成的伤害改成红色方便分辨"）★★
