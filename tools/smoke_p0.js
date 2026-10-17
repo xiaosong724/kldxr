@@ -264,6 +264,20 @@ const PW = 'abc123456';
   ].join(''));
   console.log('  匕首两段: ' + dag2);
 
+  // ★ 所有武器动作仍然正常（改映射后不能崩）
+  const archTest = await ev([
+    'var looks = ["sword","axe","hammer","spear","staff","bow","dagger","saber"];',
+    'var out = {};',
+    'for (var i = 0; i < looks.length; i++) {',
+    '  var a = atkArchOf(looks[i]);',
+    '  var h = hero();',
+    '  heroAtkPose(h, 0.30, 0, 0, 0, looks[i], 0, 0);',
+    '  out[looks[i]] = { arch: a, nan: !isFinite(h.armR.rotation.x) };',
+    '}',
+    'return JSON.stringify(out);',
+  ].join(''));
+  console.log('  武器动作: ' + archTest);
+
   const ripple = await ev([
     'var live = 0;',
     'for (var i = 0; i < _ripple.length; i++) { if (_ripple[i].on) { live++; } }',

@@ -2588,7 +2588,10 @@ function fillHeldWeapon(sw, look, tier, swL) {
      我上一版在上面单独写了一句 g.rotation.set(0, Math.PI, 0) ✓
      → 紧接着就被这一行覆盖掉了 ✗（所以"改了没效果"✓ 用户一眼看出来还是反的 ✓）
      → 结论：弓的修正必须【折进这一行】✓ */
-  g.rotation.y = -Math.PI / 2 + ((useLook === 'bow') ? Math.PI : 0);
+  /* ★ round396（用户："刀拿反了，刀尖朝自己"）
+     ★ 和弓那次【同一种修法】：绕 Y 轴翻 180° ✓ 刀尖就朝前了 ✓ */
+  g.rotation.y = -Math.PI / 2 + ((useLook === 'bow') ? Math.PI : 0)
+               + ((useLook === 'saber') ? Math.PI : 0);
   /* ★ ★ 第 72 轮 用户报：“弓和手臂贴的太紧了” ★★
      弓本来就比刀剑宽（弓臂向两侧弯）→ 直接套在手上会和前臂穿模 ✗
      → 往【前、上、外】各推开一点 ✓（只对弓生效 ✓ 其他武器手感不变 ✗）*/
@@ -4962,7 +4965,8 @@ var KF_DRAW = [
 var ATK_ARCH = {
   axe: 'chop', hammer: 'chop',
   sword: 'stab2',                    // ★ round374：单手剑 = 快速前刺两下 ✓
-  saber: 'sweep', staff: 'chop',    // ★ round393：长棍从上往下敲 ✓
+  saber: 'chop',                    // ★ round396：弯刀从上往下砍 ✓
+  staff: 'chop',                    // ★ round393：长棍从上往下敲 ✓
   dagger: 'thrust', spear: 'thrust',
   bow: 'draw'                // ★ 第 70 轮：弓有自己的“拉弓”了 ✓
 };
