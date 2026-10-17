@@ -101,8 +101,17 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   }
   // ★ 砍倒的瞬间应该有一个独立模型在倒 ✓
   const fall = await ev([
-    'var ln = (typeof NET.loot === "object" && NET.loot) ? Object.keys(NET.loot).length : -1;',
-    'return JSON.stringify({ played: (window._fallN||0), loot: ln });',
+    'var gx = ' + JSON.parse(fight).tree[0] + ', gz = ' + JSON.parse(fight).tree[1] + ';',
+    'var ci = Math.floor(gx / PROP_CHUNK), cj = Math.floor(gz / PROP_CHUNK);',
+    'var key = ci + "," + cj;',
+    'var sol = propSolids || [];',
+    'var near = 0;',
+    'for (var i = 0; i < sol.length; i++) {',
+    '  var dx = sol[i].x - (gx + 0.5) * TER.LEVEL_H;',
+    '  var dz = sol[i].z - (gz + 0.5) * TER.LEVEL_H;',
+    '  if (dx * dx + dz * dz < 1.2) { near++; }',
+    '}',
+    'return JSON.stringify({ chunk: key, solids: sol.length, nearDeadProp: near });',
   ].join(''));
   console.log('  倒地动画: ' + fall);
   await sleep(1200);

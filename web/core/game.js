@@ -581,7 +581,7 @@ function flashCloneTick(dt) {
          （原来是"一下子到峰值再线性淡出"✗ 起点很硬 ✓）
        ★ 时长 0.14 → 0.30 秒（慢一倍 ✓）
        ★ 峰值 0.34/0.30 → 0.18/0.16（淡很多 ✓）*/
-    var k = f.t / 0.30;
+    var k = f.t / 0.22;
     if (k >= 1) {
       if (f.o.parent) { f.o.parent.remove(f.o); }
       f.m.dispose();
@@ -878,7 +878,24 @@ function propApplyEdits(cells) {
     dropChunk(key);
     buildChunk(parseInt(key.split(',')[0], 10), parseInt(key.split(',')[1], 10));
   }
+  /* ★★★ round343 修的真 bug（用户："被破坏的树和石头，碰撞箱没有移除"）★★★
+     根因：碰撞用的是 propSolids ✗ 而它只在【玩家跨区块】时重建 ✓
+           砍树走的是"重建某一块" ✗ 没同步这个数组 ✓
+           → 树没了、碰撞还在 ✓
+     修：重建区块之后，立刻把 propSolids 从 _chunkSolid 重算一遍 ✓ */
+  if (_dirtyCount(dirty)) {
+    refreshPropSolids();
+  }
 }
+
+/* 从 _chunkSolid 重算碰撞数组（砍掉物件之后必须调 ✓）*/
+function refreshPropSolids() {
+  propSolids = [];
+  for (var k in _chunkSolid) { propSolids = propSolids.concat(_chunkSolid[k]); }
+  PROP_MESHES = [];
+  for (var k2 in _chunkMesh) { PROP_MESHES = PROP_MESHES.concat(_chunkMesh[k2]); }
+}
+function _dirtyCount(o) { for (var k in o) { return 1; } return 0; }
 
 /* ★ F1：服务端说"这些格子的水变了" → 改覆盖 + 重建那几片 ✓ */
 function fluApplyEdits(cells) {
@@ -5390,8 +5407,8 @@ function frame(ts) {
          ★ 为什么不用更远的"射线"：这一步只是选目标 ✗ 距离校验在服务端 ✓
            客户端选准一点就行 ✓ 选宽一点也不会让玩家砍到够不着的树（服务端会拒 ✓）*/
       var _propHit = null, _propBest = 1e9;
-      for (var _ox = -2; _ox <= 2; _ox++) {
-        for (var _oz = -2; _oz <= 2; _oz++) {
+      for (var _ox = -3; _ox <= 3; _ox++) {
+        for (var _oz = -3; _oz <= 3; _oz++) {
           var _cx = _fx + _ox, _cz = _fz + _oz;
           var _ck = _cx + ',' + _cz;
           if (!propAt[_ck]) { continue; }
