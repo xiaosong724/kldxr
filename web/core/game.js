@@ -3263,12 +3263,15 @@ function netPush(buf, x, z, yaw, t) {
 function netSample(buf, t, out) {
   var n = buf.length;
   if (!n) { return false; }
-  if (n === 1) { out.x = buf[0].x; out.z = buf[0].z; out.yaw = buf[0].yaw; return true; }
+  if (n === 1) { out.x = buf[0].x; out.z = buf[0].z; out.yaw = buf[0].yaw;
+    out.jy = +buf[0].jy || 0; return true; }
   while (buf.length > 2 && buf[1].t <= t) { buf.shift(); }
   var a = buf[0], b = buf[1];
-  if (t <= a.t) { out.x = a.x; out.z = a.z; out.yaw = a.yaw; return true; }
+  if (t <= a.t) { out.x = a.x; out.z = a.z; out.yaw = a.yaw;
+    out.jy = +a.jy || 0; return true; }
   var seg = b.t - a.t;
-  if (seg <= 0.0001) { out.x = b.x; out.z = b.z; out.yaw = b.yaw; return true; }
+  if (seg <= 0.0001) { out.x = b.x; out.z = b.z; out.yaw = b.yaw;
+    out.jy = +b.jy || 0; return true; }
   var u = (t - a.t) / seg;
   if (u > 1) {
     /* ★★ 越界外推（P0-9 实测出来的真问题）★★
@@ -3295,6 +3298,11 @@ function netSample(buf, t, out) {
   while (dy > Math.PI) { dy -= Math.PI * 2; }
   while (dy < -Math.PI) { dy += Math.PI * 2; }
   out.yaw = a.yaw + dy * u;
+  /* ★ round331：离地高度也要【插值】带出来
+     ★ 自测踩到：只改了渲染那行 ✗ 没改这里 → w.jy 永远是 undefined
+       → 别人的跳跃怎么看都看不见 ✓（用户："开始看不到跳动"）*/
+  var _ajy = +a.jy || 0, _bjy = +b.jy || 0;
+  out.jy = _ajy + (_bjy - _ajy) * u;
   return true;
 }
 
@@ -3392,7 +3400,11 @@ function addOther(w, t) {
     fillHeldWeapon(hh.sw, w.wlook || 'sword',
                    (typeof w.wtier === 'number') ? w.wtier : 0);
     hh.g.scale.set(G.HERO_SCALE, G.HERO_SCALE, G.HERO_SCALE);
-    hh.g.position.set(w.x, 0, w.z);
+    /* ★ round331：刚出现时就站在地形上（不然第一帧会陷进山里 ✓）*/
+    var _oy0 = (typeof terYAt === 'function') ? terYAt(w.x, w.z) : 0;
+    var _ojy0 = +w.jy || 0;
+    if (_ojy0 < 0) { _ojy0 = 0; }
+    hh.g.position.set(w.x, _oy0 + _ojy0, w.z);
     scene.add(hh.g);
     var ui = mkMobUI((w.name || '道友') + ' ' + (w.realm || ''), 100);
     o = NET.others[w.uid] = {
@@ -3473,7 +3485,12 @@ function addOther(w, t) {
     o.buf.length = 0;
     o.rtS = null;
     o.rtLast = undefined;
-    if (o.g) { o.g.position.set(w.x, 0, w.z); }
+    if (o.g) {
+      var _oy2 = (typeof terYAt === 'function') ? terYAt(w.x, w.z) : 0;
+      var _ojy2 = +w.jy || 0;
+      if (_ojy2 < 0) { _ojy2 = 0; }
+      o.g.position.set(w.x, _oy2 + _ojy2, w.z);
+    }
     o.cur = { x: w.x, z: w.z, yaw: w.yaw || 0 };
     o.last = { x: w.x, z: w.z };
   } else {
