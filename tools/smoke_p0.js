@@ -240,6 +240,17 @@ const PW = 'abc123456';
   ].join(''));
   console.log('  匕首双持: ' + dagTest);
 
+  // ★ 左手武器槽：匕首可见，其它武器隐藏
+  const ohTest = await ev([
+    'var h = hero();',
+    'fillHeldWeapon(h.sw, "dagger", 3, h.swL);',
+    'var a = { vis: h.swL.visible, n: h.swL.children.length };',
+    'fillHeldWeapon(h.sw, "axe", 3, h.swL);',
+    'var b = { vis: h.swL.visible, n: h.swL.children.length };',
+    'return JSON.stringify({ dagger: a, axe: b });',
+  ].join(''));
+  console.log('  左手槽: ' + ohTest);
+
   const ripple = await ev([
     'var live = 0;',
     'for (var i = 0; i < _ripple.length; i++) { if (_ripple[i].on) { live++; } }',

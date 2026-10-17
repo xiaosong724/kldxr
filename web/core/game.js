@@ -2344,7 +2344,14 @@ function hero() {
      （数据就是那份已确认的示意图；换武器时 setWeapon → fillHeldWeapon 重建 ✓）
      ★ 攻击动画只认这个 Group 的 rotation，所以一行都不用改 ✓ */
   fillHeldWeapon(sw, null, null);   // 先按本地默认造一个 ✓ 远端玩家随后会被替换成他自己的 ✓
-  return { g: g, armL: armL, armR: armR, legL: legL, legR: legR, sw: sw };
+  /* ★★★ round387（用户："匕首只是模型做拿两个，不需要第二格武器槽"）★★★
+     ★ 纯粹是【视觉】：左手也挂一个武器模型 ✗ 背包/属性完全不变 ✓
+     ★ 只有匕首会用到 ✗ 其它武器左手空着（和以前一样 ✓）*/
+  var swL = new THREE.Group();
+  swL.rotation.x = 0.55;
+  swL.visible = false;
+  armL.add(swL);
+  return { g: g, armL: armL, armR: armR, legL: legL, legR: legR, sw: sw, swL: swL };
 }
 
 /* ★ 妖兽头顶 UI（血条 + 名字 ✓ 用 CSS 元素 + 每帧投影到屏幕 ✓）*/
@@ -2539,7 +2546,7 @@ function buildWeaponMesh(look, tier) {
 }
 
 /* 把"手上那把"换成新的（换武器时调 ✓ 攻击动画不用改 —— 它只认这个 Group 的旋转 ✓）*/
-function fillHeldWeapon(sw, look, tier) {
+function fillHeldWeapon(sw, look, tier, swL) {
   /* ★★ 第 65 轮：加了 look / tier 两个参数 ★★
      以前它直接读全局 MY_WEAPON ✗ → 别人的小人也会拿【你的】武器 ✗
      （用户报的："我拿弓箭，别的玩家手里也显示弓箭"✓）
@@ -2583,6 +2590,24 @@ function fillHeldWeapon(sw, look, tier) {
     g.position.set(0.30, -0.06, 0.22);   // ★ 第 74 轮：用户说靠上了→往下移 ✓
   }
   sw.add(g);
+  /* ★ round387：匕首 → 左手也放一把（纯视觉 ✓ 背包里还是一把 ✓）
+     ★ 其它武器：左手槽清空并隐藏 ✓ 不会多出来一把斧头 ✓ */
+  if (swL) {
+    for (var j = swL.children.length - 1; j >= 0; j--) {
+      var c2 = swL.children[j];
+      swL.remove(c2);
+      if (c2.geometry) { c2.geometry.dispose(); }
+    }
+    if (useLook === 'dagger') {
+      var g2 = buildWeaponMesh(useLook, useTier);
+      g2.rotation.y = -Math.PI / 2;
+      g2.scale.set(0.92, 0.92, 0.92);        // 左手那把略小一点 ✗ 免得两只一样大看着呆 ✓
+      swL.add(g2);
+      swL.visible = true;
+    } else {
+      swL.visible = false;
+    }
+  }
   return sw;
 }
 
@@ -2702,7 +2727,7 @@ function setWeapon(w) {
   G.ATK_ARC = b ? (+b.arc || 1.05) : 1.05;
   G.ATK_CD = 0.62 / Math.max(0.6, Math.min(2.2, spd));
   // ★ 手上的模型也跟着换（第 49 轮 ✓ 换武器立刻能看出来 ✓）
-  fillHeldWeapon(typeof H !== 'undefined' && H ? H.sw : null);
+  fillHeldWeapon(typeof H !== 'undefined' && H ? H.sw : null, null, null, H ? H.swL : null);
   return MY_WEAPON;
 }
 /* ★ 模型往下埋了多少（量出来的：脚在 y=-0.46）—— mob() 会把整体抬回来 ✓
@@ -3682,7 +3707,7 @@ function addOther(w, t) {
     //   写成 w.w / w.wt（那是快照的原始字段名）→ 永远 undefined
     //   → 兜底成 'sword' → 所有队友都被画成一把普通单手剑 + 用"扫"的动作 ✗
     fillHeldWeapon(hh.sw, w.wlook || 'sword',
-                   (typeof w.wtier === 'number') ? w.wtier : 0);
+                   (typeof w.wtier === 'number') ? w.wtier : 0, hh.swL);
     hh.g.scale.set(G.HERO_SCALE, G.HERO_SCALE, G.HERO_SCALE);
     /* ★ round331：刚出现时就站在地形上（不然第一帧会陷进山里 ✓）*/
     var _oy0 = (typeof terYAt === 'function') ? terYAt(w.x, w.z) : 0;
