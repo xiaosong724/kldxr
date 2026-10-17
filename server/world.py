@@ -1670,10 +1670,8 @@ class World(object):
                 dv = int(a['dmg'])
                 hit.hp -= dv
                 if shooter is not None:
-                    self._add_pend(shooter.cid, 'mhits',
-                                   {'mid': hit.mid, 'dmg': dv, 'crit': bool(a['crit']),
-                                    'arrow': True,
-                                    'x': round(hit.x, 2), 'z': round(hit.z, 2)})
+                    self._report_hit(shooter, hit.mid, dv, a['crit'], hit.x, hit.z,
+                                     {'arrow': True})
                 else:
                     self._add_pend(None, 'mhits',
                                    {'mid': hit.mid, 'dmg': dv, 'crit': bool(a['crit']),
@@ -1687,6 +1685,32 @@ class World(object):
                 continue
             if a['life'] <= 0:
                 self.arrows.pop(str(a['id']), None)
+
+    def _report_hit(self, p, mid, dmg, crit, x, z, extra=None):
+        """打中反馈：给我 mhits + 广播给周围的人（★ round402）
+
+        ★ 为什么要有这个函数：原来【只有主近战】那一处广播了伤害 ✓
+          箭 / 溅射 / 横扫 / 旋击 / 延迟伤害 都只发给了攻击者 ✗
+          → 别人看不到"我在打多少"✓
+        ★ 统一成一个入口 ✗ 以后再加伤害来源就不会漏 ✓
+        """
+        item = {'mid': mid, 'dmg': int(dmg), 'crit': bool(crit),
+                'x': round(x, 2), 'z': round(z, 2)}
+        if extra:
+            item.update(extra)
+        if p is not None:
+            self._add_pend(p.cid, 'mhits', item)
+        if p is not None:
+            self._fx_broadcast(p, {'kind': 'dmg', 'v': int(dmg),
+                                   'crit': 1 if crit else 0,
+                                   'x': round(x, 2), 'z': round(z, 2),
+                                   '_skip': p.cid})
+        else:
+            # 没有攻击者（比如怪自己触发）→ 广播给所有人（不 skip）
+            for _q in self.players.values():
+                self._send_cid(_q.cid, P.pack('fx', kind='dmg', v=int(dmg),
+                                              crit=1 if crit else 0,
+                                              x=round(x, 2), z=round(z, 2)))
 
     def _fx_broadcast(self, p, payload):
         """把特效事件广播给【周围】的人（★ round398：不然别人看不到连砍/转圈/长棍变大）
@@ -1733,9 +1757,8 @@ class World(object):
             if not m or m.hp <= 0:
                 continue
             m.hp -= dmg
-            self._add_pend(cid, 'mhits', {'mid': mid, 'dmg': dmg, 'crit': False,
-                                          'back': False, 'mb': None, 'heal': 0,
-                                          'x': round(m.x, 2), 'z': round(m.z, 2)})
+            self._report_hit(self.players.get(cid), mid, dmg, False, m.x, m.z,
+                             {'back': False, 'mb': None, 'heal': 0})
             # ★ round395：连砍的"前进 + 击退"
             if opt:
                 p2 = self.players.get(cid)
@@ -4455,9 +4478,8 @@ class World(object):
                 # ★ 击退：沿玩家朝向推 1.2 米 ✓
                 o.x += _dxs * 1.2
                 o.z += _dzs * 1.2
-                self._add_pend(p.cid, 'mhits', {'mid': o.mid, 'dmg': sdv, 'crit': False,
-                                                'splash': True, 'heal': 0,
-                                                'x': round(o.x, 2), 'z': round(o.z, 2)})
+                self._report_hit(p, o.mid, sdv, False, o.x, o.z,
+                                 {'splash': True, 'heal': 0})
                 if o.hp <= 0:
                     o.hp = 0
                     self._mob_died(p, o)
@@ -4475,9 +4497,8 @@ class World(object):
                     continue
                 sdv = max(1, int(round(dv * fx['value'])))
                 o.hp -= sdv
-                self._add_pend(p.cid, 'mhits', {'mid': o.mid, 'dmg': sdv, 'crit': False,
-                                                'splash': True, 'heal': 0,
-                                                'x': round(o.x, 2), 'z': round(o.z, 2)})
+                self._report_hit(p, o.mid, sdv, False, o.x, o.z,
+                                 {'splash': True, 'heal': 0})
                 if o.hp <= 0:
                     o.hp = 0
                     self._mob_died(p, o)
