@@ -4637,10 +4637,37 @@ function netUpdate(dt) {
     // ★ 他的挥剑动画（抬剑 → 下砍 ✓ 和本地共用 heroAtkPose → 动作一模一样 ✓）
     if (o.atkT >= 0) {
       o.atkT += dt * ATK_ANIM_SPD;   // ★ 第 169 轮：他们的动画也一起加速 ✓（看着才一致 ✓）
-      if (!heroAtkPose(o.hh, o.atkT, px, pz, o.cur.yaw, o.wlook, terYAt(px, pz),
+      /* ★ round398：别人放特效时，按他的状态覆盖动画（连砍/长棍/转圈）*/
+      var _rNow = performance.now();
+      var _rMulti = (o.multiN > 0 && o.multiT0 && _rNow - o.multiT0 < o.multiN * 180);
+      if (_rMulti) {
+        var _rRep = ((_rNow - o.multiT0) % 180) / 180;
+        heroAtkPose(o.hh, _rRep * ATK_T.chop[ATK_T.chop.length - 1],
+                    px, pz, o.cur.yaw, 'axe', terYAt(px, pz), 0);
+        if (o.staffT0) { /* 多刀时不叠加长棍 ✓ */ }
+      } else if (!heroAtkPose(o.hh, o.atkT, px, pz, o.cur.yaw, o.wlook, terYAt(px, pz),
                        (o.atkSeq >= 0 ? o.atkSeq : 0))) {
         o.atkT = -1;
         heroAtkReset(o.hh, px, pz, o.cur.yaw);
+      }
+      /* ★ round398：别人的长棍变大 + 锤子转圈（和本地同一套包络/角度 ✓）*/
+      if (o.hh && o.hh.sw) {
+        var _sAge2 = o.staffT0 ? (_rNow - o.staffT0) / 1900 : 2;
+        if (_sAge2 >= 0 && _sAge2 < 1) {
+          var _env2 = (_sAge2 < 0.10) ? (_sAge2 / 0.10)
+                    : ((_sAge2 < 0.35) ? 1 : (1 - (_sAge2 - 0.35) / 0.65));
+          var _pk2 = 1 + Math.min(4.4, ((o.staffLen || 4) / 10) * 4.4);
+          var _sk2 = 1 + (_pk2 - 1) * Math.max(0, _env2);
+          o.hh.sw.scale.set(_sk2, _sk2, _sk2);
+        } else if (o.hh.sw.scale.x !== 1) {
+          o.hh.sw.scale.set(1, 1, 1);
+        }
+      }
+      if (o.spinUntil && _rNow < o.spinUntil) {
+        var _sp2 = 1 - (o.spinUntil - _rNow) / 560;
+        if (_sp2 < 0) { _sp2 = 0; }
+        if (_sp2 > 1) { _sp2 = 1; }
+        o.hh.g.rotation.y = o.cur.yaw + Math.PI * 4 * _sp2;
       }
     }
     // 头顶昵称

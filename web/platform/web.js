@@ -5151,6 +5151,20 @@ function wsOnMessage(raw) {
        修：直接加进 FX_C ✓（并且带上数字 ✓）*/
     /* ★ round381：锤子旋击 → 飘一个"旋击"并且开始转圈 ✓ */
     /* ★ round392：长棍横扫 → 棍子变长变大 + 飘字 */
+    /* ★★★ round398（用户："这些动画要做同步，不然别人看不到"）★★★
+       ★ 服务端现在会把特效广播给周围 ✗ 带上 by = 谁在放 ✓
+       ★ 不是我就记到那个玩家身上 ✗ 渲染时按他的状态播 ✓ */
+    var _fxOp = d.by;
+    var _fxMine = (_fxOp === undefined) || (_fxOp === null) ||
+                  (typeof WSC !== 'undefined' && _fxOp === WSC.myId);
+    if (!_fxMine) {
+      var _ro = (NET.others && NET.others[_fxOp]) ? NET.others[_fxOp] : null;
+      if (_ro) {
+        if (d.kind === 'saber') { _ro.multiN = Math.max(2, Math.min(13, +d.n || 2)); _ro.multiT0 = performance.now(); }
+        if (d.kind === 'staff') { _ro.staffT0 = performance.now() - 120; _ro.staffLen = +d.len || 4; }
+        if (d.kind === 'spin') { _ro.spinUntil = performance.now() + 560; }
+      }
+    }
     /* ★ round395：弯刀连砍 → 循环播 N 刀的动画 */
     if (d.kind === 'saber') {
       _multiN = Math.max(2, Math.min(13, +d.n || 2));

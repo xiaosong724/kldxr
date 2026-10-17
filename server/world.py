@@ -1688,6 +1688,21 @@ class World(object):
             if a['life'] <= 0:
                 self.arrows.pop(str(a['id']), None)
 
+    def _fx_broadcast(self, p, payload):
+        """把特效事件广播给【周围】的人（★ round398：不然别人看不到连砍/转圈/长棍变大）
+
+        ★ 40 米够了 ✗ 比视野略大 ✓ 再远也看不清 ✓
+        """
+        payload = dict(payload)
+        payload['by'] = p.cid          # ★ 客户端要按它找"是哪个玩家在放招"✓
+        v2 = 40.0 * 40.0
+        for _q in self.players.values():
+            if (_q.x - p.x) ** 2 + (_q.z - p.z) ** 2 <= v2:
+                try:
+                    self._send_cid(_q.cid, P.pack('fx', **payload))
+                except Exception:
+                    pass
+
     def _later_tick(self):
         """到点结算的延迟【伤害】和延迟【发射】（round382 / 391 ✓）
 
@@ -4393,7 +4408,7 @@ class World(object):
             #   ★ 第一刀刚才已经结算了（也压到 60% ✓）→ 这里只补后面的 N-1 刀 ✓
             #   ★ 每刀间隔 0.18 秒 ✗ 动画也按这个节奏循环 ✓
             _n = max(2, min(13, int(round(fx['value']))))
-            self._send_cid(p.cid, P.pack('fx', kind='saber', n=_n))
+            self._fx_broadcast(p, {'kind': 'saber', 'n': _n})
             for _i2 in range(1, _n):
                 self._later.append((now_s() + 0.18 * _i2, p.cid, m.mid, dv,
                                     {'step': 0.35, 'push': 0.35}))
@@ -4404,7 +4419,7 @@ class World(object):
             _d = max(1.0, float(fx['value']))
             _dxs = math.sin(p.yaw)
             _dzs = math.cos(p.yaw)
-            self._send_cid(p.cid, P.pack('fx', kind='staff', len=round(_d, 1)))
+            self._fx_broadcast(p, {'kind': 'staff', 'len': round(_d, 1)})
             for o in list(self.mobs.values()):
                 if o is m or o.hp <= 0:
                     continue
@@ -4434,7 +4449,7 @@ class World(object):
             #   ★ 主目标不重复算（它已经吃过 dv 了 ✓）
             # ★ round383（用户："锤子转圈时攻击距离提升一倍"）
             _r2 = 4.4 * 4.4
-            self._send_cid(p.cid, P.pack('fx', kind='spin'))
+            self._fx_broadcast(p, {'kind': 'spin'})
             for o in list(self.mobs.values()):
                 if o is m or o.hp <= 0:
                     continue
