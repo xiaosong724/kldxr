@@ -101,7 +101,8 @@ var keys = {}, atkHeld = false;
 var jumpHeld = 0;          // 跳跃键按住的时刻（0 = 没按 ✓）
 var jumpCD = 0;            // 跳跃冷却剩余（秒 ✓）
 var FALL_MIN = 3;          // 落差 ≥3 格才掉血 ✓
-var _camY = 0;             // 相机当前的高度（缓动跟随 P.y ✗ 上下坡不跳 ✓）
+var _camY = 0;             // 相机当前的高度（缓动跟随【地面】✗ 跳跃才看得出来 ✓）
+var squashT = 0;           // 落地压扁剩余时间（秒 ✓）
 var FALL_DMG = 5;          // 每格 5 点（用户 2026-10-17 定 ✓）
 var solids = [], propSolids = [], mobs = [], PROP_MESHES = [], GROUNDMESH = null;
 
@@ -875,7 +876,21 @@ function buildTerrainTile(ti, tj) {
       nH = terH(gx, gz - 1); if (nH < h - 0.30) { ao -= 0.09; } else if (nH > h + 0.30) { ao -= 0.12; }
       var ct = _terColOf(mat, h, ao);
       var uvT = [[x0 / GW, z0 / GW], [x1 / GW, z0 / GW], [x1 / GW, z1 / GW], [x0 / GW, z1 / GW]];
+      /* ★★★ round308（用户："方块的边框感再明显一点"）★★★
+         做法：每格顶面画【两层】
+           ① 满格铺一层【暗色】→ 相邻两格之间就露出一条暗缝 ✓
+           ② 内缩 7.5% 再铺一层【亮色】→ 像一个一个砖块 ✓
+         成本：顶面四边形从 1 个变 2 个 ✗ 三角形翻倍 ✓
+              但地形是 unlit 的 ✗ 手机上画 5 万个三角形没什么压力 ✓
+         ★ 为什么不用"画线"：线在 3D 里有锯齿 ✗ 而且每格 4 条线太密 ✓
+           内缩的两层最干净 ✗ 而且能跟着高度/材质自动变 ✓ */
+      var cb = _terColOf(mat, h, ao * 0.80);       // 砖缝：只暗 20%（0.46 太黑 ✗ 0.70 还是有点闷 ✓）
       pushQuad([[x0, y00, z0], [x1, y10, z0], [x1, y11, z1], [x0, y01, z1]],
+               [cb, cb, cb, cb], uvT);
+      var ins = TER.LEVEL_H * 0.032;               // 内缩 3.2%（7.5% 太粗 ✗ 像方格纸 ✓）
+      var iy = 0.004;                              // 抬 4mm ✗ 防 z-fighting ✓
+      pushQuad([[x0 + ins, y00 + iy, z0 + ins], [x1 - ins, y10 + iy, z0 + ins],
+                [x1 - ins, y11 + iy, z1 - ins], [x0 + ins, y01 + iy, z1 - ins]],
                [ct, ct, ct, ct], uvT);
 
       /* ---- 四个侧面：只画比邻居高的那部分 ✗ 被挡住的完全不生成 ✓ ---- */
@@ -1320,7 +1335,20 @@ function blocked(x, z, hw, hd, byMob, skipMob, fromX, fromZ) {
    ★ 只比对【脚步位置】的地面高度 ✗ 不比对碰撞箱 ✓ 简单且够用 ✓ */
 function terrainStepOk(x, z) {
   if (P.air) { return true; }
+  /* ★★★ round308（用户："方块有比较严格碰撞箱，现在贴近了也容易穿模"）★★★
+     根因：这里原来只查【脚下中心点】一个位置 ✗
+           而身体有 0.6×0.5 那么宽 ✓ → 能贴着高方块走进去半个身位 ✓
+           视觉上就是"人压进方块里"✓
+     修：查【身体四角 + 中心】五个点 ✗ 取其中最高的地面 ✓
+        → 离高方块还有半个身位就走不过去了 ✓ 和视觉完全对得上 ✓
+     ★ 五个点比"一个矩形查询"便宜得多 ✓ 而且地形是纯函数 ✓ 没有副作用 ✓ */
+  var hw = G.BODY_W * 0.5, hd = G.BODY_D * 0.5;
   var gy = terYAt(x, z);
+  var t;
+  t = terYAt(x + hw, z + hd); if (t > gy) { gy = t; }
+  t = terYAt(x + hw, z - hd); if (t > gy) { gy = t; }
+  t = terYAt(x - hw, z + hd); if (t > gy) { gy = t; }
+  t = terYAt(x - hw, z - hd); if (t > gy) { gy = t; }
   return (gy - P.y) <= TER.STEP_WALK * TER.LEVEL_H + 0.03;
 }
 function moveWithCollision(dx, dz, hw, hd, byMob, skipMob) {
@@ -1357,6 +1385,9 @@ function terrainV(dt) {
     P.airY = gy;
     jumpCD = 0.15;
     jumpHeld = 0;
+    /* ★ 跳跃拉长 + 落地压扁（很便宜 ✗ 但"跳起来"一下就看得出来了 ✓）
+       向上速度越大拉得越长 ✓ 落地那一下压扁 ✓ 这是动作游戏的老办法 ✓ */
+    H.g.scale.set(0.90, 1.16, 0.90);
   }
 
   if (!P.air) {
@@ -1381,6 +1412,8 @@ function terrainV(dt) {
       P.y = gy;
       P.air = false;
       P.vy = 0;
+      H.g.scale.set(1.12, 0.86, 1.12);             // 落地压扁 ✓
+      squashT = 0.14;
       if (drop >= FALL_MIN && !dead) {
         var n = Math.floor(drop) - 2;              // 落差 3 → 1 格 ✓
         var dv = n * FALL_DMG;
@@ -4402,6 +4435,13 @@ function frame(ts) {
   /* ★ 第 306 轮：竖直方向（跳 / 掉 / 掉血）✗ 必须在移动之后算 ✓
      因为要用【移动后】的 x/z 去问脚下有多高 ✓ */
   terrainV(dt);
+  /* ★ 跳跃的拉长/压扁：每帧缓回原状 ✓ 省事又不会一直歪着 ✓ */
+  if (squashT > 0) { squashT = Math.max(0, squashT - dt); }
+  if (P.air || squashT > 0) {
+    H.g.scale.x += (1 - H.g.scale.x) * Math.min(1, dt * 14);
+    H.g.scale.y += (1 - H.g.scale.y) * Math.min(1, dt * 14);
+    H.g.scale.z += (1 - H.g.scale.z) * Math.min(1, dt * 14);
+  }
   if (atkT < 0) {
     H.g.position.set(P.x, P.y + (moving ? Math.abs(Math.sin(walkT)) * 0.05 : 0), P.z);
   }   // ★ 攻击时坐标由动画控制 ✓
@@ -4759,7 +4799,13 @@ function frame(ts) {
   /* ★ 第 306 轮：相机跟着地形高度走 ✗
      不然爬上山之后人物会掉到画面外面 ✓
      ★ 用【缓动】而不是直接跟随 ✗ 上下坡时镜头才不会一跳一跳 ✓ */
-  _camY = _camY + (P.y - _camY) * Math.min(1, dt * 8);
+  /* ★★★ round308（用户："跳跃动画的高度不够高，跳跃动画不明显"）★★★
+     根因：相机跟的是 P.y ✗ 而 P.y【包含跳跃高度】✓
+           → 一跳起来相机跟着升 ✗ 人和画面的相对位移几乎为 0 ✗ 看不出在跳 ✓
+     修：相机跟【脚下的地面高度】P.gy ✗ 人跳起来就真的离开画面 ✓
+     ★ 缓动也调慢（dt*8 → dt*5）✗ 上下坡时镜头更稳 ✓ */
+  var _camTgt = (typeof P.gy === 'number' && isFinite(P.gy)) ? P.gy : P.y;
+  _camY = _camY + (_camTgt - _camY) * Math.min(1, dt * 5);
   cam.position.set(P.x + sx, _camY + 1.4 + G.CAM_DIST * Math.sin(G.CAM_PITCH),
                    P.z + G.CAM_DIST * Math.cos(G.CAM_PITCH) + sz);
   cam.lookAt(P.x, _camY + 1.4, P.z);
