@@ -102,6 +102,7 @@ var jumpHeld = 0;          // 跳跃键按住的时刻（0 = 没按 ✓）
 var jumpCD = 0;            // 跳跃冷却剩余（秒 ✓）
 var FALL_MIN = 3;          // 落差 ≥3 格才掉血 ✓
 var _camY = 0;             // 相机当前的高度（缓动跟随【地面】✗ 跳跃才看得出来 ✓）
+var _waterT = 0;           // 溅涟漪的节流（秒 ✓）
 var MOV = { vx: 0, vz: 0, tx: 0, tz: 0 };   // 移动速度（★ 为了冰面的惯性 ✗ 原来直接改位移 ✓）
 var FALL_DMG = 5;          // 每格 5 点（用户 2026-10-17 定 ✓）
 var solids = [], propSolids = [], mobs = [], PROP_MESHES = [], GROUNDMESH = null;
@@ -502,6 +503,46 @@ function terDebris(gx, gz, mat, baseH) {
   /* ★ 尘烟：一格宽的扁片，扩散淡出（0.5 秒 ✓）
      ★ 为什么要有：光有石头会很"脆"✗ 加一层灰才像"塌了"✓ */
   terDust(gx, gz, cy, col);
+}
+
+/* ★ round316：沼泽涟漪（走在污水里溅一圈 ✗ 0.6 秒扩散消失 ✓）*/
+var _ripplePool = [], _ripple = [];
+function terRipple(wx, wz, wy) {
+  if (!_ripplePool.length) {
+    var rg = new THREE.RingGeometry(0.12, 0.20, 16);
+    for (var i = 0; i < 8; i++) {
+      var mm = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({
+        color: 0xa8d8e0, transparent: true, opacity: 0, depthWrite: false,
+        side: THREE.DoubleSide }));
+      mm.rotation.x = -Math.PI / 2;
+      mm.visible = false;
+      mm.renderOrder = 5;
+      scene.add(mm);
+      _ripplePool.push(mm);
+      _ripple.push({ on: 0, t: 0 });
+    }
+  }
+  for (var j = 0; j < _ripple.length; j++) {
+    if (_ripple[j].on) { continue; }
+    var r = _ripple[j], m = _ripplePool[j];
+    r.on = 1; r.t = 0;
+    m.position.set(wx, wy + 0.02, wz);
+    m.scale.setScalar(1);
+    m.material.opacity = 0.55;
+    m.visible = true;
+    return;
+  }
+}
+function rippleTick(dt) {
+  for (var i = 0; i < _ripple.length; i++) {
+    var r = _ripple[i];
+    if (!r.on) { continue; }
+    r.t += dt;
+    var k = r.t / 0.6;
+    if (k >= 1) { r.on = 0; _ripplePool[i].visible = false; continue; }
+    _ripplePool[i].scale.setScalar(1 + k * 3.2);
+    _ripplePool[i].material.opacity = 0.55 * (1 - k);
+  }
 }
 
 /* 尘烟（独立小池子 ✗ 6 个就够 ✓）*/
@@ -1777,6 +1818,16 @@ function terrainV(dt) {
      ★ 复用 falldmg 那条路 ✗ 不新增协议 ✓ 服务端照样会夹住 ✓ */
   var _fkind = terFluid(Math.floor(P.x / TER.LEVEL_H), Math.floor(P.z / TER.LEVEL_H));
   P.onLava = (_fkind === 3);
+  /* ★ 在水里：人物下沉一点点（像站在浅水里 ✓）✗ 走动时溅涟漪 ✓ */
+  P.inWater = (_fkind === 1 || _fkind === 2);
+  if (P.inWater && !P.air) {
+    _waterT = (_waterT || 0) - dt;
+    if (_waterT <= 0 && Math.hypot(MOV.vx, MOV.vz) > 0.8) {
+      _waterT = 0.34;
+      terRipple(P.x, P.z, P.y);
+      if (typeof sfx === 'function') { sfx('step', 0.5); }
+    }
+  }
   if (P.onLava && !P.air && !dead) {
     P.lavaT = (P.lavaT || 0) - dt;
     if (P.lavaT <= 0) {
@@ -4827,13 +4878,15 @@ function frame(ts) {
      因为要用【移动后】的 x/z 去问脚下有多高 ✓ */
   terrainV(dt);
   if (typeof terDebTick === 'function') { terDebTick(dt); }
+  if (typeof rippleTick === 'function') { rippleTick(dt); }
   if (atkT < 0) {
     /* ★ 跳跃的"视觉加高"：只有【从地面跳起来】才加（摔下去不加 ✓）
        加的量 = 当前离地高度 × 0.9 → 顶点 0.713 格时多看 0.64 格
        合起来 ≈ 1.35 格高 ✗ 差不多是人物身高的一倍 ✓ 一眼就看出来在跳 ✓ */
     var _vb = 0;
     if (P.jumping && P.air) { _vb = Math.max(0, P.y - (P.gy || 0)) * 0.9; }
-    H.g.position.set(P.x, P.y + _vb + (moving ? Math.abs(Math.sin(walkT)) * 0.05 : 0), P.z);
+    var _sink = (P.inWater && !P.air) ? -0.12 : 0;   // 站在水里：下沉 12cm
+    H.g.position.set(P.x, P.y + _vb + _sink + (moving ? Math.abs(Math.sin(walkT)) * 0.05 : 0), P.z);
   }   // ★ 攻击时坐标由动画控制 ✓
   /* ★★ 第 56 轮：死亡 = 【倒地】，不是站着 ✗（用户要求）★★
      ★ 必须放在上面那些姿势代码【之后】—— 不然会被它们覆盖回去 ✗ */

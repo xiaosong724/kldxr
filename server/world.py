@@ -1616,6 +1616,14 @@ class World(object):
         #     更大 → 过不去 ✗ 要绕路 ✓（这就是"峭壁挡僵尸"✓）
         #   ★ 改这个文件的时候注意：地形是【纯函数】✗ 不查库 ✓ 直接算 ✓
         hw = mobs.MOB_BODY / 2.0
+        # ★ round316（P2 收尾）：僵尸也受地貌影响 ✓
+        #   冰原 ×1.45（它们也会滑过头 ✗ 很好笑 ✓）
+        #   沼泽 ×0.58（陷在泥里 ✓ 玩家会拿沼泽当退路 ✓ 这是玩法 ✓）
+        _bcell = termod.cell_of_world(m.x, m.z)
+        _bsp = termod.BIOME_SPEED.get(termod.biome(_bcell[0], _bcell[1]), 1.0)
+        if _bsp != 1.0:
+            dx *= _bsp
+            dz *= _bsp
         _cur = termod.height(*termod.cell_of_world(m.x, m.z))
         nx = m.x + dx
         if not worldgen.blocked(nx, m.z, hw, hw):
