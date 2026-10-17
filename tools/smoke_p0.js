@@ -143,6 +143,18 @@ const PW = 'abc123456';
     '  moved: !!(ix || iy) });',
   ].join(''));
   console.log('  安全区: ' + autoTest);
+  // ★ 高级掉落优先：放一件 6 阶掉落，看 AI 是否去抢
+  const lootTest = await ev([
+    'if (typeof NET === "undefined" || !NET.rloot) { return "no rloot"; }',
+    'NET.rloot["TEST_HI"] = { x: 60, z: 60, name: "测试神装", tier: 6, look: "", asked: 0 };',
+    'P.x = 40; P.z = 40;',
+    'if (typeof AUTO !== "undefined") { AUTO.on = true; AUTO.tgt = ""; AUTO.pauseUntil = 0; }',
+    'if (typeof autoTick === "function") { autoTick(0.016); }',
+    'var r = { jx: jx, jy: jy, info: AUTO.info };',
+    'delete NET.rloot["TEST_HI"];',
+    'return JSON.stringify(r);',
+  ].join(''));
+  console.log('  高级掉落: ' + lootTest);
   await ev('if (typeof AUTO !== "undefined") { AUTO.on = false; } return 1;');
 
   const ripple = await ev([

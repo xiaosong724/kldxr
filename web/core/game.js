@@ -5141,6 +5141,38 @@ function autoTick(dt) {
     return;
   }
   if (!AUTO.on) { autoRelease(); return; }
+  /* ★★★ round363（用户："掉落物五阶以上，优先去捡，再继续打怪"）★★★
+     ★ 为什么放在【选目标之前】：要压过"打架"✗ 而不只是"没怪时去捡"✓
+     ★ 半径给大一点（AUTO_LOOT_R）✗ 高级掉落值得跑一趟 ✓
+     ★ 只认 tier >= 5 ✗ 低阶的照旧"顺手捡"（没怪时才去 ✓）*/
+  if (AUTO.lootOn) {
+    var _hi = null, _hid = 1e9;
+    for (var _lk in NET.rloot) {
+      var _le = NET.rloot[_lk];
+      if (!_le || (+_le.tier || 0) < 5) { continue; }
+      var _hdx = _le.x - P.x, _hdz = _le.z - P.z;
+      var _hd2 = _hdx * _hdx + _hdz * _hdz;
+      if (_hd2 < _hid) { _hid = _hd2; _hi = _le; }
+    }
+    if (_hi) {
+      var _hdl = Math.sqrt(_hid);
+      if (_hdl > 1.2) {
+        jx = (_hi.x - P.x) / _hdl;
+        jy = (_hi.z - P.z) / _hdl;
+        AUTO.setInput = true;
+        P.yaw = autoFacing(_hi.x - P.x, _hi.z - P.z);
+        atkHeld = false; AUTO.attacking = false;
+        AUTO.info = '自动战斗：抢 ' + (+_hi.tier) + ' 阶「' + (_hi.name || '掉落') +
+                    '」 ' + _hdl.toFixed(1) + 'm';
+        return;
+      }
+      /* 已经很近了：站住让自动拾取生效 ✓ */
+      jx = 0; jy = 0; AUTO.setInput = true;
+      atkHeld = false; AUTO.attacking = false;
+      AUTO.info = '自动战斗：捡 ' + (+_hi.tier) + ' 阶掉落';
+      return;
+    }
+  }
   /* ---- 手动操作检测（自己判 ✗ 不用平台层加钩子 ✓）----
      上一帧我没写 jx/jy ✓ 而这一帧它们有值 → 说明是玩家在推摇杆 ✓
      键盘 WASD 也一起判 ✓ */
