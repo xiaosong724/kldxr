@@ -99,6 +99,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     const r = await ev('atkHeld = true; return "atk";');
     await sleep(700);
   }
+  // ★ 砍倒的瞬间应该有一个独立模型在倒 ✓
+  const fall = await ev('return JSON.stringify({ falling: (_falling||[]).length, played: (window._fallN||0), err: (window._fallErr||"").slice(0,200) });');
+  console.log('  倒地动画: ' + fall);
   await sleep(1200);
   const after = await ev([
     'var gx = ' + JSON.parse(fight).tree[0] + ', gz = ' + JSON.parse(fight).tree[1] + ';',

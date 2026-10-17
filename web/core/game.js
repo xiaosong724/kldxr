@@ -655,6 +655,82 @@ function terDebTick(dt) {
 
 /* ★ 收到服务端的破坏广播：改覆盖 + 清缓存 + 只重建受影响的瓦片 ✓
    ★ 为什么不全部重建：一片 16×16 格 ✗ 全重建要 20ms ✓ 只重建 1~4 片 ✓ */
+/* ★★★ round338：树倒地动画（用户要求）
+   ★ 难点：树的 mesh 是按材质【合并成一块】的 ✗ 没有单独对象可以旋转 ✓
+   ★ 做法（不改合并结构 ✗ 不动平常的 draw call）：
+       砍倒时 → 临时造一个【独立树模型】放在原位
+              → 让它绕树根旋转倒地（0.75 秒）
+              → 1.1 秒后移除
+       同时整块重建 ✗ 原来的那棵树就消失了 ✓
+   ★ 为什么绕树根：几何体是按【世界坐标】建出来的 ✗
+     所以要把顶点平移成"以树根为原点"✗ 再把整个组摆到树根 ✓（见 geo.translate）*/
+var _falling = [], _fallMax = 6;
+function propFallAnim(kind, gx, gz) {
+  try {
+    /* ★★ 必须和 buildChunk 一样有 fallback ✗
+       树有 tree2/tree3 几种 ✗ 但 PROP_PARTS 里只存了 'tree' 一套零件 ✓
+       建块时靠 `|| PROP_PARTS.tree` 兜底 ✗ 我第一版漏了这句 → 直接 return ✗ 动画不动 ✓ */
+    var parts = (PROP_PARTS && PROP_PARTS[kind]) || (PROP_PARTS && PROP_PARTS.tree);
+    if (!parts || !parts.length) { return; }
+    var s2 = G.PROP_SCALE;
+    var hh2 = ((gx * 2654435761) ^ (gz * 40503)) & 0xffffffff;
+    var q2 = Math.abs(hh2 % 1000);
+    var rot = ((q2 >> 3) % 4) * Math.PI / 2, cs = Math.cos(rot), sn = Math.sin(rot);
+    var wx2 = worldX(gx), wz2 = worldZ(gz);
+    var baseY = terYAt(wx2, wz2);
+    var acc = {}, mk;
+    for (var pi = 0; pi < parts.length; pi++) {
+      var p = parts[pi];
+      var ox = (p[4] * cs - p[6] * sn) * s2, oz = (p[4] * sn + p[6] * cs) * s2, oy = p[5] * s2;
+      var gg = boxGeoAt(p[0] * s2, p[1] * s2, p[2] * s2,
+                        wx2 + ox, baseY + oy, wz2 + oz, rot).toNonIndexed();
+      if (!acc[p[3]]) { acc[p[3]] = []; }
+      acc[p[3]].push(gg);
+    }
+    var grp = new THREE.Group();
+    grp.position.set(wx2, baseY, wz2);
+    for (mk in acc) {
+      var geo = mergeGeos(acc[mk]);
+      geo.translate(-wx2, -baseY, -wz2);      // ★ 枢轴挪到树根 ✓
+      var mm = new THREE.Mesh(geo, M[mk] || M.dirt);
+      mm.castShadow = true;
+      grp.add(mm);
+      for (var di = 0; di < acc[mk].length; di++) { acc[mk][di].dispose(); }
+    }
+    scene.add(grp);
+    if (_falling.length >= _fallMax) {
+      var old0 = _falling.shift();
+      scene.remove(old0.g);
+      old0.g.traverse(function (o) { if (o.geometry) { o.geometry.dispose(); } });
+    }
+    window._fallN = (window._fallN || 0) + 1;   // ★ 累计次数（动画结束也不会归零 ✓）
+    _falling.push({ g: grp, t: 0, life: 1.15,
+                    dir: ((gx * 7 + gz * 13) % 2) ? 1 : -1,
+                    axis: ((gx * 3 + gz * 5) % 2) ? 'x' : 'z' });
+  } catch (e) {
+    // ★ 动画失败不能影响砍树本身 ✓ 但要留下痕迹 ✗ 不然查不到 ✓
+    try { window._fallErr = String((e && e.stack) || e); } catch (e2) { }
+  }
+}
+
+/* 每帧推进倒地（★ 只在有树在倒时才跑 ✓）*/
+function propFallTick(dt) {
+  if (!_falling.length) { return; }
+  for (var i = _falling.length - 1; i >= 0; i--) {
+    var f = _falling[i];
+    f.t += dt;
+    var k = Math.min(1, f.t / 0.75);
+    var e = 1 - Math.pow(1 - k, 3);           // ★ 先快后慢（像真的倒下去 ✓）
+    var ang = e * 1.45 * f.dir;               // 1.45 rad ≈ 83°
+    if (f.axis === 'x') { f.g.rotation.x = ang; } else { f.g.rotation.z = ang; }
+    if (f.t > f.life) {
+      scene.remove(f.g);
+      f.g.traverse(function (o) { if (o.geometry) { o.geometry.dispose(); } });
+      _falling.splice(i, 1);
+    }
+  }
+}
+
 /* ★ round329：服务端说"这几棵树没了" → 记下来 + 重建那一片 ✓ */
 function propApplyEdits(cells) {
   if (!cells || !cells.length) { return; }
@@ -665,6 +741,10 @@ function propApplyEdits(cells) {
     if (dead) {
       propDead[k] = 1;
       delete propDmg[k];
+      // ★ 先让【独立模型】倒下去 ✗ 再重建块（把原来的挪走）✓
+      propFallAnim(propAt[k] || '', gx, gz);
+      // ★ 木屑/石屑（复用破坏的碎块 ✓ 换成木头色 ✓）
+      terDebris(gx, gz, 'dirt', terH(gx, gz));
       if (typeof sfx === 'function') {
         var _d2 = Math.pow(gx * TER.LEVEL_H - P.x, 2) + Math.pow(gz * TER.LEVEL_H - P.z, 2);
         var _dv = 1 - Math.min(1, _d2 / (30 * 30));
@@ -5099,6 +5179,7 @@ function frame(ts) {
   terrainV(dt);
   if (typeof terDebTick === 'function') { terDebTick(dt); }
   if (typeof rippleTick === 'function') { rippleTick(dt); }
+  if (typeof propFallTick === 'function') { propFallTick(dt); }
   if (atkT < 0) {
     /* ★ 跳跃的"视觉加高"：只有【从地面跳起来】才加（摔下去不加 ✓）
        加的量 = 当前离地高度 × 0.9 → 顶点 0.713 格时多看 0.64 格
