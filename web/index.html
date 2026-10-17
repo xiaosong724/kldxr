@@ -66,7 +66,7 @@
    box-shadow:0 4px 12px #00000055,inset 0 1px 0 #ffffff22,inset 0 -9px 18px #0000002e;
    backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
    user-select:none;cursor:pointer;z-index:30;
-   transition:transform .07s ease,box-shadow .15s ease}
+   transition:transform .07s ease,box-shadow .15s ease;touch-action:none}
  /* ★★ 第 306 轮：跳跃键 ★★
     位置：攻击键【左下角】✗ 拇指不用挪 ✓（地形方案 §3.4）
     大小：攻击键的 60% ✗ 一眼分得清主次 ✓
@@ -80,7 +80,7 @@
     border:2px solid #86967a88;
     box-shadow:0 3px 9px #00000055,inset 0 1px 0 #ffffff22,inset 0 -6px 12px #0000002a;
     user-select:none;cursor:pointer;z-index:30;
-    transition:transform .07s ease,box-shadow .15s ease}
+    transition:transform .07s ease,box-shadow .15s ease;touch-action:none}
  /* ★★★ round326（用户实测：空格跳不卡、点按钮跳卡、手机不卡）★★★
     根因候选：① 这里原来有 backdrop-filter:blur(2px) ✗
                 每次重绘都要重算模糊 ✗ 某些显卡上直接掉一帧 ✓
@@ -105,7 +105,7 @@
     border:2px solid #86967a88;
     box-shadow:0 3px 9px #00000055,inset 0 1px 0 #ffffff22,inset 0 -6px 12px #0000002a;
     user-select:none;cursor:pointer;z-index:30;
-    transition:transform .07s ease,box-shadow .15s ease}
+    transition:transform .07s ease,box-shadow .15s ease;touch-action:none}
  #auto .aic{width:52%;height:52%;color:#dfe8d4;opacity:.95}
  /* ★ 状态区分：开着 = 绿边框 + 呼吸光 ✓ 一眼看出在自动打 ✓ */
  #auto.on{border-color:#8ee0a8cc;
@@ -114,7 +114,8 @@
  #auto.on .aic{color:#b8f0c8}
  @keyframes autoPulse{0%,100%{opacity:1}50%{opacity:.72}}
  /* ★ 拖动中：浮起来 ✓ 给点反馈 ✓ */
- .uiDrag{outline:2px dashed #ffd83d99;outline-offset:4px}
+ .uiDrag{outline:2px dashed #ffd83d99;outline-offset:4px;
+   transform:none!important;animation:none!important;transition:none!important}
 /* ★★ 第 233 轮（用户要求）：损坏的装备要有明显样式 ★★
    为什么：挂机回来只看到"少了一件"✗ 分不清是坏了还是丢了 ✓
    现在坏了的还在背包里 ✓ 格子上红框 + 压暗 + 右上角一个叉 ✓ */

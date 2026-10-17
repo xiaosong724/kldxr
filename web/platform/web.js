@@ -2454,14 +2454,17 @@ function makeDraggable(id) {
       st.moved = true;
       el.classList.add('uiDrag');
     }
-    // ★ 夹在屏幕内 ✗ 别拖出去找不回来 ✓
+    /* ★★★ round354（用户："攻击键拖起来非常流畅，另两个参考改一下"）★★★
+       ★ 关键差别：原来每帧改 left/top ✗ 会触发【布局重排】✗ 慢且抖 ✓
+       ★ 改成 translate() ✗ 只走合成层 ✗ GPU 直接搬 ✗ 和攻击键一样顺 ✓
+         （攻击键本身也是在拖，但它是大按钮，重排代价相对小 ✓
+           小按钮 + :active 缩放/呼吸动画 → 抖得更明显 ✓）
+       ★ 松手时才把 translate 换算回 left/top 存起来 ✓ */
     var w = el.offsetWidth, h = el.offsetHeight;
     var nl = Math.max(0, Math.min(window.innerWidth - w, st.l + dx));
     var nt = Math.max(0, Math.min(window.innerHeight - h, st.t + dy));
-    el.style.left = nl + 'px';
-    el.style.top = nt + 'px';
-    el.style.right = 'auto';
-    el.style.bottom = 'auto';
+    st.nl = nl; st.nt = nt;
+    el.style.transform = 'translate(' + (nl - st.l) + 'px,' + (nt - st.t) + 'px)';
   });
   function end(e) {
     if (!st) { return; }
@@ -2471,9 +2474,17 @@ function makeDraggable(id) {
     if (moved) {
       el._dragged = true;                  // ★ 让点击处理知道"这是拖动"✓
       setTimeout(function () { el._dragged = false; }, 250);
+      /* ★ 松手：translate 换算回 left/top ✗ 再清掉 transform ✓
+         （必须同一个位置 ✗ 不能先清 transform 再设 left ✓ 会闪一下 ✓）*/
+      var nl = (st && st.nl !== undefined) ? st.nl : el.offsetLeft;
+      var nt = (st && st.nt !== undefined) ? st.nt : el.offsetTop;
+      el.style.transform = '';
+      el.style.left = nl + 'px';
+      el.style.top = nt + 'px';
+      el.style.right = 'auto';
+      el.style.bottom = 'auto';
       try {
-        var r = el.getBoundingClientRect();
-        localStorage.setItem(KEY, JSON.stringify({ l: Math.round(r.left), t: Math.round(r.top) }));
+        localStorage.setItem(KEY, JSON.stringify({ l: Math.round(nl), t: Math.round(nt) }));
       } catch (e3) { }
     }
   }
