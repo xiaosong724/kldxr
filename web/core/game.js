@@ -3271,6 +3271,9 @@ function wsApplyWorld(d) {
     var etxt = String(edv) + (e2.crit ? ' 暴击' : '') + (e2.block ? ' 格挡' : '') +
                (e2.back ? ' 背击' : '') + (e2.splash ? ' 溅射' : '');
     dmg(etxt, +e2.x, 2.4, +e2.z, !!e2.crit);
+    /* ★ round383（用户："暴击动画做成跳起来打"）
+       ★ 只是动画 ✗ 不真的跳（不影响移动/命中 ✓）*/
+    if (e2.crit) { _jumpAtkUntil = performance.now() + _jumpAtkDur; }
     /* ★ round340：僵尸被打中闪白（用户要求 ✓）环境伤害不闪 ✓ */
     if (!e2.env) {
       var _rm2 = NET.rmobs && NET.rmobs[e2.mid];
@@ -5113,6 +5116,8 @@ var AUTO_LOOT_R = 12.0;      /* 没怪时去捡东西的搜索半径 ✓ */
    ★ 0.30 秒 ≈ 0.9 米 ✗ 刚够离开僵尸的攻击距离 ✓ 又不会跑开太远 ✓
    ★ 不能压太狠：僵尸蓄力 0.45 秒 ✗ 没退出去会被打到 ✓
      → 0.28~0.32 是安全区间 ✓ */
+var _jumpAtkUntil = 0;      // ★ round383：暴击"跳起来打"的动画截止时刻
+var _jumpAtkDur = 400;      // 跳一下的时长（ms ✓）
 var _spinUntil = 0;         // ★ round381：锤子旋击的动画截止时刻
 var _spinDur = 560;         // 转一圈的时长（ms ✓）
 var _yawLockUntil = 0;      // 挥刀锁朝向的截止时刻（ms ✓）
@@ -5654,6 +5659,14 @@ function frame(ts) {
       if (_sp > 1) { _sp = 1; }
       H.g.rotation.y = P.yaw + Math.PI * 4 * _sp;   /* round382: 两圈 */
       if (H.shadow) { H.shadow.visible = true; }
+    }
+    /* ★ round383：暴击跳打 —— 叠一个竖直抛物线 ✓
+       ★ 和旋击可以同时生效 ✗ 转圈也能跳起来转 ✓ */
+    if (performance.now() < _jumpAtkUntil) {
+      var _jp = 1 - (_jumpAtkUntil - performance.now()) / _jumpAtkDur;
+      if (_jp < 0) { _jp = 0; }
+      if (_jp > 1) { _jp = 1; }
+      H.g.position.y += Math.sin(_jp * Math.PI) * 0.45;
     }
   }
   if (atkCd > 0) { atkCd -= dt; }

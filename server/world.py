@@ -4306,7 +4306,8 @@ class World(object):
             # ★ round381（用户："锤子触发了就转圈打整个一圈"）
             #   ★ 半径 2.2 米（≈ 锤的攻击距离）✗ 不看朝向 = 360° ✓
             #   ★ 主目标不重复算（它已经吃过 dv 了 ✓）
-            _r2 = 2.2 * 2.2
+            # ★ round383（用户："锤子转圈时攻击距离提升一倍"）
+            _r2 = 4.4 * 4.4
             self._send_cid(p.cid, P.pack('fx', kind='spin'))
             for o in list(self.mobs.values()):
                 if o is m or o.hp <= 0:
