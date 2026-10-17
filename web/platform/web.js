@@ -5152,8 +5152,12 @@ function wsOnMessage(raw) {
     /* ★ round381：锤子旋击 → 飘一个"旋击"并且开始转圈 ✓ */
     /* ★ round392：长棍横扫 → 棍子变长变大 + 飘字 */
     if (d.kind === 'staff') {
-      _staffUntil = performance.now() + 620;
+      /* ★ round393：触发时刻提前一点 ✗ 让"变大"发生在砸下去之前 ✓
+         （事件是命中瞬间到的，往前挪 120ms 相当于"起手就已经在变大了"）*/
+      _staffT0 = performance.now() - 120;
       _staffLen = +d.len || 4;
+      /* 峰值放大：4 米 → 2.8 倍 · 10 米 → 5.4 倍（用户要求"至少再长一倍"）*/
+      _staffPeak = 1 + Math.min(4.4, (_staffLen / 10) * 4.4);
       fxNum('横扫 ' + _staffLen.toFixed(0) + 'm', '#8ee0ff', P.x, 2.9, P.z);
       return;
     }
