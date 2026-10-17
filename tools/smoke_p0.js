@@ -139,6 +139,33 @@ const PW = 'abc123456';
   ].join(''));
   console.log('  跳跃: ' + jr);
 
+  // ★ 站到山上，攻击一次，看人物会不会掉到方块下面（用户报的 bug）
+  const atk = await ev([
+    'var best = null;',
+    'for (var gx = -60; gx <= 60; gx += 2) {',
+    '  for (var gz = -60; gz <= 60; gz += 2) {',
+    '    var h = terH(gx, gz);',
+    '    if (h >= 2 && (!best || h > best[2])) { best = [gx, gz, h]; }',
+    '  } }',
+    'P.x = (best[0] + 0.5) * TER.LEVEL_H; P.z = (best[1] + 0.5) * TER.LEVEL_H;',
+    'P.y = terYAt(P.x, P.z); P.air = false;',
+    'var before = P.y;',
+    'atkT = 0; atkCd = 0.1;',
+    'var lowest = 99;',
+    'for (var i = 0; i < 40; i++) {',
+    '  terrainV(1 / 30);',
+    '  if (typeof heroAtkPose === "function") {',
+    '    heroAtkPose(H, atkT, P.x, P.z, P.yaw, "sword", P.y);',
+    '  }',
+    '  if (H.g.position.y < lowest) { lowest = H.g.position.y; }',
+    '  atkT += 1 / 30;',
+    '}',
+    'return JSON.stringify({ groundY: Math.round(before * 1000) / 1000,',
+    '  lowestModelY: Math.round(lowest * 1000) / 1000,',
+    '  sank: lowest < before - 0.12 });',
+  ].join(''));
+  console.log('  山上攻击: ' + atk);
+
   // 截图
   const shot = await send('Page.captureScreenshot', { format: 'png' });
   if (shot && shot.result && shot.result.data) {

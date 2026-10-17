@@ -173,17 +173,40 @@ MAT_SWAMP = 'swamp'
 MAT_BRICK = 'brick'
 
 
+def vnoise(gx, gz, salt, period):
+    """成片的 value noise（波长 = period 格 ✓ 只用四则 ✓ 两边一致 ✓）
+
+    ★ 自测踩到：材质原来用 rand01（每格独立白噪声）✗
+      画出来是【一格绿一格褐】的噪点 ✗ 像马赛克不像草地 ✓
+      → 必须用【空间噪声】✗ 相邻格才会是同一个材质 ✓
+    """
+    fx = gx / period
+    fz = gz / period
+    ix = math.floor(fx)
+    iz = math.floor(fz)
+    sx = smoothstep(fx - ix)
+    sz = smoothstep(fz - iz)
+    v00 = rand01(ix, iz, salt)
+    v10 = rand01(ix + 1, iz, salt)
+    v01 = rand01(ix, iz + 1, salt)
+    v11 = rand01(ix + 1, iz + 1, salt)
+    a = v00 + (v10 - v00) * sx
+    b = v01 + (v11 - v01) * sx
+    return a + (b - a) * sz
+
+
 def material(gx, gz):
-    """材质：高处是石头，其它按噪声分草/土 ✓
+    """材质：高处是石头，其它按【成片】的噪声分草/土 ✓
 
     ★ 只影响颜色 ✗ 不影响高度 ✓（用户要的是"高低一样"✗ 不是"颜色一样"✓）
+    ★ 用 vnoise（波长 9 格）✗ 一片一片的 ✓ 不是一格一格的噪点 ✓
     """
     h = height(gx, gz)
     if h >= 4:
         return MAT_STONE
-    if h >= 2 and rand01(gx, gz, 43) < 0.45:
+    if h >= 2 and vnoise(gx, gz, 43, 5) > 0.55:
         return MAT_STONE
-    if rand01(gx, gz, 31) < 0.30:
+    if vnoise(gx, gz, 31, 9) > 0.62:
         return MAT_DIRT
     return MAT_GRASS
 

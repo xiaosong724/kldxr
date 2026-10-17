@@ -335,14 +335,25 @@ function terH(gx, gz) {
   _terHc[k] = v; _terHcN++;
   return v;
 }
+/* ★ 成片的 value noise（和 server/terrain.py 的 vnoise 逐位等价 ✓）
+   ★ 自测踩到：材质原来用 terRand01（每格独立白噪声）✗
+     画出来是【一格绿一格褐】的噪点 ✗ 像马赛克不像草地 ✓ */
+function terNoise(gx, gz, salt, period) {
+  var fx = gx / period, fz = gz / period;
+  var ix = Math.floor(fx), iz = Math.floor(fz);
+  var sx = terSmooth(fx - ix), sz = terSmooth(fz - iz);
+  var v00 = terRand01(ix, iz, salt), v10 = terRand01(ix + 1, iz, salt);
+  var v01 = terRand01(ix, iz + 1, salt), v11 = terRand01(ix + 1, iz + 1, salt);
+  return (v00 + (v10 - v00) * sx) + ((v01 + (v11 - v01) * sx) - (v00 + (v10 - v00) * sx)) * sz;
+}
 function terMat(gx, gz) {
   var k = _terKey(gx, gz);
   var v = _terMc[k];
   if (v !== undefined) { return v; }
   var h = terH(gx, gz);
   if (h >= 4) { v = 'stone'; }
-  else if (h >= 2 && terRand01(gx, gz, 43) < 0.45) { v = 'stone'; }
-  else if (terRand01(gx, gz, 31) < 0.30) { v = 'dirt'; }
+  else if (h >= 2 && terNoise(gx, gz, 43, 5) > 0.55) { v = 'stone'; }
+  else if (terNoise(gx, gz, 31, 9) > 0.62) { v = 'dirt'; }
   else { v = 'grass'; }
   _terMc[k] = v;
   return v;
@@ -356,13 +367,17 @@ function terYAt(wx, wz) {
   return terH(Math.floor(wx / TER.LEVEL_H), Math.floor(wz / TER.LEVEL_H)) * TER.LEVEL_H;
 }
 
+/* ★ 第 307 轮（用户："画面有点暗"）：整体提亮约 35%
+   ★ 为什么是"顶点色提亮"而不是"调环境光"：
+     地形用的是 MeshBasicMaterial（不吃光照 ✓）✗ 调灯没用 ✓
+     只能从顶点色走 ✓（这样也最省 ✓ 手机上零额外开销 ✓）*/
 var TER_COL = {
-  grass: [0.44, 0.50, 0.27],
-  dirt:  [0.48, 0.36, 0.23],
-  stone: [0.52, 0.51, 0.48],
-  ice:   [0.58, 0.78, 0.85],
-  swamp: [0.31, 0.36, 0.23],
-  brick: [0.54, 0.32, 0.24]
+  grass: [0.60, 0.68, 0.37],
+  dirt:  [0.65, 0.49, 0.31],
+  stone: [0.70, 0.69, 0.65],
+  ice:   [0.74, 0.90, 0.95],
+  swamp: [0.42, 0.48, 0.31],
+  brick: [0.70, 0.42, 0.31]
 };
 
 /* E 已搬到 platform/web.js */
@@ -808,7 +823,8 @@ var _terTiles = {}, _terTileN = 0;
 function _terColOf(mat, h, kv) {
   var c = TER_COL[mat] || TER_COL.grass;
   // 越高越亮（每层 +7.5% ✗ 只有 5 层 ✗ 不会发光 ✓）
-  var k = (1.0 + 0.075 * Math.max(0, h)) * kv;
+  // ★ 每升一层亮 11%（原来 7.5% ✗ 台阶层次不明显 ✓）
+  var k = (1.0 + 0.16 * Math.max(0, h)) * kv;
   return [c[0] * k, c[1] * k, c[2] * k];
 }
 
@@ -843,12 +859,20 @@ function buildTerrainTile(ti, tj) {
       var y01 = terGroundY(gx, gz, 0, 1);
 
       // 顶面：紧挨着更低处的格子压暗（假 AO ✗ 不用贴图就能看出"边缘"✓）
+      /* ★ 假 AO：挨着低处的那几边压暗 ✗ 顶面边缘就有"厚度感"✓
+         第 307 轮加强：每边 −0.09（原来 −0.10 但基准只有 1.0 ✗ 不明显 ✓）
+         四边都低 → 0.64 ✗ 一块地就被"框"出来了 ✓ */
       var ao = 1.0;
       var nH;
-      nH = terH(gx + 1, gz); if (nH < h - 0.30) { ao -= 0.10; }
-      nH = terH(gx - 1, gz); if (nH < h - 0.30) { ao -= 0.10; }
-      nH = terH(gx, gz + 1); if (nH < h - 0.30) { ao -= 0.10; }
-      nH = terH(gx, gz - 1); if (nH < h - 0.30) { ao -= 0.10; }
+      /* ★★ 第 307 轮（用户："方块立体感不够强"）：两种压暗一起做 ★★
+         ① 挨着【更低】的格子 → 这里是个边 ✗ 压一点 ✓（边缘感）
+         ② 挨着【更高】的格子 → 这里是悬崖脚下 ✗ 压更多 ✓（阴影感）
+         ★ ② 才是立体感的来源：有阴影就知道"那边高"✓
+         四个方向都被高墙围住 → 0.52 ✗ 那个坑一眼就看出是坑 ✓ */
+      nH = terH(gx + 1, gz); if (nH < h - 0.30) { ao -= 0.09; } else if (nH > h + 0.30) { ao -= 0.12; }
+      nH = terH(gx - 1, gz); if (nH < h - 0.30) { ao -= 0.09; } else if (nH > h + 0.30) { ao -= 0.12; }
+      nH = terH(gx, gz + 1); if (nH < h - 0.30) { ao -= 0.09; } else if (nH > h + 0.30) { ao -= 0.12; }
+      nH = terH(gx, gz - 1); if (nH < h - 0.30) { ao -= 0.09; } else if (nH > h + 0.30) { ao -= 0.12; }
       var ct = _terColOf(mat, h, ao);
       var uvT = [[x0 / GW, z0 / GW], [x1 / GW, z0 / GW], [x1 / GW, z1 / GW], [x0 / GW, z1 / GW]];
       pushQuad([[x0, y00, z0], [x1, y10, z0], [x1, y11, z1], [x0, y01, z1]],
@@ -874,8 +898,12 @@ function buildTerrainTile(ti, tj) {
         if (own - nb < 0.02) { continue; }     // 邻居不比这里低 → 不画 ✓
         var A = ed[e][5][0], B = ed[e][5][1];
         // ③ 上沿高光 / ② 接触阴影：上两点亮、下两点暗 ✓
-        var cTop = _terColOf(mat, h, 0.78);
-        var cBot = _terColOf(mat, h, 0.40);
+        /* ★ 第 307 轮（用户："方块立体感不够强"）：
+           上沿 0.92（亮 ✗ 像被天光照到）
+           底部 0.30（很暗 ✗ 像贴着地面的阴影）
+           → 一个侧面里上亮下暗 = 2.4 倍反差 ✓ 立体感主要靠这个 ✓ */
+        var cTop = _terColOf(mat, h, 0.92);
+        var cBot = _terColOf(mat, h, 0.30);
         /* ★ 侧面用一个【固定点】的 UV ✗ 不要拉伸 ✓
            自测踩到：原来写的是 [[0.5,0],[0.5,1],…] ✗ 等于沿贴图竖直方向
            拉一根线 ✗ 碰上贴图里的亮线 → 地面上出现一片白条纹 ✓
@@ -3656,7 +3684,7 @@ function netUpdate(dt) {
     // ★ 他的挥剑动画（抬剑 → 下砍 ✓ 和本地共用 heroAtkPose → 动作一模一样 ✓）
     if (o.atkT >= 0) {
       o.atkT += dt * ATK_ANIM_SPD;   // ★ 第 169 轮：他们的动画也一起加速 ✓（看着才一致 ✓）
-      if (!heroAtkPose(o.hh, o.atkT, px, pz, o.cur.yaw, o.wlook)) {
+      if (!heroAtkPose(o.hh, o.atkT, px, pz, o.cur.yaw, o.wlook, terYAt(px, pz))) {
         o.atkT = -1;
         heroAtkReset(o.hh, px, pz, o.cur.yaw);
       }
@@ -3953,7 +3981,14 @@ var ATK_T = {
 
 function atkArchOf(look) { return ATK_ARCH[look] || 'sweep'; }
 
-function heroAtkPose(heroObj, atkT, bx, bz, byaw, look) {
+function heroAtkPose(heroObj, atkT, bx, bz, byaw, look, baseY) {
+  /* ★★★ round307 修的真 bug（用户："玩家攻击的时候会穿模，会掉落到方块下面去"）★★★
+     根因：下面那句 `position.y = lp(10)` 用的是【关键帧里的绝对 Y】✗
+           而关键帧是按"站在 y=0 的平地上"调的 ✓
+           → 一按攻击 ✗ 高度被冲回 ≈0 ✗ 站在山上的玩家瞬间掉到方块下面 ✓
+     修：关键帧的 y 当成【相对地面的偏移】✗ 加上 baseY ✓
+     ★ 别的玩家也一样 ✗ 他们站在山上攻击时也会陷进去 ✓ 一起修了 ✓ */
+  if (baseY === undefined) { baseY = 0; }
   var arch = atkArchOf(look);
   var KF = ATK_KF[arch];
   var TT = ATK_T[arch];
@@ -3983,7 +4018,7 @@ function heroAtkPose(heroObj, atkT, bx, bz, byaw, look) {
   heroObj.legR.rotation.x = lp(8);
   heroObj.g.position.x = bx + Math.sin(byaw) * lp(9);
   heroObj.g.position.z = bz + Math.cos(byaw) * lp(9);
-  heroObj.g.position.y = lp(10);
+  heroObj.g.position.y = baseY + lp(10);
   /* ★★ 第 72 轮 用户报："拉弓的动作一点也不像，另一个手都没有拉弓的动作" ★★
      病根：关键帧表只有 armL.rotation.x 一个左手通道 ✗
            只绕 X 转 = 手在【身前上下抡】✗ 做不出"把弦拉到脸侧"这个动作 ✗
@@ -4412,7 +4447,7 @@ function frame(ts) {
        关节：右臂 X/Y/Z 三轴 + 肩部 + 重心 + 左手 + 双腿 */
     atkT += dt * ATK_ANIM_SPD;   // ★ 第 169 轮：动画快 20%（攻速不变 ✓）
     // ★ 直接调共用的挥剑动画（本地 / 别的玩家 同一套 → 动作一致 ✓）
-    if (!heroAtkPose(H, atkT, P.x, P.z, P.yaw, MY_WEAPON && MY_WEAPON.look)) {
+    if (!heroAtkPose(H, atkT, P.x, P.z, P.yaw, MY_WEAPON && MY_WEAPON.look, P.y)) {
       atkT = -1;
       heroAtkReset(H, P.x, P.z, P.yaw);
     }
