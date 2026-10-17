@@ -5150,6 +5150,13 @@ function wsOnMessage(raw) {
              → 玩家看到的就是【特效】两个字 ✗ 而不是加了多少经验 ✗
        修：直接加进 FX_C ✓（并且带上数字 ✓）*/
     /* ★ round381：锤子旋击 → 飘一个"旋击"并且开始转圈 ✓ */
+    /* ★ round392：长棍横扫 → 棍子变长变大 + 飘字 */
+    if (d.kind === 'staff') {
+      _staffUntil = performance.now() + 620;
+      _staffLen = +d.len || 4;
+      fxNum('横扫 ' + _staffLen.toFixed(0) + 'm', '#8ee0ff', P.x, 2.9, P.z);
+      return;
+    }
     if (d.kind === 'spin') {
       _spinUntil = performance.now() + _spinDur;
       fxNum('旋击', '#ffd83d', P.x, 2.9, P.z);

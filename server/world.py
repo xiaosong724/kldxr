@@ -4358,6 +4358,35 @@ class World(object):
                 m.stunT = fx['value']
                 m.stunImmune = weapons.STUN_IMMUNE
                 self._send_cid(p.cid, P.pack('fx', kind='stun', mid=m.mid))
+        elif nm == '横扫':
+            # ★ round392（用户："长棍触发时前方一条直线伤害并击退，按品阶延长"）
+            #   ★ "一条直线" = 前方夹角 20° 内（dot > 0.94）✗ 不是扇形 ✓
+            #   ★ 长度 = fx['value']（4~10 米 ✓ 由品阶决定 ✓）
+            _d = max(1.0, float(fx['value']))
+            _dxs = math.sin(p.yaw)
+            _dzs = math.cos(p.yaw)
+            self._send_cid(p.cid, P.pack('fx', kind='staff', len=round(_d, 1)))
+            for o in list(self.mobs.values()):
+                if o is m or o.hp <= 0:
+                    continue
+                _vx = o.x - p.x
+                _vz = o.z - p.z
+                _dist = (_vx * _vx + _vz * _vz) ** 0.5
+                if _dist > _d or _dist < 0.01:
+                    continue
+                if (_vx * _dxs + _vz * _dzs) / _dist < 0.94:
+                    continue
+                sdv = max(1, int(round(dv * 0.8)))
+                o.hp -= sdv
+                # ★ 击退：沿玩家朝向推 1.2 米 ✓
+                o.x += _dxs * 1.2
+                o.z += _dzs * 1.2
+                self._add_pend(p.cid, 'mhits', {'mid': o.mid, 'dmg': sdv, 'crit': False,
+                                                'splash': True, 'heal': 0,
+                                                'x': round(o.x, 2), 'z': round(o.z, 2)})
+                if o.hp <= 0:
+                    o.hp = 0
+                    self._mob_died(p, o)
         elif nm == '旋击':
             # ★ round381（用户："锤子触发了就转圈打整个一圈"）
             #   ★ 半径 2.2 米（≈ 锤的攻击距离）✗ 不看朝向 = 360° ✓

@@ -4962,7 +4962,7 @@ var KF_DRAW = [
 var ATK_ARCH = {
   axe: 'chop', hammer: 'chop',
   sword: 'stab2',                    // ★ round374：单手剑 = 快速前刺两下 ✓
-  saber: 'sweep', staff: 'sweep',
+  saber: 'sweep', staff: 'thrust',   // ★ round392：长棍改成往前打 ✓
   dagger: 'thrust', spear: 'thrust',
   bow: 'draw'                // ★ 第 70 轮：弓有自己的“拉弓”了 ✓
 };
@@ -5197,6 +5197,8 @@ var AUTO_LOOT_R = 12.0;      /* 没怪时去捡东西的搜索半径 ✓ */
    ★ 0.30 秒 ≈ 0.9 米 ✗ 刚够离开僵尸的攻击距离 ✓ 又不会跑开太远 ✓
    ★ 不能压太狠：僵尸蓄力 0.45 秒 ✗ 没退出去会被打到 ✓
      → 0.28~0.32 是安全区间 ✓ */
+var _staffUntil = 0;        // ★ round392：长棍横扫的动画截止时刻
+var _staffLen = 4;          // 这次横扫的长度（米 ✓ 按品阶来）
 var _jumpAtkUntil = 0;      // ★ round383：暴击"跳起来打"的动画截止时刻
 var _jumpAtkDur = 400;      // 跳一下的时长（ms ✓）
 var _spinUntil = 0;         // ★ round381：锤子旋击的动画截止时刻
@@ -5743,6 +5745,14 @@ function frame(ts) {
     }
     /* ★ round383：暴击跳打 —— 叠一个竖直抛物线 ✓
        ★ 和旋击可以同时生效 ✗ 转圈也能跳起来转 ✓ */
+    /* ★ round392：横扫时长棍【变长变大】✗ 长度按品阶（4~10 米）✓
+       ★ 只放大武器那个 Group ✗ 不动人物 ✓ */
+    if (performance.now() < _staffUntil && H.sw) {
+      var _sk = 1 + Math.min(1.6, (_staffLen / 10) * 1.6);
+      H.sw.scale.set(_sk, _sk, _sk);
+    } else if (H.sw && H.sw.scale.x !== 1) {
+      H.sw.scale.set(1, 1, 1);
+    }
     if (performance.now() < _jumpAtkUntil) {
       var _jp = 1 - (_jumpAtkUntil - performance.now()) / _jumpAtkDur;
       if (_jp < 0) { _jp = 0; }
