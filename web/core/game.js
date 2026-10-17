@@ -3331,6 +3331,12 @@ function netSync() {
     x: +P.x.toFixed(2),
     z: +P.z.toFixed(2),
     yaw: +P.yaw.toFixed(3),
+    /* ★ round330（用户："看不到其他玩家的跳跃动作"）
+       jy = 离地高度（跳起来 / 掉下去的那一段）✗ 别人的客户端拿它来还原动作 ✓
+       ★ 为什么发"离地高度"而不是绝对高度：
+         绝对高度每帧都在变（走上下坡）✗ 还要处理地形不一致 ✓
+         离地高度是 0 或一个周期内的弧 ✗ 语义干净 ✓ */
+    jy: +(P.y - (P.gy || 0)).toFixed(3),
     /* round286: 加上跨刷新不变的基准 ✗
        不再用纯的 performance.now()（刷新归零 ✗ 会毒化别人 ✓）*/
     t: +(NET_TIME_BASE + now).toFixed(3),
@@ -3408,7 +3414,13 @@ function addOther(w, t) {
       o.buf.length = 0;
       o.rtS = null;
       o.rtLast = undefined;
-      if (o.g) { o.g.position.set(w.x, 0, w.z); }
+      /* ★ round330：站在地形上 ✗ 不是 y=0（原来直接穿过山坡 ✓）*/
+      if (o.g) {
+        var _oy = (typeof terYAt === 'function') ? terYAt(w.x, w.z) : 0;
+        var _ojy = +w.jy || 0;
+        if (_ojy < 0) { _ojy = 0; }
+        o.g.position.set(w.x, _oy + _ojy, w.z);
+      }
       o.cur = { x: w.x, z: w.z, yaw: w.yaw || 0 };
       o.last = { x: w.x, z: w.z };
     } else {

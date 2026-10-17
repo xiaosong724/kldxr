@@ -196,7 +196,10 @@ class Player(object):
                  # round293: gold. Memory is authoritative (docs v3 section 1);
                  #   goldDirty = client has not seen it; goldLog = ring buffer.
                  'gold', 'goldDirty', 'goldLog',
-                 'moveT', 'moveBad', 'suspect')   # 第 173 轮：传送读条结束时刻（0 = 没在读条）      # ★ 第 168 轮（用户 #5）：离线宽限的时刻 ✓
+                 'moveT', 'moveBad', 'suspect',
+                 # ★ round330（用户："看不到其他玩家的跳跃动作"）
+                 #   jy = 离地高度（跳起来那一段 ✗ 0 = 站在地上 ✓）
+                 'jy')   # 第 173 轮：传送读条结束时刻（0 = 没在读条）      # ★ 第 168 轮（用户 #5）：离线宽限的时刻 ✓
 
     def __init__(self, cid, role):
         self.cid = cid
@@ -1031,6 +1034,16 @@ class World(object):
 
     def _handle_intent(self, p, t, d):
         if t == 'move':
+            # ★ round330：收下"离地高度"✗ 夹在 0..3 格（≈1.9 米）✓
+            try:
+                _jy = float(d.get('jy') or 0)
+            except Exception:
+                _jy = 0.0
+            if _jy < 0:
+                _jy = 0.0
+            elif _jy > 3.0:
+                _jy = 3.0
+            p.jy = _jy
             # ★★★ 第 227 轮：位移校验（反瞬移 / 反加速）★★★
             #   思路（照 Grim Anticheat）：服务器自己算"这么久最多能走多远"
             #   超出了就不采纳这次位置 ✓ 超得离谱还回推一个纠正 ✓
@@ -4432,6 +4445,8 @@ class World(object):
                 'x': round(o.x, 3),
                 'z': round(o.z, 3),
                 'y': round(o.yaw, 3),
+                # ★ round330：离地高度 ✗ 别人的客户端拿它还原跳跃动作 ✓
+                'jy': round(getattr(o, 'jy', 0.0) or 0.0, 3),
                 't': round(o.ct, 3),      # ★ 对方自己的钟 → 客户端做插值时间轴
                 'hp': o.hp,
                 # ★★★ 第 220 轮修的真 bug（用户自己发现的！）★★★
