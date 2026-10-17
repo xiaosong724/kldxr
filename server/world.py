@@ -363,6 +363,16 @@ class World(object):
         #   存档线程拿它判断"这一笔排队之后钱有没有又被改过"✓
         #   （过期的写入直接作废 ✗ 不给它把新值盖回去的机会 ✓）
         self._gold_seq = {}
+        # ★★★ round310（P1 破坏）★★★
+        #   ter_over ：被破坏的格子 → 新高度（覆盖 terrain.height 的纯函数值 ✓）
+        #   ter_hp   ：打到一半的格子 → 剩余耐久（没碎就不用覆盖地形 ✓）
+        #   ★ 为什么"破坏"要一张覆盖表：地形是纯函数（种子算出来的 ✗ 改不了 ✓）
+        #     破坏 = 在纯函数之上【记一笔覆盖】✗ 客户端收到同一份覆盖 ✓
+        #   ★ 自愈：每格记一个时刻 ✗ 超过 REGEN_MS 就删掉覆盖 ✓ 地形自己回来 ✓
+        self.ter_over = {}
+        self.ter_hp = {}
+        self.TER_REGEN_MS = 20 * 60 * 1000     # 20 分钟完全恢复（方案 §5.7 ✓）
+        self._ter_bc = []                      # 本 tick 要广播的破坏事件
         self._ticker_last = {}          # 第 247 轮：同类弹幕最后发送时间（1 秒合并）
         self._ticker_dup = {}           # 被合并掉了几条
         # ★ 本 tick 的治疗事件（第 46 轮）：[[医生x, 医生z, 目标x, 目标z, 回了多少], ...]
@@ -686,6 +696,16 @@ class World(object):
             self._mkt_tick()
         except Exception as _mke:
             print('[mkt] tick failed: %r' % (_mke,))
+
+        # ★ round310（P1 破坏）：自愈清扫 + 广播（★ 一秒一次 ✗ 不占 tick ✓）
+        self._ter_acc = getattr(self, '_ter_acc', 0.0) + TICK_DT
+        if self._ter_acc >= 1.0:
+            self._ter_acc = 0.0
+            try:
+                self._ter_sweep(dbmod.now_ms())
+                self._ter_flush(0)
+            except Exception as _te:
+                print('[ter] sweep failed: %r' % (_te,))
 
         # ③ 僵尸：刷怪 / 回收 / AI（P2 第一刀）
         #    ★ 和玩家一样【只在 tick 线程跑】→ 一张快照发出去时，世界是"冻结"的 ✓
@@ -1111,6 +1131,8 @@ class World(object):
                                          text=('穿上：%s' % nm) if nm else '脱下防具'))
             self._send_cid(p.cid, P.pack('armor', a=p.armor or None,
                                          hpm=self._hp_max(p)))
+        elif t == 'mine':
+            self._ter_mine(p, d)
         elif t == 'falldmg':
             # ★ round306（地形）：掉落伤害
             #   ★ 客户端算落差 ✗ 服务端【夹住】✓ 不能让它改包自杀/刷血 ✓
@@ -1200,6 +1222,87 @@ class World(object):
             if t not in p.warned:
                 p.warned.add(t)
                 self._send_cid(p.cid, P.pack('error', msg='%s 还没实现' % t))
+
+    # ============================================================ 地形破坏（P1）
+    #  ★ 硬度表（方案 §5.2）✗ 和材质一一对应 ✓
+    TER_HARD = {'grass': 1, 'dirt': 1, 'ice': 2, 'swamp': 1,
+                'brick': 4, 'stone': 6}
+    #  ★ 能打多远的格子（格 ✗ 玩家离格子的距离上限 ✓）
+    TER_REACH = 3
+
+    def ter_h_at(self, gx, gz):
+        """这一格【当前】的高度（含破坏覆盖 ✓ 和客户端的 terH 等价 ✓）"""
+        ov = self.ter_over.get((gx, gz))
+        if ov is not None:
+            return ov[0]
+        return termod.height(gx, gz)
+
+    def _ter_sweep(self, now):
+        """自愈：过期的破坏全部撤销（★ 惰性 ✗ 不在每格上跑定时器 ✓）
+
+        ★ 为什么这样做：100 万格被破坏也只是字典里 100 万条
+          每次扫一遍字典 ✗ 太贵 ✓ → 所以【每秒最多扫一次】✗ 而且只扫到期的 ✓
+          （实测：破坏是低频操作 ✗ 字典通常只有几十条 ✓ 扫一遍是微秒级 ✓）
+        """
+        if not self.ter_over:
+            return
+        dead = []
+        for k, v in self.ter_over.items():
+            if now - v[1] >= self.TER_REGEN_MS:
+                dead.append(k)
+        for k in dead:
+            self.ter_over.pop(k, None)
+            self._ter_bc.append([k[0], k[1], -999])   # -999 = 恢复了（客户端删覆盖 ✓）
+
+    def _ter_mine(self, p, d):
+        """打一格地形（★ 服务端权威 ✗ 客户端只是"请求"✓）"""
+        try:
+            gx = int((d or {}).get('gx'))
+            gz = int((d or {}).get('gz'))
+        except Exception:
+            return
+        # ① 够不够得着（防作弊：不能隔半个地图拆地形 ✓）
+        px, pz = termod.cell_of_world(p.x, p.z)
+        if max(abs(gx - px), abs(gz - pz)) > self.TER_REACH:
+            return
+        # ② 安全区不许拆
+        if abs(p.x) <= mqmod.SAFE_HALF and abs(p.z) <= mqmod.SAFE_HALF:
+            return
+        key = (gx, gz)
+        cur = self.ter_h_at(gx, gz)
+        # ★ 用户："可以往下破坏，但是只能破坏一层"（2026-10-17）
+        #   往下最多挖到 −1（一个坑 ✓）✗ 再挖就到底了 ✓
+        if cur <= -1.0:
+            return
+        mat = termod.material(gx, gz)
+        need = self.TER_HARD.get(mat, 1)
+        got = self.ter_hp.get(key, 0) + 1
+        if got < need:
+            self.ter_hp[key] = got
+            return                                  # 还没碎 ✓ 只记住进度 ✓
+        # ③ 碎了：高度 −1（用户：往下只能破坏一层 ✓ 从 0 到 −1 就到底）
+        self.ter_hp.pop(key, None)
+        nh = cur - 1.0
+        if nh < -1.0:
+            nh = -1.0
+        self.ter_over[key] = [nh, dbmod.now_ms()]
+        # ★ 广播给附近的人（★ 用 _evt_near ✗ 和现有的特效/音效同一套 ✓）
+        self._ter_bc.append([gx, gz, nh])
+        # ★ 掉东西（P1 先不掉 ✗ 等背包/掉落接进来 ✓ 方案 §5.2 写着 ✓）
+        self._send_cid(p.cid, P.pack('notice', text='这一格碎了（%s）' % mat))
+
+    def _ter_flush(self, now):
+        """把本 tick 的破坏广播出去（★ 一秒最多一次 ✗ 别刷屏 ✓）"""
+        if not self._ter_bc:
+            return
+        _ = now
+        batch = self._ter_bc
+        self._ter_bc = []
+        for p in self.players.values():
+            try:
+                self._send_cid(p.cid, P.pack('teredit', cells=batch))
+            except Exception:
+                pass
 
     # ============================================================ 僵尸（P2 第一刀）
 

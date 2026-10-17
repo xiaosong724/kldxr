@@ -5091,6 +5091,11 @@ function wsOnMessage(raw) {
     if ((SETCFG.setTab || '') === 'talent') { talRender(); }
     return;
   }
+  /* ★ round310（P1 破坏）：服务端说"这几格变了"→ 改覆盖 + 重建那几片瓦片 ✓ */
+  if (t === 'teredit') {
+    if (typeof terApplyEdits === 'function') { terApplyEdits(d && d.cells); }
+    return;
+  }
   if (t === 'armor') {
     BAG.armor = d.a || null;
     /* ★★★ 第 105 轮：这段我第 102 轮加过，但被后面的补丁冲掉了 ✗ 现在补回来 ★★★

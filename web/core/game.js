@@ -325,13 +325,21 @@ function terHillH(gx, gz) {
   return best;
 }
 
+/* ★ round310（P1 破坏）：被破坏的格子（服务端说了算 ✗ 客户端只存 ✓）
+   key -> 新高度 ✗ 收到 teredit 就更新 ✓ 同时清缓存 + 重建受影响的瓦片 ✓ */
+var terOver = {};
 function terH(gx, gz) {
   var k = _terKey(gx, gz);
   var v = _terHc[k];
   if (v !== undefined) { return v; }
-  v = terHillH(gx, gz);
-  if (v < 0) { v = 0; }
-  if (v > TER.MAX_H) { v = TER.MAX_H; }
+  var ov = terOver[k];
+  if (ov !== undefined) {
+    v = ov;
+  } else {
+    v = terHillH(gx, gz);
+    if (v < 0) { v = 0; }
+    if (v > TER.MAX_H) { v = TER.MAX_H; }
+  }
   if (_terHcN > 400000) { terHClear(); }
   _terHc[k] = v; _terHcN++;
   return v;
@@ -363,6 +371,35 @@ function terMat(gx, gz) {
 function terSlope(gx, gz) { return 0; }
 /* 格子内的地面 Y（世界单位 ✓）—— 没有斜坡，整格是平的 ✓ */
 function terGroundY(gx, gz, fx, fz) { return terH(gx, gz) * TER.LEVEL_H; }
+/* 裂纹进度（客户端本地记 ✗ 只为了"看得出还要几刀"✓ 服务端有自己的计数 ✓） */
+var terDmg = {};
+
+/* ★ 收到服务端的破坏广播：改覆盖 + 清缓存 + 只重建受影响的瓦片 ✓
+   ★ 为什么不全部重建：一片 16×16 格 ✗ 全重建要 20ms ✓ 只重建 1~4 片 ✓ */
+function terApplyEdits(cells) {
+  if (!cells || !cells.length) { return; }
+  var dirty = {};
+  for (var i = 0; i < cells.length; i++) {
+    var gx = cells[i][0], gz = cells[i][1], nh = cells[i][2];
+    var k = _terKey(gx, gz);
+    if (nh === -999) { delete terOver[k]; delete terDmg[k]; }
+    else { terOver[k] = nh; delete terDmg[k]; }
+    var ti = Math.floor(gx / TER.TILE), tj = Math.floor(gz / TER.TILE);
+    // 相邻瓦片也要重建（边上的格子会影响邻居的侧面 ✓）
+    for (var di = -1; di <= 1; di++) {
+      for (var dj = -1; dj <= 1; dj++) { dirty[(ti + di) + ',' + (tj + dj)] = 1; }
+    }
+  }
+  terHClear();
+  for (var key in dirty) {
+    if (!_terTiles[key]) { continue; }
+    scene.remove(_terTiles[key]);
+    if (_terTiles[key].geometry) { _terTiles[key].geometry.dispose(); }
+    delete _terTiles[key];
+    _terTileN--;
+  }
+}
+
 /* 世界坐标 → 地面 Y */
 function terYAt(wx, wz) {
   return terH(Math.floor(wx / TER.LEVEL_H), Math.floor(wz / TER.LEVEL_H)) * TER.LEVEL_H;
@@ -3796,14 +3833,21 @@ function netUpdate(dt) {
     if (rm.lastGY === undefined) { rm.lastGY = _mgy; }
     var _rise = _mgy - rm.lastGY;
     if (_rise > 0.05 && !rm.jumpT) {
-      rm.jumpT = 0.001;          // 开始跳（只在【往上走】时触发 ✗ 掉下来不跳 ✓）
+      /* ★★★ round310（用户："把妖兽的跳跃动画也做明显一点高一点"）★★★
+         上一版弧高只有 0.34 世界单位（≈ 半格）✗ 一跳就过去了 ✗ 根本看不出来 ✓
+         现在：基础 0.72 + 台阶高度 × 0.8
+              上一格台阶（0.62）→ 弧高 1.22 ≈ 2 格 ✓ 和玩家的观感一致 ✓
+         滞空也从 0.3 秒拉到 0.42 秒（看得清 ✗ 而且像"跳"不像"弹" ✓）
+         ★ 影子留在【地面】✗ 不跟着飞起来 ✓ 这样高度差一眼就看得出来 ✓ */
+      rm.jumpT = 0.001;
+      rm.jumpH = 0.72 + Math.min(_rise, TER.LEVEL_H) * 0.8;
     }
     var _jy = _mgy;
     if (rm.jumpT) {
       rm.jumpT += dt;
-      var _jt = rm.jumpT / 0.3;          // 0.3 秒一个来回 ✓
+      var _jt = rm.jumpT / 0.42;
       if (_jt >= 1) { rm.jumpT = 0; }
-      else { _jy += Math.sin(_jt * Math.PI) * 0.34; }   // 弧高 0.34（≈ 半格 ✓）
+      else { _jy += Math.sin(_jt * Math.PI) * (rm.jumpH || 1.2); }
     }
     rm.lastGY = _mgy;
     rm.g.position.set(rx, _jy, rz);
@@ -4519,6 +4563,20 @@ function frame(ts) {
   if (dead) { atkHeld = false; }   // ★ 倒下了不能挥剑 ✓
   if (atkHeld && atkCd <= 0 && atkT < 0 && !dead) {
     atkT = 0; atkCd = (G.ATK_CD || 0.62);
+    /* ★★★ round310（P1 破坏）：挥刀【先判地形】✗ 方案 §5.1 ✓
+       规则：正前方一格（1 格远 + 扇形内）有比脚下高的地形 → 打它 ✓
+       ★ 为什么先判地形：不然站在墙前面打僵尸 ✗ 墙永远拆不掉 ✓
+       ★ 客户端只是【发请求】✗ 服务端验距离/硬度/扣耐久 ✓ */
+    try {
+      var _agx = Math.floor(P.x / TER.LEVEL_H), _agz = Math.floor(P.z / TER.LEVEL_H);
+      var _fx = Math.floor((P.x + Math.sin(P.yaw) * TER.LEVEL_H * 1.2) / TER.LEVEL_H);
+      var _fz = Math.floor((P.z + Math.cos(P.yaw) * TER.LEVEL_H * 1.2) / TER.LEVEL_H);
+      var _curH = terH(_agx, _agz), _tgtH = terH(_fx, _fz);
+      if (_tgtH > _curH + 0.5) {
+        wsSend('mine', { gx: _fx, gz: _fz });
+        terDmg[_terKey(_fx, _fz)] = (terDmg[_terKey(_fx, _fz)] || 0) + 1;
+      }
+    } catch (e) { }
     NET.atkSeq++;        // ★ 告诉别人"我挥剑了"（下一包位置一起带过去 ✓）
     sfx('swing', 0.9);   // ★ MC 挥剑声（6 变体随机 ✓）   // 与动画(0.86s)配合 ✓ 连击流畅 ✓
     /* ★ 判定：只打【正前方扇形】里的目标（第 34 轮改的）
