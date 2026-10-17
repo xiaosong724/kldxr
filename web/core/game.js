@@ -3437,6 +3437,8 @@ function addOther(w, t) {
       o.last = { x: w.x, z: w.z };
     } else {
       netPush(o.buf, w.x, w.z, w.yaw || 0, w.ct);
+    o.tgtJy = Math.max(0, +w.jy || 0);   // ★ 跳跃偏移目标 ✓
+      o.tgtJy = Math.max(0, +w.jy || 0);   // ★ 跳跃偏移目标 ✓
     }
     return o;
   }
@@ -3495,6 +3497,7 @@ function addOther(w, t) {
     o.last = { x: w.x, z: w.z };
   } else {
     netPush(o.buf, w.x, w.z, w.yaw || 0, w.ct);
+    o.tgtJy = Math.max(0, +w.jy || 0);   // ★ 跳跃偏移目标 ✓
   }
   var moved = !lp || Math.abs(lp.x - w.x) > 0.002 || Math.abs(lp.z - w.z) > 0.002 ||
               Math.abs(lp.yaw - (w.yaw || 0)) > 0.002;
@@ -3517,6 +3520,7 @@ function addOther(w, t) {
   var _ct2 = (typeof w.ct === 'number' && w.ct > 0) ? w.ct : 0;
   if (_ct2 > 0 && (moved || !lp || _ct2 > lp.t + NET.rate * 0.5)) {
     netPush(o.buf, w.x, w.z, w.yaw || 0, _ct2);          // ★ 用他的钟排队 ✓
+    o.tgtJy = Math.max(0, +w.jy || 0);   // ★ 跳跃偏移目标 ✓
   }
   return o;
 }
@@ -5483,6 +5487,23 @@ function frame(ts) {
   sun.target.updateMatrixWorld();
   if (H.shadow) { H.shadow.position.set(P.x, P.y + 0.02, P.z); }
   if (H.boxDbg) { H.boxDbg.position.set(P.x, 0.1, P.z); }   // ★ 人物碰撞箱线框跟随 ✓
+
+  /* ★★★ round332（用户："还是看不其它玩家跳，站着陷进"）★★★
+     前两轮我在一个一个补"写位置"的地方 ✗ 补不全 ✓
+     改成【渲染前统一纠正】：扫一遍其他玩家 ✗
+     用他们最终渲染出的 x/z 算地形高度 ✗ 再叠跳跃偏移 ✓
+     → 前面有多少处写错了 y 都会被这里盖掉 ✓ */
+  if (NET.on && NET.others) {
+    for (var _fu in NET.others) {
+      var _fo = NET.others[_fu];
+      if (!_fo || !_fo.g || !_fo.g.visible) { continue; }
+      var _tj = _fo.tgtJy || 0;
+      _fo.jyS = (_fo.jyS === undefined) ? _tj
+                 : (_fo.jyS + (_tj - _fo.jyS) * Math.min(1, dt * 14));
+      var _gy = terYAt(_fo.g.position.x, _fo.g.position.z);
+      _fo.g.position.y = _gy + Math.max(0, _fo.jyS);
+    }
+  }
 
   rd.render(scene, cam);
 
