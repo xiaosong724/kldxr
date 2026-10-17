@@ -55,6 +55,7 @@ def main():
     bad_sl = []
     bad_gy = []
     bad_bio = []
+    bad_fl = []
     n = 0
     for k, v in client.items():
         gx, gz = [int(x) for x in k.split(',')]
@@ -73,6 +74,8 @@ def main():
             bad_gy.append((gx, gz, v[3], sg))
         if len(v) > 4 and T.biome(gx, gz) != v[4]:
             bad_bio.append((gx, gz, v[4], T.biome(gx, gz)))
+        if len(v) > 5 and T.fluid_of(gx, gz)[0] != v[5]:
+            bad_fl.append((gx, gz, v[5], T.fluid_of(gx, gz)[0]))
     print('   比对 %d 格' % n)
 
     print('== 3. 逐项核对 ==')
@@ -86,6 +89,8 @@ def main():
        % (len(bad_sl), ('例：' + repr(bad_sl[:3])) if bad_sl else ''))
     ok(not bad_bio, '地貌一致（不一致 %d 格）%s'
        % (len(bad_bio), ('例：' + repr(bad_bio[:3])) if bad_bio else ''))
+    ok(not bad_fl, '流体一致（不一致 %d 格）%s'
+       % (len(bad_fl), ('例：' + repr(bad_fl[:3])) if bad_fl else ''))
 
     print('== 4. 地形本身合不合理（不靠客户端 ✗ 纯服务端）==')
     hs = []

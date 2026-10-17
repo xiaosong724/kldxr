@@ -260,6 +260,43 @@ SLOPE_NONE = 0
 SLOPE_DIRS = ((1, 0), (-1, 0), (0, 1), (0, -1))
 
 
+# ---------------------------------------------------------------- 流体（F0 静水）
+
+F_NONE = 0      # 没有
+F_WATER = 1     # 清水
+F_SWAMP = 2     # 污水（沼泽 ✓ 腐蚀）
+F_LAVA = 3      # 地火（烫伤 ✓ 会发光）
+
+# ★ 每种流体的"深度"（占一格的多少 ✗ 0.55 = 到脚踝 ✓ 方案 §6.2）
+FLUID_DEPTH = {F_WATER: 0.85, F_SWAMP: 0.55, F_LAVA: 0.80}
+
+
+def fluid_of(gx, gz):
+    """这一格有什么流体 → (kind, depth) ✓ 纯函数 ✗ 两边各算一遍 ✓
+
+    ★ F0 只做【静止的流体】✗ 不会流动 ✓（流动是 F1 ✗ 要活跃集合 + 预算 ✓）
+      → 所以【零 tick 开销】✗ 和地形一样只是"算出来的"✓
+    ★ 只出现在【平地】上 ✗ 山上是没有水的 ✓
+    ★ 污水 = 整片沼泽 ✓ 地火 = 城区废墟里零星的几格（废弃工厂熔炉 ✓）
+    """
+    if height(gx, gz) > 0:
+        return (F_NONE, 0.0)
+    b = biome(gx, gz)
+    if b == B_SWAMP:
+        return (F_SWAMP, FLUID_DEPTH[F_SWAMP])
+    if b == B_RUIN and vnoise(gx, gz, 121, 9) > 0.855:
+        return (F_LAVA, FLUID_DEPTH[F_LAVA])
+    return (F_NONE, 0.0)
+
+
+def fluid_y(gx, gz):
+    """流体的表面高度（世界单位 Y ✗ 没流体返回 None ✓）"""
+    k, d = fluid_of(gx, gz)
+    if not k:
+        return None
+    return (height(gx, gz) + d) * LEVEL_H
+
+
 def slope_of(gx, gz):
     """★ 用户："不要斜坡了" ✗ 永远返回 0 ✓
 

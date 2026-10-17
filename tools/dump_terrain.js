@@ -71,7 +71,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     '  for (var gz = -R; gz <= R; gz += s) {' +
     '    out[gx + "," + gz] = [Math.round(terH(gx, gz) * 1e6) / 1e6,' +
     '      terMat(gx, gz), terSlope(gx, gz),' +
-    '      Math.round(terGroundY(gx, gz, 0.5, 0.5) * 1e6) / 1e6, terBiome(gx, gz)];' +
+    '      Math.round(terGroundY(gx, gz, 0.5, 0.5) * 1e6) / 1e6, terBiome(gx, gz), terFluid(gx, gz)];' +
     '  } }' +
     'return JSON.stringify(out);';
   const r = await ev(expr);

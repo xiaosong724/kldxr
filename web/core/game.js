@@ -367,6 +367,16 @@ function terBiome(gx, gz) {
   return 'wild';
 }
 
+/* ★★★ F0 静水（和 server/terrain.py 的 fluid_of 逐位等价 ✓）★★★ */
+var TER_F_DEPTH = { 2: 0.55, 3: 0.80 };
+function terFluid(gx, gz) {
+  if (terH(gx, gz) > 0) { return 0; }
+  var b = terBiome(gx, gz);
+  if (b === 'swamp') { return 2; }                     // 污水
+  if (b === 'ruin' && terNoise(gx, gz, 121, 9) > 0.855) { return 3; }  // 地火
+  return 0;
+}
+
 function terMat(gx, gz) {
   var k = _terKey(gx, gz);
   var v = _terMc[k];
@@ -591,7 +601,7 @@ function terApplyEdits(cells) {
     } else {
       // ★ 破坏成功：先炸碎块 ✗ 再改覆盖 ✓（顺序反了就取不到"碎之前"的高度了）
       terDebris(gx, gz, mat, terH(gx, gz));
-      if (typeof sfx === 'function') { sfx('break', 0.85); }
+      if (typeof sfx === 'function') { sfx('break', 0.95); }
       terOver[k] = nh; delete terDmg[k];
       // 把这格的裂纹收掉（已经碎了 ✗ 留着就穿帮 ✓）
       for (var ci = 0; ci < _crackPool.length; ci++) {
@@ -609,6 +619,10 @@ function terApplyEdits(cells) {
   for (var key in dirty) {
     if (!_terTiles[key]) { continue; }
     scene.remove(_terTiles[key]);
+    if (_terTiles[key]._fluid) {
+      scene.remove(_terTiles[key]._fluid);
+      if (_terTiles[key]._fluid.geometry) { _terTiles[key]._fluid.geometry.dispose(); }
+    }
     if (_terTiles[key].geometry) { _terTiles[key].geometry.dispose(); }
     delete _terTiles[key];
     _terTileN--;
@@ -660,6 +674,8 @@ var SFX_FILES = {
   zdeath: ['zdeath1.mp3'],
   /* ★ round313：破坏方块（用户提供 ✗ 立体声转成单声道 ✓ 136KB → 68KB）*/
   break: ['break1.mp3'],
+  /* ★ round314：落地（用户提供 ✗ 立体声转单声道 ✓）*/
+  land: ['land1.mp3'],
   zhurt: ['zhurt1.mp3', 'zhurt2.mp3'],
 };
 var SFX_FILES_OGG = {
@@ -673,6 +689,8 @@ var SFX_FILES_OGG = {
   zdeath: ['zdeath1.ogg'],
   /* ★ round313：破坏方块（用户提供 ✗ 立体声转成单声道 ✓ 136KB → 68KB）*/
   break: ['break1.ogg'],
+  /* ★ round314：落地（用户提供 ✗ 立体声转单声道 ✓）*/
+  land: ['land1.ogg'],
   zhurt: ['zhurt1.ogg', 'zhurt2.ogg'],
 };
 var SFX_FILES_WAV = {
@@ -686,6 +704,8 @@ var SFX_FILES_WAV = {
   zdeath: ['zdeath1.wav'],
   /* ★ round313：破坏方块（用户提供 ✗ 立体声转成单声道 ✓ 136KB → 68KB）*/
   break: ['break1.wav'],
+  /* ★ round314：落地（用户提供 ✗ 立体声转单声道 ✓）*/
+  land: ['land1.wav'],
   zhurt: ['zhurt1.wav', 'zhurt2.wav'],
 };
 
@@ -1090,6 +1110,7 @@ function _terColOf(mat, h, kv) {
 function buildTerrainTile(ti, tj) {
   var N = TER.TILE, LH = TER.LEVEL_H;
   var V = [], UV = [], C = [], I = [];
+  var FV = [], FC = [], FI = [];      // 流体（水/地火）
   var gx0 = ti * N, gz0 = tj * N;
   var GW = G.GRID_WORLD;   // 贴图比例沿用现在的地面（每 2 格一个小格 ✓）
 
@@ -1133,6 +1154,24 @@ function buildTerrainTile(ti, tj) {
       nH = terH(gx - 1, gz); if (nH < h - 0.30) { ao -= 0.09; edge = 1; } else if (nH > h + 0.30) { ao -= 0.12; edge = 1; }
       nH = terH(gx, gz + 1); if (nH < h - 0.30) { ao -= 0.09; edge = 1; } else if (nH > h + 0.30) { ao -= 0.12; edge = 1; }
       nH = terH(gx, gz - 1); if (nH < h - 0.30) { ao -= 0.09; edge = 1; } else if (nH > h + 0.30) { ao -= 0.12; edge = 1; }
+      /* ★ F0 流体：一格一个面（水位 = 地面 + 深度 ✓） */
+      var _fk = terFluid(gx, gz);
+      if (_fk) {
+        var _fy = (h + (TER_F_DEPTH[_fk] || 0.55)) * LH;
+        var _fc = (_fk === 3) ? [1.0, 0.42, 0.10] : [0.26, 0.60, 0.68];
+        // 地火略微动一下明暗（像在烧 ✗ 但只是顶点色 ✗ 零开销 ✓）
+        if (_fk === 3) {
+          var _flick = 1.0 + 0.18 * Math.sin(performance.now() / 180 + gx * 1.7 + gz * 2.3);
+          _fc = [_fc[0] * _flick, _fc[1] * _flick, _fc[2] * _flick];
+        }
+        var _ins = LH * 0.02;
+        var _fb = FV.length / 3;
+        FV.push(x0 + _ins, _fy, z0 + _ins, x1 - _ins, _fy, z0 + _ins,
+                x1 - _ins, _fy, z1 - _ins, x0 + _ins, _fy, z1 - _ins);
+        for (var _fi2 = 0; _fi2 < 4; _fi2++) { FC.push(_fc[0], _fc[1], _fc[2]); }
+        FI.push(_fb, _fb + 2, _fb + 1, _fb, _fb + 3, _fb + 2);
+      }
+
       var ct = _terColOf(mat, h, ao);
       var uvT = [[x0 / GW, z0 / GW], [x1 / GW, z0 / GW], [x1 / GW, z1 / GW], [x0 / GW, z1 / GW]];
       /* ★★★ round308（用户："方块的边框感再明显一点"）★★★
@@ -1211,7 +1250,31 @@ function buildTerrainTile(ti, tj) {
   mesh.receiveShadow = true;
   mesh.renderOrder = 1;
   scene.add(mesh);
+
+  /* ★ F0 流体层：和地形同一个循环里顺手收集 ✗ 不用再遍历一遍 ✓
+     ★ 为什么单独一个 mesh：水是【半透明】的 ✗ 和地形共用一个材质就全透了 ✓ */
+  if (FV.length) {
+    var fg = new THREE.BufferGeometry();
+    fg.setAttribute('position', new THREE.Float32BufferAttribute(FV, 3));
+    fg.setAttribute('color', new THREE.Float32BufferAttribute(FC, 3));
+    fg.setIndex(FI);
+    fg.computeBoundingSphere();
+    var fm = new THREE.Mesh(fg, fluidMaterial());
+    fm.renderOrder = 2;
+    scene.add(fm);
+    mesh._fluid = fm;
+  }
   return mesh;
+}
+
+/* 流体材质（★ 水半透明 ✗ 地火不透明且很亮 ✓）共用一份 ✗ 不每片新建 ✓ */
+var _fluidMat = null;
+function fluidMaterial() {
+  if (_fluidMat) { return _fluidMat; }
+  _fluidMat = new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.66,
+    depthWrite: false, side: THREE.DoubleSide });
+  return _fluidMat;
 }
 
 function refreshTerrain() {
@@ -1688,6 +1751,13 @@ function terrainV(dt) {
       P.air = false;
       P.vy = 0;
       P.jumping = false;
+      /* ★ 落地声（落差越大越响 ✗ 小跳也能听见 ✓）*/
+      if (typeof sfx === 'function') {
+        /* ★ round315（用户：落地声有点小，要拉满才听得见）：两个原因一起修 ——
+           ① 音频文件本身峰值只有 -4.5dB ✓ 已归一到 -0.4dB（和现有音效一致）
+           ② 这里音量给太低（0.45 起）✓ 抬到 0.85 起 ✓ */
+        sfx('land', Math.min(1.0, 0.85 + drop * 0.05));
+      }
       if (drop >= FALL_MIN && !dead) {
         var n = Math.floor(drop) - 2;              // 落差 3 → 1 格 ✓
         var dv = n * FALL_DMG;
@@ -1702,6 +1772,22 @@ function terrainV(dt) {
     }
   }
   P.gy = gy;
+
+  /* ★ F0 地火烫伤（方案 §6）：站在地火上每 0.5 秒掉一次 ✓
+     ★ 复用 falldmg 那条路 ✗ 不新增协议 ✓ 服务端照样会夹住 ✓ */
+  var _fkind = terFluid(Math.floor(P.x / TER.LEVEL_H), Math.floor(P.z / TER.LEVEL_H));
+  P.onLava = (_fkind === 3);
+  if (P.onLava && !P.air && !dead) {
+    P.lavaT = (P.lavaT || 0) - dt;
+    if (P.lavaT <= 0) {
+      P.lavaT = 0.5;
+      if (typeof dmg === 'function') { dmg('-5', P.x, P.y + 1.15, P.z, false); }
+      shake = 0.18;
+      wsSend('falldmg', { d: 5 });
+    }
+  } else {
+    P.lavaT = 0;
+  }
 }
 
 /* ============================================================

@@ -80,13 +80,14 @@ const PW = 'abc123456';
     'var bx = -320, bz = -320;',
     'for (var q = -260; q <= 260; q += 4) {',
     '  for (var w = -260; w <= 260; w += 4) {',
-    '    if (terBiome(q, w) === "ice") { bx = q; bz = w; }',
+    '    if (terFluid(q, w) === 2) { bx = q; bz = w; }',
     '  } }',
     'P.x = bx * TER.LEVEL_H; P.z = bz * TER.LEVEL_H;',
     'P.y = terYAt(P.x, P.z); P.air = false; P.gy = P.y;',
     'terHClear(); refreshTerrain();',
-    'return JSON.stringify({ ice: [bx, bz], biome: terBiome(bx, bz),',
-    '  mat: terMat(bx, bz), speed: TER_BIO_SPEED[terBiome(bx, bz)] });',
+    'return JSON.stringify({ cell: [bx, bz], biome: terBiome(bx, bz),',
+    '  mat: terMat(bx, bz), fluid: terFluid(bx, bz),',
+    '  speed: TER_BIO_SPEED[terBiome(bx, bz)] });',
   ].join(''));
   console.log('  地貌: ' + _ice);
   await sleep(1800);
