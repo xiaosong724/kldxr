@@ -2429,7 +2429,7 @@ function makeDraggable(id) {
   if (!el || el._dragInit) { return; }
   el._dragInit = true;
   var KEY = 'uiPos_' + id;
-  // ★ 先恢复上次的位置（用 left/top 定位 ✗ 覆盖掉 right/bottom ✓）
+  // ★ 先恢复上次的位置
   try {
     var saved = JSON.parse(localStorage.getItem(KEY) || 'null');
     if (saved && typeof saved.l === 'number') {
@@ -2439,61 +2439,68 @@ function makeDraggable(id) {
       el.style.bottom = 'auto';
     }
   } catch (e) { }
-  var st = null;
+  /* ★★★ round357 修的真 bug（用户："点了键位按钮后无法拖动"）★★★
+     ★ 根因：原来 pointermove / pointerup 绑在【元素自己】身上 ✗
+       而 pointerdown 里调了 setPointerCapture ✗
+       一旦 capture 没成功（或浏览器把它转给了别人）✗
+       后续 move 事件就不会派发到这个元素 ✓ → 一条都收不到 ✓
+     ★ 改成：【document 上监听】✗ 不管你拖到哪儿都收得到 ✓
+       这也是拖拽最稳的写法 ✓ 元素被重建也不会丢 ✓ */
   el.addEventListener('pointerdown', function (e) {
     if (e && e.preventDefault) { e.preventDefault(); }
     var r = el.getBoundingClientRect();
-    st = { x: e.clientX, y: e.clientY, l: r.left, t: r.top, moved: false, id: e.pointerId };
-    try { el.setPointerCapture(e.pointerId); } catch (e2) { }
+    _dragSt = { el: el, key: KEY, x: e.clientX, y: e.clientY,
+                l: r.left, t: r.top, moved: false, nl: r.left, nt: r.top };
   });
-  el.addEventListener('pointermove', function (e) {
+}
+/* 全局拖拽状态（一次只拖一个 ✓）*/
+var _dragSt = null;
+(function dragDocHandlers() {
+  if (window._dragDocBound) { return; }
+  window._dragDocBound = true;
+  document.addEventListener('pointermove', function (e) {
+    var st = _dragSt;
     if (!st) { return; }
     var dx = e.clientX - st.x, dy = e.clientY - st.y;
     if (!st.moved) {
-      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) { return; }   // ★ 还没到阈值 ✓
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) { return; }
       st.moved = true;
-      el.classList.add('uiDrag');
+      st.el.classList.add('uiDrag');
     }
-    /* ★★★ round354（用户："攻击键拖起来非常流畅，另两个参考改一下"）★★★
-       ★ 关键差别：原来每帧改 left/top ✗ 会触发【布局重排】✗ 慢且抖 ✓
-       ★ 改成 translate() ✗ 只走合成层 ✗ GPU 直接搬 ✗ 和攻击键一样顺 ✓
-         （攻击键本身也是在拖，但它是大按钮，重排代价相对小 ✓
-           小按钮 + :active 缩放/呼吸动画 → 抖得更明显 ✓）
-       ★ 松手时才把 translate 换算回 left/top 存起来 ✓ */
-    var w = el.offsetWidth, h = el.offsetHeight;
+    var w = st.el.offsetWidth, h = st.el.offsetHeight;
     var nl = Math.max(0, Math.min(window.innerWidth - w, st.l + dx));
     var nt = Math.max(0, Math.min(window.innerHeight - h, st.t + dy));
     st.nl = nl; st.nt = nt;
-    el.style.transform = 'translate(' + (nl - st.l) + 'px,' + (nt - st.t) + 'px)';
-  });
-  function end(e) {
+    st.el.style.transform = 'translate(' + (nl - st.l) + 'px,' + (nt - st.t) + 'px)';
+  }, { passive: false });
+  document.addEventListener('pointerup', function () {
+    var st = _dragSt;
     if (!st) { return; }
-    var moved = st.moved;
-    st = null;
-    el.classList.remove('uiDrag');
-    if (moved) {
-      el._dragged = true;                  // ★ 让点击处理知道"这是拖动"✓
-      setTimeout(function () { el._dragged = false; }, 250);
-      /* ★ 松手：translate 换算回 left/top ✗ 再清掉 transform ✓
-         （必须同一个位置 ✗ 不能先清 transform 再设 left ✓ 会闪一下 ✓）*/
-      var nl = (st && st.nl !== undefined) ? st.nl : el.offsetLeft;
-      var nt = (st && st.nt !== undefined) ? st.nt : el.offsetTop;
-      el.style.transform = '';
-      el.style.left = nl + 'px';
-      el.style.top = nt + 'px';
-      el.style.right = 'auto';
-      el.style.bottom = 'auto';
-      try {
-        localStorage.setItem(KEY, JSON.stringify({ l: Math.round(nl), t: Math.round(nt) }));
-      } catch (e3) { }
-    }
-  }
-  el.addEventListener('pointerup', end);
-  el.addEventListener('pointercancel', end);
-}
+    _dragSt = null;
+    st.el.classList.remove('uiDrag');
+    if (!st.moved) { return; }
+    st.el._dragged = true;
+    setTimeout(function () { st.el._dragged = false; }, 250);
+    var nl = st.nl, nt = st.nt;
+    st.el.style.transform = '';
+    st.el.style.left = nl + 'px';
+    st.el.style.top = nt + 'px';
+    st.el.style.right = 'auto';
+    st.el.style.bottom = 'auto';
+    try {
+      localStorage.setItem(st.key, JSON.stringify({ l: Math.round(nl), t: Math.round(nt) }));
+    } catch (e3) { }
+  });
+  document.addEventListener('pointercancel', function () {
+    if (!_dragSt) { return; }
+    _dragSt.el.classList.remove('uiDrag');
+    _dragSt = null;
+  });
+})();
+
 /* ★★★ round355（用户："键位按钮：点一下进入调整，再点保存；调整时三个键不能用"）★★★
-   ★ 为什么调整时要禁用功能：三点
-     ① 拖跳跃键会顺手跳一下 ✗ 位置还没定就先跳了 ✓
+   ★ 为什么调整时要禁用功能：
+     ① 拖跳跃键会顺手跳一下 ✗
      ② 拖攻击键会一直挥刀 ✗ 还可能打到怪 ✓
      ③ 拖自动键会开关自动战斗 ✗ 越调越乱 ✓ */
 var UI_EDIT = false;
@@ -2509,8 +2516,6 @@ function uiEditToggle() {
     try { atkHeld = false; } catch (e) { }
     try { jumpHeld = 0; } catch (e2) { }
   }
-  /* ★ 提示用【按钮自己的文字】表达 ✗ 不依赖别的提示组件 ✓
-     （这里原来写了个 notice() ✗ 项目里没有这个函数 ✗ 被自由变量闸门抓到了 ✓）*/
 }
 function uiEditBind() {
   var b = document.getElementById('uiEdit');

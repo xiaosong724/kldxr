@@ -121,6 +121,13 @@
  #auto.on .aic{color:#b8f0c8}
  @keyframes autoPulse{0%,100%{opacity:1}50%{opacity:.72}}
  /* ★ 拖动中：浮起来 ✓ 给点反馈 ✓ */
+ /* ★ round358（用户："除了攻击键，其它按钮都有蓝色透明框"）
+    ★ 统一去掉：点击高亮 + 焦点框 ✗ 四个键表现一致 ✓
+      （移动端长按/点击时浏览器会画一层半透明高亮 ✗
+        有的浏览器是蓝色 ✗ 看着就是"蓝框" ✓）*/
+ #atk,#jmp,#auto,#uiEdit,#setBtn{
+   -webkit-tap-highlight-color:transparent;outline:none}
+ #atk:focus,#jmp:focus,#auto:focus,#uiEdit:focus,#setBtn:focus{outline:none}
  .uiDrag{outline:2px dashed #ffd83d99;outline-offset:4px;
    transform:none!important;animation:none!important;transition:none!important}
 /* ★★ 第 233 轮（用户要求）：损坏的装备要有明显样式 ★★
