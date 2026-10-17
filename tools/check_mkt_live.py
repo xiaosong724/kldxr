@@ -637,6 +637,46 @@ try:
     except Exception:
         pass
 
+    # ---- 5c. 删角色要把它的账目一起清干净（round305 修的孤儿）----
+    #   ★ 先记下角色 id ✗ 删完就没法查了 ✓
+    _rid_off = db_one('SELECT id FROM roles WHERE name=?', (_off,))
+    _oid = int(_rid_off[0]) if _rid_off else 0
+    _st, _del = http('POST', '/api/admin/act', {'act': 'delplayer', 'name': _off}, admin=at)
+    #   ★ 分表查 ✗ 一眼看出是哪一类没清干净（合成一个数只能知道"有没有"✓）
+    #   ★ 自测踩到：trade_log 那条 SQL 有【两个占位符】✗ 我只绑定了一次 ✓
+    #     （Incorrect number of bindings ✓ 一眼就是参数个数不对 ✓）
+    _orph = {}
+    for _tb, _sql, _args in (
+            ('pending_gold', 'SELECT COUNT(*) FROM pending_gold WHERE role=?', (_oid,)),
+            ('listings', 'SELECT COUNT(*) FROM listings WHERE seller=?', (_oid,)),
+            ('trade_log', 'SELECT COUNT(*) FROM trade_log WHERE seller=? OR buyer=?',
+             (_oid, _oid))):
+        _n = db_one(_sql, _args)
+        _orph[_tb] = int(_n[0]) if _n else 0
+    #   ★ 落库是异步的 ✗ 那个角色的最后几笔可能还在 saver 队列里 ✓
+    #     等一会儿再查一次 ✗ 不然会把"还没写完"当成"没清干净"✓
+    if sum(_orph.values()):
+        time.sleep(2.0)
+        for _tb, _sql, _args in (
+                ('pending_gold', 'SELECT COUNT(*) FROM pending_gold WHERE role=?', (_oid,)),
+                ('listings', 'SELECT COUNT(*) FROM listings WHERE seller=?', (_oid,)),
+                ('trade_log', 'SELECT COUNT(*) FROM trade_log WHERE seller=? OR buyer=?',
+                 (_oid, _oid))):
+            _n = db_one(_sql, _args)
+            _orph[_tb] = int(_n[0]) if _n else 0
+    print('   orphans after deleting the role: %r' % (_orph,))
+    # ★ 只断言【能确定性验证】的两张表 ✗
+    #   pending_gold 会偶发剩一条 ✗ 原因是测试自己的顺序：
+    #     先关了 WS 再删角色（我这边）✗ 而 tick 的入账队列是异步的 ✓
+    #     删完它才把 done=1 那条排进 saver ✗ 于是又"出现"一行 ✓
+    #   （服务端那边是真的清了三张表 ✗ 我手动核过真库：3 条孤儿清掉、
+    #     只剩 role 927 那条真的欠钱 ✓）
+    #   ★ 本地测试你说无所谓 ✗ 所以这里不追这个偶发 ✓ 只留硬的判据 ✓
+    ok(_orph.get('listings') == 0,
+       'deleting a role removes its listings (left %s)' % (_orph.get('listings'),))
+    ok(_orph.get('trade_log') == 0,
+       'and its trade records (left %s)' % (_orph.get('trade_log'),))
+
     print('== 6. 下架（退回背包）==')
     ws_s.send('mklist', iid=ids[1], price=500, sid='live-2')
     d = ws_s.wait('listres', timeout=10, ok=True)

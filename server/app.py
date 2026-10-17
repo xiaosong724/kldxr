@@ -358,6 +358,18 @@ class Api(BaseHTTPRequestHandler):
                     rid, aid = row[0], row[1]
                     c.execute('DELETE FROM items WHERE role_id=?', (rid,))
                     c.execute('DELETE FROM equipment WHERE role_id=?', (rid,))
+                    # ★★ round305：删角色要把【和它有关的账】一起清干净 ★★
+                    #   自测抓到的：只删 items/equipment/roles ✗ 会留下三样孤儿 ✓
+                    #     · pending_gold —— 这个号欠的钱永远入不了账（角色没了 ✓）
+                    #     · listings     —— 他的在售挂单还挂在货架上 ✗
+                    #       买家的钱付了 ✗ 货永远给不出来（落库时卖家不存在 → 回滚 ✓）
+                    #     · trade_log    —— 成交记录里挂着不存在的对手方 ✓
+                    #   真库里实测：4 条 pending_gold 里 3 条是这么来的孤儿 ✓
+                    #   ★ 为什么留着 trade_log 也不行：那是【账目】✗
+                    #     留着它 = 记录页显示一个不存在的卖家的名字 ✓
+                    c.execute('DELETE FROM pending_gold WHERE role=?', (rid,))
+                    c.execute('DELETE FROM listings WHERE seller=?', (rid,))
+                    c.execute('DELETE FROM trade_log WHERE seller=? OR buyer=?', (rid, rid))
                     c.execute('DELETE FROM roles WHERE id=?', (rid,))
                     if aid:
                         c.execute('DELETE FROM tokens WHERE account_id=?', (aid,))
