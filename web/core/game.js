@@ -5442,7 +5442,25 @@ function frame(ts) {
        规则：正前方一格（1 格远 + 扇形内）有比脚下高的地形 → 打它 ✓
        ★ 为什么先判地形：不然站在墙前面打僵尸 ✗ 墙永远拆不掉 ✓
        ★ 客户端只是【发请求】✗ 服务端验距离/硬度/扣耐久 ✓ */
+    /* ★★★ round350（用户："旁边有树的时候，打怪会优先打到树"）★★★
+       ★ 原因：挥刀的判定顺序是【物件 → 地形 → 僵尸】✗ 物件排最前 ✓
+       ★ 修：先看"正前方有没有僵尸"✗ 有就整个跳过物件/地形 ✓
+         （僵尸是战斗目标 ✗ 树只是障碍物 ✓ 打怪时不该被抢）*/
+    var _mobNear = false;
     try {
+      var _ax = P.x + Math.sin(P.yaw) * TER.LEVEL_H * 0.95;
+      var _az = P.z + Math.cos(P.yaw) * TER.LEVEL_H * 0.95;
+      if (NET.rmobs) {
+        for (var _mk in NET.rmobs) {
+          var _mr = NET.rmobs[_mk];
+          if (!_mr || !_mr.cur || _mr.dead) { continue; }
+          var _mdx = _mr.cur.x - _ax, _mdz = _mr.cur.z - _az;
+          if (_mdx * _mdx + _mdz * _mdz < 1.21) { _mobNear = true; break; }
+        }
+      }
+    } catch (e0) { }
+    try {
+      if (_mobNear) { throw 'skip'; }        // ★ 有僵尸 → 直接去下面打它 ✓
       var _agx = Math.floor(P.x / TER.LEVEL_H), _agz = Math.floor(P.z / TER.LEVEL_H);
       var _fx = Math.floor((P.x + Math.sin(P.yaw) * TER.LEVEL_H * 1.5) / TER.LEVEL_H);
       var _fz = Math.floor((P.z + Math.cos(P.yaw) * TER.LEVEL_H * 1.5) / TER.LEVEL_H);

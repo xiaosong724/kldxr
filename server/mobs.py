@@ -243,7 +243,9 @@ class Mob(object):
                   #   根因就是这里 ✗ __slots__ 里没有 lavaT → 赋值直接抛异常 ✓
                   #   → tick 每帧在同一个地方崩 ✗ 僵尸逻辑整段不执行 ✓
                   #   ★ 教训：给 __slots__ 的类加属性 ✗ 必须两边一起改 ✓
-                  'lavaT' )
+                  'lavaT',
+                  # ★ round350：逃跑音效只播一次的标记
+                  'fleeSnd' )
 
     def __init__(self, mid, lv, x, z, kind=None):
         # ★ 第 132 轮：硬配额 —— 这只僵尸是【替谁刷的】✓
@@ -251,6 +253,7 @@ class Mob(object):
         self.owner = None
         self.awarded = False    # 第 217 轮：结算标记（只给一次经验）
         self.lavaT = 0.0        # ★ round322：地火烫伤的计时
+        self.fleeSnd = False    # ★ round350：逃跑音效播过没有
         self.mid = str(mid)
         self.kind = kind or random.choice(KINDS)
         self.lv = int(lv)

@@ -1793,11 +1793,16 @@ class World(object):
                     m.fleeT = mobs.FLEE_TIME
                     # ★ round348（用户："外卖僵尸逃跑时播放逃跑音效"）
                     #   只发给 30 格内的人 ✓ 太远听不到也没意义 ✓
-                    for _pf in self.players.values():
-                        _dxf = m.x - _pf.x
-                        _dzf = m.z - _pf.z
-                        if _dxf * _dxf + _dzf * _dzf <= 900:
-                            self._add_pend(_pf.cid, 'flee', {'mid': m.mid})
+                    # ★ round350（用户："旁边还有一个满血外卖僵尸，打一下就会播放一次"）
+                    #   根因：fleeT 减到 0 之后条件又成立 ✗ 每 2.5 秒重播一次 ✓
+                    #   修：一只僵尸【只播一次】（fleeSnd 标记 ✓ __slots__ 里加了 ✓）
+                    if not m.fleeSnd:
+                        m.fleeSnd = True
+                        for _pf in self.players.values():
+                            _dxf = m.x - _pf.x
+                            _dzf = m.z - _pf.z
+                            if _dxf * _dxf + _dzf * _dzf <= 900:
+                                self._add_pend(_pf.cid, 'flee', {'mid': m.mid})
                 if m.fleeT > 0:
                     m.fleeT -= dt
                     m.yaw = math.atan2(m.x - near.x, m.z - near.z)   # 背对着人 ✓
@@ -1883,6 +1888,27 @@ class World(object):
                 self.heals.append([round(doc.x, 2), round(doc.z, 2),
                                    round(m.x, 2), round(m.z, 2), real])
 
+    def _mob_blocked(self, x, z, hw):
+        """僵尸的碰撞（★ round350：砍掉的物件不该再挡僵尸 ✓）
+
+        ★ 自测踩到：用户报"我破坏掉的东西碰撞箱还在，僵尸过不来"
+          —— 客户端那边我修过 propSolids ✗ 但僵尸的碰撞是【服务端】算的 ✓
+          服务端只问 worldgen.blocked ✗ 它不知道 prop_dead ✓
+        """
+        if not worldgen.blocked(x, z, hw, hw):
+            return False
+        # ★ 挡住的东西如果是【已经砍掉】的物件 → 放行 ✓
+        try:
+            cx, cz = termod.cell_of_world(x, z)
+            if (cx, cz) in self.prop_dead:
+                return False
+            k = worldgen.kind_of_cell(cx, cz)
+            if k is None:
+                return False
+        except Exception:
+            pass
+        return True
+
     def _move_mob(self, m, dx, dz):
         """僵尸移动 —— ★ 会被建筑挡住（第 41 轮，用户要求"僵尸不应该穿墙"）
 
@@ -1927,13 +1953,13 @@ class World(object):
             dz *= _bsp
         _cur = termod.height(*termod.cell_of_world(m.x, m.z))
         nx = m.x + dx
-        if not worldgen.blocked(nx, m.z, hw, hw):
+        if not self._mob_blocked(nx, m.z, hw):
             _nh = termod.height(*termod.cell_of_world(nx, m.z))
             if _nh - _cur <= termod.STEP_JUMP:
                 m.x = nx
                 _cur = _nh
         nz = m.z + dz
-        if not worldgen.blocked(m.x, nz, hw, hw):
+        if not self._mob_blocked(m.x, nz, hw):
             _nh2 = termod.height(*termod.cell_of_world(m.x, nz))
             if _nh2 - _cur <= termod.STEP_JUMP:
                 m.z = nz
