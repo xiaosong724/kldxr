@@ -76,7 +76,23 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   ].join(''));
   console.log('  样式: ' + styles);
 
-  // ② 进入键位模式，然后用真实的 pointer 事件拖跳跃键
+  // ② 先测"没进键位模式时不该能拖"
+  const dragOff = await ev([
+    'if (typeof UI_EDIT !== "undefined" && UI_EDIT) { uiEditToggle(); }',
+    'var e = document.getElementById("jmp");',
+    'var r0 = e.getBoundingClientRect();',
+    'function pd(t, x, y) { e.dispatchEvent(new PointerEvent(t, {bubbles:true, cancelable:true,',
+    '  pointerId: 9, clientX: x, clientY: y, pointerType: "mouse", isPrimary: true})); }',
+    'pd("pointerdown", r0.left + 10, r0.top + 10);',
+    'pd("pointermove", r0.left + 90, r0.top + 70);',
+    'pd("pointerup", r0.left + 90, r0.top + 70);',
+    'var r1 = e.getBoundingClientRect();',
+    'return JSON.stringify({ edit: UI_EDIT,',
+    '  moved: Math.round(r1.left - r0.left) + "," + Math.round(r1.top - r0.top) });',
+  ].join(''));
+  console.log('  拖动(普通模式): ' + dragOff);
+
+  // ③ 进入键位模式，然后用真实的 pointer 事件拖跳跃键
   const drag = await ev([
     'if (typeof uiEditToggle === "function" && !UI_EDIT) { uiEditToggle(); }',
     'var e = document.getElementById("jmp");',

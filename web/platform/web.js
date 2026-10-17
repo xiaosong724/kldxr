@@ -2447,6 +2447,11 @@ function makeDraggable(id) {
      ★ 改成：【document 上监听】✗ 不管你拖到哪儿都收得到 ✓
        这也是拖拽最稳的写法 ✓ 元素被重建也不会丢 ✓ */
   el.addEventListener('pointerdown', function (e) {
+    /* ★★★ round359（用户："现在不管点不点键位都能拖，应该只在键位模式下能拖"）★★★
+       ★ 根因：拖动入口没判模式 ✗ 任何时候按下去都能拖 ✓
+       ★ 修：不在键位模式 → 直接 return ✗ 按钮走它本来的功能 ✓
+         （攻击键按住就砍 ✗ 跳跃键按下就跳 ✓ 和以前一样 ✓）*/
+    if (!UI_EDIT) { return; }
     if (e && e.preventDefault) { e.preventDefault(); }
     var r = el.getBoundingClientRect();
     _dragSt = { el: el, key: KEY, x: e.clientX, y: e.clientY,
@@ -2461,6 +2466,12 @@ var _dragSt = null;
   document.addEventListener('pointermove', function (e) {
     var st = _dragSt;
     if (!st) { return; }
+    if (!UI_EDIT) {                 // ★ 拖到一半退出键位模式 → 立刻停 ✓
+      st.el.classList.remove('uiDrag');
+      st.el.style.transform = '';
+      _dragSt = null;
+      return;
+    }
     var dx = e.clientX - st.x, dy = e.clientY - st.y;
     if (!st.moved) {
       if (Math.abs(dx) < 8 && Math.abs(dy) < 8) { return; }
