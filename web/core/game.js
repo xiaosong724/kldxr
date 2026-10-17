@@ -3242,6 +3242,16 @@ function wsApplyWorld(d) {
     healNum('+' + Math.round(+he2[4] || 0), +he2[2], 2.95, +he2[3]);
   }
 
+  /* ★★★ round349 修的真 bug（用户："没有听到逃跑音效"）★★★
+     根因：逃跑事件是走 _add_pend 发的 ✗ 它和 hurts/mhits 一样
+           混在【世界快照】里 ✗ 不是独立消息 ✓
+     而我写在了独立消息的分发器里 → 永远不会执行 ✓
+     修：在这里读 d.flee（和 hurts/mhits 同一个地方 ✓）*/
+  var fl = d.flee || [];
+  for (var _fi = 0; _fi < fl.length; _fi++) {
+    if (fl[_fi] && fl[_fi].mid) { fleePlay(fl[_fi].mid); }
+  }
+
   // ---- 打在我身上的伤害 ----
   var hs = d.hurts || [];
   for (var h = 0; h < hs.length; h++) { netApplyHurt(hs[h]); }

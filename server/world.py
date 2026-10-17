@@ -909,11 +909,16 @@ class World(object):
                 # round294: gold goes out with `me` (one extra int, no new message).
                 #   The client adopts it field-wise, so a missing value never zeroes it.
                 _me0['gold'] = int(getattr(p, 'gold', 0) or 0)
+                # ★★★ round349 修的真 bug（用户："没有听到逃跑音效"）★★★
+                #   根因：这里【只认 hurts / mhits】✗ 别的事件被静默丢掉 ✓
+                #         我加的 'flee' 走 _add_pend 上来 ✗ 到这里就被扔了 ✓
+                #   ★ 改成【通用拷贝】：除了 'me'（单独处理）其它 key 一律带上 ✓
+                #     以后再加事件（逃跑/播报/特效）不用改这里 ✓
                 if pend:
-                    if pend.get('hurts'):
-                        d['hurts'] = pend['hurts']
-                    if pend.get('mhits'):
-                        d['mhits'] = pend['mhits']
+                    for _pk, _pv in pend.items():
+                        if _pk == 'me' or not _pv:
+                            continue
+                        d[_pk] = _pv
                 if pend and pend.get('me'):
                     d['me'] = pend['me']          # 升级/涨经验了才带 ✓
                 # ★ 治疗事件（第 46 轮）：只发这个玩家看得见的（别把全图的都塞给他 ✗）
