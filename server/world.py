@@ -362,6 +362,8 @@ class World(object):
         self._spawn_acc = 0.0           # 刷怪节流
         self.pvp = False                # ★ PvP 总开关（服务器权威；客户端只是请求开/关 ✓）
         self._pend = {}                 # cid -> {'hurts': [...], 'mhits': [...], 'me': {...}}
+        # ★ round382：延迟结算（单手剑连刺的第二段 ✓ 看起来才像两下）
+        self._later = []                # [(到期时刻, cid, mid, 伤害)]
         # ★ round305：余额的"代号"（role_id -> 递增序号 ✗ 每改一次钱 +1 ✓）
         #   存档线程拿它判断"这一笔排队之后钱有没有又被改过"✓
         #   （过期的写入直接作废 ✗ 不给它把新值盖回去的机会 ✓）
@@ -861,6 +863,7 @@ class World(object):
             for pid in list(self.parties.keys()):
                 self._party_push(pid)        # ★ 每秒补推一次（血条要动 ✓）
         self._mob_tick(TICK_DT)
+        self._later_tick()
         self._arrow_tick(TICK_DT)   # ★ 第 69 轮：箭（要在僵尸移动之后算 ✓）
         self._loot_tick(TICK_DT)          # ★ 地上掉的也归 tick 线程管 ✓
         for p in self.players.values():
@@ -1681,6 +1684,30 @@ class World(object):
                 continue
             if a['life'] <= 0:
                 self.arrows.pop(str(a['id']), None)
+
+    def _later_tick(self):
+        """到点就结算的延迟伤害（★ round382：单手剑连刺第二段 ✓）"""
+        if not self._later:
+            return
+        _now = now_s()
+        _keep = []
+        for (due, cid, mid, dmg) in self._later:
+            if _now < due:
+                _keep.append((due, cid, mid, dmg))
+                continue
+            m = self.mobs.get(mid)
+            if not m or m.hp <= 0:
+                continue
+            m.hp -= dmg
+            self._add_pend(cid, 'mhits', {'mid': mid, 'dmg': dmg, 'crit': False,
+                                          'back': False, 'mb': None, 'heal': 0,
+                                          'x': round(m.x, 2), 'z': round(m.z, 2)})
+            if m.hp <= 0:
+                m.hp = 0
+                p2 = self.players.get(cid)
+                if p2:
+                    self._mob_died(p2, m)
+        self._later = _keep
 
     def _mob_tick(self, dt):
         """刷怪 / 回收 / 追击 / 咬人 —— ★ 只在 tick 线程里跑"""
@@ -4298,11 +4325,11 @@ class World(object):
             # ★ round379（用户："单手剑改成连刺，概率造成两次伤害"）
             #   ★ 触发时【再结算一次 dv】✗ 不是把 dv 翻倍 ✓
             #     （分开报两次 mhits ✗ 玩家能看到"两下"✓）
+            # ★ round382（用户："第二段伤害延迟一点，看着才像二段"）
+            #   ★ 原来两段同一帧结算 ✗ 数字叠在一起 ✗ 看着像一次大伤害 ✓
+            #   ★ 现在第二段延后 0.18 秒 ✗ 正好是动画里第二下刺出去的时刻 ✓
             extra = max(1, int(round(dv * fx['value'])))
-            m.hp -= extra
-            self._add_pend(p.cid, 'mhits', {'mid': m.mid, 'dmg': extra, 'crit': False,
-                                            'back': False, 'mb': None, 'heal': 0,
-                                            'x': round(m.x, 2), 'z': round(m.z, 2)})
+            self._later.append((now_s() + 0.18, p.cid, m.mid, extra))
             # ★ 不在这里判死 ✗ 交给调用方（它在本函数之后统一判 hp<=0 ✓）
         elif nm == '溅射':
             # ★★★ round378（用户："斧头溅射应该由品阶决定，最低 2 个，12 阶可以 13 个"）★★★

@@ -5652,7 +5652,7 @@ function frame(ts) {
       var _sp = 1 - (_spinUntil - performance.now()) / _spinDur;
       if (_sp < 0) { _sp = 0; }
       if (_sp > 1) { _sp = 1; }
-      H.g.rotation.y = P.yaw + Math.PI * 2 * _sp;
+      H.g.rotation.y = P.yaw + Math.PI * 4 * _sp;   /* round382: 两圈 */
       if (H.shadow) { H.shadow.visible = true; }
     }
   }
