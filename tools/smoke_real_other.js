@@ -70,6 +70,25 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     await sleep(450);
   }
 
+  // ★ 单元验证：服务器发来的 jy 能不能穿过【字段映射】到 tgtJy
+  const mapTest = await ev([
+    'wsApplyWorld({ ts: 0, players: [{ id: 99999, n: "T", x: 3, z: 3, y: 0,',
+    '  hp: 100, jy: 1.5, t: 1 }] });',
+    'var o = NET.others[99999];',
+    'return JSON.stringify({ tgtJy: o ? o.tgtJy : "无对象",',
+    '  y: (o && o.hh && o.hh.g) ? +o.hh.g.position.y.toFixed(2) : "?" });',
+  ].join(''));
+  console.log('  字段映射测试(jy=1.5): ' + mapTest);
+  await sleep(600);
+  const mapTest2 = await ev([
+    'var o = NET.others[99999];',
+    'return JSON.stringify({ y: o && o.hh ? +o.hh.g.position.y.toFixed(2) : "?",',
+    '  terrain: o && o.hh ? +terYAt(o.hh.g.position.x, o.hh.g.position.z).toFixed(2) : "?" });',
+  ].join(''));
+  console.log('  映射后位置: ' + mapTest2);
+  // ★ 位置验完就把它清掉（免得后面的读数被这个假玩家干扰）
+  await ev('removeOther(99999); return 1;');
+
   for (let round = 0; round < 3; round++) {
     const out = await ev([
       'var ks = Object.keys(NET.others || {});',

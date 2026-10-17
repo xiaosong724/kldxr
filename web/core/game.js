@@ -2855,6 +2855,13 @@ function wsApplyWorld(d) {
     addOther({
       uid: w.id, name: w.n, realm: '', lv: w.lv,
       x: w.x, z: w.z, yaw: w.y, hp: w.hp,
+      /* ★★★ round336 修的真 bug（跳跃动画始终不显示）★★★
+         这一层是【显式字段清单】✗ 服务器发的 jy 不在这里列出来就会被丢掉 ✓
+         → addOther 里 w.jy 永远 undefined → tgtJy 永远 0 → 人一动不动 ✓
+         ★ 旁边 hpm / mq 那两段注释记的就是同一个坑 ✗ 我这次又踩了第三次 ✓
+         ★ 教训：服务器加字段 → ①打包 dict ②这里映射 ③addOther ④渲染
+                 四层都要改 ✗ 少一层就静默失效 ✓ */
+      jy: Math.max(0, +w.jy || 0),
       /* ★★★ 第 221 轮修的真 bug（用户："我的血条在别的玩家那边没有按比例扣除，
              只有数字变化"）★★★
          这里原来写死 hpm: 0 ✗
