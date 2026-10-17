@@ -5500,12 +5500,20 @@ function frame(ts) {
   if (NET.on && NET.others) {
     for (var _fu in NET.others) {
       var _fo = NET.others[_fu];
-      if (!_fo || !_fo.g || !_fo.g.visible) { continue; }
+      if (!_fo) { continue; }
+      /* ★★★ round335 修的真 bug（三轮都白改的根因）★★★
+         真实玩家存的是 o.hh（模型对象）✗ 根本没有 o.g 这个字段 ✓
+         而我一直改的是 o.g.position ✗ 那些代码对真实玩家【从不执行】✓
+         → 我改了三轮死代码（用户："为什么僵尸不穿模，别的玩家不行"）
+         ★ 现在正确取对象：有 hh 用 hh.g ✗ 没有才退回 g ✓ */
+      var _mg = (_fo.hh && _fo.hh.g) ? _fo.hh.g : _fo.g;
+      if (!_mg || !_mg.visible) { continue; }
       var _tj = _fo.tgtJy || 0;
       _fo.jyS = (_fo.jyS === undefined) ? _tj
                  : (_fo.jyS + (_tj - _fo.jyS) * Math.min(1, dt * 14));
-      var _gy = terYAt(_fo.g.position.x, _fo.g.position.z);
-      _fo.g.position.y = _gy + Math.max(0, _fo.jyS);
+      if (!isFinite(_fo.jyS)) { _fo.jyS = _tj; }
+      var _gy = terYAt(_mg.position.x, _mg.position.z);
+      _mg.position.y = _gy + Math.max(0, _fo.jyS);
     }
   }
 

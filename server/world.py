@@ -1044,6 +1044,13 @@ class World(object):
             elif _jy > 3.0:
                 _jy = 3.0
             p.jy = _jy
+            # ★ 用 World 上的集合 ✗ 不能存在 Player 上（__slots__ 会报错 ✓）
+            if _jy > 0.2:
+                if not hasattr(self, '_jy_logged'):
+                    self._jy_logged = set()
+                if p.cid not in self._jy_logged:
+                    self._jy_logged.add(p.cid)
+                    print('[jy] %s 发来跳跃高度 %.2f（服务端收到了 ✓）' % (p.name, _jy))
             # ★★★ 第 227 轮：位移校验（反瞬移 / 反加速）★★★
             #   思路（照 Grim Anticheat）：服务器自己算"这么久最多能走多远"
             #   超出了就不采纳这次位置 ✓ 超得离谱还回推一个纠正 ✓
