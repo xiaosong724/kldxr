@@ -1694,9 +1694,16 @@ class World(object):
         ★ 40 米够了 ✗ 比视野略大 ✓ 再远也看不清 ✓
         """
         payload = dict(payload)
-        payload['by'] = p.cid          # ★ 客户端要按它找"是哪个玩家在放招"✓
+        # ★★★ round400 修的真 bug（用户："都没有"）★★★
+        #   ★ 原来发的是 p.cid（连接 id）✗
+        #     而客户端认玩家用的是【role_id】（NET.others 的 key ✓）
+        #     → 永远匹配不到 → 什么都不播 ✓
+        payload['by'] = p.role_id
         v2 = 40.0 * 40.0
+        _skip = payload.pop('_skip', None)
         for _q in self.players.values():
+            if _skip and _q.cid == _skip:
+                continue                 # ★ 攻击者自己有 mhits 了 ✗ 别重复弹 ✓
             if (_q.x - p.x) ** 2 + (_q.z - p.z) ** 2 <= v2:
                 try:
                     self._send_cid(_q.cid, P.pack('fx', **payload))
@@ -4360,6 +4367,13 @@ class World(object):
             #   ★ 暴击是 mhits 里的信息 ✗ 只发给我 ✓ → 额外广播一条 ✓
             if crit:
                 self._fx_broadcast(p, {'kind': 'crit'})
+            # ★ round400（用户："把别人打的伤害也显示出来"）
+            #   ★ mhits 只发给我 ✗ 别人看不到我在打多少 ✓ → 广播一条 ✓
+            #   ★ _skip = 我自己 ✗ 我已经有 mhits 了 ✓ 不重复弹数字 ✓
+            self._fx_broadcast(p, {'kind': 'dmg', 'v': int(dv),
+                                   'crit': 1 if crit else 0,
+                                   'x': round(m.x, 2), 'z': round(m.z, 2),
+                                   '_skip': p.cid})
             self._weapon_fx(p, m, _fxRun, dv)
 
             if m.hp <= 0:

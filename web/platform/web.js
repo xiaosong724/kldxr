@@ -5154,12 +5154,19 @@ function wsOnMessage(raw) {
     /* ★★★ round398（用户："这些动画要做同步，不然别人看不到"）★★★
        ★ 服务端现在会把特效广播给周围 ✗ 带上 by = 谁在放 ✓
        ★ 不是我就记到那个玩家身上 ✗ 渲染时按他的状态播 ✓ */
+    /* ★ round400：别人打的伤害 → 弹一个灰色数字 */
+    if (d.kind === 'dmg') {
+      var _dmgTxt = String(+d.v || 0) + (d.crit ? ' 暴击' : '');
+      dmg(_dmgTxt, +d.x, 2.4, +d.z, !!d.crit);
+      return;
+    }
     var _fxOp = d.by;
     var _fxMine = (_fxOp === undefined) || (_fxOp === null) ||
                   (typeof WSC !== 'undefined' && _fxOp === WSC.myId);
     if (!_fxMine) {
       var _ro = (NET.others && NET.others[_fxOp]) ? NET.others[_fxOp] : null;
       if (_ro) {
+        // ★ 记到那个玩家头上 ✓
         if (d.kind === 'saber') { _ro.multiN = Math.max(2, Math.min(13, +d.n || 2)); _ro.multiT0 = performance.now(); }
         if (d.kind === 'staff') { _ro.staffT0 = performance.now() - 120; _ro.staffLen = +d.len || 4; }
         if (d.kind === 'spin') { _ro.spinUntil = performance.now() + 560; }
