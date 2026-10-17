@@ -1966,12 +1966,18 @@ var ITEM_ICON = {
   batt:   ICON_SVG('<path d="M4 8h13v8H4z"/><path d="M19 11v2"/><path d="M7 10v4M10 10v4"/>'),
   glass:  ICON_SVG('<path d="M6 3l2 18M18 3l-2 18"/><path d="M7 9h10M6.6 15h10.8"/>'),
   band:   ICON_SVG('<path d="M4 14l10-10 6 6-10 10z"/><path d="M9 9l6 6M12 6l6 6"/>'),
-  box:    ICON_SVG('<path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M4 7l8 4 8-4M12 11v10"/>')
+  box:    ICON_SVG('<path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M4 7l8 4 8-4M12 11v10"/>'),
+  /* ★ round340（用户："石头和木材图标要看起来像对应的材料"）
+     三种建材的图标：原木（带年轮）/ 石头（多面块）/ 砖头（砌法）*/
+  wood:   ICON_SVG('<path d="M7 6h11a3 3 0 0 1 0 12H7"/><ellipse cx="7" cy="12" rx="3" ry="6"/><path d="M7 9a1.6 1.6 0 0 0 0 6M7 11a.9.9 0 0 0 0 2"/>'),
+  stone:  ICON_SVG('<path d="M6 8l5-4 7 2 2 7-4 6-7 1-4-5z"/><path d="M11 4l1 6 6-1M12 10l-3 4 5 1"/>'),
+  brick:  ICON_SVG('<path d="M3 6h18v12H3z"/><path d="M3 12h18M9 6v6M15 12v6M9 12v6M15 6v6"/>')
 };
 var MAT_ICON_BY_NAME = {
   '破布': 'cloth', '绷带': 'band', '锈铁': 'iron', '螺丝钉': 'gear', '生锈齿轮': 'gear',
   '碎玻璃': 'glass', '灵气结晶': 'crystal', '兽骨': 'bone', '电池': 'batt',
-  '疫苗': 'vial', '铜线卷': 'gear'
+  '疫苗': 'vial', '铜线卷': 'gear',
+  '木材': 'wood', '石块': 'stone', '砖头': 'brick'
 };
 /* ★★ 第 99 轮：用户从 6 个候选里选了【②带肩甲的盔甲样式】★★
    （预览页在 web/preview_armor.html ✓ 以后想换回来对照着挑 ✓）

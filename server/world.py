@@ -1451,7 +1451,11 @@ class World(object):
             self.loot_seq += 1
             self.loot[str(self.loot_seq)] = {
                 'x': _wx, 'z': _wz, 'ttl': drops.DROP_TTL,
-                'item': {'name': drop, 'tier': 0, 'kind': 'material'}}
+                # ★ round340（用户："这个也有做掉落的随机品阶吗"）
+                #   原来固定 0 阶 ✗ 现在随机 0~2 ✗ 10% 出 3 阶（稀有一点 ✓）
+                'item': {'name': drop,
+                         'tier': (3 if random.random() < 0.10 else random.randint(0, 2)),
+                         'kind': 'material'}}
             for _p4 in self.players.values():
                 _dx4 = _wx - _p4.x
                 _dz4 = _wz - _p4.z

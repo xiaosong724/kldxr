@@ -537,6 +537,50 @@ function terDebris(gx, gz, mat, baseH) {
   terDust(gx, gz, cy, col);
 }
 
+/* ★★★ round340（用户："方块和这些可以破坏的东西打中加个轻微闪白，僵尸也是"）
+   ★ 为什么用"命中点闪一下"而不是"改材质颜色"：
+     方块和物件是【按材质合并】的 ✗ 改一个材质的颜色会让整片一起白 ✓
+     而命中点闪白不碰材质 ✗ 只管一个独立的小面片 ✓ 开销几乎为零 ✓ */
+var _flashPool = [], _flash = [];
+function hitFlash(wx, wy, wz, big) {
+  if (!_flashPool.length) {
+    var fg = new THREE.PlaneGeometry(1, 1);
+    for (var i = 0; i < 10; i++) {
+      var mm = new THREE.Mesh(fg, new THREE.MeshBasicMaterial({
+        color: 0xffffff, transparent: true, opacity: 0, depthWrite: false,
+        depthTest: false, blending: THREE.AdditiveBlending }));
+      mm.visible = false;
+      mm.renderOrder = 20;
+      scene.add(mm);
+      _flashPool.push(mm);
+      _flash.push({ on: 0, t: 0 });
+    }
+  }
+  for (var j = 0; j < _flash.length; j++) {
+    if (_flash[j].on) { continue; }
+    var d = _flash[j], m = _flashPool[j];
+    d.on = 1; d.t = 0;
+    m.position.set(wx, wy + 0.35, wz);
+    m.scale.setScalar((big ? 0.9 : 0.62));
+    m.material.opacity = 0.55;
+    m.visible = true;
+    return;
+  }
+}
+function hitFlashTick(dt) {
+  for (var i = 0; i < _flash.length; i++) {
+    var d = _flash[i];
+    if (!d.on) { continue; }
+    d.t += dt;
+    var k = d.t / 0.14;
+    if (k >= 1) { d.on = 0; _flashPool[i].visible = false; continue; }
+    _flashPool[i].scale.setScalar(0.62 + k * 0.55);
+    _flashPool[i].material.opacity = 0.55 * (1 - k);
+    // ★ 面片永远朝相机（不然侧着看是一条线 ✓）
+    _flashPool[i].quaternion.copy(cam.quaternion);
+  }
+}
+
 /* ★ round316：沼泽涟漪（走在污水里溅一圈 ✗ 0.6 秒扩散消失 ✓）*/
 var _ripplePool = [], _ripple = [];
 function terRipple(wx, wz, wy) {
@@ -703,14 +747,10 @@ function propFallAnim(kind, gx, gz) {
       scene.remove(old0.g);
       old0.g.traverse(function (o) { if (o.geometry) { o.geometry.dispose(); } });
     }
-    window._fallN = (window._fallN || 0) + 1;   // ★ 累计次数（动画结束也不会归零 ✓）
     _falling.push({ g: grp, t: 0, life: 1.15,
                     dir: ((gx * 7 + gz * 13) % 2) ? 1 : -1,
                     axis: ((gx * 3 + gz * 5) % 2) ? 'x' : 'z' });
-  } catch (e) {
-    // ★ 动画失败不能影响砍树本身 ✓ 但要留下痕迹 ✗ 不然查不到 ✓
-    try { window._fallErr = String((e && e.stack) || e); } catch (e2) { }
-  }
+  } catch (e) { /* 动画失败不能影响砍树本身 ✓ */ }
 }
 
 /* 每帧推进倒地（★ 只在有树在倒时才跑 ✓）*/
@@ -3096,6 +3136,10 @@ function wsApplyWorld(d) {
     var etxt = String(edv) + (e2.crit ? ' 暴击' : '') + (e2.block ? ' 格挡' : '') +
                (e2.back ? ' 背击' : '') + (e2.splash ? ' 溅射' : '');
     dmg(etxt, +e2.x, 2.4, +e2.z, !!e2.crit);
+    /* ★ round340：僵尸被打中闪白（用户要求 ✓）环境伤害不闪 ✓ */
+    if (!e2.env && typeof hitFlash === 'function') {
+      hitFlash(+e2.x, 1.0, +e2.z, !!e2.crit);
+    }
     /* ★ round324（用户："僵尸进岩浆受伤，为什么我的屏幕也会抖动"）
        env=1 = 环境伤害（岩浆烧僵尸）✗ 只是"别人在掉血"✓
        → 不震屏、不顿帧、不出打击音效 ✓ 只飘数字 ✓ */
@@ -5185,6 +5229,7 @@ function frame(ts) {
   if (typeof terDebTick === 'function') { terDebTick(dt); }
   if (typeof rippleTick === 'function') { rippleTick(dt); }
   if (typeof propFallTick === 'function') { propFallTick(dt); }
+  if (typeof hitFlashTick === 'function') { hitFlashTick(dt); }
   if (atkT < 0) {
     /* ★ 跳跃的"视觉加高"：只有【从地面跳起来】才加（摔下去不加 ✓）
        加的量 = 当前离地高度 × 0.9 → 顶点 0.713 格时多看 0.64 格
@@ -5260,8 +5305,8 @@ function frame(ts) {
        ★ 客户端只是【发请求】✗ 服务端验距离/硬度/扣耐久 ✓ */
     try {
       var _agx = Math.floor(P.x / TER.LEVEL_H), _agz = Math.floor(P.z / TER.LEVEL_H);
-      var _fx = Math.floor((P.x + Math.sin(P.yaw) * TER.LEVEL_H * 1.2) / TER.LEVEL_H);
-      var _fz = Math.floor((P.z + Math.cos(P.yaw) * TER.LEVEL_H * 1.2) / TER.LEVEL_H);
+      var _fx = Math.floor((P.x + Math.sin(P.yaw) * TER.LEVEL_H * 1.5) / TER.LEVEL_H);
+      var _fz = Math.floor((P.z + Math.cos(P.yaw) * TER.LEVEL_H * 1.5) / TER.LEVEL_H);
       /* ★★★ round337 修的真 bug（用户："测试了破坏树和石头不行"）★★★
          根因：原来只查【前方 1.2 格那一个格子】✗
                而树的碰撞盒会把玩家挡在 1~1.5 格外 ✓
@@ -5270,25 +5315,33 @@ function frame(ts) {
          ★ 为什么不用更远的"射线"：这一步只是选目标 ✗ 距离校验在服务端 ✓
            客户端选准一点就行 ✓ 选宽一点也不会让玩家砍到够不着的树（服务端会拒 ✓）*/
       var _propHit = null, _propBest = 1e9;
-      for (var _ox = -1; _ox <= 1; _ox++) {
-        for (var _oz = -1; _oz <= 1; _oz++) {
+      for (var _ox = -2; _ox <= 2; _ox++) {
+        for (var _oz = -2; _oz <= 2; _oz++) {
           var _cx = _fx + _ox, _cz = _fz + _oz;
           var _ck = _cx + ',' + _cz;
           if (!propAt[_ck]) { continue; }
           // 还要够得着（玩家脚下那格也算 ✓ 因为碰撞盒可能把它挤开）
           var _dd = Math.max(Math.abs(_cx - _agx), Math.abs(_cz - _agz));
-          if (_dd > 2) { continue; }
+          if (_dd > 3) { continue; }
           if (_dd < _propBest) { _propBest = _dd; _propHit = [_cx, _cz]; }
           if (_dd === 0) { break; }
         }
       }
       if (_propHit && !propDead[_propHit[0] + ',' + _propHit[1]]) {
+        // ★ 打击反馈：音效 + 命中点闪白 ✓
+        if (typeof sfx === 'function') { sfx('hit', 0.75); }
+        hitFlash((_propHit[0] + 0.5) * TER.LEVEL_H,
+                 terH(_propHit[0], _propHit[1]) * TER.LEVEL_H,
+                 (_propHit[1] + 0.5) * TER.LEVEL_H, true);
         wsSend('mineprop', { gx: _propHit[0], gz: _propHit[1] });
         propDmg[_propHit[0] + ',' + _propHit[1]] = (propDmg[_propHit[0] + ',' + _propHit[1]] || 0) + 1;
         return;                       // ★ 打了树就不打地形/怪 ✓
       }
       var _curH = terH(_agx, _agz), _tgtH = terH(_fx, _fz);
       if (_tgtH > _curH + 0.5) {
+        // ★ 打方块也要音效 + 闪白（用户："加一个破坏的打击音效"）
+        if (typeof sfx === 'function') { sfx('hit', 0.7); }
+        hitFlash((_fx + 0.5) * TER.LEVEL_H, _tgtH * TER.LEVEL_H, (_fz + 0.5) * TER.LEVEL_H, false);
         wsSend('mine', { gx: _fx, gz: _fz });
         terDmg[_terKey(_fx, _fz)] = (terDmg[_terKey(_fx, _fz)] || 0) + 1;
       }
