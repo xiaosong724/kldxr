@@ -155,6 +155,23 @@ const PW = 'abc123456';
     'return JSON.stringify(r);',
   ].join(''));
   console.log('  高级掉落: ' + lootTest);
+  // ★ 自动跳：站在山脚，朝山的方向应触发跳跃
+  const jumpTest = await ev([
+    'var L = TER.LEVEL_H, best = null;',
+    'for (var gx = -60; gx <= 60 && !best; gx++) {',
+    '  for (var gz = -60; gz <= 60; gz++) {',
+    '    if (terH(gx, gz) >= 2 && terH(gx - 1, gz) === 0) { best = [gx, gz]; break; }',
+    '  } }',
+    'if (!best) { return "找不到山脚"; }',
+    'P.x = (best[0] - 1 + 0.5) * L; P.z = (best[1] + 0.5) * L;',
+    'P.y = terYAt(P.x, P.z); P.air = false; P.gy = P.y; P.inWater = false;',
+    'if (typeof jumpHeld !== "undefined") { jumpHeld = 0; }',
+    'if (typeof AUTO !== "undefined") { AUTO.stuckT = 0; }',
+    'autoJumpIfNeeded(1, 0);',
+    'return JSON.stringify({ hill: best, jumped: (typeof jumpHeld !== "undefined") ? !!jumpHeld : null });',
+  ].join(''));
+  console.log('  自动跳: ' + jumpTest);
+
   await ev('if (typeof AUTO !== "undefined") { AUTO.on = false; } return 1;');
 
   const ripple = await ev([

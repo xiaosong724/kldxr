@@ -5051,6 +5051,29 @@ var AUTO_LOOT_R = 12.0;      /* 没怪时去捡东西的搜索半径 ✓ */
 var AUTO_RETREAT = 0.30;
 var AUTO_STUCK_MOVE = 0.12;
 
+/* ★★★ round366（用户："有方块山要学会自己跳跃，掉水里也要自己起来"）★★★
+   ★ 什么时候跳：
+     ① 前方 0.5 米那一格比脚下高【超过一小步】→ 跳上去 ✓
+        （地形是整数层 ✗ 台阶 1 层要跳 ✓ 0.35 以下的能直接走 ✓）
+     ② 站在水里 → 跳一下更容易出来 ✓（水面比岸低一层 ✓）
+     ③ 卡住超过 0.25 秒 → 跳一下试试（撞到矮墙/台阶 ✓）
+   ★ 只在【没在空中】时设跳 ✗ 空中再按没用 ✓ */
+function autoJumpIfNeeded(dirx, dirz) {
+  if (typeof jumpHeld === 'undefined') { return; }
+  if (P.air) { return; }
+  var L = TER.LEVEL_H;
+  var hx = Math.floor(P.x / L), hz = Math.floor(P.z / L);
+  var fx = Math.floor((P.x + dirx * 0.55) / L);
+  var fz = Math.floor((P.z + dirz * 0.55) / L);
+  var hHere = terH(hx, hz), hFront = terH(fx, fz);
+  // ① 前方更高 → 跳
+  if (hFront - hHere > 0.2) { jumpHeld = 1; return; }
+  // ② 在水里 → 跳（更容易爬上岸）
+  if (P.inWater) { jumpHeld = 1; return; }
+  // ③ 卡住了 → 跳一下
+  if (AUTO.stuckT > 0.25) { jumpHeld = 1; }
+}
+
 function autoFacing(dx, dz) {
   return Math.atan2(dx, dz * G.FLIP_Z);   /* ★ 和主循环同一个公式 ✓ */
 }
@@ -5215,6 +5238,7 @@ function autoTick(dt) {
         if (ld > 1.2) {                       /* 够近了就交给原有的自动捡 ✓ */
           jx = (bl.x - P.x) / ld; jy = (bl.z - P.z) / ld; AUTO.setInput = true;
           P.yaw = autoFacing(bl.x - P.x, bl.z - P.z);
+          autoJumpIfNeeded(jx, jy);
           AUTO.info = '自动战斗：去捡东西 ' + ld.toFixed(1) + 'm';
           return;
         }
@@ -5320,6 +5344,7 @@ function autoTick(dt) {
       }
       jx = dx / d; jy = dz / d; AUTO.setInput = true;
       atkHeld = false; AUTO.attacking = false;
+      autoJumpIfNeeded(dx / d, dz / d);          // ★ 前面有台阶/水 → 自己跳 ✓
     }
     AUTO.info = '自动战斗：接近 ' + lvTxt + d.toFixed(1) + 'm';
     return;
@@ -5340,6 +5365,7 @@ function autoTick(dt) {
   var rx = -dx / (d || 1), rz = -dz / (d || 1);
   jx = rx; jy = rz; AUTO.setInput = true;
   P.yaw = autoFacing(dx, dz);
+  autoJumpIfNeeded(rx, rz);                      // ★ 退路上有障碍也跳 ✓
   if (Math.hypot(P.x - AUTO.lastX, P.z - AUTO.lastZ) < AUTO_STUCK_MOVE) {
     AUTO.stuckT += dt;
   } else {
