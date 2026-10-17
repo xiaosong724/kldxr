@@ -195,12 +195,55 @@ def vnoise(gx, gz, salt, period):
     return a + (b - a) * sz
 
 
+# ---------------------------------------------------------------- 地貌（P2）
+
+B_WILD = 'wild'     # 荒野（默认 ✗ 出生点附近强制这个 ✓）
+B_ICE = 'ice'       # 冰原（跑得快 ✗ 刹不住 ✓）
+B_SWAMP = 'swamp'   # 沼泽（慢 ✗ 有积水 ✓）
+B_RUIN = 'ruin'     # 城区废墟（砖地 ✗ 以后接可拆的墙 ✓）
+
+BIOME_SIZE = 48     # 地貌的波长（格 ✗ 太大了会觉得世界单调 ✓ 48 刚好 ✓）
+BIOME_SAFE = 70     # 出生点这么远以内强制荒野（新手区 ✓）
+# ★ 各处的地貌移速（★ 客户端要一模一样 ✗ 不然"我看着跑得快但实际慢"✓）
+BIOME_SPEED = {B_WILD: 1.0, B_ICE: 1.45, B_SWAMP: 0.58, B_RUIN: 1.0}
+
+
+def biome(gx, gz):
+    """这一格是什么地貌（★ 纯函数 ✗ 两边各算一遍 ✓ 必须一致 ✓）
+
+    ★ 为什么用【低频噪声】而不是"画几块矩形"：
+      噪声出来的边界是自然的曲线 ✗ 矩形会看到"斜着的直线"✓
+    ★ 出生点附近强制荒野 ✓ 不然一出生就站在冰上会摔跟头 ✓
+    """
+    ddx = gx * 1.0
+    ddz = gz * 1.0
+    if (ddx * ddx + ddz * ddz) < (BIOME_SAFE * BIOME_SAFE):
+        return B_WILD
+    # ★ 阈值是【按噪声的实际分布】定的（p90=0.627 / p75=0.544 / p25=0.423 ✓）
+    #   自测踩到：第一版随手写 0.76 ✗ 冰原只占 0.2% ✗ 等于没有 ✓
+    n = vnoise(gx, gz, 91, BIOME_SIZE)
+    if n > 0.62:
+        return B_ICE        # ≈10%
+    if n > 0.545:
+        return B_SWAMP      # ≈15%
+    if n < 0.36:
+        return B_RUIN       # ≈12%
+    return B_WILD
+
+
 def material(gx, gz):
     """材质：高处是石头，其它按【成片】的噪声分草/土 ✓
 
     ★ 只影响颜色 ✗ 不影响高度 ✓（用户要的是"高低一样"✗ 不是"颜色一样"✓）
     ★ 用 vnoise（波长 9 格）✗ 一片一片的 ✓ 不是一格一格的噪点 ✓
     """
+    b = biome(gx, gz)
+    if b == B_ICE:
+        return MAT_ICE
+    if b == B_SWAMP:
+        return MAT_SWAMP
+    if b == B_RUIN:
+        return MAT_BRICK
     h = height(gx, gz)
     if h >= 4:
         return MAT_STONE

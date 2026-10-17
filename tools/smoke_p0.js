@@ -76,19 +76,22 @@ const PW = 'abc123456';
   await sleep(8000);
 
   // ★ 挪到山边看效果（管理端没有 tp ✗ 测试里直接改坐标 ✓ 只影响这一个测试号）
-  const hill = await ev([
-    'var best = null;',
-    'for (var gx = -140; gx <= 140; gx += 3) {',
-    '  for (var gz = -140; gz <= 140; gz += 3) {',
-    '    var h = terH(gx, gz);',
-    '    if (!best || h > best[2]) { best = [gx, gz, h]; }',
+  const _ice = await ev([
+    'var bx = -320, bz = -320;',
+    'for (var q = -260; q <= 260; q += 4) {',
+    '  for (var w = -260; w <= 260; w += 4) {',
+    '    if (terBiome(q, w) === "ice") { bx = q; bz = w; }',
     '  } }',
-    'P.x = best[0] * TER.LEVEL_H - 3.2; P.z = best[1] * TER.LEVEL_H - 3.2;',
+    'P.x = bx * TER.LEVEL_H; P.z = bz * TER.LEVEL_H;',
+    'P.y = terYAt(P.x, P.z); P.air = false; P.gy = P.y;',
     'terHClear(); refreshTerrain();',
-    'return JSON.stringify(best);',
+    'return JSON.stringify({ ice: [bx, bz], biome: terBiome(bx, bz),',
+    '  mat: terMat(bx, bz), speed: TER_BIO_SPEED[terBiome(bx, bz)] });',
   ].join(''));
-  console.log('  最高的一座山: ' + hill);
-  await sleep(2500);
+  console.log('  地貌: ' + _ice);
+  await sleep(1800);
+  // （原来这里会挪到最高的山上 ✗ 现在为了看冰原，跳过 ✓）
+  await ev('return 1;');
 
   const info = await ev([
     'return JSON.stringify({',

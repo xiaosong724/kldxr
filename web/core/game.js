@@ -102,7 +102,7 @@ var jumpHeld = 0;          // 跳跃键按住的时刻（0 = 没按 ✓）
 var jumpCD = 0;            // 跳跃冷却剩余（秒 ✓）
 var FALL_MIN = 3;          // 落差 ≥3 格才掉血 ✓
 var _camY = 0;             // 相机当前的高度（缓动跟随【地面】✗ 跳跃才看得出来 ✓）
-var squashT = 0;           // 落地压扁剩余时间（秒 ✓）
+var MOV = { vx: 0, vz: 0, tx: 0, tz: 0 };   // 移动速度（★ 为了冰面的惯性 ✗ 原来直接改位移 ✓）
 var FALL_DMG = 5;          // 每格 5 点（用户 2026-10-17 定 ✓）
 var solids = [], propSolids = [], mobs = [], PROP_MESHES = [], GROUNDMESH = null;
 
@@ -355,15 +355,33 @@ function terNoise(gx, gz, salt, period) {
   var v01 = terRand01(ix, iz + 1, salt), v11 = terRand01(ix + 1, iz + 1, salt);
   return (v00 + (v10 - v00) * sx) + ((v01 + (v11 - v01) * sx) - (v00 + (v10 - v00) * sx)) * sz;
 }
+/* ★★★ P2 地貌（和 server/terrain.py 的 biome 逐位等价 ✓）★★★ */
+var TER_BIOME_SIZE = 48, TER_BIOME_SAFE = 70;
+var TER_BIO_SPEED = { wild: 1.0, ice: 1.45, swamp: 0.58, ruin: 1.0 };
+function terBiome(gx, gz) {
+  if ((gx * gx + gz * gz) < (TER_BIOME_SAFE * TER_BIOME_SAFE)) { return 'wild'; }
+  var n = terNoise(gx, gz, 91, TER_BIOME_SIZE);
+  if (n > 0.62) { return 'ice'; }
+  if (n > 0.545) { return 'swamp'; }
+  if (n < 0.36) { return 'ruin'; }
+  return 'wild';
+}
+
 function terMat(gx, gz) {
   var k = _terKey(gx, gz);
   var v = _terMc[k];
   if (v !== undefined) { return v; }
-  var h = terH(gx, gz);
-  if (h >= 4) { v = 'stone'; }
-  else if (h >= 2 && terNoise(gx, gz, 43, 5) > 0.55) { v = 'stone'; }
-  else if (terNoise(gx, gz, 31, 9) > 0.62) { v = 'dirt'; }
-  else { v = 'grass'; }
+  var b = terBiome(gx, gz);
+  if (b === 'ice') { v = 'ice'; }
+  else if (b === 'swamp') { v = 'swamp'; }
+  else if (b === 'ruin') { v = 'brick'; }
+  else {
+    var h = terH(gx, gz);
+    if (h >= 4) { v = 'stone'; }
+    else if (h >= 2 && terNoise(gx, gz, 43, 5) > 0.55) { v = 'stone'; }
+    else if (terNoise(gx, gz, 31, 9) > 0.62) { v = 'dirt'; }
+    else { v = 'grass'; }
+  }
   _terMc[k] = v;
   return v;
 }
@@ -4683,18 +4701,42 @@ function frame(ts) {
   if (keys['a']) { ix -= 1; } if (keys['d']) { ix += 1; }
   if (dead) { ix = 0; iz = 0; }   // ★ 倒下了就不能走（点复活才起来 ✓ 手机/电脑都拦 ✓）
   var len = Math.hypot(ix, iz), moving = false;
+  /* ★★★ P2 地貌手感（方案 §6）★★★
+     冰面   移速 ×1.45 ✗ 加减速都极慢（惯性）✗ 松手还会滑一段 ✓
+     沼泽   移速 ×0.58 ✗ 加速度也慢（像陷在泥里）✓
+     其它   一下就到速（和原来一模一样 ✗ 不影响手感 ✓）
+     ★ 为什么用"速度+加速度"而不是"直接改位移"：
+       直接改位移的话 ✗ 松手立刻就停 ✗ 那就不叫冰了 ✓
+     ★ 加速度用【一阶跟随】✗ 不是真物理积分 ✓ 更好调 ✓ 也不会抖 ✓ */
+  var _gbx = Math.floor(P.x / TER.LEVEL_H), _gbz = Math.floor(P.z / TER.LEVEL_H);
+  var _bio = terBiome(_gbx, _gbz);
+  var _spdM = TER_BIO_SPEED[_bio] || 1;
+  var _tspd = G.SPEED * _spdM;
   if (len > 0.08) {
     var nx = ix / Math.max(1, len), nz = iz / Math.max(1, len);
-    var wx = nx, wz = nz * G.FLIP_Z;
+    MOV.tx = nx * _tspd;
+    MOV.tz = nz * G.FLIP_Z * _tspd;
+    P.yaw = Math.atan2(nx, nz * G.FLIP_Z);      // ★ 朝向跟着【输入】走（转得快 ✓ 滑行时不会乱转）
+  } else {
+    MOV.tx = 0; MOV.tz = 0;
+  }
+  var _acc = (_bio === 'ice') ? 2.2 : ((_bio === 'swamp') ? 6.5 : 26.0);
+  MOV.vx += (MOV.tx - MOV.vx) * Math.min(1, dt * _acc);
+  MOV.vz += (MOV.tz - MOV.vz) * Math.min(1, dt * _acc);
+  if (Math.abs(MOV.vx) > 0.03 || Math.abs(MOV.vz) > 0.03) {
     var ox = P.x, oz = P.z;
-    moveWithCollision(wx * G.SPEED * dt, wz * G.SPEED * dt, G.BODY_W / 2, G.BODY_D / 2, true, null);   // ★ 矩形 + 被所有妖兽拦住 ✓
-    if (Math.hypot(P.x - ox, P.z - oz) > 0.001) {
-      P.yaw = Math.atan2(wx, wz); moving = true; walkT += dt * 7.5;
-      // ★ 脚步声（每 0.36 秒一次 ✓ MC 僵尸脚步 ✓）
-      stepTimer -= dt;
-      if (stepTimer <= 0) { stepTimer = 0.36; /* sfx('step', 0.5);   // ★ 脚步音效已关闭（用户要求 ✓ 想恢复去掉注释即可 ✓）*/ }
+    moveWithCollision(MOV.vx * dt, MOV.vz * dt, G.BODY_W / 2, G.BODY_D / 2, true, null);
+    if (Math.hypot(P.x - ox, P.z - oz) < 0.0004) {
+      // ★ 撞墙了：速度打个折 ✗ 不然会一直贴着墙"顶"✓
+      MOV.vx *= 0.35; MOV.vz *= 0.35;
     }
   }
+  if (Math.hypot(MOV.vx, MOV.vz) > 0.7) {
+    moving = true; walkT += dt * 7.5;
+    stepTimer -= dt;
+    if (stepTimer <= 0) { stepTimer = 0.36; }
+  }
+  P.bio = _bio;
   /* ★ 第 306 轮：竖直方向（跳 / 掉 / 掉血）✗ 必须在移动之后算 ✓
      因为要用【移动后】的 x/z 去问脚下有多高 ✓ */
   terrainV(dt);
