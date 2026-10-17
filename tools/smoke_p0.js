@@ -174,6 +174,28 @@ const PW = 'abc123456';
 
   await ev('if (typeof AUTO !== "undefined") { AUTO.on = false; AUTO.faceLock = false; } return 1;');
 
+  // ★ 所有武器动作都能跑（通用化不能弄坏别的武器）
+  const animTest = await ev([
+    'var looks = ["sword","axe","hammer","spear","staff","bow","dagger","saber"];',
+    'var bad = [];',
+    'for (var i = 0; i < looks.length; i++) {',
+    '  try {',
+    '    var h = hero();',
+    '    var arc = (typeof atkArchOf === "function") ? atkArchOf(looks[i]) : "?";',
+    '    var TT = ATK_T[arc]; var tot = TT[TT.length - 1];',
+    '    for (var t = 0; t <= tot; t += 0.05) {',
+    '      heroAtkPose(h, t, P.x, P.z, 0, looks[i], P.y);',
+    '      if (!isFinite(h.armR.rotation.x)) { throw "NaN"; }',
+    '    }',
+    '  } catch (e) { bad.push(looks[i] + ":" + e); }',
+    '}',
+    'var kf = { throat: 0 };',
+    'return JSON.stringify({ bad: bad, swordArch: atkArchOf("sword"),',
+    '  swordFrames: (ATK_KF[atkArchOf("sword")] || []).length,',
+    '  swordSegs: (ATK_T[atkArchOf("sword")] || []).length });',
+  ].join(''));
+  console.log('  动作: ' + animTest);
+
   const ripple = await ev([
     'var live = 0;',
     'for (var i = 0; i < _ripple.length; i++) { if (_ripple[i].on) { live++; } }',

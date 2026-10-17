@@ -4912,17 +4912,37 @@ var KF_DRAW = [
 ];
 var ATK_ARCH = {
   axe: 'chop', hammer: 'chop',
-  sword: 'sweep', saber: 'sweep', staff: 'sweep',
+  sword: 'stab2',                    // ★ round374：单手剑 = 快速前刺两下 ✓
+  saber: 'sweep', staff: 'sweep',
   dagger: 'thrust', spear: 'thrust',
   bow: 'draw'                // ★ 第 70 轮：弓有自己的“拉弓”了 ✓
 };
-var ATK_KF = { chop: KF_CHOP, sweep: KF_SWEEP, thrust: KF_THRUST, draw: KF_DRAW };
+/* ★★★ round374（用户："单手剑改成往前面快速刺两下"）★★★
+   ★ 列的含义（和 KF_THRUST 一致 ✓）：
+     0 armR.x · 1 armR.y · 2 armR.z · 3 剑的俯仰 · 4 身体前倾
+     5 额外偏航 · 6 左臂 · 7 左腿 · 8 右腿 · 9 前冲距离 · 10 高度
+   ★ 6 帧 = 起手 → 刺1出 → 收回 → 刺2出 → 收回 → 回位 ✓
+     （第二下比第一下【更深一点】✗ 看着有节奏 ✓）*/
+var KF_STAB2 = [
+  [ 0.00,  0.00,  0.15,  0.55,  0.00,  0.00, -0.15,  0.00,  0.00,  0.00,  0.00],  // 起手
+  [ 0.88, -0.28,  0.10,  1.22, -0.05, -0.16, -0.28, -0.07,  0.07, -0.04,  0.00],  // 蓄力（很浅 ✗ 要快）
+  [-1.40,  0.04,  0.05,  1.58,  0.11,  0.06,  0.32, -0.15,  0.15,  0.20,  0.00],  // 刺1 —— 出
+  [-0.10, -0.06,  0.12,  0.95,  0.02,  0.00, -0.05, -0.04,  0.04,  0.02,  0.00],  // 收回
+  [-1.50,  0.06,  0.05,  1.66,  0.14,  0.09,  0.38, -0.18,  0.18,  0.26,  0.00],  // 刺2 —— 更深
+  [ 0.00,  0.00,  0.15,  0.55,  0.00,  0.00, -0.15,  0.00,  0.00,  0.00,  0.00]   // 回位
+];
+
+var ATK_KF = { chop: KF_CHOP, sweep: KF_SWEEP, thrust: KF_THRUST, draw: KF_DRAW,
+               stab2: KF_STAB2 };
 // 各自的节奏：劈最慢（收招重 ✓）· 扫居中 · 刺最快（秒收 ✓）
 var ATK_T = {
   chop:   [0.26, 0.43, 0.52, 0.86],
   sweep:  [0.20, 0.36, 0.46, 0.78],
   thrust: [0.14, 0.24, 0.30, 0.58],
-  draw:   [0.22, 0.42, 0.52, 0.90]     // ★ 拉弓要慢一点（举弓 → 拉满 → 撒放 ✓）
+  draw:   [0.22, 0.42, 0.52, 0.90],    // ★ 拉弓要慢一点（举弓 → 拉满 → 撒放 ✓）
+  /* ★ 6 帧 / 5 段：0.09 蓄力 · 0.18 刺1 · 0.27 收 · 0.36 刺2 · 0.62 回位
+     ★ 两下的"出手时刻"间隔 ≈ 0.18 秒 ✗ 手速感明确 ✓ 但又分得清是两下 ✓ */
+  stab2:  [0.09, 0.18, 0.27, 0.36, 0.62]
 };
 
 function atkArchOf(look) { return ATK_ARCH[look] || 'sweep'; }
@@ -4938,19 +4958,32 @@ function heroAtkPose(heroObj, atkT, bx, bz, byaw, look, baseY) {
   var arch = atkArchOf(look);
   var KF = ATK_KF[arch];
   var TT = ATK_T[arch];
-  var TOTAL = TT[3];
-  var T1 = TT[0], T2 = TT[1], T3 = TT[2];
-  var f, e;
-  if (atkT < T1) { f = 0; e = atkT / T1; }
-  else if (atkT < T2) { f = 1; e = (atkT - T1) / (T2 - T1); }
-  else if (atkT < T3) { f = 2; e = (atkT - T2) / (T3 - T2); }
-  else { f = 3; e = Math.min(1, (atkT - T3) / (TOTAL - T3)); }
-  // 缓动：预备用 ease-in(慢起 ✓) 挥击用 ease-out(极快 ✓) 收招用 ease-in-out
+  var TOTAL = TT[TT.length - 1];
+  /* ★★★ round374：帧数改成【通用】（原来写死 5 帧 / 4 段 ✗）
+     ★ 为什么要改：用户要"单手剑刺两下"✗ 那是 6 帧 ✓
+       而 axe/hammer 的左右交替、锤子转圈 也都需要更多帧 ✓
+     ★ 兼容：现有 chop/sweep/thrust/draw 都是 5 帧 ✗ 走同一条路径 ✓
+       段数 = 帧数 − 1 ✗ 缓动按"第一段 ease-in、最后一段 ease-in-out、
+       中间交替"分配 ✓ 和原来的手感完全一致 ✓ */
+  var _nSeg = KF.length - 1;
+  var f, e, _t0 = 0;
+  f = _nSeg - 1;                       // 默认落最后一段
+  e = 1;
+  for (var _si = 0; _si < _nSeg; _si++) {
+    var _tb = TT[_si];
+    if (atkT < _tb) {
+      f = _si;
+      e = (_tb > _t0) ? (atkT - _t0) / (_tb - _t0) : 1;
+      break;
+    }
+    _t0 = _tb;
+  }
+  if (atkT >= TOTAL) { f = _nSeg - 1; e = 1; }
   var ee;
   if (f === 0) { ee = e * e; }
-  else if (f === 1) { ee = 1 - Math.pow(1 - e, 3); }
-  else if (f === 2) { ee = e; }
-  else { ee = e < 0.5 ? (2 * e * e) : (1 - Math.pow(-2 * e + 2, 2) / 2); }
+  else if (f === _nSeg - 1) { ee = e < 0.5 ? (2 * e * e) : (1 - Math.pow(-2 * e + 2, 2) / 2); }
+  else if ((f % 2) === 1) { ee = 1 - Math.pow(1 - e, 3); }
+  else { ee = e; }
   var A = KF[f], B = KF[f + 1];
   var lp = function (i) { return A[i] + (B[i] - A[i]) * ee; };
   heroObj.armR.rotation.x = lp(0);
