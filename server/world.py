@@ -39,6 +39,7 @@ import mq as mqmod      # ★ 第 149 轮：魔气规则中心 ✓
 import value as valuemod  # ★ round304b：价格/上限（和卖系统同一份 ✓）
 import weapons
 import worldgen
+import terrain as termod   # ★ round306：僵尸也要认地形高度 ✓
 import protocol as P
 
 TICK_HZ = 30
@@ -1456,13 +1457,28 @@ class World(object):
             # of the zone if they somehow got in (old save / knockback).
             m.x, m.z = _nx, _nz
             return
+        # ★★★ round306 修的真 bug（用户："僵尸怎么无视方块可以直接穿模了"）★★★
+        #   根因：这里原来【只查 worldgen.blocked】（也就是树/房子那些 2D 盒子）
+        #         完全没查【地形高度】✗
+        #         而第 306 轮给玩家加了地形判定（terrainStepOk）✗ 僵尸没加 ✓
+        #         → 玩家爬不上去的墙，僵尸直接走上去 ✓ 看着就是"穿模" ✓
+        #   ★ 现在僵尸和玩家【用同一套规矩】✗ 只差各自的跳跃高度 ✓
+        #     落差 ≤ STEP_JUMP(1.15) → 跳上去 ✓
+        #     更大 → 过不去 ✗ 要绕路 ✓（这就是"峭壁挡僵尸"✓）
+        #   ★ 改这个文件的时候注意：地形是【纯函数】✗ 不查库 ✓ 直接算 ✓
         hw = mobs.MOB_BODY / 2.0
+        _cur = termod.height(*termod.cell_of_world(m.x, m.z))
         nx = m.x + dx
         if not worldgen.blocked(nx, m.z, hw, hw):
-            m.x = nx
+            _nh = termod.height(*termod.cell_of_world(nx, m.z))
+            if _nh - _cur <= termod.STEP_JUMP:
+                m.x = nx
+                _cur = _nh
         nz = m.z + dz
         if not worldgen.blocked(m.x, nz, hw, hw):
-            m.z = nz
+            _nh2 = termod.height(*termod.cell_of_world(m.x, nz))
+            if _nh2 - _cur <= termod.STEP_JUMP:
+                m.z = nz
 
     def _mob_wander(self, m, dt):
         """没目标时的漫游：过一会儿换个方向，慢慢挪 ✓"""

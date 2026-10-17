@@ -219,24 +219,31 @@ function cellOf(w) { return Math.round(w / G.TS); }
    ============================================================================ */
 var TER = {
   LEVEL_H: 0.62,      // 一层多高（= G.TS ✓ 方块才是方的 ✓）
-  HB: 24,             // 小山：每 24×24 格最多一座
-  HILL_CHANCE: 0.55,
-  MAX_H: 5.2,
-  MIN_H: -1.0,
-  STEP_WALK: 0.35,    // 走路能迈上去的最大落差（层）
-  STEP_JUMP: 1.15,    // 跳能上去的最大落差（层）
+  HB: 24,             // 大山：每 24×24 格最多一座
+  HB_SMALL: 12,       // 小土包：每 12×12 格
+  HILL_CHANCE: 0.50,
+  SMALL_CHANCE: 0.30,
+  MAX_H: 5,
+  STEP_WALK: 0.35,    // 走上去的最大落差（层）
+  STEP_JUMP: 1.15,    // 跳上去的最大落差（层）
   TILE: 16,           // 地形瓦片边长（格）
-  TILE_R: 4,          // 渲染半径（瓦片）→ 4×16 = 64 格 ≈ 40 世界单位
-  TILE_BUDGET: 3,     // 一帧最多新建几片（防卡顿）
+  TILE_R: 4,          // 渲染半径（瓦片）
+  TILE_BUDGET: 3,     // 一帧最多新建几片
   JUMP_V: 8.15,       // 起跳速度（世界单位/秒）→ 顶点 1.15 层 / 滞空 0.35 秒
   GRAV: 46.6          // 重力
 };
+/* ★★ 用户 2026-10-17 第三轮的三条改动 ★★
+   ① 不要斜坡了 ✗ terSlope 恒为 0 ✓
+   ② 平地必须一样高 ✗ 所以【没有低频噪声、没有每格抖动】✓
+   ③ 山的样式多样 + 要有悬崖 ✓
+      → 每座山 = 3 个偏心圆叠出来（形状不规整 ✗ 但只用 sqrt ✓ 两边一致 ✓）
+      → 缓山（每格落差 1 ✗ 跳得上去）/ 悬崖山（落差 2 ✗ 跳不上去）✓ */
 
 function ter32(gx, gz, salt) {
   var a = gx * 2654435761;
   var b = gz * 40503;
   var c = salt * 2246822519;
-  return ((a ^ b) ^ c) >>> 0;        // ★ ^ 是 int32 语义 ✗ >>>0 变无符号 ✓
+  return ((a ^ b) ^ c) >>> 0;
 }
 function terRand01(gx, gz, salt) {
   return (ter32(gx, gz, salt) % 1000000) / 1000000;
@@ -244,70 +251,85 @@ function terRand01(gx, gz, salt) {
 function terSmooth(t) {
   if (t <= 0) { return 0; }
   if (t >= 1) { return 1; }
-  return t * t * (3 - 2 * t);         // ★ 只用乘法 ✗ 两边一位不差 ✓
-}
-function terLerp(a, b, t) { return a + (b - a) * t; }
-function terNoise(gx, gz, salt, period) {
-  var fx = gx / period, fz = gz / period;
-  var ix = Math.floor(fx), iz = Math.floor(fz);
-  var sx = terSmooth(fx - ix), sz = terSmooth(fz - iz);
-  var v00 = terRand01(ix, iz, salt), v10 = terRand01(ix + 1, iz, salt);
-  var v01 = terRand01(ix, iz + 1, salt), v11 = terRand01(ix + 1, iz + 1, salt);
-  return terLerp(terLerp(v00, v10, sx), terLerp(v01, v11, sx), sz);
+  return t * t * (3 - 2 * t);
 }
 
 var _hillCache = {}, _hillCacheN = 0;
-function terHillBlock(bx, bz) {
-  var k = bx + ',' + bz;
+function terHillBlock(bx, bz, hb, salt, chance, hmin, hmax, rFlat, rCliff, cliffAt) {
+  var k = bx + ',' + bz + ',' + hb + ',' + salt;
   if (k in _hillCache) { return _hillCache[k]; }
   var out = null;
-  if (terRand01(bx, bz, 71) < TER.HILL_CHANCE) {
-    out = [bx * TER.HB + terRand01(bx, bz, 72) * TER.HB,
-           bz * TER.HB + terRand01(bx, bz, 73) * TER.HB,
-           2 + Math.floor(terRand01(bx, bz, 74) * 4),
-           3 + terRand01(bx, bz, 75) * 3];
+  if (terRand01(bx, bz, salt + 0) < chance) {
+    var cx = bx * hb + terRand01(bx, bz, salt + 1) * hb;
+    var cz = bz * hb + terRand01(bx, bz, salt + 2) * hb;
+    var hh = hmin + Math.floor(terRand01(bx, bz, salt + 3) * (hmax - hmin + 1));
+    if (hh > hmax) { hh = hmax; }
+    var cliff = terRand01(bx, bz, salt + 4) < cliffAt;
+    var baseR = (cliff ? rCliff : rFlat) * hh + 1.2;
+    baseR *= 0.80 + terRand01(bx, bz, salt + 5) * 0.55;
+    var blobs = [];
+    for (var i = 0; i < 3; i++) {
+      blobs.push([cx + (terRand01(bx, bz, salt + 10 + i) - 0.5) * baseR * 0.75,
+                  cz + (terRand01(bx, bz, salt + 20 + i) - 0.5) * baseR * 0.75,
+                  baseR * (0.58 + terRand01(bx, bz, salt + 30 + i) * 0.42)]);
+    }
+    out = [blobs, hh];
   }
   if (_hillCacheN > 8192) { _hillCache = {}; _hillCacheN = 0; }
   _hillCache[k] = out; _hillCacheN++;
   return out;
 }
-function terHillH(gx, gz) {
-  var bx = Math.floor(gx / TER.HB), bz = Math.floor(gz / TER.HB);
-  var best = 0;
-  for (var dx = -1; dx <= 1; dx++) {
-    for (var dz = -1; dz <= 1; dz++) {
-      var hl = terHillBlock(bx + dx, bz + dz);
-      if (!hl) { continue; }
-      var ddx = gx - hl[0], ddz = gz - hl[1];
-      var dist = Math.sqrt(ddx * ddx + ddz * ddz);
-      if (dist >= hl[3]) { continue; }
-      var v = hl[2] * terSmooth(1 - dist / hl[3]);
-      if (v > best) { best = v; }
-    }
+function terBigHill(bx, bz) {
+  return terHillBlock(bx, bz, TER.HB, 71, TER.HILL_CHANCE, 2, 5, 1.35, 0.45, 0.34);
+}
+function terSmallHill(bx, bz) {
+  return terHillBlock(bx, bz, TER.HB_SMALL, 101, TER.SMALL_CHANCE, 1, 2, 1.40, 0.60, 0.20);
+}
+function terContrib(gx, gz, hill) {
+  if (!hill) { return 0; }
+  var blobs = hill[0], hh = hill[1], best = 0;
+  for (var i = 0; i < blobs.length; i++) {
+    var ddx = gx - blobs[i][0], ddz = gz - blobs[i][1];
+    var dist = Math.sqrt(ddx * ddx + ddz * ddz);
+    if (dist >= blobs[i][2]) { continue; }
+    var t = terSmooth(1 - dist / blobs[i][2]);
+    if (t > best) { best = t; }
   }
-  return best;
+  if (best <= 0) { return 0; }
+  var v = Math.floor(best * hh + 0.5);
+  return v > hh ? hh : v;
 }
-function terBaseH(gx, gz) {
-  var h = 0;
-  h += terNoise(gx, gz, 11, 18) * 0.80;
-  h += terNoise(gx, gz, 23, 7) * 0.35;
-  h += terHillH(gx, gz);
-  if (h < TER.MIN_H) { h = TER.MIN_H; }
-  if (h > TER.MAX_H) { h = TER.MAX_H; }
-  return h;
-}
-function terJitter(gx, gz) { return (terRand01(gx, gz, 41) - 0.5) * 0.12; }
 
 /* ★ 缓存：几何构建时每格要问好几次邻居 ✗ 不缓存会很慢 ✓ */
 var _terHc = {}, _terHcN = 0, _terMc = {}, _terSc = {};
 function _terKey(gx, gz) { return ((gx & 0xffff) << 16) | (gz & 0xffff); }
 function terHClear() { _terHc = {}; _terMc = {}; _terSc = {}; _terHcN = 0; }
+
+function terHillH(gx, gz) {
+  var bx = Math.floor(gx / TER.HB), bz = Math.floor(gz / TER.HB);
+  var best = 0, dx, dz, v;
+  for (dx = -1; dx <= 1; dx++) {
+    for (dz = -1; dz <= 1; dz++) {
+      v = terContrib(gx, gz, terBigHill(bx + dx, bz + dz));
+      if (v > best) { best = v; }
+    }
+  }
+  var sx = Math.floor(gx / TER.HB_SMALL), sz = Math.floor(gz / TER.HB_SMALL);
+  for (dx = -1; dx <= 1; dx++) {
+    for (dz = -1; dz <= 1; dz++) {
+      v = terContrib(gx, gz, terSmallHill(sx + dx, sz + dz));
+      if (v > best) { best = v; }
+    }
+  }
+  return best;
+}
+
 function terH(gx, gz) {
   var k = _terKey(gx, gz);
   var v = _terHc[k];
   if (v !== undefined) { return v; }
-  v = terBaseH(gx, gz) + terJitter(gx, gz);
-  if (v < TER.MIN_H) { v = TER.MIN_H; }
+  v = terHillH(gx, gz);
+  if (v < 0) { v = 0; }
   if (v > TER.MAX_H) { v = TER.MAX_H; }
   if (_terHcN > 400000) { terHClear(); }
   _terHc[k] = v; _terHcN++;
@@ -318,55 +340,22 @@ function terMat(gx, gz) {
   var v = _terMc[k];
   if (v !== undefined) { return v; }
   var h = terH(gx, gz);
-  if (h >= 4.2) { v = 'stone'; }
-  else if (terNoise(gx, gz, 31, 11) > 0.74) { v = 'stone'; }
-  else if (terNoise(gx, gz, 37, 17) > 0.62) { v = 'dirt'; }
+  if (h >= 4) { v = 'stone'; }
+  else if (h >= 2 && terRand01(gx, gz, 43) < 0.45) { v = 'stone'; }
+  else if (terRand01(gx, gz, 31) < 0.30) { v = 'dirt'; }
   else { v = 'grass'; }
   _terMc[k] = v;
   return v;
 }
-var TER_SD = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-function terSlope(gx, gz) {
-  var k = _terKey(gx, gz);
-  var v = _terSc[k];
-  if (v !== undefined) { return v; }
-  var h = terH(gx, gz), bestDir = 0, bestDrop = 0;
-  if (terHillH(gx, gz) >= 0.25) {
-    for (var i = 0; i < 4; i++) {
-      var nh = terH(gx + TER_SD[i][0], gz + TER_SD[i][1]);
-      var drop = nh - h;
-      if (drop > TER.STEP_JUMP && drop <= 2.2 && drop > bestDrop) {
-        bestDrop = drop; bestDir = i + 1;
-      }
-    }
-  }
-  _terSc[k] = bestDir;
-  return bestDir;
-}
-/* 格子内某点的地面 Y（世界单位 ✓ fx/fz = 格子内 0..1 进度 ✓） */
-function terGroundY(gx, gz, fx, fz) {
-  var h = terH(gx, gz);
-  var sl = terSlope(gx, gz);
-  if (sl) {
-    var d = TER_SD[sl - 1];
-    var nh = terH(gx + d[0], gz + d[1]);
-    var t;
-    if (d[0] === 1) { t = fx; }
-    else if (d[0] === -1) { t = 1 - fx; }
-    else if (d[1] === 1) { t = fz; }
-    else { t = 1 - fz; }
-    h = h + (nh - h) * t;
-  }
-  return h * TER.LEVEL_H;
-}
+/* ★ 用户："不要斜坡了" ✗ 恒为 0 ✓（留着是为了交叉验证测试还要比这一项 ✓） */
+function terSlope(gx, gz) { return 0; }
+/* 格子内的地面 Y（世界单位 ✓）—— 没有斜坡，整格是平的 ✓ */
+function terGroundY(gx, gz, fx, fz) { return terH(gx, gz) * TER.LEVEL_H; }
 /* 世界坐标 → 地面 Y */
 function terYAt(wx, wz) {
-  var fx = wx / TER.LEVEL_H, fz = wz / TER.LEVEL_H;
-  var gx = Math.floor(fx), gz = Math.floor(fz);
-  return terGroundY(gx, gz, fx - gx, fz - gz);
+  return terH(Math.floor(wx / TER.LEVEL_H), Math.floor(wz / TER.LEVEL_H)) * TER.LEVEL_H;
 }
 
-/* 材质基础色（D 档观感：每层更亮 ✗ 紧挨着更低处的格子压暗 ✓） */
 var TER_COL = {
   grass: [0.44, 0.50, 0.27],
   dirt:  [0.48, 0.36, 0.23],
@@ -2925,13 +2914,14 @@ function addWorldMob(arr, t) {
     var m = mob(mkind);                              // ★ 传职业名（几何体按名缓存 ✓ 第 44 轮）
     // ★ 体型 = 等级带来的（第 37 轮）× 职业自己的比例（学生矮、健身教练壮）
     m.g.scale.setScalar(mobScaleAt(mlv) * ((mcls && mcls.scale) || 1));
-    m.g.position.set(x, 0, z);
+    /* ★ round306：新出现的僵尸也要站在地形上（原来永远 y=0 ✗ 会陷进山里 ✓）*/
+    m.g.position.set(x, terYAt(x, z), z);
     m.g.rotation.y = yaw;
     scene.add(m.g);
     var sh = new THREE.Mesh(new THREE.CircleGeometry(0.54, 14),
       new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.24, depthWrite: false }));
     sh.rotation.x = -Math.PI / 2;
-    sh.position.set(x, 0.02, z);
+    sh.position.set(x, terYAt(x, z) + 0.02, z);
     sh.scale.setScalar(mobScaleAt(mlv) / G.MOB_SCALE);   // ★ 影子跟着体型一起放大 ✓
     scene.add(sh);
     rm = NET.rmobs[mid] = {
@@ -3718,9 +3708,30 @@ function netUpdate(dt) {
     var rm = NET.rmobs[mid];
     if (!netSample(rm.buf, srvRender, rm.cur)) { continue; }   // ★ 妖兽用服务器钟 ✓
     var rx = rm.cur.x, rz = rm.cur.z;
-    rm.g.position.set(rx, 0, rz);
+    /* ★★★ round306：僵尸也要站在地形上 ✗ 而且上台阶要"跳"一下 ✓
+       自测踩到（用户："僵尸怎么无视方块可以直接穿模了"）：
+         ① 服务端 _mob_step 完全没查地形高度 ✗ 僵尸直接走上峭壁 ✓（已修 ✓）
+         ② 客户端把僵尸【永远画在 y=0】✗ 走进山里就整个人陷进去 ✓
+       现在：Y 跟着地形走 ✗ 落差 1 格时补一个 0.3 秒的小跳跃弧线 ✓
+       ★ 用 terYAt 自己算 ✗ 不需要服务器多发一个字段 ✓
+         （地形是纯函数 ✗ 两边算出来一样 ✓ 这正是它的好处 ✓）*/
+    var _mgy = terYAt(rx, rz);
+    if (rm.lastGY === undefined) { rm.lastGY = _mgy; }
+    var _rise = _mgy - rm.lastGY;
+    if (_rise > 0.05 && !rm.jumpT) {
+      rm.jumpT = 0.001;          // 开始跳（只在【往上走】时触发 ✗ 掉下来不跳 ✓）
+    }
+    var _jy = _mgy;
+    if (rm.jumpT) {
+      rm.jumpT += dt;
+      var _jt = rm.jumpT / 0.3;          // 0.3 秒一个来回 ✓
+      if (_jt >= 1) { rm.jumpT = 0; }
+      else { _jy += Math.sin(_jt * Math.PI) * 0.34; }   // 弧高 0.34（≈ 半格 ✓）
+    }
+    rm.lastGY = _mgy;
+    rm.g.position.set(rx, _jy, rz);
     rm.g.rotation.y = rm.cur.yaw;
-    if (rm.shadow) { rm.shadow.position.set(rx, 0.02, rz); }
+    if (rm.shadow) { rm.shadow.position.set(rx, _mgy + 0.02, rz); }
     /* ★ 第 44 轮：只给 30 米内的僵尸投影 —— 更远的影子在地平线上只有几个像素，看不出来 ✓
        只要状态没变就不重复写 castShadow（写它会让 three.js 重建阴影列表 ✗）*/
     if (rm.hh.casters) {

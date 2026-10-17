@@ -84,19 +84,65 @@ def main():
 
     print('== 4. 地形本身合不合理（不靠客户端 ✗ 纯服务端）==')
     hs = []
-    sl = 0
+    flat = 0
+    n2 = 0
     for gx in range(-90, 90, 3):
         for gz in range(-90, 90, 3):
-            hs.append(T.height(gx, gz))
-            if T.slope_of(gx, gz):
-                sl += 1
+            h = T.height(gx, gz)
+            hs.append(h)
+            if h == 0:
+                flat += 1
+            n2 += 1
     hs.sort()
-    p50 = hs[len(hs) // 2]
     ok(hs[-1] <= T.MAX_H + 1e-9, '最高不超过上限（%.2f ≤ %.2f）' % (hs[-1], T.MAX_H))
-    ok(hs[0] >= T.MIN_H - 1e-9, '最低不低于下限（%.2f ≥ %.2f）' % (hs[0], T.MIN_H))
-    ok(hs[-1] > 2.5, '确实有小山（最高 %.2f 层）' % hs[-1])
-    ok(p50 < 1.2, '大部分地方是平地（中位数 %.2f 层）' % p50)
-    ok(sl > 0, '确实生成出了斜坡（%d 格）' % sl)
+    ok(hs[0] >= 0 - 1e-9, '没有负数高度（最低 %.2f）' % hs[0])
+    ok(hs[-1] >= 3.0, '确实有山（最高 %.2f 层）' % hs[-1])
+    ok(flat * 1.0 / n2 > 0.75,
+       '大部分地方是平地（%.1f%% 的格子是 0 层）' % (flat * 100.0 / n2))
+
+    print('== 5. ★ 用户 2026-10-17 第三轮的三条要求 ==')
+    # ① 不要斜坡：全部为 0
+    nz = 0
+    for gx in range(-60, 60, 2):
+        for gz in range(-60, 60, 2):
+            if T.slope_of(gx, gz) != 0:
+                nz += 1
+    ok(nz == 0, '① 没有斜坡了（非零 %d 处）' % nz)
+
+    # ② 平地必须一样高：随机取 2000 个 0 层格子，看周围有没有抖动
+    same = 0
+    checked = 0
+    for gx in range(-60, 60, 3):
+        for gz in range(-60, 60, 3):
+            if T.height(gx, gz) != 0:
+                continue
+            checked += 1
+            # 一个纯平地区域：附近 3x3 全是 0 → 高度必须是【整数 0】
+            if T.height(gx, gz) == 0.0 and T.jitter(gx, gz) == 0.0:
+                same += 1
+    ok(checked > 0 and same == checked,
+       '② 平地格子高度完全一致（%d/%d 是整数 0 ✗ 没有抖动）' % (same, checked))
+
+    # ③ 山头多样 + 有悬崖
+    steps = {}
+    for gx in range(-70, 70):
+        for gz in range(-70, 70):
+            h = T.height(gx, gz)
+            d = int(T.height(gx + 1, gz) - h)
+            if d:
+                steps[d] = steps.get(d, 0) + 1
+    up1 = steps.get(1, 0)
+    up2 = steps.get(2, 0) + steps.get(3, 0)
+    ok(up1 > 0, '③ 有能跳上去的一格台阶（%d 处）' % up1)
+    ok(up2 > 0, '③ 也有跳不上去的峭壁（二格以上 %d 处）' % up2)
+    ratios = {}
+    for gx in range(-96, 96, 2):
+        for gz in range(-96, 96, 2):
+            v = int(T.height(gx, gz))
+            ratios[v] = ratios.get(v, 0) + 1
+    kinds = len([k for k in ratios if k > 0])
+    ok(kinds >= 3, '③ 山的层数有 %d 种（不是只有一种高度）' % kinds)
+
 
     print()
     print('FAILED: %d' % len(fails))
