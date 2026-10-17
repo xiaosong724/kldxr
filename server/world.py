@@ -4440,9 +4440,34 @@ class World(object):
                     continue
                 if not mobs.in_front(p.x, p.z, p.yaw, q.x, q.z, reach, arc):
                     continue
-                dv, _ = mobs.roll_damage(self._atk_of(p))
+                dv, _cr = mobs.roll_damage(self._atk_of(p))
+                # ★★★ round405 修的真 bug：这里原来【只发提示、不扣血】✗
+                #   客户端自己减了 HP ✗ 但服务端 q.hp 没动 ✓
+                #   → PvP 打不死人 ✗ 而且下次快照又把血推回去 ✓
+                q.hp = max(0, int(q.hp) - int(dv))
                 self._add_pend(q.cid, 'hurts', {'dmg': dv, 'x': round(p.x, 2),
                                                 'z': round(p.z, 2), 'by': p.name, 'pvp': 1})
+                if _cr:
+                    self._fx_broadcast(p, {'kind': 'crit'})
+                # ★ round405（用户："武器特效对玩家也要生效"）
+                #   ★ 只做【伤害类】特效（连刺/旋击/横扫/连砍/挑飞落地）✓
+                #   ★ 控制类（眩晕/击退/挑飞在空中）对玩家【先不做】✗
+                #     因为玩家位置是客户端权威 ✗ 服务端推回去会被覆盖 ✓
+                fx2 = weapons.fx_of(wlook, wtier)
+                if fx2 and fx2['name'] in ('连刺', '连砍', '旋击', '横扫', '挑飞'):
+                    if random.random() < fx2['chance']:
+                        _extra = max(1, int(round(dv * 0.6)))
+                        q.hp = max(0, int(q.hp) - _extra)
+                        self._add_pend(q.cid, 'hurts', {'dmg': _extra, 'x': round(p.x, 2),
+                                                        'z': round(p.z, 2),
+                                                        'by': p.name, 'pvp': 1})
+                        self._fx_broadcast(p, {'kind': 'crit'} if fx2['name'] == '连刺'
+                                              else {'kind': 'dmg', 'v': _extra, 'crit': 0,
+                                                    'x': round(q.x, 2), 'z': round(q.z, 2),
+                                                    '_skip': p.cid})
+                if int(q.hp) <= 0:
+                    q.hp = 0
+                    self._send_cid(q.cid, P.pack('dead', by=p.name))
 
     def _weapon_fx(self, p, m, fx, dv):
         """命中后触发武器机制（第 59 轮 ✓ 全部由服务器算 ✓）"""
