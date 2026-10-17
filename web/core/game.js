@@ -553,7 +553,7 @@ var _flashClones = [];
 function flashCloneMesh(obj) {
   if (!obj) { return; }
   var wm = new THREE.MeshBasicMaterial({
-    color: 0xffffff, transparent: true, opacity: 0.34,
+    color: 0xffffff, transparent: true, opacity: 0,
     depthWrite: false, blending: THREE.AdditiveBlending });
   var c;
   try { c = obj.clone(true); } catch (e) { return; }
@@ -565,7 +565,7 @@ function flashCloneMesh(obj) {
   c.scale.copy(obj.scale);
   c.visible = true;
   if (obj.parent) { obj.parent.add(c); } else { scene.add(c); }
-  _flashClones.push({ o: c, t: 0, m: wm });
+  _flashClones.push({ o: c, t: 0, m: wm, peak: 0.18 });
   if (_flashClones.length > 8) {
     var f0 = _flashClones.shift();
     if (f0.o.parent) { f0.o.parent.remove(f0.o); }
@@ -576,13 +576,18 @@ function flashCloneTick(dt) {
   for (var i = _flashClones.length - 1; i >= 0; i--) {
     var f = _flashClones[i];
     f.t += dt;
-    var k = f.t / 0.14;
+    /* ★ round342（用户："闪白的动画慢一点，淡入淡出，再淡一点"）
+       ★ 曲线：sin(k*π) → 0 起来、峰值、再落回 0 ✗ 两头都是软的 ✓
+         （原来是"一下子到峰值再线性淡出"✗ 起点很硬 ✓）
+       ★ 时长 0.14 → 0.30 秒（慢一倍 ✓）
+       ★ 峰值 0.34/0.30 → 0.18/0.16（淡很多 ✓）*/
+    var k = f.t / 0.30;
     if (k >= 1) {
       if (f.o.parent) { f.o.parent.remove(f.o); }
       f.m.dispose();
       _flashClones.splice(i, 1);
     } else {
-      f.m.opacity = 0.34 * (1 - k);
+      f.m.opacity = f.peak * Math.sin(k * Math.PI);
     }
   }
 }
@@ -591,7 +596,7 @@ var _blockFlashGeo = null;
 function flashBlock(gx, gz) {
   if (!_blockFlashGeo) { _blockFlashGeo = new THREE.BoxGeometry(TER.LEVEL_H, TER.LEVEL_H, TER.LEVEL_H); }
   var wm = new THREE.MeshBasicMaterial({
-    color: 0xffffff, transparent: true, opacity: 0.30,
+    color: 0xffffff, transparent: true, opacity: 0,
     depthWrite: false, blending: THREE.AdditiveBlending });
   var m = new THREE.Mesh(_blockFlashGeo, wm);
   m.position.set((gx + 0.5) * TER.LEVEL_H,
@@ -601,7 +606,7 @@ function flashBlock(gx, gz) {
      ★ 稍微放大 2% ✗ 盖住和地形之间的接缝 ✓ */
   m.scale.setScalar(1.02);
   scene.add(m);
-  _flashClones.push({ o: m, t: 0, m: wm });
+  _flashClones.push({ o: m, t: 0, m: wm, peak: 0.16 });
 }
 function hitFlash(wx, wy, wz, big) {
   if (!_flashPool.length) {
