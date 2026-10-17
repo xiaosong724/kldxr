@@ -220,7 +220,8 @@ const PW = 'abc123456';
     'for (var i = 0; i < 3; i++) { diff += Math.abs(a[i] - b[i]); }',
     'var bad = false;',
     'for (var j = 0; j < 3; j++) { if (!isFinite(a[j]) || !isFinite(b[j])) { bad = true; } }',
-    'return JSON.stringify({ diff: +diff.toFixed(3), nan: bad,',
+    'var lL = h.armL.rotation.x, rL = h.armR.rotation.x;',
+    'return JSON.stringify({ diff: +diff.toFixed(3), nan: bad, armL: +lL.toFixed(2), armR: +rL.toFixed(2),',
     '  a: a.map(function(v){return +v.toFixed(2);}),',
     '  b: b.map(function(v){return +v.toFixed(2);}) });',
   ].join(''));

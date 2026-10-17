@@ -5003,13 +5003,28 @@ function heroAtkPose(heroObj, atkT, bx, bz, byaw, look, baseY, side) {
   else { ee = e; }
   var A = KF[f], B = KF[f + 1];
   var lp = function (i) { return A[i] + (B[i] - A[i]) * ee; };
+  /* ★ round377（用户："左右的幅度不够大，看不出来"）
+     ★ 侧向的三个通道（手臂左右/手臂张角/身体扭转）普遍只有 ±0.1~0.2 弧度
+       ≈ 6~11 度 ✗ 屏幕上根本看不出"左劈"还是"右劈"✓
+     ★ 斧头单独放大 2.6 倍 ✗ 其它武器不动 ✓（免得影响已有手感 ✓）*/
+  var _latK = (look === 'axe') ? 2.6 : 1.0;
   heroObj.armR.rotation.x = lp(0);
-  heroObj.armR.rotation.y = lp(1);
-  heroObj.armR.rotation.z = lp(2);
+  heroObj.armR.rotation.y = lp(1) * _latK;
+  heroObj.armR.rotation.z = lp(2) * _latK;
   if (heroObj.sw) { heroObj.sw.rotation.x = lp(3); }
   heroObj.g.rotation.x = lp(4);
-  heroObj.g.rotation.y = byaw + lp(5);
-  heroObj.armL.rotation.x = lp(6);
+  heroObj.g.rotation.y = byaw + lp(5) * _latK;
+  /* ★ round377（用户："名字叫双手斧，应该是两个手握着"）
+     ★ 现在左手有自己的通道（lp(6)）✗ 和右手完全不同步 ✗ 看着像单手挥 ✓
+     ★ 斧/锤：左手【跟着右手抬】+ 往中线收 ✓ 就是两手握同一把柄 ✓
+       （只看 x/z 两个通道 ✗ 关键帧里没有左臂的 y，做不出更细的握法 ✓）*/
+  if (look === 'axe' || look === 'hammer') {
+    heroObj.armL.rotation.x = lp(0) * 0.82 + 0.10;
+    heroObj.armL.rotation.z = 0.34;
+  } else {
+    heroObj.armL.rotation.x = lp(6);
+    heroObj.armL.rotation.z = 0;
+  }
   heroObj.legL.rotation.x = lp(7);
   heroObj.legR.rotation.x = lp(8);
   heroObj.g.position.x = bx + Math.sin(byaw) * lp(9);
