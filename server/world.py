@@ -4309,8 +4309,17 @@ class World(object):
             # ★ round395（用户："每刀 60%"）
             #   ★ 弯刀连砍：把这一刀本身也压到 60% ✗ 后面的刀由队列补 ✓
             #   → 总计 = N × 60% ✓（不加这一句就是 100% + (N-1)×60% ✗）
+            _fxRun = fx
             if fx and fx.get('name') == '连砍':
-                dv = max(1, int(round(dv * 0.6)))
+                # ★ round397（用户："统一概率 20%"）
+                #   ★ 先掷骰子 ✗ 没触发就【完全走普通攻击】(100% 伤害 ✓)
+                #   ★ 触发了才把第一刀压到 60% ✗ 后面的刀由队列补 ✓
+                if random.random() < fx['chance']:
+                    dv = max(1, int(round(dv * 0.6)))
+                    _fxRun = dict(fx)
+                    _fxRun['chance'] = 1.0      # ★ 已经掷过了 ✗ 别再掷一次 ✓
+                else:
+                    _fxRun = None
             m.hp -= dv
             # ★★★ round361 修的真 bug（用户："打僵尸的受伤音效没有了"）★★★
             #   根因：我上次把 'heal': _heal 塞进 mhits ✗
@@ -4332,7 +4341,7 @@ class World(object):
                                             'x': round(m.x, 2), 'z': round(m.z, 2)})
 
             # ★★ 命中后按武器类型触发机制 ★★
-            self._weapon_fx(p, m, fx, dv)
+            self._weapon_fx(p, m, _fxRun, dv)
 
             if m.hp <= 0:
                 m.hp = 0
@@ -4352,15 +4361,21 @@ class World(object):
         """命中后触发武器机制（第 59 轮 ✓ 全部由服务器算 ✓）"""
         if not fx or m.hp <= 0:
             return
+        # ★★★ round397：概率【统一在这里掷一次】★★★
+        #   原来只有流血/击退/眩晕三个分支自己掷 ✗
+        #   而我新加的连刺/旋击/横扫/连砍【一个都没掷】✗ 等于必定触发 ✓
+        #   现在统一：chance >= 1 的（溅射/投掷/连砍）不受影响 ✓
+        if fx.get('chance', 1.0) < 1.0 and random.random() >= fx['chance']:
+            return
         nm = fx['name']
         if nm == '流血':
-            if random.random() < fx['chance']:
+            if True:
                 m.bleedT = weapons.BLEED_TIME
                 m.bleedDmg = max(0.5, dv * fx['value'] / weapons.BLEED_TIME)
                 m.bleedFrom = p
                 self._send_cid(p.cid, P.pack('fx', kind='bleed', mid=m.mid))
         elif nm == '击退':
-            if m.knockImmune <= 0 and random.random() < fx['chance']:
+            if m.knockImmune <= 0:
                 m.knockImmune = weapons.KNOCK_IMMUNE
                 # 顺着"我→他"的方向推出去 ✓
                 dx, dz = m.x - p.x, m.z - p.z
@@ -4369,7 +4384,7 @@ class World(object):
                 m.z += dz / d * fx['value']
                 self._send_cid(p.cid, P.pack('fx', kind='knock', mid=m.mid))
         elif nm == '眩晕':
-            if m.stunImmune <= 0 and random.random() < fx['chance']:
+            if m.stunImmune <= 0:
                 m.stunT = fx['value']
                 m.stunImmune = weapons.STUN_IMMUNE
                 self._send_cid(p.cid, P.pack('fx', kind='stun', mid=m.mid))
