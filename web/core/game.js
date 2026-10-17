@@ -5197,6 +5197,9 @@ var AUTO_LOOT_R = 12.0;      /* 没怪时去捡东西的搜索半径 ✓ */
    ★ 0.30 秒 ≈ 0.9 米 ✗ 刚够离开僵尸的攻击距离 ✓ 又不会跑开太远 ✓
    ★ 不能压太狠：僵尸蓄力 0.45 秒 ✗ 没退出去会被打到 ✓
      → 0.28~0.32 是安全区间 ✓ */
+var _multiN = 0;            // ★ round395：弯刀连砍的刀数
+var _multiT0 = 0;           // 连砍动画起始时刻
+var _multiRep = 180;        // 每刀间隔（ms ✓ 和服务端一致）
 var _staffT0 = 0;           // ★ round393：长棍横扫的【触发时刻】
 var _staffDur = 1900;       // 整个"变大 → 慢慢缩回"的时长（ms ✓）
 var _staffLen = 4;          // 这次横扫的长度（米 ✓ 按品阶来）
@@ -5747,6 +5750,21 @@ function frame(ts) {
     }
     /* ★ round383：暴击跳打 —— 叠一个竖直抛物线 ✓
        ★ 和旋击可以同时生效 ✗ 转圈也能跳起来转 ✓ */
+    /* ★★★ round395（用户："向前挥砍 N 刀，每刀一步，双手握刀"）★★★
+       ★ 不算新关键帧 ✗ 把【劈砍】这套循环播 N 次 ✓
+       ★ 用 'axe' 那套：本来就是从上往下劈 ✗ 而且左手会握住 ✓（双手 ✓）*/
+    if (_multiN > 0) {
+      var _mNow = performance.now();
+      var _mEl = _mNow - _multiT0;
+      var _mTot = _multiN * _multiRep;
+      if (_mEl >= 0 && _mEl < _mTot) {
+        var _repT = (_mEl % _multiRep) / _multiRep;
+        var _atkT2 = _repT * ATK_T.chop[ATK_T.chop.length - 1];
+        heroAtkPose(H, _atkT2, P.x, P.z, P.yaw, 'axe', P.y, 0);
+      } else if (_mEl >= _mTot) {
+        _multiN = 0;
+      }
+    }
     /* ★★★ round393（用户："变大不够提前，攻击完要慢慢变小，而且不够大"）★★★
        ★ 包络曲线：
          0 ~ 0.10  【快速变大】✗ 攻击那一刻已经是大棍子了 ✓

@@ -1701,9 +1701,11 @@ class World(object):
             return
         _now = now_s()
         _keep = []
-        for (due, cid, mid, dmg) in self._later:
+        for _it in self._later:
+            due, cid, mid, dmg = _it[0], _it[1], _it[2], _it[3]
+            opt = _it[4] if len(_it) > 4 else None
             if _now < due:
-                _keep.append((due, cid, mid, dmg))
+                _keep.append(_it)
                 continue
             m = self.mobs.get(mid)
             if not m or m.hp <= 0:
@@ -1712,6 +1714,14 @@ class World(object):
             self._add_pend(cid, 'mhits', {'mid': mid, 'dmg': dmg, 'crit': False,
                                           'back': False, 'mb': None, 'heal': 0,
                                           'x': round(m.x, 2), 'z': round(m.z, 2)})
+            # ★ round395：连砍的"前进 + 击退"
+            if opt:
+                p2 = self.players.get(cid)
+                if p2:
+                    p2.x += math.sin(p2.yaw) * opt.get('step', 0)
+                    p2.z += math.cos(p2.yaw) * opt.get('step', 0)
+                m.x += math.sin(p2.yaw if p2 else 0) * opt.get('push', 0)
+                m.z += math.cos(p2.yaw if p2 else 0) * opt.get('push', 0)
             if m.hp <= 0:
                 m.hp = 0
                 p2 = self.players.get(cid)
@@ -4296,6 +4306,11 @@ class World(object):
             if m.kind == '保安' and rng() < mobs.BLOCK_CHANCE:
                 dv = max(1, int(round(dv * mobs.BLOCK_MUL)))
                 blocked = True
+            # ★ round395（用户："每刀 60%"）
+            #   ★ 弯刀连砍：把这一刀本身也压到 60% ✗ 后面的刀由队列补 ✓
+            #   → 总计 = N × 60% ✓（不加这一句就是 100% + (N-1)×60% ✗）
+            if fx and fx.get('name') == '连砍':
+                dv = max(1, int(round(dv * 0.6)))
             m.hp -= dv
             # ★★★ round361 修的真 bug（用户："打僵尸的受伤音效没有了"）★★★
             #   根因：我上次把 'heal': _heal 塞进 mhits ✗
@@ -4358,6 +4373,15 @@ class World(object):
                 m.stunT = fx['value']
                 m.stunImmune = weapons.STUN_IMMUNE
                 self._send_cid(p.cid, P.pack('fx', kind='stun', mid=m.mid))
+        elif nm == '连砍':
+            # ★ round395（用户："向前挥砍 2~13 刀，每刀 60%，一刀一步"）
+            #   ★ 第一刀刚才已经结算了（也压到 60% ✓）→ 这里只补后面的 N-1 刀 ✓
+            #   ★ 每刀间隔 0.18 秒 ✗ 动画也按这个节奏循环 ✓
+            _n = max(2, min(13, int(round(fx['value']))))
+            self._send_cid(p.cid, P.pack('fx', kind='saber', n=_n))
+            for _i2 in range(1, _n):
+                self._later.append((now_s() + 0.18 * _i2, p.cid, m.mid, dv,
+                                    {'step': 0.35, 'push': 0.35}))
         elif nm == '横扫':
             # ★ round392（用户："长棍触发时前方一条直线伤害并击退，按品阶延长"）
             #   ★ "一条直线" = 前方夹角 20° 内（dot > 0.94）✗ 不是扇形 ✓
@@ -4417,7 +4441,7 @@ class World(object):
             #   ★ 原来两段同一帧结算 ✗ 数字叠在一起 ✗ 看着像一次大伤害 ✓
             #   ★ 现在第二段延后 0.18 秒 ✗ 正好是动画里第二下刺出去的时刻 ✓
             extra = max(1, int(round(dv * fx['value'])))
-            self._later.append((now_s() + 0.18, p.cid, m.mid, extra))
+            self._later.append((now_s() + 0.18, p.cid, m.mid, extra, None))
             # ★ 不在这里判死 ✗ 交给调用方（它在本函数之后统一判 hp<=0 ✓）
         elif nm == '溅射':
             # ★★★ round378（用户："斧头溅射应该由品阶决定，最低 2 个，12 阶可以 13 个"）★★★

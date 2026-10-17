@@ -5151,6 +5151,13 @@ function wsOnMessage(raw) {
        修：直接加进 FX_C ✓（并且带上数字 ✓）*/
     /* ★ round381：锤子旋击 → 飘一个"旋击"并且开始转圈 ✓ */
     /* ★ round392：长棍横扫 → 棍子变长变大 + 飘字 */
+    /* ★ round395：弯刀连砍 → 循环播 N 刀的动画 */
+    if (d.kind === 'saber') {
+      _multiN = Math.max(2, Math.min(13, +d.n || 2));
+      _multiT0 = performance.now();
+      fxNum('连砍 ' + _multiN + ' 刀', '#ffd83d', P.x, 2.9, P.z);
+      return;
+    }
     if (d.kind === 'staff') {
       /* ★ round393：触发时刻提前一点 ✗ 让"变大"发生在砸下去之前 ✓
          （事件是命中瞬间到的，往前挪 120ms 相当于"起手就已经在变大了"）*/
