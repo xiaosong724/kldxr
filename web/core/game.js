@@ -4277,7 +4277,14 @@ function netUpdate(dt) {
     var _mgy = terYAt(rx, rz);
     if (rm.lastGY === undefined) { rm.lastGY = _mgy; }
     var _rise = _mgy - rm.lastGY;
-    if (_rise > 0.05 && !rm.jumpT) {
+    /* ★ round323（用户："一直跳动的话僵尸看起来一卡一卡的"）
+       ★ 一个可能的原因：这一段"上台阶就跳"的门槛只有 0.05 ✗
+         而 _mgy 来自【插值后的坐标】✗ 站在两格高度的交界处会来回抖 ✓
+         → 每帧都触发一次小跳跃弧 ✗ 看着就是一卡一卡 ✓
+       修：① 门槛提到 0.4（只有真的上了一阶才跳 ✓）
+          ② 加 0.5 秒冷却（同一只怪不会连着弹 ✓） */
+    if (_rise > 0.4 && !rm.jumpT && (rm.jumpCd || 0) <= 0) {
+      rm.jumpCd = 0.5;
       /* ★★★ round310（用户："把妖兽的跳跃动画也做明显一点高一点"）★★★
          上一版弧高只有 0.34 世界单位（≈ 半格）✗ 一跳就过去了 ✗ 根本看不出来 ✓
          现在：基础 0.72 + 台阶高度 × 0.8
@@ -4294,6 +4301,7 @@ function netUpdate(dt) {
       if (_jt >= 1) { rm.jumpT = 0; }
       else { _jy += Math.sin(_jt * Math.PI) * (rm.jumpH || 1.2); }
     }
+    if (rm.jumpCd > 0) { rm.jumpCd -= dt; }
     rm.lastGY = _mgy;
     rm.g.position.set(rx, _jy, rz);
     rm.g.rotation.y = rm.cur.yaw;

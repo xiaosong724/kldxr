@@ -1568,6 +1568,16 @@ class World(object):
                     if m.lavaT <= 0:
                         m.lavaT = 0.5
                         m.hp = int(m.hp) - 5
+                        # ★ round323（用户："僵尸进岩浆也要飘字和受伤音效"）
+                        #   走 mhits 这条现成的路 ✓ 客户端会弹伤害数字 + 出打击音效 ✓
+                        #   只发给【附近】的人（30 格）✗ 远处的人不用知道 ✓
+                        for _p3 in self.players.values():
+                            _dx3 = m.x - _p3.x
+                            _dz3 = m.z - _p3.z
+                            if _dx3 * _dx3 + _dz3 * _dz3 <= 900:
+                                self._add_pend(_p3.cid, 'mhits',
+                                               {'dmg': 5, 'x': round(m.x, 2),
+                                                'z': round(m.z, 2), 'mid': m.mid})
             # ★ 第 59 轮：武器机制的状态衰减（先衰减再判断行为 ✓）
             if m.stunImmune > 0:
                 m.stunImmune = max(0.0, m.stunImmune - dt)
