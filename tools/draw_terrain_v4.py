@@ -179,23 +179,34 @@ def make_overview():
         for y in range(N):
             HM[(x, y)] = [0, DIRT, None]
 
-    # ★ 小山：按【到山心的距离】算高度 ✗ 自然成一层层的锥形 ✓
-    #   （自测踩到：手排格子会长成一堆盒子 ✗ 看不出是"山"✓）
-    cx, cy = 3.4, 3.4
+    # ★★ 小山：随机 2~5 层 ✗ 不固定样式（用户 2026-10-17 的决定）★★
+    #   按【到山心的距离】算高度 ✗ 自然成一层层的锥形 ✓
+    #   （手排格子会长成一堆盒子 ✗ 看不出是"山"✓ 我改了四版）
+    #   ★ 每格再叠 ±0.12 的抖动 ✗ 用户要求"不要每个都很准确的一格"✓
+    jr = random.Random(20261017)
+    HILLS = [(3.2, 3.0, 5, 1.62), (6.8, 6.6, 2, 1.35)]
+    for (cx, cy, hh, sl) in HILLS:
+        for x in range(N):
+            for y in range(N):
+                dd = math.hypot(x - cx, y - cy)
+                h = hh - dd * sl
+                if h > HM[(x, y)][0]:
+                    HM[(x, y)] = [h, GRASS, None]
     for x in range(N):
         for y in range(N):
-            dd = math.hypot(x - cx, y - cy)
-            h = int(round(3.5 - dd * 1.12))
-            if h > 0:
-                HM[(x, y)] = [min(3, h), GRASS, None]
-    # 山顶换石头（可破坏 6 下）
+            if HM[(x, y)][0] > 0:
+                HM[(x, y)][0] = HM[(x, y)][0] + jr.uniform(-0.06, 0.06)
+    # 山顶（≥4.4 层）换石头（可破坏 6 下）
     for x in range(N):
         for y in range(N):
-            if HM[(x, y)][0] == 3:
+            # ★ 抖动出来的"极矮格子" (<0.25) 压平成 0 ✗ 否则满图碎块 ✓
+            if 0 < HM[(x, y)][0] < 0.25:
+                HM[(x, y)][0] = 0.0
+            if HM[(x, y)][0] >= 4.4:
                 HM[(x, y)][1] = STONE
     # 西侧两条斜坡（0→1、1→2）✗ 演示"不用跳就能上山"✓
-    HM[(0, 2)] = [0, GRASS, ('x', 1)]
-    HM[(1, 2)] = [1, GRASS, ('x', 1)]
+    HM[(0, 2)] = [0.0, GRASS, ('x', 1)]
+    HM[(1, 2)] = [1.0, GRASS, ('x', 1)]
 
     # ── 石塔（独立的一个 2 层台）──
     HM[(5, 6)] = [2, STONE, None]
@@ -220,8 +231,8 @@ def make_overview():
     for (x, y) in keys:
         # ★ 站到"前侧"山腰（x+y 大 = 靠画面下方）✗
         #   原来挑的是最早遍历到的 2 层格 ✗ 正好在石头旁边 ✗ 标签打架 ✓
-        if HM[(x, y)][0] == 2 and HM[(x, y)][1] == GRASS and x + y >= 7:
-            px, py = iso.px(x, y, 2)
+        if 1.4 <= HM[(x, y)][0] <= 2.6 and HM[(x, y)][1] == GRASS and x + y >= 7:
+            px, py = iso.px(x, y, HM[(x, y)][0])
             cx2, cy2 = px + iso.cw / 2, py + iso.ch / 2 + 6
             person(d, cx2, cy2)
             d.line([cx2 + 20, cy2 - 4, cx2 + 20, cy2 - 64], fill=GREEN, width=2)
@@ -235,8 +246,8 @@ def make_overview():
 
     # ── 山顶石头标注 ──
     for (x, y) in keys:
-        if HM[(x, y)][0] == 3:
-            tx, ty = iso.px(x, y, 3)
+        if HM[(x, y)][1] == STONE and HM[(x, y)][0] >= 4.4:
+            tx, ty = iso.px(x, y, HM[(x, y)][0])
             d.polygon([(tx, ty + iso.ch / 2), (tx + iso.cw / 2, ty),
                        (tx + iso.cw, ty + iso.ch / 2), (tx + iso.cw / 2, ty + iso.ch)],
                       outline=GOLD, width=3)
@@ -268,15 +279,15 @@ def make_overview():
 
     # ---- 右侧规则 ----
     x0 = 880
-    T(d, x0, 96, '高度（一格 = 1 层）', GOLD, 18, bold=True)
+    T(d, x0, 96, '高度（一格 = 1.0）', GOLD, 18, bold=True)
     for k, t in enumerate([
         '· 0 = 地面；负数 = 坑（最深 1 层）',
         '· 最高 5 层（再高会挡住视线）',
         '· 人占 2 格：头顶那格必须是空气',
-        '· 落差 +1：自动迈上去（台阶）',
-        '· 落差 +2：跳不上去（只能跳 1 格）',
-        '             走斜坡，或者破坏掉',
-        '· 落差 ≥+3：墙，跳也上不去',
+        '· 每格高度【不精确】±0.06 抖动',
+        '· 落差 ≤0.35：自动迈上去',
+        '· 落差 ≤1.15：跳上去（跳跃高度）',
+        '· 落差 >1.15：上不去 → 斜坡 / 破坏',
     ]):
         T(d, x0, 126 + k * 23, t, TEXT, 13)
 
@@ -369,7 +380,7 @@ def make_jump():
         d.polygon([(bx, by), (bx - 11, by - 9), (bx - 9, by + 5)], fill=col)
 
     # ---------- A：0 → 1 层，能跳 ----------
-    ox = panel(0, 'A · 跳 1 格  ✓', '1 格高的台子：能跳上去', GREEN)
+    ox = panel(0, 'A · 跳 1 格  ✓', '1 层台阶（约 1.0）能跳上去', GREEN)
     ground(ox, 0, 5)
     blk(ox, 0, 0, 1, 1, DIRT)
     blk(ox, 1, 0, 1, 1, DIRT)
@@ -378,10 +389,10 @@ def make_jump():
     figure(ox, 1, 0)
     T(d, ox + 1.4 * U - 10, Y0 + BASE - 104, '跳 1 格 ✓', GOLD, 12, anchor='lm',
       bold=True)
-    T(d, ox + 14, Y0 + 300, '也能直接走上去（台阶）', DIM, 11)
+    T(d, ox + 14, Y0 + 300, '落差 ≤0.35 直接走 ✗ 更大的要跳', DIM, 11)
 
     # ---------- B：0 → 3 层，跳不上去 ----------
-    ox = panel(1, 'B · 3 层  ×', '只能跳 1 格，3 层跳不上去', RED)
+    ox = panel(1, 'B · 3 层  ×', '跳跃 1.15 格 ✗ 3 层约 3.0 跳不上去', RED)
     ground(ox, 0, 5)
     blk(ox, 0, 0, 2, 1, DIRT)
     blk(ox, 2, 0, 2, 3, STONE)
@@ -444,7 +455,7 @@ def make_jump():
     yb = 470
     T(d, 36, yb, '跳跃的规则（初版数值）', GOLD, 18, bold=True)
     rules = [
-        ('跳跃高度', '1 格（= 1.0 × 层高）'),
+        ('跳跃高度', '1.15 格（略高于 1 层 ✗ 盖住抖动）'),
         ('滞空时间', '0.35 秒'),
         ('起跳速度', '4.2（水平跑速是 4.4，跳不会变快）'),
         ('冷却', '0.15 秒（不能连跳刷位移）'),
@@ -461,7 +472,8 @@ def make_jump():
       '★ 关键：跳跃【只能 +1 格】✗ 所以"上不去的台子"是常态 ✓ 这就是斜坡和破坏系统的用处 ✓',
       GOLD, 13, bold=True)
     T(d, 36, yb + 40 + 2 * 60 + 42,
-      '★ 跳跃按钮放在攻击键【左下角】✗ 拇指不用挪 ✓ 和现有按键布局一致 ✓', DIM, 12)
+      '★ 为什么是 1.15 而不是 1.00：格子有 ±0.06 抖动 ✗ 一层台阶实际 0.94~1.06 ✓ '
+      '取 1.00 会"玄学上不去"✓', DIM, 12)
 
     p = os.path.join(OUT, 'terrain-jump.png')
     im.save(p)
@@ -552,14 +564,21 @@ def make_look():
         (1, 'A · 纯色方块', '现在的地面就是这样 ✗ 平的', RED),
         (2, 'B · 侧面明暗', '每层固定亮度 → 能看出高度', GOLD),
         (3, 'C · 接触阴影 + 投影', '★ 立体感主要来自这一步', GREEN),
-        (4, 'D · 边缘高光 + 草边 + 纹理', '最终想要的效果', CYAN),
+        (4, 'D · 边缘高光 + 草边 + 纹理', '★ 用户已选定这一档', CYAN),
     ]
     for i, (lv, nm, desc, col) in enumerate(names):
         ox = x00 + i * (pw + gap)
         d.rectangle([ox, y00, ox + pw, y00 + ph], fill=(28, 26, 24))
         patch(ox + pw / 2 - 60, y00 + 44, lv)
+        if lv == 4:
+            # ★ 选中的那一档：描一圈金边 + 右上角打勾 ✓
+            d.rectangle([ox, y00, ox + pw, y00 + ph], outline=GOLD, width=3)
+            d.ellipse([ox + pw - 44, y00 + 10, ox + pw - 12, y00 + 42], fill=GOLD)
+            d.text((ox + pw - 28, y00 + 26), '√', font=font(18, True),
+                   fill=(20, 19, 18), anchor='mm')
         T(d, ox + 14, y00 + ph - 52, nm, col, 15, bold=True)
-        T(d, ox + 14, y00 + ph - 30, desc, DIM, 12)
+        T(d, ox + 14, y00 + ph - 30, desc, col if lv == 4 else DIM, 12)
+    T(d, 36, y00 - 34, '★ 用户 2026-10-17 选了 D 档', GOLD, 14, bold=True)
 
     # 下部：技法清单
     y1 = 470
