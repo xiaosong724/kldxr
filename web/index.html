@@ -193,9 +193,17 @@
 #setPanel.merge #setBox > #setX,
 #setPanel.merge #setBox > #verTag,
 #setPanel.merge #setBox > #setTabsWrap{order:1 !important}
+/* ★★ round304x：给一排兄弟写 order ✗ 必须【全是整数】★★
+   我第一版写的是 order:3.5 ✗ 在 Chrome 上能用 ✓
+   但 CSS 规范里 order 是 <integer> ✗ Firefox 会【整条忽略】✓
+   → 那一页又回到默认 0 ✗ 还是排在标题上面 ✓
+   → 用户报"电脑手机都一样"✗ 正是因为浏览器不同 ✗ 而我只看了一个 ✓
+   ★ 教训：写 CSS 别用"看起来能过"的值 ✗ 用规范允许的值 ✓
+     而且【换一个浏览器验一遍】✗ 我这次只用了 Chrome ✓ */
 #setPanel.merge .tabpane[data-pane="audio"]{order:2 !important}
 #setPanel.merge .tabpane[data-pane="view"]{order:3 !important}
-#setPanel.merge .tabpane[data-pane="ctrl"]{order:4 !important}
+#setPanel.merge .tabpane[data-pane="mkt"]{order:4 !important}
+#setPanel.merge .tabpane[data-pane="ctrl"]{order:5 !important}
 </style>
 
 <style>
@@ -317,6 +325,17 @@
 .mktIco{position:relative;width:34px;height:34px;border-radius:7px;flex:0 0 34px;
   display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.09)}
 .mktIco svg{width:26px;height:26px}
+/* ★★ round304y：用户截图报的"阶数筛选那行跑到标题栏上面去了"★★
+   ★ 根因是【类名撞车】：.mktTier 同时被用在了两个完全不同的东西上
+     · 商品图标左上角那个"阶数小角标" → 需要 position:absolute（下面就写着 ✓）
+     · 阶数筛选按钮（全阶 / 1-3 阶 …）→ 它们是普通按钮 ✗ 却被这条 CSS
+       整成了【绝对定位 left:2 top:1】✓ → 四个按钮全叠在面板左上角 ✓
+       （看起来就是"跑到标题栏上面去了"✗ 而且不报错 ✓ 只是位置不对 ✓）
+   ★ 为什么以前没发现：这四条按钮和角标同名 ✗ 从有筛选那天起就错了 ✓
+   ★ 修法：筛选按钮改用 .mktTierBtn ✗ 和角标彻底分开 ✓
+     （.mktTier 这个名字留给角标 ✗ 它是"图标里的阶数"✓ 语义也对 ✓）
+   ★ 教训：CSS 类名一旦被两处共用 ✗ 只要有一处需要定位/尺寸 ✗ 另一处就遭殃 ✓
+     命名里带上"它是什么"（Btn / Ico / Badge ✓）能避免一整类这种事 ✓ */
 .mktTier{position:absolute;left:2px;top:1px;font-size:9px;color:#fff;opacity:.85;
   text-shadow:0 1px 2px #000}
 .mktCnt{position:absolute;right:2px;bottom:1px;font-size:10px;color:#ffe0a0;
@@ -757,10 +776,10 @@
       <button class="bagB mktCat" data-cat="other">其他</button>
     </div>
     <div class="bagBtns" id="mktSortRow">
-      <button class="bagB on mktTier" data-tier="0">全阶</button>
-      <button class="bagB mktTier" data-tier="1">1-3 阶</button>
-      <button class="bagB mktTier" data-tier="2">4-6 阶</button>
-      <button class="bagB mktTier" data-tier="3">7-9 阶</button>
+      <button class="bagB on mktTierBtn" data-tier="0">全阶</button>
+      <button class="bagB mktTierBtn" data-tier="1">1-3 阶</button>
+      <button class="bagB mktTierBtn" data-tier="2">4-6 阶</button>
+      <button class="bagB mktTierBtn" data-tier="3">7-9 阶</button>
       <button class="bagB mktSort" data-sort="price">价格↑</button>
       <button class="bagB mktSort" data-sort="price_desc">价格↓</button>
       <button class="bagB mktSort" data-sort="new">最新</button>

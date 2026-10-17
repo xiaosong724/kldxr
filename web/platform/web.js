@@ -3026,7 +3026,7 @@ function mktBindOnce() {
       mktAsk(false);
     };
   }
-  var tiers = document.querySelectorAll('#mktSortRow .mktTier');
+  var tiers = document.querySelectorAll('#mktSortRow .mktTierBtn');
   for (var j = 0; j < tiers.length; j++) {
     tiers[j].onclick = function () {
       MKT.tier = +(this.getAttribute('data-tier') || 0);
@@ -3267,7 +3267,7 @@ function mktRender() {
   if (msg) { msg.textContent = MKT.msg || ''; }
   /* 按钮高亮：分类 / 阶数 / 排序 / 只看买得起（★ 全部现算 ✓）*/
   mktHilite('#mktCatRow .mktCat', 'data-cat', MKT.cat);
-  mktHilite('#mktSortRow .mktTier', 'data-tier', String(MKT.tier));
+  mktHilite('#mktSortRow .mktTierBtn', 'data-tier', String(MKT.tier));
   mktHilite('#mktSortRow .mktSort', 'data-sort', MKT.sort);
   var af = document.getElementById('mktAfford');
   if (af) { af.className = MKT.afford ? 'bagB on mktAfford' : 'bagB mktAfford'; }
