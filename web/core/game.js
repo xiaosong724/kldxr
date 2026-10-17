@@ -5670,7 +5670,7 @@ function frame(ts) {
          ★ 弹跳键的视觉最高点 ≈ 1.98 格（物理 1.04 × 1.9 倍视觉加成 ✓）
          ★ 0.45 只有它的四分之一 ✗ 难怪看不出来 ✓
          ★ 2.4 格 = 明显高过普通跳跃 ✓ */
-      H.g.position.y += Math.sin(_jp * Math.PI) * 2.4;
+      H.g.position.y += Math.sin(_jp * Math.PI) * 3.4;   /* round385: 2.4 -> 3.4 */
     }
   }
   if (atkCd > 0) { atkCd -= dt; }
