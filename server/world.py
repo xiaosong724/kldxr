@@ -4265,10 +4265,20 @@ class World(object):
                 m.stunImmune = weapons.STUN_IMMUNE
                 self._send_cid(p.cid, P.pack('fx', kind='stun', mid=m.mid))
         elif nm == '溅射':
-            # 对主目标 1.5 米内最多 2 个再各打一份 ✓（不触发二次溅射 ✓ 防递归）
+            # ★★★ round378（用户："斧头溅射应该由品阶决定，最低 2 个，12 阶可以 13 个"）★★★
+            #   ★ 规则：1 阶 = 2 个 ✗ 每多 1 阶多 1 个 ✗ 12 阶 = 13 个 ✓
+            #   ★ 其余武器（斧以外）保持原来的 SPLASH_MAX 不变 ✓
+            _wTier = 0
+            try:
+                _wTier = int((p.weapon or {}).get('tier') or 0)
+            except Exception:
+                _wTier = 0
+            _splashCap = weapons.SPLASH_MAX
+            if (p.weapon or {}).get('look') == 'axe' or (p.weapon or {}).get('id') == 'axe':
+                _splashCap = max(2, min(13, 2 + max(0, _wTier - 1)))
             n, r2 = 0, weapons.SPLASH_R * weapons.SPLASH_R
             for o in list(self.mobs.values()):
-                if n >= weapons.SPLASH_MAX:
+                if n >= _splashCap:
                     break
                 if o is m or o.hp <= 0:
                     continue

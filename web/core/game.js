@@ -5007,7 +5007,7 @@ function heroAtkPose(heroObj, atkT, bx, bz, byaw, look, baseY, side) {
      ★ 侧向的三个通道（手臂左右/手臂张角/身体扭转）普遍只有 ±0.1~0.2 弧度
        ≈ 6~11 度 ✗ 屏幕上根本看不出"左劈"还是"右劈"✓
      ★ 斧头单独放大 2.6 倍 ✗ 其它武器不动 ✓（免得影响已有手感 ✓）*/
-  var _latK = (look === 'axe') ? 2.6 : 1.0;
+  var _latK = (look === 'axe') ? 3.6 : 1.0;   /* round378: 2.6 -> 3.6 */
   heroObj.armR.rotation.x = lp(0);
   heroObj.armR.rotation.y = lp(1) * _latK;
   heroObj.armR.rotation.z = lp(2) * _latK;
