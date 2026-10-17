@@ -364,6 +364,8 @@ class World(object):
         self._pend = {}                 # cid -> {'hurts': [...], 'mhits': [...], 'me': {...}}
         # ★ round382：延迟结算（单手剑连刺的第二段 ✓ 看起来才像两下）
         self._later = []                # [(到期时刻, cid, mid, 伤害)]
+        # ★ round391：待发射的投射物（匕首投掷要延后出手 ✓）
+        self._later_arrow = []          # [(到期时刻, cid, 伤害, 暴击, 是否匕首)]
         # ★ round305：余额的"代号"（role_id -> 递增序号 ✗ 每改一次钱 +1 ✓）
         #   存档线程拿它判断"这一笔排队之后钱有没有又被改过"✓
         #   （过期的写入直接作废 ✗ 不给它把新值盖回去的机会 ✓）
@@ -1709,6 +1711,27 @@ class World(object):
                 if p2:
                     self._mob_died(p2, m)
         self._later = _keep
+        # ★ 到点发射投掷物（round391 ✓）
+        if getattr(self, '_later_arrow', None):
+            _ka = []
+            for (_due2, _cid2, _dmg2, _crit2, _isdag) in self._later_arrow:
+                if _now < _due2:
+                    _ka.append((_due2, _cid2, _dmg2, _crit2, _isdag))
+                    continue
+                pp = self.players.get(_cid2)
+                if not pp or len(self.arrows) >= ARROW_MAX:
+                    continue
+                self._arrow_id += 1
+                self.arrows[str(self._arrow_id)] = {
+                    'id': self._arrow_id,
+                    'x': pp.x, 'z': pp.z, 'yaw': pp.yaw,
+                    'dx': math.sin(pp.yaw), 'dz': math.cos(pp.yaw),
+                    'dmg': _dmg2, 'crit': bool(_crit2),
+                    'kind': 'dagger' if _isdag else 'arrow',
+                    'life': (14.0 if _isdag else 8.0) / ARROW_SPEED,
+                    'by': pp.cid,
+                }
+            self._later_arrow = _ka
 
     def _mob_tick(self, dt):
         """刷怪 / 回收 / 追击 / 咬人 —— ★ 只在 tick 线程里跑"""
@@ -4175,7 +4198,7 @@ class World(object):
         #     偶数刀 = 近身刺（走下面的正常近战 ✓）
         #   ★ 投掷伤害按品阶：1 阶 20% → 12 阶 80%（每阶 +6%）
         if wlook == 'dagger':
-            if len(self.arrows) < ARROW_MAX:
+            if True:   # ★ round391：不再立刻发射 ✗ 压队列延后 0.40 秒 ✓
                 self._arrow_id += 1
                 _atk2 = self._atk_of(p)
                 _dv2, _crit2 = mobs.roll_damage(
@@ -4188,18 +4211,10 @@ class World(object):
                 if _ratio > 0.80:
                     _ratio = 0.80
                 _dv2 = max(1, int(round(_dv2 * _ratio)))
-                self.arrows[str(self._arrow_id)] = {
-                    'id': self._arrow_id,
-                    'x': p.x, 'z': p.z, 'yaw': p.yaw,
-                    'dx': math.sin(p.yaw), 'dz': math.cos(p.yaw),
-                    'dmg': _dv2, 'crit': bool(_crit2),
-                    'kind': 'dagger',                 # ★ round389：客户端按它选模型 ✓
-                    # ★ round388（用户："第一次攻击要像箭一样射出去，距离也和箭一样"）
-                    #   ★ 原来用的是【匕首的近战距离 1.8 米】✗ 飞一下就没了 ✓
-                    #   ★ 现在用【弓的距离 14 米】✗ 和箭完全一致 ✓
-                    'life': 14.0 / ARROW_SPEED,
-                    'by': p.cid,
-                }
+                # ★ round391（用户："也要做延迟，看起来才像两段伤害"）
+                #   ★ 不再立刻发射 ✗ 压进队列 0.40 秒后再射 ✓
+                #     0.40 秒 ≈ 动画里左臂真正甩出去的时刻 ✓
+                self._later_arrow.append((now_s() + 0.40, p.cid, _dv2, _crit2, True))
             # ★ round390（用户："两次攻击作为一次，分成两段，像单手剑一样"）
             #   ★ 这里【不 return】✗ 继续往下走普通近战 ✓
             #   → 一次按键 = 先扔出一把（远程）✗ 再近身刺一刀 ✓
