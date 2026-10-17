@@ -1445,7 +1445,8 @@ class World(object):
             return
         self.prop_hp.pop(key, None)
         self.prop_dead.add(key)
-        self._prop_bc.append([gx, gz, 1, 0, 0])
+        # ★ round346：把【种类】也广播出去 ✗ 别人的客户端拿它倒正确的模型 ✓
+        self._prop_bc.append([gx, gz, 1, 0, 0, kind])
         # ★ 掉建材（直接往地上放 ✗ 复用现成的 loot 表 ✓ 客户端会自动捡 ✓）
         try:
             _wx = (gx + 0.5) * termod.LEVEL_H

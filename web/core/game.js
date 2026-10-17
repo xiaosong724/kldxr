@@ -777,10 +777,12 @@ function terDebTick(dt) {
 var _falling = [], _fallMax = 6;
 /* ★ 造一件物件的独立模型（倒地动画 / 命中闪白 共用 ✓）
    ★ 顶点按世界坐标建 ✗ 所以要平移到"以物件中心为原点"✗ 再把组摆回原位 ✓ */
-function buildPropSolid(kind, gx, gz) {
+function buildPropSolid(kind, gx, gz, partFilter) {
   try {
     var parts = (PROP_PARTS && PROP_PARTS[kind]) || (PROP_PARTS && PROP_PARTS.tree);
     if (!parts || !parts.length) { return null; }
+    if (partFilter) { parts = parts.filter(partFilter); }
+    if (!parts.length) { return null; }
     var s2 = G.PROP_SCALE;
     var hh2 = ((gx * 2654435761) ^ (gz * 40503)) & 0xffffffff;
     var q2 = Math.abs(hh2 % 1000);
@@ -810,19 +812,36 @@ function buildPropSolid(kind, gx, gz) {
   } catch (e) { return null; }
 }
 
+function _pushFall(grp, gx, gz, dir, axis, delay) {
+  scene.add(grp);
+  if (_falling.length >= _fallMax) {
+    var old0 = _falling.shift();
+    scene.remove(old0.g);
+    old0.g.traverse(function (o) { if (o.geometry) { o.geometry.dispose(); } });
+  }
+  _falling.push({ g: grp, t: -(delay || 0), life: 1.15 + (delay || 0),
+                  dir: dir, axis: axis });
+}
+
 function propFallAnim(kind, gx, gz) {
   try {
+    /* ★★★ round346（用户："这个断墙，动画从中间断开，分别倒下"）★★★
+       断墙本来就由【两段墙】拼的（PROP_PARTS.ruin 里有 ox=−1.8 那一段 ✓）
+       → 按零件的位置拆成两半 ✗ 各倒各的 ✗ 还要错开 0.08 秒 ✓
+       看着就是"从中间断裂、两截先后倒下去"✓ */
+    if (kind === 'ruin') {
+      var ha = buildPropSolid(kind, gx, gz, function (p) { return p[4] <= 0; });
+      var hb = buildPropSolid(kind, gx, gz, function (p) { return p[4] > 0; });
+      var d0 = ((gx * 7 + gz * 13) % 2) ? 1 : -1;
+      if (ha) { _pushFall(ha, gx, gz, d0, 'z', 0); }
+      if (hb) { _pushFall(hb, gx, gz, -d0, 'x', 0.08); }
+      return;
+    }
     var grp = buildPropSolid(kind, gx, gz);
     if (!grp) { return; }
-    scene.add(grp);
-    if (_falling.length >= _fallMax) {
-      var old0 = _falling.shift();
-      scene.remove(old0.g);
-      old0.g.traverse(function (o) { if (o.geometry) { o.geometry.dispose(); } });
-    }
-    _falling.push({ g: grp, t: 0, life: 1.15,
-                    dir: ((gx * 7 + gz * 13) % 2) ? 1 : -1,
-                    axis: ((gx * 3 + gz * 5) % 2) ? 'x' : 'z' });
+    _pushFall(grp, gx, gz,
+              ((gx * 7 + gz * 13) % 2) ? 1 : -1,
+              ((gx * 3 + gz * 5) % 2) ? 'x' : 'z', 0);
   } catch (e) { /* 动画失败不能影响砍树本身 ✓ */ }
 }
 
@@ -855,7 +874,7 @@ function propApplyEdits(cells) {
       propDead[k] = 1;
       delete propDmg[k];
       // ★ 先让【独立模型】倒下去 ✗ 再重建块（把原来的挪走）✓
-      var _fk2 = propAt[k] || '';
+      var _fk2 = cells[i][5] || propAt[k] || '';   // ★ 优先用服务端给的种类 ✓
       /* ★ round345（用户："这个也做一下倒下的动画" —— 指断墙 ruin）
          ★ 断墙是立着的砖结构 ✗ 倒下去很自然 ✓
          ★ 房子仍然是"碎掉"✗ 一整栋楼倒下来反而怪 ✓（要的话说一声 ✓）*/
