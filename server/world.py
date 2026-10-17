@@ -866,6 +866,7 @@ class World(object):
                 self._party_push(pid)        # ★ 每秒补推一次（血条要动 ✓）
         self._mob_tick(TICK_DT)
         self._later_tick()
+        self._fly_tick()
         self._arrow_tick(TICK_DT)   # ★ 第 69 轮：箭（要在僵尸移动之后算 ✓）
         self._loot_tick(TICK_DT)          # ★ 地上掉的也归 tick 线程管 ✓
         for p in self.players.values():
@@ -1733,6 +1734,36 @@ class World(object):
                     self._send_cid(_q.cid, P.pack('fx', **payload))
                 except Exception:
                     pass
+
+    def _fly_tick(self):
+        """被挑飞的怪：1.5 秒后落地 ✗ 落地砸出范围伤害（round404）"""
+        for m in list(self.mobs.values()):
+            if getattr(m, 'flyT', 0) <= 0:
+                continue
+            m.flyT -= TICK_DT
+            if m.flyT > 0:
+                continue
+            # ★ 落地：周围 2 米内所有怪吃一份伤害（包括它自己 ✓）
+            _d = int(getattr(m, 'latDmg', 0) or 10)
+            _r2 = 2.0 * 2.0
+            for o in list(self.mobs.values()):
+                if o.hp <= 0:
+                    continue
+                if (o.x - m.x) ** 2 + (o.z - m.z) ** 2 > _r2:
+                    continue
+                o.hp -= _d
+                self._report_hit(None, o.mid, _d, False, o.x, o.z, {'splash': True})
+                if o.hp <= 0:
+                    o.hp = 0
+            # ★ 广播落地（客户端放落地音效 ✓）
+            for _q in self.players.values():
+                if (_q.x - m.x) ** 2 + (_q.z - m.z) ** 2 <= 1600:
+                    try:
+                        self._send_cid(_q.cid, P.pack('fx', kind='land',
+                                                      x=round(m.x, 2), z=round(m.z, 2)))
+                    except Exception:
+                        pass
+            m.flyT = 0.0
 
     def _later_tick(self):
         """到点结算的延迟【伤害】和延迟【发射】（round382 / 391 ✓）
@@ -4444,6 +4475,13 @@ class World(object):
                 m.stunT = fx['value']
                 m.stunImmune = weapons.STUN_IMMUNE
                 self._send_cid(p.cid, P.pack('fx', kind='stun', mid=m.mid))
+        elif nm == '挑飞':
+            # ★ round404（用户："长枪把敌人挑到 6 格高，1.5 秒后落地，落地范围伤害"）
+            m.flyT = 1.5
+            m.flyH = max(2.0, float(fx['value']))
+            m.latDmg = int(dv)                # ★ 落地伤害按这一次的伤害算 ✓
+            self._fx_broadcast(p, {'kind': 'launch', 'mid': m.mid,
+                                   'by': p.role_id})
         elif nm == '连砍':
             # ★ round395（用户："向前挥砍 2~13 刀，每刀 60%，一刀一步"）
             #   ★ 第一刀刚才已经结算了（也压到 60% ✓）→ 这里只补后面的 N-1 刀 ✓

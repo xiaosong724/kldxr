@@ -5154,6 +5154,19 @@ function wsOnMessage(raw) {
     /* ★★★ round398（用户："这些动画要做同步，不然别人看不到"）★★★
        ★ 服务端现在会把特效广播给周围 ✗ 带上 by = 谁在放 ✓
        ★ 不是我就记到那个玩家身上 ✗ 渲染时按他的状态播 ✓ */
+    /* ★ round404（用户："长枪挑飞，落地加落地音效"）*/
+    if (d.kind === 'launch') {
+      if (typeof NET !== 'undefined' && NET.rmobs && NET.rmobs[d.mid]) {
+        NET.rmobs[d.mid].flyUntil = performance.now() + 1500;
+        NET.rmobs[d.mid].flyH = 6 * 0.62;
+      }
+      return;
+    }
+    if (d.kind === 'land') {
+      if (typeof sfx === 'function') { sfx('land', 1.0); }
+      if (typeof hitFlash === 'function') { hitFlash(+d.x, 0.4, +d.z, true); }
+      return;
+    }
     /* ★ round400：别人打的伤害 → 弹一个灰色数字 */
     if (d.kind === 'dmg') {
       var _dmgTxt = String(+d.v || 0) + (d.crit ? ' 暴击' : '');

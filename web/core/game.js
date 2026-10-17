@@ -4786,7 +4786,12 @@ function netUpdate(dt) {
       var _k = Math.min(1, dt * 22);
       rm.g.position.x += (rx - rm.g.position.x) * _k;
       rm.g.position.z += (rz - rm.g.position.z) * _k;
-      rm.g.position.y = _jy;
+      /* ★ round404：被挑飞的怪要升空（抛物线：1.5 秒一个来回 ✓）*/
+    if (rm.flyUntil && performance.now() < rm.flyUntil) {
+      var _fk2 = (rm.flyUntil - performance.now()) / 1500;   // 1 → 0
+      _jy += Math.sin(_fk2 * Math.PI) * (rm.flyH || 3.7);
+    }
+    rm.g.position.y = _jy;
     }
     rm.g.rotation.y = rm.cur.yaw;
     if (rm.shadow) {

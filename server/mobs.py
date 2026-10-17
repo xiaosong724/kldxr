@@ -245,7 +245,9 @@ class Mob(object):
                   #   ★ 教训：给 __slots__ 的类加属性 ✗ 必须两边一起改 ✓
                   'lavaT',
                   # ★ round350：逃跑音效只播一次的标记
-                  'fleeSnd' )
+                  'fleeSnd',
+                  # ★ round404：长枪挑飞（flyT = 还要飞多久 · flyH = 多高）
+                  'flyT', 'flyH', 'latDmg' )
 
     def __init__(self, mid, lv, x, z, kind=None):
         # ★ 第 132 轮：硬配额 —— 这只僵尸是【替谁刷的】✓
@@ -254,6 +256,9 @@ class Mob(object):
         self.awarded = False    # 第 217 轮：结算标记（只给一次经验）
         self.lavaT = 0.0        # ★ round322：地火烫伤的计时
         self.fleeSnd = False    # ★ round350：逃跑音效播过没有
+        self.flyT = 0.0         # ★ round404：还要飞多久（秒）
+        self.flyH = 0.0         # 飞多高（格）
+        self.latDmg = 0         # ★ 落地时砸多少伤害
         self.mid = str(mid)
         self.kind = kind or random.choice(KINDS)
         self.lv = int(lv)
