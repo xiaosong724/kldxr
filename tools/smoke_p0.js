@@ -172,7 +172,7 @@ const PW = 'abc123456';
   ].join(''));
   console.log('  自动跳: ' + jumpTest);
 
-  await ev('if (typeof AUTO !== "undefined") { AUTO.on = false; } return 1;');
+  await ev('if (typeof AUTO !== "undefined") { AUTO.on = false; AUTO.faceLock = false; } return 1;');
 
   const ripple = await ev([
     'var live = 0;',

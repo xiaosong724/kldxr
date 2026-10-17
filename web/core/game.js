@@ -5326,6 +5326,7 @@ function autoTick(dt) {
   if (AUTO.phase === 'find') { AUTO.phase = 'approach'; AUTO.t = 0; }
 
   if (AUTO.phase === 'approach') {
+    AUTO.faceLock = false;              // ★ 追的时候朝向跟着走就行 ✓
     P.yaw = autoFacing(dx, dz);
     if (d <= reach) {
       AUTO.phase = 'strike'; AUTO.t = 0; jx = 0; jy = 0; AUTO.setInput = true;
@@ -5350,6 +5351,7 @@ function autoTick(dt) {
     return;
   }
   if (AUTO.phase === 'strike') {
+    AUTO.faceLock = true;
     jx = 0; jy = 0; AUTO.setInput = true;
     P.yaw = autoFacing(dx, dz);
     atkHeld = (atkT < 0); AUTO.attacking = atkHeld;
@@ -5361,6 +5363,7 @@ function autoTick(dt) {
     return;
   }
   /* retreat：往远离目标的方向退 ✓ 这是"躲"的关键 ✓ */
+  AUTO.faceLock = true;                 // ★ 后撤时保持面朝目标 ✓ 不转身 ✓
   atkHeld = false; AUTO.attacking = false;
   var rx = -dx / (d || 1), rz = -dz / (d || 1);
   jx = rx; jy = rz; AUTO.setInput = true;
@@ -5450,7 +5453,15 @@ function frame(ts) {
     var nx = ix / Math.max(1, len), nz = iz / Math.max(1, len);
     MOV.tx = nx * _tspd;
     MOV.tz = nz * G.FLIP_Z * _tspd;
-    P.yaw = Math.atan2(nx, nz * G.FLIP_Z);      // ★ 朝向跟着【输入】走（转得快 ✓ 滑行时不会乱转）
+    /* ★★★ round367（用户："退后太快看起来像在攻击后面"）★★★
+       ★ 根因：这里用【输入方向】覆盖朝向 ✗
+         而自动战斗【后撤】时输入是"往后退"✗ 人就转身朝后走了 ✓
+         → 看着像背对着怪打 ✓
+       ★ 修：自动战斗锁朝向时（faceLock）跳过这里 ✗ 保持它自己设的朝向 ✓
+         → 后撤 = 【面朝怪、往后滑】✓ 和格斗游戏的后跳一样 ✓ */
+    if (!(typeof AUTO !== 'undefined' && AUTO.faceLock)) {
+      P.yaw = Math.atan2(nx, nz * G.FLIP_Z);   // ★ 朝向跟着【输入】走（滑行时不会乱转）
+    }
   } else {
     MOV.tx = 0; MOV.tz = 0;
   }
