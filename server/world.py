@@ -4207,13 +4207,18 @@ class World(object):
                                             'block': blocked, 'back': back,
                                             # ★ 第 62 轮：背击倍率 → 客户端能算出"额外打了多少"✓
                                             'mb': round(backMul, 2) if back else None,
+                                            'heal': _heal,
                                             'x': round(m.x, 2), 'z': round(m.z, 2)})
 
             # ★★ 第 60 轮：吸血词条 —— 按造成的伤害回血 ✓
             _ls = _T.get('lifesteal', 0.0)
+            _heal = 0
             if _ls > 0:
                 hpm = self._hp_max(p)     # ★ 第 67 轮：含防具加成 ✓
-                p.hp = min(hpm, int(p.hp) + max(1, int(round(dv * _ls / 100.0))))
+                _heal = max(1, int(round(dv * _ls / 100.0)))
+                p.hp = min(hpm, int(p.hp) + _heal)
+                # ★ round352（用户："吸血要飘绿字"）：把数值塞进 mhits ✓
+                #   （客户端在同一个循环里就能拿到 ✓ 不用新事件通道 ✓）
 
             # ★★ 命中后按武器类型触发机制 ★★
             self._weapon_fx(p, m, fx, dv)

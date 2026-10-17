@@ -3285,6 +3285,11 @@ function wsApplyWorld(d) {
       var extra = Math.max(1, Math.round(edv - edv / (+e2.mb)));
       fxNum('额外 +' + extra, '#ffd83d', +e2.x, 2.9, +e2.z);
     }
+    /* ★ round352（用户："武器吸血要飘绿字在自己头上"）
+       ★ 服务器把吸血量放进 mhits 里（heal 字段 ✓）✗ 这里只负责显示 ✓ */
+    if (e2.heal > 0) {
+      fxNum('+' + Math.round(e2.heal), '#6ee06e', P.x, 2.9 + 0.3, P.z);
+    }
     if (q2 === 0) {
       sfx(e2.crit ? 'crit' : 'hit', 1.0);
       sfx('zhurt', 0.7);
@@ -4170,7 +4175,10 @@ function hurtPlayer(dv, fx, fz, kind, byName) {
            而服务器每帧会推真实值过来 ✗ 不会扣两次 ✓）*/
   if (dv <= 0) { return; }
   HP -= dv; shake = 0.4;
-  sfx('zhurt', 0.9);
+  /* ★ round352（用户："玩家受伤的声音和僵尸一样"）
+     ★ 原来用的是 zhurt（僵尸受伤 ✓）✗ 玩家挨打也放它 ✓
+     ★ 换成 groan（人声呻吟）✗ 和僵尸明显区分 ✓ */
+  sfx('groan', 0.85);
   if (!isFinite(fx)) { fx = P.x; }
   if (!isFinite(fz)) { fz = P.z; }
   /* ★★ 第 146 轮（用户："把僵尸对自己造成的伤害改成红色方便分辨"）★★
