@@ -23,7 +23,10 @@ import math
 TS = 0.62                 # 逻辑格边长（G.TS）
 PROP_CHUNK = 32           # 每块 32 格（PROP_CHUNK）
 PROP_HALO = 8             # 光环（PROP_HALO）
-PROP_DENSITY = 34         # 密度（G.PROP_DENSITY）
+# ★ round373（用户："树/墙/石头生成数量降低一半，打怪老是打到"）
+#   ★ 这是【每多少格出一个】✗ 34 → 68 = 数量正好减半 ✓
+#   ★ 必须和 game.js 的 G.PROP_DENSITY 完全一致 ✗ 不一致会两边对不上 ✓
+PROP_DENSITY = 68         # 密度（G.PROP_DENSITY）
 SPAWN_SAFE = 17.0         # 出生点附近不生成（G.SPAWN_SAFE）
 PROP_SCALE = 0.48         # 物件缩放（G.PROP_SCALE）
 HOUSE_CELLS = 7           # markHouseCells 的 ±7

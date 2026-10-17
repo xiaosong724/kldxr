@@ -46,7 +46,7 @@ var G = {
   CRIT_MUL: 1.5,
   PLANE_SIZE: 3000,
   PROP_R: 40,
-  PROP_DENSITY: 34,
+  PROP_DENSITY: 68,   // ★ round373：34 → 68（物件数量减半 ✓ 和服务端一致 ✓）
   SPAWN_SAFE: 17,
   MOB_COUNT: 3,
   MOB_MAX: 60,          // ★ 实体上限（超过 60 手机掉到 60 帧以下 ✓ 所有生成路径都受它限制 ✓）
