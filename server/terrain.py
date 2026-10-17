@@ -148,8 +148,28 @@ def hill_h(gx, gz):
     return best
 
 
+def basin(gx, gz):
+    """这一格是不是【水盆】（比其他地面低一层 ✓ 纯函数）
+
+    ★★ 用户 2026-10-18："水应该是在地面下一格，得有方块包围才合理" ★★
+      之前水是【浮在平地上】的 ✗ 看着像一层蓝色塑料布 ✓
+      现在：水盆格的高度是 −1 ✗ 四周是 0 → 水就在坑里 ✓ 四周有岸 ✓
+    ★ 沼泽：一片片小水洼（噪声波长 6 ✗ 不是一整个大湖 ✓）
+      留出陆地可以走 ✗ 不然整片沼泽都要跳着走 ✓
+    ★ 城区：零星的地火坑（很少 ✓）
+    """
+    b = biome(gx, gz)
+    if b == B_SWAMP:
+        return vnoise(gx, gz, 131, 6) > 0.52
+    if b == B_RUIN:
+        return vnoise(gx, gz, 137, 7) > 0.62 and vnoise(gx, gz, 121, 9) > 0.855
+    return False
+
+
 def height(gx, gz):
     """这一格的最终高度（层 ✓ 整数 ✓ 平地恒为 0 ✓）"""
+    if basin(gx, gz):
+        return -1.0          # ★ 水盆比其他地面低一层 ✓
     h = hill_h(gx, gz)
     if h < 0:
         h = 0
@@ -268,7 +288,7 @@ F_SWAMP = 2     # 污水（沼泽 ✓ 腐蚀）
 F_LAVA = 3      # 地火（烫伤 ✓ 会发光）
 
 # ★ 每种流体的"深度"（占一格的多少 ✗ 0.55 = 到脚踝 ✓ 方案 §6.2）
-FLUID_DEPTH = {F_WATER: 0.85, F_SWAMP: 0.55, F_LAVA: 0.80}
+FLUID_DEPTH = {F_WATER: 0.75, F_SWAMP: 0.70, F_LAVA: 0.80}
 
 
 def fluid_of(gx, gz):
@@ -279,12 +299,12 @@ def fluid_of(gx, gz):
     ★ 只出现在【平地】上 ✗ 山上是没有水的 ✓
     ★ 污水 = 整片沼泽 ✓ 地火 = 城区废墟里零星的几格（废弃工厂熔炉 ✓）
     """
-    if height(gx, gz) > 0:
+    if not basin(gx, gz):
         return (F_NONE, 0.0)
     b = biome(gx, gz)
     if b == B_SWAMP:
         return (F_SWAMP, FLUID_DEPTH[F_SWAMP])
-    if b == B_RUIN and vnoise(gx, gz, 121, 9) > 0.855:
+    if b == B_RUIN:
         return (F_LAVA, FLUID_DEPTH[F_LAVA])
     return (F_NONE, 0.0)
 

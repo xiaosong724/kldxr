@@ -329,6 +329,17 @@ function terHillH(gx, gz) {
 /* ★ round310（P1 破坏）：被破坏的格子（服务端说了算 ✗ 客户端只存 ✓）
    key -> 新高度 ✗ 收到 teredit 就更新 ✓ 同时清缓存 + 重建受影响的瓦片 ✓ */
 var terOver = {};
+/* ★ round317（用户："水应该是在地面下一格，得有方块包围才合理"）
+   水盆格的高度是 −1 ✗ 四周是 0 → 水在坑里 ✓ 四周有岸 ✓ */
+function terBasin(gx, gz) {
+  var b = terBiome(gx, gz);
+  if (b === 'swamp') { return terNoise(gx, gz, 131, 6) > 0.52; }
+  if (b === 'ruin') {
+    return terNoise(gx, gz, 137, 7) > 0.62 && terNoise(gx, gz, 121, 9) > 0.855;
+  }
+  return false;
+}
+
 function terH(gx, gz) {
   var k = _terKey(gx, gz);
   var v = _terHc[k];
@@ -336,6 +347,8 @@ function terH(gx, gz) {
   var ov = terOver[k];
   if (ov !== undefined) {
     v = ov;
+  } else if (terBasin(gx, gz)) {
+    v = -1;                       // ★ 水盆比其他地面低一层 ✓
   } else {
     v = terHillH(gx, gz);
     if (v < 0) { v = 0; }
@@ -369,12 +382,12 @@ function terBiome(gx, gz) {
 }
 
 /* ★★★ F0 静水（和 server/terrain.py 的 fluid_of 逐位等价 ✓）★★★ */
-var TER_F_DEPTH = { 2: 0.55, 3: 0.80 };
+var TER_F_DEPTH = { 2: 0.70, 3: 0.80 };
 function terFluid(gx, gz) {
-  if (terH(gx, gz) > 0) { return 0; }
+  if (!terBasin(gx, gz)) { return 0; }
   var b = terBiome(gx, gz);
-  if (b === 'swamp') { return 2; }                     // 污水
-  if (b === 'ruin' && terNoise(gx, gz, 121, 9) > 0.855) { return 3; }  // 地火
+  if (b === 'swamp') { return 2; }   // 污水
+  if (b === 'ruin') { return 3; }    // 地火
   return 0;
 }
 
@@ -1199,7 +1212,7 @@ function buildTerrainTile(ti, tj) {
       var _fk = terFluid(gx, gz);
       if (_fk) {
         var _fy = (h + (TER_F_DEPTH[_fk] || 0.55)) * LH;
-        var _fc = (_fk === 3) ? [1.0, 0.42, 0.10] : [0.26, 0.60, 0.68];
+        var _fc = (_fk === 3) ? [1.0, 0.42, 0.10] : [0.20, 0.52, 0.60];
         // 地火略微动一下明暗（像在烧 ✗ 但只是顶点色 ✗ 零开销 ✓）
         if (_fk === 3) {
           var _flick = 1.0 + 0.18 * Math.sin(performance.now() / 180 + gx * 1.7 + gz * 2.3);
@@ -1710,6 +1723,9 @@ function blocked(x, z, hw, hd, byMob, skipMob, fromX, fromZ) {
    ★ 只比对【脚步位置】的地面高度 ✗ 不比对碰撞箱 ✓ 简单且够用 ✓ */
 function terrainStepOk(x, z) {
   if (P.air) { return true; }
+  /* ★ 站在水里可以直接走上岸（不用跳）—— 水盆比岸低一层，
+     不特判的话每次出水都要跳一下，在沼泽里会烦死 ✓ */
+  if (P.inWater) { return true; }
   /* ★★★ round308（用户："方块有比较严格碰撞箱，现在贴近了也容易穿模"）★★★
      根因：这里原来只查【脚下中心点】一个位置 ✗
            而身体有 0.6×0.5 那么宽 ✓ → 能贴着高方块走进去半个身位 ✓

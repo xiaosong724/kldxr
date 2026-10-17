@@ -105,7 +105,31 @@ def main():
             n2 += 1
     hs.sort()
     ok(hs[-1] <= T.MAX_H + 1e-9, '最高不超过上限（%.2f ≤ %.2f）' % (hs[-1], T.MAX_H))
-    ok(hs[0] >= 0 - 1e-9, '没有负数高度（最低 %.2f）' % hs[0])
+    # ★ 用户 2026-10-18：水盆故意比地面低一层（-1）✗ 所以负数是对的 ✓
+    ok(hs[0] >= -1.0 - 1e-9, '高度在 [-1, 5] 之间（最低 %.2f ✓ 水盆 = -1）' % hs[0])
+    # ★ 水盆必须【被岸围着】—— 一格水盆四周至少有一个不是水盆 ✓
+    lone = 0
+    nb = 0
+    for gx in range(-70, 70, 2):
+        for gz in range(-70, 70, 2):
+            if not T.basin(gx, gz):
+                continue
+            nb += 1
+            if (not T.basin(gx + 1, gz) or not T.basin(gx - 1, gz)
+                    or not T.basin(gx, gz + 1) or not T.basin(gx, gz - 1)):
+                lone += 1
+    ok(nb == 0 or lone > 0,
+       '水盆有岸围着（%d 个水盆里 %d 个挨着陆地）' % (nb, lone))
+    # ★ 水盆里的水面必须【比岸低】（不然就是"水浮在地上"✗ 用户说的就是这个 ✓）
+    bad_surf = 0
+    for gx in range(-70, 70, 2):
+        for gz in range(-70, 70, 2):
+            k, d = T.fluid_of(gx, gz)
+            if not k:
+                continue
+            if (T.height(gx, gz) + d) * T.LEVEL_H >= 0:
+                bad_surf += 1
+    ok(bad_surf == 0, '水面低于岸（高出岸的有 %d 格）' % bad_surf)
     ok(hs[-1] >= 3.0, '确实有山（最高 %.2f 层）' % hs[-1])
     ok(flat * 1.0 / n2 > 0.75,
        '大部分地方是平地（%.1f%% 的格子是 0 层）' % (flat * 100.0 / n2))

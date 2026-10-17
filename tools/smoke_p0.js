@@ -87,6 +87,7 @@ const PW = 'abc123456';
     'terHClear(); refreshTerrain();',
     'return JSON.stringify({ cell: [bx, bz], biome: terBiome(bx, bz),',
     '  mat: terMat(bx, bz), fluid: terFluid(bx, bz),',
+    '  hBasin: terH(bx, bz), hBank: terH(bx + 2, bz),',
     '  speed: TER_BIO_SPEED[terBiome(bx, bz)] });',
   ].join(''));
   console.log('  地貌: ' + _ice);
