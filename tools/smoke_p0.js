@@ -80,7 +80,7 @@ const PW = 'abc123456';
     'var bx = -320, bz = -320;',
     'for (var q = -260; q <= 260; q += 4) {',
     '  for (var w = -260; w <= 260; w += 4) {',
-    '    if (terFluid(q, w) === 2) { bx = q; bz = w; }',
+    '    if (terBiome(q, w) === "ice") { bx = q; bz = w; }',
     '  } }',
     'P.x = bx * TER.LEVEL_H; P.z = bz * TER.LEVEL_H;',
     'P.y = terYAt(P.x, P.z); P.air = false; P.gy = P.y;',
@@ -91,6 +91,15 @@ const PW = 'abc123456';
     '  speed: TER_BIO_SPEED[terBiome(bx, bz)] });',
   ].join(''));
   console.log('  地貌: ' + _ice);
+  await sleep(2600);
+  {
+    const _s0 = await send('Page.captureScreenshot', { format: 'png' });
+    if (_s0 && _s0.result && _s0.result.data) {
+      fs.writeFileSync(path.join(path.resolve(__dirname, '..'), 'docs', 'shots', 'p2-biome.png'),
+        Buffer.from(_s0.result.data, 'base64'));
+      console.log('  冰原截图: docs/shots/p2-biome.png');
+    }
+  }
   await sleep(1800);
   // （原来这里会挪到最高的山上 ✗ 现在为了看冰原，跳过 ✓）
   await ev('return 1;');
