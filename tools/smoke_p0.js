@@ -80,7 +80,7 @@ const PW = 'abc123456';
     'var bx = -320, bz = -320;',
     'for (var q = -260; q <= 260; q += 4) {',
     '  for (var w = -260; w <= 260; w += 4) {',
-    '    if (terBiome(q, w) === "ice") { bx = q; bz = w; }',
+    '    if (terFluid(q, w) === 2) { bx = q; bz = w; }',
     '  } }',
     'P.x = bx * TER.LEVEL_H; P.z = bz * TER.LEVEL_H;',
     'P.y = terYAt(P.x, P.z); P.air = false; P.gy = P.y;',
@@ -91,6 +91,21 @@ const PW = 'abc123456';
     '  speed: TER_BIO_SPEED[terBiome(bx, bz)] });',
   ].join(''));
   console.log('  地貌: ' + _ice);
+  // ★ 在水里走两步 ✗ 看涟漪有没有生成（用户报"涟漪没了"✓）
+  await ev('jx = 0; jy = -1; return 1;');
+  await sleep(900);
+  await ev('jx = 0; jy = 0; return 1;');
+  await sleep(200);
+  const ripple = await ev([
+    'var live = 0;',
+    'for (var i = 0; i < _ripple.length; i++) { if (_ripple[i].on) { live++; } }',
+    'var wy = terFluidY(Math.floor(P.x / TER.LEVEL_H), Math.floor(P.z / TER.LEVEL_H));',
+    'return JSON.stringify({ inWater: !!P.inWater, on: live,',
+    '  py: Math.round(P.y * 1000) / 1000,',
+    '  waterY: wy === null ? null : Math.round(wy * 1000) / 1000,',
+    '  rippleY: live ? Math.round(_ripplePool[0].position.y * 1000) / 1000 : null });',
+  ].join(''));
+  console.log('  涟漪: ' + ripple);
   await sleep(2600);
   {
     const _s0 = await send('Page.captureScreenshot', { format: 'png' });

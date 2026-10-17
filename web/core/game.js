@@ -391,6 +391,16 @@ function terFluid(gx, gz) {
   return 0;
 }
 
+/* ★ 水面高度（世界单位 Y ✗ 没流体返回 null）
+   ★★ 自测踩到：水盆改到地下一层之后 ✗ 涟漪还放在 P.y（= 坑底 −0.62）
+      而水面在 −0.19 → 涟漪生成在水底下 ✗ 看不见 ✓
+      所以任何"贴在水面上的东西"都必须用这个函数 ✗ 不能用 P.y ✓ */
+function terFluidY(gx, gz) {
+  var k = terFluid(gx, gz);
+  if (!k) { return null; }
+  return (terH(gx, gz) + (TER_F_DEPTH[k] || 0.7)) * TER.LEVEL_H;
+}
+
 function terMat(gx, gz) {
   var k = _terKey(gx, gz);
   var v = _terMc[k];
@@ -1844,7 +1854,8 @@ function terrainV(dt) {
     _waterT = (_waterT || 0) - dt;
     if (_waterT <= 0 && Math.hypot(MOV.vx, MOV.vz) > 0.8) {
       _waterT = 0.34;
-      terRipple(P.x, P.z, P.y);
+      var _wy = terFluidY(Math.floor(P.x / TER.LEVEL_H), Math.floor(P.z / TER.LEVEL_H));
+      terRipple(P.x, P.z, (_wy === null ? P.y : _wy));
       if (typeof sfx === 'function') { sfx('step', 0.5); }
     }
   }
