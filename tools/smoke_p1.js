@@ -104,6 +104,13 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const over = await ev('return (typeof terOver !== "undefined") ? Object.keys(terOver).length : -1;');
   console.log('  破坏后高度: ' + after + '  覆盖表条数: ' + over);
   console.log('  结论: ' + (after < before ? '✓ 破坏生效' : '✗ 没打碎'));
+  // ★ 音效有没有真加载进来
+  const sfxInfo = await ev([
+    'var n = -1; try { n = (SFX_BANK["break"] || []).length; } catch (e) {}',
+    'return JSON.stringify({ breakLoaded: n, total: (typeof SFX_LOADED !== "undefined") ? SFX_LOADED : -1,',
+    '  want: (typeof SFX_TOTAL !== "undefined") ? SFX_TOTAL : -1 });',
+  ].join(''));
+  console.log('  破坏音效: ' + sfxInfo);
   console.log('  页面错误: ' + (errs.length ? errs.slice(0, 3).join(' | ') : '(无)'));
 
   const shot = await send('Page.captureScreenshot', { format: 'png' });

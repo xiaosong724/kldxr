@@ -573,6 +573,7 @@ function terApplyEdits(cells) {
     } else {
       // ★ 破坏成功：先炸碎块 ✗ 再改覆盖 ✓（顺序反了就取不到"碎之前"的高度了）
       terDebris(gx, gz, mat, terH(gx, gz));
+      if (typeof sfx === 'function') { sfx('break', 0.85); }
       terOver[k] = nh; delete terDmg[k];
       // 把这格的裂纹收掉（已经碎了 ✗ 留着就穿帮 ✓）
       for (var ci = 0; ci < _crackPool.length; ci++) {
@@ -639,6 +640,8 @@ var SFX_FILES = {
   strong: ['strong1.mp3', 'strong2.mp3', 'strong3.mp3', 'strong4.mp3'],
   swing: ['swing1.mp3', 'swing2.mp3', 'swing3.mp3', 'swing4.mp3', 'swing5.mp3', 'swing6.mp3'],
   zdeath: ['zdeath1.mp3'],
+  /* ★ round313：破坏方块（用户提供 ✗ 立体声转成单声道 ✓ 136KB → 68KB）*/
+  break: ['break1.mp3'],
   zhurt: ['zhurt1.mp3', 'zhurt2.mp3'],
 };
 var SFX_FILES_OGG = {
@@ -650,6 +653,8 @@ var SFX_FILES_OGG = {
   strong: ['strong1.ogg', 'strong2.ogg', 'strong3.ogg', 'strong4.ogg'],
   swing: ['swing1.ogg', 'swing2.ogg', 'swing3.ogg', 'swing4.ogg', 'swing5.ogg', 'swing6.ogg'],
   zdeath: ['zdeath1.ogg'],
+  /* ★ round313：破坏方块（用户提供 ✗ 立体声转成单声道 ✓ 136KB → 68KB）*/
+  break: ['break1.ogg'],
   zhurt: ['zhurt1.ogg', 'zhurt2.ogg'],
 };
 var SFX_FILES_WAV = {
@@ -661,6 +666,8 @@ var SFX_FILES_WAV = {
   strong: ['strong1.wav', 'strong2.wav', 'strong3.wav', 'strong4.wav'],
   swing: ['swing1.wav', 'swing2.wav', 'swing3.wav', 'swing4.wav', 'swing5.wav', 'swing6.wav'],
   zdeath: ['zdeath1.wav'],
+  /* ★ round313：破坏方块（用户提供 ✗ 立体声转成单声道 ✓ 136KB → 68KB）*/
+  break: ['break1.wav'],
   zhurt: ['zhurt1.wav', 'zhurt2.wav'],
 };
 
