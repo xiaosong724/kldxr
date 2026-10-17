@@ -121,21 +121,23 @@ const PW = 'abc123456';
   ].join(''));
   console.log('  走了一段: ' + walked);
 
-  // 跳一下
+  // 跳一下：量【视觉位置】比地面高多少（用户要的是"看起来跳得更高"）
   const jr = await ev([
-    'jumpHeld = 1;',
-    'return new Promise(function(res){',
-    '  var maxY = -99, t0 = performance.now();',
-    '  var iv = setInterval(function(){',
-    '    if (P.y > maxY) { maxY = P.y; }',
-    '    if (performance.now() - t0 > 900) {',
-    '      clearInterval(iv);',
-    '      res(JSON.stringify({ peakAboveStart: Math.round((maxY - P.gy) * 1000) / 1000,',
-    '                           landY: Math.round(P.y * 1000) / 1000,',
-    '                           air: P.air }));',
-    '    }',
-    '  }, 20);',
-    '});',
+    'P.air = false; P.vy = 0; P.jumping = false; P.y = terYAt(P.x, P.z); P.gy = P.y;',
+    'var base = P.y, peakVis = 0, peakReal = 0;',
+    'jumpHeld = 1; jumpCD = 0;',
+    'for (var i = 0; i < 40; i++) {',
+    '  terrainV(1 / 60);',
+    '  var vb = (P.jumping && P.air) ? Math.max(0, P.y - (P.gy || 0)) * 0.9 : 0;',
+    '  var vis = P.y + vb - base;',
+    '  if (vis > peakVis) { peakVis = vis; }',
+    '  if (P.y - base > peakReal) { peakReal = P.y - base; }',
+    '}',
+    'return JSON.stringify({',
+    '  realApexCells: Math.round(peakReal / TER.LEVEL_H * 100) / 100,',
+    '  visualApexCells: Math.round(peakVis / TER.LEVEL_H * 100) / 100,',
+    '  scaleY: Math.round(H.g.scale.y * 100) / 100,',
+    '  backOnGround: !P.air });',
   ].join(''));
   console.log('  跳跃: ' + jr);
 

@@ -870,10 +870,11 @@ function buildTerrainTile(ti, tj) {
          ② 挨着【更高】的格子 → 这里是悬崖脚下 ✗ 压更多 ✓（阴影感）
          ★ ② 才是立体感的来源：有阴影就知道"那边高"✓
          四个方向都被高墙围住 → 0.52 ✗ 那个坑一眼就看出是坑 ✓ */
-      nH = terH(gx + 1, gz); if (nH < h - 0.30) { ao -= 0.09; } else if (nH > h + 0.30) { ao -= 0.12; }
-      nH = terH(gx - 1, gz); if (nH < h - 0.30) { ao -= 0.09; } else if (nH > h + 0.30) { ao -= 0.12; }
-      nH = terH(gx, gz + 1); if (nH < h - 0.30) { ao -= 0.09; } else if (nH > h + 0.30) { ao -= 0.12; }
-      nH = terH(gx, gz - 1); if (nH < h - 0.30) { ao -= 0.09; } else if (nH > h + 0.30) { ao -= 0.12; }
+      var edge = 0;   // ★ 这一格有几个邻居和它高度不同（0 = 在平地中间 ✓）
+      nH = terH(gx + 1, gz); if (nH < h - 0.30) { ao -= 0.09; edge = 1; } else if (nH > h + 0.30) { ao -= 0.12; edge = 1; }
+      nH = terH(gx - 1, gz); if (nH < h - 0.30) { ao -= 0.09; edge = 1; } else if (nH > h + 0.30) { ao -= 0.12; edge = 1; }
+      nH = terH(gx, gz + 1); if (nH < h - 0.30) { ao -= 0.09; edge = 1; } else if (nH > h + 0.30) { ao -= 0.12; edge = 1; }
+      nH = terH(gx, gz - 1); if (nH < h - 0.30) { ao -= 0.09; edge = 1; } else if (nH > h + 0.30) { ao -= 0.12; edge = 1; }
       var ct = _terColOf(mat, h, ao);
       var uvT = [[x0 / GW, z0 / GW], [x1 / GW, z0 / GW], [x1 / GW, z1 / GW], [x0 / GW, z1 / GW]];
       /* ★★★ round308（用户："方块的边框感再明显一点"）★★★
@@ -884,14 +885,26 @@ function buildTerrainTile(ti, tj) {
               但地形是 unlit 的 ✗ 手机上画 5 万个三角形没什么压力 ✓
          ★ 为什么不用"画线"：线在 3D 里有锯齿 ✗ 而且每格 4 条线太密 ✓
            内缩的两层最干净 ✗ 而且能跟着高度/材质自动变 ✓ */
-      var cb = _terColOf(mat, h, ao * 0.80);       // 砖缝：只暗 20%（0.46 太黑 ✗ 0.70 还是有点闷 ✓）
-      pushQuad([[x0, y00, z0], [x1, y10, z0], [x1, y11, z1], [x0, y01, z1]],
-               [cb, cb, cb, cb], uvT);
-      var ins = TER.LEVEL_H * 0.032;               // 内缩 3.2%（7.5% 太粗 ✗ 像方格纸 ✓）
-      var iy = 0.004;                              // 抬 4mm ✗ 防 z-fighting ✓
-      pushQuad([[x0 + ins, y00 + iy, z0 + ins], [x1 - ins, y10 + iy, z0 + ins],
-                [x1 - ins, y11 + iy, z1 - ins], [x0 + ins, y01 + iy, z1 - ins]],
-               [ct, ct, ct, ct], uvT);
+      /* ★★★ round309（用户："方块的线条太多了太密集了"）★★★
+         根因：我上一版给【每一格】都画了砖缝 ✗
+               → 平地上就是一张方格纸 ✓ 0.62 一格 × 屏幕上 14 像素一条线 ✓
+         改：只给【边上的格子】画 ✗ 也就是邻居高度和它不同的那些 ✓
+             → 平地上【一条线都没有】✓ 台阶和台地边缘才有一圈深色 ✓
+             → 既看得出方块轮廓 ✗ 又没有满屏网格 ✓
+         ★ 判据用 edge（见上面）✗ 已经在算了 ✓ 顺手 ✓ */
+      if (edge) {
+        var cb = _terColOf(mat, h, ao * 0.74);
+        pushQuad([[x0, y00, z0], [x1, y10, z0], [x1, y11, z1], [x0, y01, z1]],
+                 [cb, cb, cb, cb], uvT);
+        var ins = TER.LEVEL_H * 0.035;
+        var iy = 0.004;
+        pushQuad([[x0 + ins, y00 + iy, z0 + ins], [x1 - ins, y10 + iy, z0 + ins],
+                  [x1 - ins, y11 + iy, z1 - ins], [x0 + ins, y01 + iy, z1 - ins]],
+                 [ct, ct, ct, ct], uvT);
+      } else {
+        pushQuad([[x0, y00, z0], [x1, y10, z0], [x1, y11, z1], [x0, y01, z1]],
+                 [ct, ct, ct, ct], uvT);
+      }
 
       /* ---- 四个侧面：只画比邻居高的那部分 ✗ 被挡住的完全不生成 ✓ ---- */
       // 每边：本格边上的高度（两个角的平均）/ 邻居对边的平均高度
@@ -1385,9 +1398,13 @@ function terrainV(dt) {
     P.airY = gy;
     jumpCD = 0.15;
     jumpHeld = 0;
-    /* ★ 跳跃拉长 + 落地压扁（很便宜 ✗ 但"跳起来"一下就看得出来了 ✓）
-       向上速度越大拉得越长 ✓ 落地那一下压扁 ✓ 这是动作游戏的老办法 ✓ */
-    H.g.scale.set(0.90, 1.16, 0.90);
+    /* ★★★ round309（用户："跳一下，人物模型变大了，我要的是动画看起来跳得更高"）★★★
+       自测踩到：我上一版用的是【拉伸模型】（0.90/1.16）✗
+         → 玩家看到的是"人变大了"✗ 不是"跳得更高"✓
+       改：不动模型尺寸 ✗ 改成【把模型画得比实际位置更高】✓
+         ★ 玩法高度还是 1.15 格（跳不上 2 格墙 ✓）
+           只是视觉上多给一段 ✓ 手感好看 ✗ 但不影响判定 ✓ */
+    P.jumping = true;
   }
 
   if (!P.air) {
@@ -1412,8 +1429,7 @@ function terrainV(dt) {
       P.y = gy;
       P.air = false;
       P.vy = 0;
-      H.g.scale.set(1.12, 0.86, 1.12);             // 落地压扁 ✓
-      squashT = 0.14;
+      P.jumping = false;
       if (drop >= FALL_MIN && !dead) {
         var n = Math.floor(drop) - 2;              // 落差 3 → 1 格 ✓
         var dv = n * FALL_DMG;
@@ -4435,15 +4451,13 @@ function frame(ts) {
   /* ★ 第 306 轮：竖直方向（跳 / 掉 / 掉血）✗ 必须在移动之后算 ✓
      因为要用【移动后】的 x/z 去问脚下有多高 ✓ */
   terrainV(dt);
-  /* ★ 跳跃的拉长/压扁：每帧缓回原状 ✓ 省事又不会一直歪着 ✓ */
-  if (squashT > 0) { squashT = Math.max(0, squashT - dt); }
-  if (P.air || squashT > 0) {
-    H.g.scale.x += (1 - H.g.scale.x) * Math.min(1, dt * 14);
-    H.g.scale.y += (1 - H.g.scale.y) * Math.min(1, dt * 14);
-    H.g.scale.z += (1 - H.g.scale.z) * Math.min(1, dt * 14);
-  }
   if (atkT < 0) {
-    H.g.position.set(P.x, P.y + (moving ? Math.abs(Math.sin(walkT)) * 0.05 : 0), P.z);
+    /* ★ 跳跃的"视觉加高"：只有【从地面跳起来】才加（摔下去不加 ✓）
+       加的量 = 当前离地高度 × 0.9 → 顶点 0.713 格时多看 0.64 格
+       合起来 ≈ 1.35 格高 ✗ 差不多是人物身高的一倍 ✓ 一眼就看出来在跳 ✓ */
+    var _vb = 0;
+    if (P.jumping && P.air) { _vb = Math.max(0, P.y - (P.gy || 0)) * 0.9; }
+    H.g.position.set(P.x, P.y + _vb + (moving ? Math.abs(Math.sin(walkT)) * 0.05 : 0), P.z);
   }   // ★ 攻击时坐标由动画控制 ✓
   /* ★★ 第 56 轮：死亡 = 【倒地】，不是站着 ✗（用户要求）★★
      ★ 必须放在上面那些姿势代码【之后】—— 不然会被它们覆盖回去 ✗ */
