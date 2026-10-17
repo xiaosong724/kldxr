@@ -2560,7 +2560,16 @@ function autoBind() {
 
 function autoToggle() {
   if (typeof AUTO === 'undefined') { return; }
+  /* ★★★ round371（用户："取消自动战斗后一直往一个方向跑"）★★★
+     ★ 可能的原因：切换被触发【两次】→ 开了又关、关了又开 ✓
+       来源：新按钮的 pointerdown + 旧的长按攻击键（两个入口 ✓）
+     ★ 修：250 毫秒内只认一次切换 ✓ 人手不可能 4 次/秒地开关 ✓ */
+  var _nowT = Date.now();
+  if (_nowT - (autoToggle._last || 0) < 250) { return; }
+  autoToggle._last = _nowT;
   AUTO.on = !AUTO.on;
+  /* ★ 关掉时把阶段和目标一起清掉 ✗ 免得下一帧 AI 还接着跑 ✓ */
+  if (!AUTO.on) { AUTO.phase = 'find'; AUTO.tgt = ''; AUTO.detourT = 0; }
   AUTO.tgt = ''; AUTO.phase = 'find'; AUTO.t = 0; AUTO.kills = 0;
   AUTO.deaths = []; AUTO.pauseUntil = 0; AUTO.stuckT = 0;
   AUTO.info = AUTO.on ? '自动战斗：正在找目标…' : '';
