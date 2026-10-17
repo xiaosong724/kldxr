@@ -636,7 +636,17 @@ function bindInput() {
     }
   }, { passive: false });
   cv.addEventListener('touchcancel', function (e) { e.preventDefault(); joyId = null; jx = 0; jy = 0; }, { passive: false });
-  addEventListener('keydown', function (e) { var k = evKey(e); if (k) { keys[k] = true; } });
+  addEventListener('keydown', function (e) {
+    var k = evKey(e);
+    if (k) { keys[k] = true; }
+    /* ★ 第 306 轮：空格 = 跳（电脑端 ✗ 手机用 #jmp 按钮 ✓）
+       ★ 按住不放只跳一次 ✗ 要再跳得抬手重按 ✓
+         （和"只能跳一格"的设定一致 ✗ 不能靠按住刷位移 ✓）*/
+    if (e.code === 'Space' && !e.repeat) {
+      if (typeof jumpHeld !== 'undefined') { jumpHeld = 1; }
+      e.preventDefault();
+    }
+  });
   addEventListener('keyup', function (e) { var k = evKey(e); if (k) { keys[k] = false; } });
 }
 
@@ -2420,6 +2430,32 @@ function autoBindAtk() {
   b.addEventListener('pointerup', up);
   b.addEventListener('pointercancel', up);
   b.addEventListener('pointerleave', up);
+}
+
+/* ---------- 跳跃键（第 306 轮 ✗ 地形方案 §3.4）----------
+   ★ 为什么用 pointerdown 而不是 click：
+     跳跃要"按下就跳"✗ 不能等抬手 ✓ 手游手感全靠这个 ✓
+   ★ 为什么按一下就清 jumpHeld：
+     只能跳 1 格 ✗ 按住不放不该一直跳 ✓
+     （想连续跳就连续点 ✗ 和"跳"这个动作的直觉一致 ✓）
+   ★ 桌面端也可以用空格（见 KEY 绑定 ✓）*/
+function jumpBind() {
+  var b = document.getElementById('jmp');
+  if (!b || b._jmpB) { return; }
+  b._jmpB = true;
+  var press = function (e) {
+    if (e && e.preventDefault) { e.preventDefault(); }
+    if (typeof jumpHeld !== 'undefined') { jumpHeld = 1; }
+    b.classList.add('on');
+    setTimeout(function () { b.classList.remove('on'); }, 110);
+  };
+  b.addEventListener('pointerdown', press);
+  b.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+}
+function jumpCoolUi(p) {
+  var b = document.getElementById('jmp');
+  if (!b) { return; }
+  if (p > 0) { b.classList.add('cool'); } else { b.classList.remove('cool'); }
 }
 
 function tpDo(e) {
@@ -5467,7 +5503,7 @@ function bindLogin() {
     window.TP_BOOT_DONE = true;
     try { tpBind(); } catch (e) { }
     TPCAST.at = performance.now() / 1000;
-    setInterval(function () { tpEnsureBtn(); tpBarRender(); autoBindAtk(); autoUiUpd(); }, 100);   /* 100ms 一次 ✓ 便宜 ✓ 而且顺带保证按钮一定挂上 ✓ */
+    setInterval(function () { tpEnsureBtn(); tpBarRender(); autoBindAtk(); jumpBind(); autoUiUpd(); }, 100);   /* 100ms 一次 ✓ 便宜 ✓ 而且顺带保证按钮一定挂上 ✓ */
     tpBarRender();                      /* 先画一次，把按钮恢复成正常样子 ✓ */
   }
   if (typeof document === 'undefined') { return; }

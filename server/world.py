@@ -1110,8 +1110,29 @@ class World(object):
                                          text=('穿上：%s' % nm) if nm else '脱下防具'))
             self._send_cid(p.cid, P.pack('armor', a=p.armor or None,
                                          hpm=self._hp_max(p)))
+        elif t == 'falldmg':
+            # ★ round306（地形）：掉落伤害
+            #   ★ 客户端算落差 ✗ 服务端【夹住】✓ 不能让它改包自杀/刷血 ✓
+            #     （完整防作弊在 P3：服务端按 terrain.py 自己算落差 ✓）
+            try:
+                _fd = int((d or {}).get('d') or 0)
+            except Exception:
+                _fd = 0
+            if 0 < _fd <= 60 and int(p.hp or 0) > 0:
+                self._tp_break(p)
+                p.hp = max(0, int(p.hp) - _fd)
+                self._add_pend(p.cid, 'hurts',
+                               {'dmg': _fd, 'x': round(p.x, 2), 'z': round(p.z, 2),
+                                'by': '摔落', 'kind': 'fall', 'crit': False})
+                # 摔死也要掉魔气（和被打死同一条规矩 ✓ 第 166 轮）
+                if int(p.hp or 0) <= 0 and int(p.mq or 0) > 0:
+                    import mq as _mqf
+                    _lost = min(int(p.mq or 0), int(_mqf.cfg('killed_loss', _mqf.KILLED_LOSS)))
+                    p.mq = max(0, int(p.mq or 0) - _lost)
+                    self._mq_save(p)
+                    self._send_cid(p.cid, P.pack(
+                        'notice', text='你摔死了，魔气 −%d（现在 %d）' % (_lost, int(p.mq or 0))))
         elif t == 'equipset':
-            # ★ 第 47 轮：网络线程已经查库 + 校验完了，这里只换内存里的引用 ✓
             #   （tick 线程不许碰磁盘 ✗ 所以查库那步在 net.py 做）
             w = d.get('weapon')
             self._flush_dur(p)                       # ★ 换武器前先把旧的耐久落库 ✓

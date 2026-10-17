@@ -90,9 +90,19 @@ var scene, cam, rd, sun, loadedOk = false;
 var _netTimer = null, _netNext = 0;
 var _growTimer = null, _boxOn = false, _texMode = 2;   // ★ 同理，也必须在 init() 之前赋值 ✓
 var T = {}, M = {}, H = null;
-var P = { x: 0, z: 0, yaw: 0 };
+var P = { x: 0, z: 0, yaw: 0, y: 0, vy: 0, air: false, airY: 0 };
+/* ★ 第 306 轮：地形的三件套
+     y      当前脚底的世界 Y（跟着地形走 ✓）
+     vy     竖直速度（跳 / 掉 ✓）
+     air    是不是在空中 ✓
+     airY   离地那一刻的 Y（用来算掉落落差 ✓）*/
 var jx = 0, jy = 0, joyId = null, jox = 0, joy0 = 0;
 var keys = {}, atkHeld = false;
+var jumpHeld = 0;          // 跳跃键按住的时刻（0 = 没按 ✓）
+var jumpCD = 0;            // 跳跃冷却剩余（秒 ✓）
+var FALL_MIN = 3;          // 落差 ≥3 格才掉血 ✓
+var _camY = 0;             // 相机当前的高度（缓动跟随 P.y ✗ 上下坡不跳 ✓）
+var FALL_DMG = 5;          // 每格 5 点（用户 2026-10-17 定 ✓）
 var solids = [], propSolids = [], mobs = [], PROP_MESHES = [], GROUNDMESH = null;
 
 /* 第 173 轮（用户 #6）：安全区 = 正方形 30×30（半边长 15）
@@ -193,6 +203,178 @@ var PROP_PARTS = {
 function worldX(cx) { return cx * G.TS; }
 function worldZ(cz) { return cz * G.TS; }
 function cellOf(w) { return Math.round(w / G.TS); }
+
+/* ============================================================================
+   ★★★ 地形（高度 / 材质 / 斜坡）★★★
+   ★★ 这一整块必须和 server/terrain.py 【逐位等价】★★
+     差一点 → 服务器认为这里有墙 / 客户端看到一条路 → 僵尸穿墙 ✓
+     所以：
+       · 只用 + − × ÷ 和 Math.floor ✗ 不用 Math.pow / 三角函数 ✓
+         （两个语言的 libm 可能差 1ulp ✗ 差一点就全错 ✓）
+       · 整数哈希要模拟 JS 的 int32 语义（Python 那边也照着写 ✓）
+       · 改任何一边 ✗ tools/check_terrain_sync.py 会立刻红 ✓
+   单位：
+     高度 h 的单位是【层】✗ 浮点 ✗ 0.0 = 地面 ✓
+     一层 = TER.LEVEL_H 世界单位（= G.TS ✓ 所以是方块 ✓）
+   ============================================================================ */
+var TER = {
+  LEVEL_H: 0.62,      // 一层多高（= G.TS ✓ 方块才是方的 ✓）
+  HB: 24,             // 小山：每 24×24 格最多一座
+  HILL_CHANCE: 0.55,
+  MAX_H: 5.2,
+  MIN_H: -1.0,
+  STEP_WALK: 0.35,    // 走路能迈上去的最大落差（层）
+  STEP_JUMP: 1.15,    // 跳能上去的最大落差（层）
+  TILE: 16,           // 地形瓦片边长（格）
+  TILE_R: 4,          // 渲染半径（瓦片）→ 4×16 = 64 格 ≈ 40 世界单位
+  TILE_BUDGET: 3,     // 一帧最多新建几片（防卡顿）
+  JUMP_V: 8.15,       // 起跳速度（世界单位/秒）→ 顶点 1.15 层 / 滞空 0.35 秒
+  GRAV: 46.6          // 重力
+};
+
+function ter32(gx, gz, salt) {
+  var a = gx * 2654435761;
+  var b = gz * 40503;
+  var c = salt * 2246822519;
+  return ((a ^ b) ^ c) >>> 0;        // ★ ^ 是 int32 语义 ✗ >>>0 变无符号 ✓
+}
+function terRand01(gx, gz, salt) {
+  return (ter32(gx, gz, salt) % 1000000) / 1000000;
+}
+function terSmooth(t) {
+  if (t <= 0) { return 0; }
+  if (t >= 1) { return 1; }
+  return t * t * (3 - 2 * t);         // ★ 只用乘法 ✗ 两边一位不差 ✓
+}
+function terLerp(a, b, t) { return a + (b - a) * t; }
+function terNoise(gx, gz, salt, period) {
+  var fx = gx / period, fz = gz / period;
+  var ix = Math.floor(fx), iz = Math.floor(fz);
+  var sx = terSmooth(fx - ix), sz = terSmooth(fz - iz);
+  var v00 = terRand01(ix, iz, salt), v10 = terRand01(ix + 1, iz, salt);
+  var v01 = terRand01(ix, iz + 1, salt), v11 = terRand01(ix + 1, iz + 1, salt);
+  return terLerp(terLerp(v00, v10, sx), terLerp(v01, v11, sx), sz);
+}
+
+var _hillCache = {}, _hillCacheN = 0;
+function terHillBlock(bx, bz) {
+  var k = bx + ',' + bz;
+  if (k in _hillCache) { return _hillCache[k]; }
+  var out = null;
+  if (terRand01(bx, bz, 71) < TER.HILL_CHANCE) {
+    out = [bx * TER.HB + terRand01(bx, bz, 72) * TER.HB,
+           bz * TER.HB + terRand01(bx, bz, 73) * TER.HB,
+           2 + Math.floor(terRand01(bx, bz, 74) * 4),
+           3 + terRand01(bx, bz, 75) * 3];
+  }
+  if (_hillCacheN > 8192) { _hillCache = {}; _hillCacheN = 0; }
+  _hillCache[k] = out; _hillCacheN++;
+  return out;
+}
+function terHillH(gx, gz) {
+  var bx = Math.floor(gx / TER.HB), bz = Math.floor(gz / TER.HB);
+  var best = 0;
+  for (var dx = -1; dx <= 1; dx++) {
+    for (var dz = -1; dz <= 1; dz++) {
+      var hl = terHillBlock(bx + dx, bz + dz);
+      if (!hl) { continue; }
+      var ddx = gx - hl[0], ddz = gz - hl[1];
+      var dist = Math.sqrt(ddx * ddx + ddz * ddz);
+      if (dist >= hl[3]) { continue; }
+      var v = hl[2] * terSmooth(1 - dist / hl[3]);
+      if (v > best) { best = v; }
+    }
+  }
+  return best;
+}
+function terBaseH(gx, gz) {
+  var h = 0;
+  h += terNoise(gx, gz, 11, 18) * 0.80;
+  h += terNoise(gx, gz, 23, 7) * 0.35;
+  h += terHillH(gx, gz);
+  if (h < TER.MIN_H) { h = TER.MIN_H; }
+  if (h > TER.MAX_H) { h = TER.MAX_H; }
+  return h;
+}
+function terJitter(gx, gz) { return (terRand01(gx, gz, 41) - 0.5) * 0.12; }
+
+/* ★ 缓存：几何构建时每格要问好几次邻居 ✗ 不缓存会很慢 ✓ */
+var _terHc = {}, _terHcN = 0, _terMc = {}, _terSc = {};
+function _terKey(gx, gz) { return ((gx & 0xffff) << 16) | (gz & 0xffff); }
+function terHClear() { _terHc = {}; _terMc = {}; _terSc = {}; _terHcN = 0; }
+function terH(gx, gz) {
+  var k = _terKey(gx, gz);
+  var v = _terHc[k];
+  if (v !== undefined) { return v; }
+  v = terBaseH(gx, gz) + terJitter(gx, gz);
+  if (v < TER.MIN_H) { v = TER.MIN_H; }
+  if (v > TER.MAX_H) { v = TER.MAX_H; }
+  if (_terHcN > 400000) { terHClear(); }
+  _terHc[k] = v; _terHcN++;
+  return v;
+}
+function terMat(gx, gz) {
+  var k = _terKey(gx, gz);
+  var v = _terMc[k];
+  if (v !== undefined) { return v; }
+  var h = terH(gx, gz);
+  if (h >= 4.2) { v = 'stone'; }
+  else if (terNoise(gx, gz, 31, 11) > 0.74) { v = 'stone'; }
+  else if (terNoise(gx, gz, 37, 17) > 0.62) { v = 'dirt'; }
+  else { v = 'grass'; }
+  _terMc[k] = v;
+  return v;
+}
+var TER_SD = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+function terSlope(gx, gz) {
+  var k = _terKey(gx, gz);
+  var v = _terSc[k];
+  if (v !== undefined) { return v; }
+  var h = terH(gx, gz), bestDir = 0, bestDrop = 0;
+  if (terHillH(gx, gz) >= 0.25) {
+    for (var i = 0; i < 4; i++) {
+      var nh = terH(gx + TER_SD[i][0], gz + TER_SD[i][1]);
+      var drop = nh - h;
+      if (drop > TER.STEP_JUMP && drop <= 2.2 && drop > bestDrop) {
+        bestDrop = drop; bestDir = i + 1;
+      }
+    }
+  }
+  _terSc[k] = bestDir;
+  return bestDir;
+}
+/* 格子内某点的地面 Y（世界单位 ✓ fx/fz = 格子内 0..1 进度 ✓） */
+function terGroundY(gx, gz, fx, fz) {
+  var h = terH(gx, gz);
+  var sl = terSlope(gx, gz);
+  if (sl) {
+    var d = TER_SD[sl - 1];
+    var nh = terH(gx + d[0], gz + d[1]);
+    var t;
+    if (d[0] === 1) { t = fx; }
+    else if (d[0] === -1) { t = 1 - fx; }
+    else if (d[1] === 1) { t = fz; }
+    else { t = 1 - fz; }
+    h = h + (nh - h) * t;
+  }
+  return h * TER.LEVEL_H;
+}
+/* 世界坐标 → 地面 Y */
+function terYAt(wx, wz) {
+  var fx = wx / TER.LEVEL_H, fz = wz / TER.LEVEL_H;
+  var gx = Math.floor(fx), gz = Math.floor(fz);
+  return terGroundY(gx, gz, fx - gx, fz - gz);
+}
+
+/* 材质基础色（D 档观感：每层更亮 ✗ 紧挨着更低处的格子压暗 ✓） */
+var TER_COL = {
+  grass: [0.44, 0.50, 0.27],
+  dirt:  [0.48, 0.36, 0.23],
+  stone: [0.52, 0.51, 0.48],
+  ice:   [0.58, 0.78, 0.85],
+  swamp: [0.31, 0.36, 0.23],
+  brick: [0.54, 0.32, 0.24]
+};
 
 /* E 已搬到 platform/web.js */
 
@@ -614,9 +796,156 @@ function refreshGround() {
   }
   GROUNDMESH = new THREE.Mesh(geo, groundMaterial());   // ★ MeshBasicMaterial（不受光照影响 ✓）
   GROUNDMESH.receiveShadow = true;
+  /* ★ 第 306 轮：这块【远景平面】压到地形下面 0.20 ✗
+     它现在只负责"远处别露黑底" ✗ 真正的地面是下面的方块地形 ✓
+     0.20 比最低的地面（约 −0.04）还低 ✓ 不会和地形打架 ✓ */
+  GROUNDMESH.position.y = -0.20;
   scene.add(GROUNDMESH);
   _groundBX = bx; _groundBZ = bz;
 }
+
+/* ============================================================================
+   ★★★ 地形瓦片（D 档观感）★★★
+   ★ 观感三条（按重要性）：
+     ① 侧面明暗：每层亮度略不同 ✗ 看得出台阶 ✓
+     ② 接触阴影：侧面【靠地面】那头压暗 ✗ 顶面靠边一圈也压暗 ✓
+     ③ 上沿高光：侧面【顶上】那头提亮 ✗ 像被天光照到 ✓
+   ★ 为什么合并成一个几何：16×16 = 256 格 ✗ 一格一个 Mesh 直接完蛋 ✓
+   ★ 为什么分瓦片而不是一整块：一整块每次移动都要重建 4096 格 ✗
+     分瓦片只建缺的那几片 ✗ 一帧最多建 TILE_BUDGET 片 ✓ 不会卡 ✓
+   ============================================================================ */
+var _terTiles = {}, _terTileN = 0;
+
+function _terColOf(mat, h, kv) {
+  var c = TER_COL[mat] || TER_COL.grass;
+  // 越高越亮（每层 +7.5% ✗ 只有 5 层 ✗ 不会发光 ✓）
+  var k = (1.0 + 0.075 * Math.max(0, h)) * kv;
+  return [c[0] * k, c[1] * k, c[2] * k];
+}
+
+function buildTerrainTile(ti, tj) {
+  var N = TER.TILE, LH = TER.LEVEL_H;
+  var V = [], UV = [], C = [], I = [];
+  var gx0 = ti * N, gz0 = tj * N;
+  var GW = G.GRID_WORLD;   // 贴图比例沿用现在的地面（每 2 格一个小格 ✓）
+
+  function pushQuad(pts, col, uv) {
+    var b = V.length / 3;
+    for (var k = 0; k < 4; k++) {
+      V.push(pts[k][0], pts[k][1], pts[k][2]);
+      UV.push(uv[k][0], uv[k][1]);
+      C.push(col[k][0], col[k][1], col[k][2]);
+    }
+    I.push(b, b + 2, b + 1, b, b + 3, b + 2);
+  }
+
+  for (var i = 0; i < N; i++) {
+    for (var j = 0; j < N; j++) {
+      var gx = gx0 + i, gz = gz0 + j;
+      var h = terH(gx, gz);
+      var mat = terMat(gx, gz);
+      var x0 = gx * LH, x1 = x0 + LH;
+      var z0 = gz * LH, z1 = z0 + LH;
+
+      // 四个角的 Y（斜坡会让它们不一样 ✓ 和玩法判定同源 ✓）
+      var y00 = terGroundY(gx, gz, 0, 0);
+      var y10 = terGroundY(gx, gz, 1, 0);
+      var y11 = terGroundY(gx, gz, 1, 1);
+      var y01 = terGroundY(gx, gz, 0, 1);
+
+      // 顶面：紧挨着更低处的格子压暗（假 AO ✗ 不用贴图就能看出"边缘"✓）
+      var ao = 1.0;
+      var nH;
+      nH = terH(gx + 1, gz); if (nH < h - 0.30) { ao -= 0.10; }
+      nH = terH(gx - 1, gz); if (nH < h - 0.30) { ao -= 0.10; }
+      nH = terH(gx, gz + 1); if (nH < h - 0.30) { ao -= 0.10; }
+      nH = terH(gx, gz - 1); if (nH < h - 0.30) { ao -= 0.10; }
+      var ct = _terColOf(mat, h, ao);
+      var uvT = [[x0 / GW, z0 / GW], [x1 / GW, z0 / GW], [x1 / GW, z1 / GW], [x0 / GW, z1 / GW]];
+      pushQuad([[x0, y00, z0], [x1, y10, z0], [x1, y11, z1], [x0, y01, z1]],
+               [ct, ct, ct, ct], uvT);
+
+      /* ---- 四个侧面：只画比邻居高的那部分 ✗ 被挡住的完全不生成 ✓ ---- */
+      // 每边：本格边上的高度（两个角的平均）/ 邻居对边的平均高度
+      var ed = [
+        // [本格边高, 邻居边高, 四个点(外法线方向)]
+        [(y10 + y11) / 2, gx + 1, gz, 1, 0, [[x1, z0], [x1, z1]]],
+        [(y00 + y01) / 2, gx - 1, gz, -1, 0, [[x0, z1], [x0, z0]]],
+        [(y01 + y11) / 2, gx, gz + 1, 0, 1, [[x1, z1], [x0, z1]]],
+        [(y00 + y10) / 2, gx, gz - 1, 0, -1, [[x0, z0], [x1, z0]]]
+      ];
+      for (var e = 0; e < 4; e++) {
+        var own = ed[e][0];
+        var nx2 = ed[e][1], nz2 = ed[e][2];
+        var nb;
+        if (ed[e][3] === 1) { nb = (terGroundY(nx2, nz2, 0, 0) + terGroundY(nx2, nz2, 0, 1)) / 2; }
+        else if (ed[e][3] === -1) { nb = (terGroundY(nx2, nz2, 1, 0) + terGroundY(nx2, nz2, 1, 1)) / 2; }
+        else if (ed[e][4] === 1) { nb = (terGroundY(nx2, nz2, 0, 0) + terGroundY(nx2, nz2, 1, 0)) / 2; }
+        else { nb = (terGroundY(nx2, nz2, 0, 1) + terGroundY(nx2, nz2, 1, 1)) / 2; }
+        if (own - nb < 0.02) { continue; }     // 邻居不比这里低 → 不画 ✓
+        var A = ed[e][5][0], B = ed[e][5][1];
+        // ③ 上沿高光 / ② 接触阴影：上两点亮、下两点暗 ✓
+        var cTop = _terColOf(mat, h, 0.78);
+        var cBot = _terColOf(mat, h, 0.40);
+        /* ★ 侧面用一个【固定点】的 UV ✗ 不要拉伸 ✓
+           自测踩到：原来写的是 [[0.5,0],[0.5,1],…] ✗ 等于沿贴图竖直方向
+           拉一根线 ✗ 碰上贴图里的亮线 → 地面上出现一片白条纹 ✓
+           改成四点同一个坐标 = 只采样一个像素 = 纯色 ✓ */
+        var uvS = [[0.5, 0.5], [0.5, 0.5], [0.5, 0.5], [0.5, 0.5]];
+        pushQuad([[A[0], own, A[1]], [B[0], own, B[1]], [B[0], nb, B[1]], [A[0], nb, A[1]]],
+                 [cTop, cTop, cBot, cBot], uvS);
+      }
+    }
+  }
+
+  var geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(V, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+  geo.setIndex(I);
+  geo.computeBoundingSphere();
+  var mesh = new THREE.Mesh(geo, groundMaterial());
+  mesh.receiveShadow = true;
+  mesh.renderOrder = 1;
+  scene.add(mesh);
+  return mesh;
+}
+
+function refreshTerrain() {
+  var S = TER.TILE * TER.LEVEL_H;
+  var cti = Math.floor(P.x / S), ctj = Math.floor(P.z / S);
+  var R = TER.TILE_R;
+  // 需要哪些瓦片（按距离由近到远 ✗ 近的先建 ✓）
+  var want = [];
+  for (var di = -R; di <= R; di++) {
+    for (var dj = -R; dj <= R; dj++) {
+      if (di * di + dj * dj > (R + 0.4) * (R + 0.4)) { continue; }
+      want.push([cti + di, ctj + dj, di * di + dj * dj]);
+    }
+  }
+  want.sort(function (a, b) { return a[2] - b[2]; });
+  var built = 0;
+  for (var k = 0; k < want.length; k++) {
+    if (built >= TER.TILE_BUDGET) { break; }
+    var key = want[k][0] + ',' + want[k][1];
+    if (_terTiles[key]) { continue; }
+    _terTiles[key] = buildTerrainTile(want[k][0], want[k][1]);
+    _terTileN++;
+    built++;
+  }
+  // 卸掉跑远的
+  for (var k2 in _terTiles) {
+    var sp = k2.split(',');
+    if (Math.abs(parseInt(sp[0], 10) - cti) > R + 1 ||
+        Math.abs(parseInt(sp[1], 10) - ctj) > R + 1) {
+      scene.remove(_terTiles[k2]);
+      if (_terTiles[k2].geometry) { _terTiles[k2].geometry.dispose(); }
+      delete _terTiles[k2];
+      _terTileN--;
+    }
+  }
+}
+
 
 /* ============ 物件合并网格 ============ */
 function boxGeoAt(w, h2, d, cx, cy, cz, rotY) {
@@ -969,11 +1298,19 @@ function blocked(x, z, hw, hd, byMob, skipMob, fromX, fromZ) {
   return false;
 }
 /* ★ 带碰撞的移动（两轴分离 → 可沿边滑动 ✓ 人物会被妖兽和其他玩家拦住 ✓）*/
+/* ★ 第 306 轮：地形能不能走过去（只看"上去"✗ 下去随便走 ✓）
+   ★ 在空中的时候【不拦】✗ 因为跳上去就是靠"空中飘过去再落地"✓
+   ★ 只比对【脚步位置】的地面高度 ✗ 不比对碰撞箱 ✓ 简单且够用 ✓ */
+function terrainStepOk(x, z) {
+  if (P.air) { return true; }
+  var gy = terYAt(x, z);
+  return (gy - P.y) <= TER.STEP_WALK * TER.LEVEL_H + 0.03;
+}
 function moveWithCollision(dx, dz, hw, hd, byMob, skipMob) {
   var ox = P.x, oz = P.z;                 // ★ 移动前的位置（传给 blocked 做"已经重叠就放行"判断 ✓）
   var nx = ox + dx, nz = oz + dz;
-  if (!blocked(nx, oz, hw, hd, byMob, skipMob, ox, oz)) { P.x = nx; }
-  if (!blocked(P.x, nz, hw, hd, byMob, skipMob, P.x, oz)) { P.z = nz; }
+  if (!blocked(nx, oz, hw, hd, byMob, skipMob, ox, oz) && terrainStepOk(nx, oz)) { P.x = nx; }
+  if (!blocked(P.x, nz, hw, hd, byMob, skipMob, P.x, oz) && terrainStepOk(P.x, nz)) { P.z = nz; }
 }
 function findOpenSpot(x, z, hw, hd) {
   if (!blocked(x, z, hw, hd, false)) { return [x, z]; }
@@ -985,6 +1322,62 @@ function findOpenSpot(x, z, hw, hd) {
     }
   }
   return [x, z];
+}
+
+/* ============================================================================
+   ★★★ 地形：竖直方向（跳 / 掉 / 掉血）★★★
+   每帧调一次 ✓ 放在移动之后（先用新的 x/z 算脚下高度 ✓）
+   ★ 掉落伤害先由客户端算（P3 挪到服务端 ✓ 见方案 §4.1）
+   ============================================================================ */
+function terrainV(dt) {
+  var gy = terYAt(P.x, P.z);
+  if (jumpCD > 0) { jumpCD = Math.max(0, jumpCD - dt); }
+
+  /* ① 起跳（只在地面 + 冷却好了 ✓） */
+  if (jumpHeld && !P.air && jumpCD <= 0 && !dead) {
+    P.vy = TER.JUMP_V;
+    P.air = true;
+    P.airY = gy;
+    jumpCD = 0.15;
+    jumpHeld = 0;
+  }
+
+  if (!P.air) {
+    /* ② 站在地上：跟着地形走 ✓ */
+    if (gy < P.y - TER.STEP_WALK * TER.LEVEL_H - 0.05) {
+      /* 脚下突然没地了 → 掉下去（不是走下来的 ✗ 是走出边缘 ✓） */
+      P.air = true;
+      P.vy = 0;
+      P.airY = P.y;
+    } else {
+      P.y = gy;                       // 上小坡 / 站平地：直接贴地 ✓
+    }
+  }
+
+  if (P.air) {
+    /* ③ 空中：重力积分 */
+    P.vy -= TER.GRAV * dt;
+    P.y += P.vy * dt;
+    if (P.y <= gy && P.vy <= 0) {
+      /* ④ 落地 ✗ 算落差 ✓ */
+      var drop = (P.airY - gy) / TER.LEVEL_H;      // 层
+      P.y = gy;
+      P.air = false;
+      P.vy = 0;
+      if (drop >= FALL_MIN && !dead) {
+        var n = Math.floor(drop) - 2;              // 落差 3 → 1 格 ✓
+        var dv = n * FALL_DMG;
+        if (dv > 0) {
+          /* ★ 表现先走（飘字 + 屏幕震 ✗ 立刻有反馈 ✓）
+             真正扣血由服务端做 ✗ 它会把结果推回来 ✓ 别在客户端改 HP ✓ */
+          if (typeof dmg === 'function') { dmg('-' + dv, P.x, P.y + 1.15, P.z, false); }
+          shake = 0.25;
+          wsSend('falldmg', { d: dv });
+        }
+      }
+    }
+  }
+  P.gy = gy;
 }
 
 /* ============================================================
@@ -3960,14 +4353,19 @@ function frame(ts) {
       if (stepTimer <= 0) { stepTimer = 0.36; /* sfx('step', 0.5);   // ★ 脚步音效已关闭（用户要求 ✓ 想恢复去掉注释即可 ✓）*/ }
     }
   }
-  if (atkT < 0) { H.g.position.set(P.x, moving ? Math.abs(Math.sin(walkT)) * 0.05 : 0, P.z); }   // ★ 攻击时坐标由动画控制 ✓
+  /* ★ 第 306 轮：竖直方向（跳 / 掉 / 掉血）✗ 必须在移动之后算 ✓
+     因为要用【移动后】的 x/z 去问脚下有多高 ✓ */
+  terrainV(dt);
+  if (atkT < 0) {
+    H.g.position.set(P.x, P.y + (moving ? Math.abs(Math.sin(walkT)) * 0.05 : 0), P.z);
+  }   // ★ 攻击时坐标由动画控制 ✓
   /* ★★ 第 56 轮：死亡 = 【倒地】，不是站着 ✗（用户要求）★★
      ★ 必须放在上面那些姿势代码【之后】—— 不然会被它们覆盖回去 ✗ */
   if (dead) {
     H.g.rotation.x = -1.45;              // 躺平（绕 X 转过去 ✓）
     H.g.rotation.z = 0.12;               // 稍微侧一点，别像块板子
     H.g.rotation.y = P.yaw;              // 朝向保持不变 ✓
-    H.g.position.set(P.x, 0.28, P.z);    // 贴地（不然会陷进地面 / 半截悬空）
+    H.g.position.set(P.x, P.y + 0.28, P.z);   // 贴地（含地形高度 ✓ 不然会陷进地里）
   }
   /* ★ 第 56 轮：无敌倒计时 + 脚下护盾环
      ★ 倒计时必须用【真实 dt】✗ 不能写死 0.033 —— 60fps 下会掉两倍快
@@ -4079,6 +4477,7 @@ function frame(ts) {
     if (_propPending || _pci !== _propCI || _pcj !== _propCJ) { updateProps(); }
   }
   refreshGround();   // ★ 地面跟着玩家走（走出 160 单位才真重建，平时只是两次比较 ✓）
+  refreshTerrain();  // ★ 第 306 轮：方块地形（分瓦片 ✗ 一帧最多建几片 ✓）
   rebuildGrid();   // ★ 每帧重建空间网格（O(N) ✓ 之后查询都是 O(1) ✓）
   for (var mj = 0; mj < mobs.length; mj++) {
     var m2 = mobs[mj];
@@ -4311,12 +4710,17 @@ function frame(ts) {
   /* ---- 相机 ---- */
   var sx = 0, sz = 0;
   if (shake > 0.01) { sx = (Math.random() - 0.5) * shake; sz = (Math.random() - 0.5) * shake; shake *= 0.88; } else { shake = 0; }
-  cam.position.set(P.x + sx, 1.4 + G.CAM_DIST * Math.sin(G.CAM_PITCH), P.z + G.CAM_DIST * Math.cos(G.CAM_PITCH) + sz);
-  cam.lookAt(P.x, 1.4, P.z);
-  sun.position.set(P.x + 38, 70, P.z + 26);
-  sun.target.position.set(P.x, 0, P.z);
+  /* ★ 第 306 轮：相机跟着地形高度走 ✗
+     不然爬上山之后人物会掉到画面外面 ✓
+     ★ 用【缓动】而不是直接跟随 ✗ 上下坡时镜头才不会一跳一跳 ✓ */
+  _camY = _camY + (P.y - _camY) * Math.min(1, dt * 8);
+  cam.position.set(P.x + sx, _camY + 1.4 + G.CAM_DIST * Math.sin(G.CAM_PITCH),
+                   P.z + G.CAM_DIST * Math.cos(G.CAM_PITCH) + sz);
+  cam.lookAt(P.x, _camY + 1.4, P.z);
+  sun.position.set(P.x + 38, _camY + 70, P.z + 26);
+  sun.target.position.set(P.x, _camY, P.z);
   sun.target.updateMatrixWorld();
-  if (H.shadow) { H.shadow.position.set(P.x, 0.02, P.z); }
+  if (H.shadow) { H.shadow.position.set(P.x, P.y + 0.02, P.z); }
   if (H.boxDbg) { H.boxDbg.position.set(P.x, 0.1, P.z); }   // ★ 人物碰撞箱线框跟随 ✓
 
   rd.render(scene, cam);
