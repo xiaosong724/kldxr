@@ -4275,6 +4275,25 @@ class World(object):
                 m.stunT = fx['value']
                 m.stunImmune = weapons.STUN_IMMUNE
                 self._send_cid(p.cid, P.pack('fx', kind='stun', mid=m.mid))
+        elif nm == '旋击':
+            # ★ round381（用户："锤子触发了就转圈打整个一圈"）
+            #   ★ 半径 2.2 米（≈ 锤的攻击距离）✗ 不看朝向 = 360° ✓
+            #   ★ 主目标不重复算（它已经吃过 dv 了 ✓）
+            _r2 = 2.2 * 2.2
+            self._send_cid(p.cid, P.pack('fx', kind='spin'))
+            for o in list(self.mobs.values()):
+                if o is m or o.hp <= 0:
+                    continue
+                if (o.x - m.x) ** 2 + (o.z - m.z) ** 2 > _r2:
+                    continue
+                sdv = max(1, int(round(dv * fx['value'])))
+                o.hp -= sdv
+                self._add_pend(p.cid, 'mhits', {'mid': o.mid, 'dmg': sdv, 'crit': False,
+                                                'splash': True, 'heal': 0,
+                                                'x': round(o.x, 2), 'z': round(o.z, 2)})
+                if o.hp <= 0:
+                    o.hp = 0
+                    self._mob_died(p, o)
         elif nm == '连刺':
             # ★ round379（用户："单手剑改成连刺，概率造成两次伤害"）
             #   ★ 触发时【再结算一次 dv】✗ 不是把 dv 翻倍 ✓

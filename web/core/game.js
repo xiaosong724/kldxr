@@ -5113,6 +5113,8 @@ var AUTO_LOOT_R = 12.0;      /* 没怪时去捡东西的搜索半径 ✓ */
    ★ 0.30 秒 ≈ 0.9 米 ✗ 刚够离开僵尸的攻击距离 ✓ 又不会跑开太远 ✓
    ★ 不能压太狠：僵尸蓄力 0.45 秒 ✗ 没退出去会被打到 ✓
      → 0.28~0.32 是安全区间 ✓ */
+var _spinUntil = 0;         // ★ round381：锤子旋击的动画截止时刻
+var _spinDur = 560;         // 转一圈的时长（ms ✓）
 var _yawLockUntil = 0;      // 挥刀锁朝向的截止时刻（ms ✓）
 var AUTO_RETREAT = 0.30;
 var AUTO_STUCK_MOVE = 0.12;
@@ -5636,10 +5638,22 @@ function frame(ts) {
        关节：右臂 X/Y/Z 三轴 + 肩部 + 重心 + 左手 + 双腿 */
     atkT += dt * ATK_ANIM_SPD;   // ★ 第 169 轮：动画快 20%（攻速不变 ✓）
     // ★ 直接调共用的挥剑动画（本地 / 别的玩家 同一套 → 动作一致 ✓）
+    var _spinOn = (performance.now() < _spinUntil);
     if (!heroAtkPose(H, atkT, P.x, P.z, P.yaw, MY_WEAPON && MY_WEAPON.look, P.y,
                      (NET && NET.atkSeq) || 0)) {
       atkT = -1;
       heroAtkReset(H, P.x, P.z, P.yaw);
+    }
+    /* ★ round381：旋击 —— 在挥刀姿势之上【再叠一个整圈旋转】✓
+       ★ 为什么叠加而不是新做一套关键帧：
+         转圈 = 身体绕 Y 轴转 360° ✗ 挥砍姿势本身不用变 ✓
+         叠加就是"一边挥一边转"✓ 正好是想要的效果 ✓ */
+    if (_spinOn) {
+      var _sp = 1 - (_spinUntil - performance.now()) / _spinDur;
+      if (_sp < 0) { _sp = 0; }
+      if (_sp > 1) { _sp = 1; }
+      H.g.rotation.y = P.yaw + Math.PI * 2 * _sp;
+      if (H.shadow) { H.shadow.visible = true; }
     }
   }
   if (atkCd > 0) { atkCd -= dt; }

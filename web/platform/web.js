@@ -5149,6 +5149,12 @@ function wsOnMessage(raw) {
              通用那个先跑 ✓ 查不到 pexp → 走兜底 ['特效'] ✗✓
              → 玩家看到的就是【特效】两个字 ✗ 而不是加了多少经验 ✗
        修：直接加进 FX_C ✓（并且带上数字 ✓）*/
+    /* ★ round381：锤子旋击 → 飘一个"旋击"并且开始转圈 ✓ */
+    if (d.kind === 'spin') {
+      _spinUntil = performance.now() + _spinDur;
+      fxNum('旋击', '#ffd83d', P.x, 2.9, P.z);
+      return;
+    }
     var FX_C = { bleed: ['流血', '#ff7a6a'], stun: ['眩晕', '#ffd83d'],
                  knock: ['击退', '#8ee0ff'], parry: ['招架', '#8ee0ff'],
                  dodge: ['闪避', '#8ee0ff'],
