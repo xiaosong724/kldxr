@@ -742,7 +742,10 @@ function propApplyEdits(cells) {
       propDead[k] = 1;
       delete propDmg[k];
       // ★ 先让【独立模型】倒下去 ✗ 再重建块（把原来的挪走）✓
-      propFallAnim(propAt[k] || '', gx, gz);
+      var _fk2 = propAt[k] || '';
+      if (_fk2.indexOf('tree') === 0 || _fk2 === 'dead' || _fk2.indexOf('fence') === 0) {
+        propFallAnim(_fk2, gx, gz);      // ★ 树/围栏才倒 ✗ 房子直接碎 ✓
+      }
       // ★ 木屑/石屑（复用破坏的碎块 ✓ 换成木头色 ✓）
       terDebris(gx, gz, 'dirt', terH(gx, gz));
       if (typeof sfx === 'function') {
@@ -1654,8 +1657,10 @@ function buildChunk(ci, cj) {
       sol.push({ x: wx2, z: wz2, hw: hw * s, hd: hd * s });
       /* ★ round329（P1 树木破坏）：记下"这一格长着什么"✗ 攻击时要查 ✓
          ★ 只记【能砍的】（树 / 石头 / 栅栏 ✗ 房子以后再说 ✓）*/
+      /* ★ round339（用户："房子掉砖头"）：房子也要能被选中 ✗ 不然砍不到 ✓ */
       if (kind.indexOf('tree') === 0 || kind === 'dead' || kind === 'rock' ||
-          kind === 'rubble' || kind === 'rock3' || kind.indexOf('fence') === 0) {
+          kind === 'rubble' || kind === 'rock3' || kind.indexOf('fence') === 0 ||
+          kind.indexOf('house') === 0) {
         propAt[gx2 + ',' + gz2] = kind;
       }
       placed++;

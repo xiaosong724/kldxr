@@ -1424,14 +1424,17 @@ class World(object):
             kind = None
         if not kind:
             return
+        # ★ round339：每种物件砍几下 + 掉什么（用户：树掉木材 / 石掉石块 / 房掉砖头）
         if kind.startswith('tree') or kind == 'dead':
-            need = 2                       # 木头：2 下
+            need, drop = 2, '木材'
         elif kind.startswith('fence'):
-            need = 2
+            need, drop = 2, '木材'
         elif kind.startswith('rock') or kind == 'rubble':
-            need = 3                       # 石头：3 下
+            need, drop = 3, '石块'
+        elif kind.startswith('house'):
+            need, drop = 4, '砖头'        # ★ 房子最硬（一整栋 ✗ 拆起来费劲 ✓）
         else:
-            return                         # 房子/车/桶：这一轮不做
+            return                         # 车 / 桶：这一轮不做
         key = (gx, gz)
         got = self.prop_hp.get(key, 0) + 1
         if got < need:
@@ -1441,6 +1444,22 @@ class World(object):
         self.prop_hp.pop(key, None)
         self.prop_dead.add(key)
         self._prop_bc.append([gx, gz, 1, 0, 0])
+        # ★ 掉建材（直接往地上放 ✗ 复用现成的 loot 表 ✓ 客户端会自动捡 ✓）
+        try:
+            _wx = (gx + 0.5) * termod.LEVEL_H
+            _wz = (gz + 0.5) * termod.LEVEL_H
+            self.loot_seq += 1
+            self.loot[str(self.loot_seq)] = {
+                'x': _wx, 'z': _wz, 'ttl': drops.DROP_TTL,
+                'item': {'name': drop, 'tier': 0, 'kind': 'material'}}
+            for _p4 in self.players.values():
+                _dx4 = _wx - _p4.x
+                _dz4 = _wz - _p4.z
+                if _dx4 * _dx4 + _dz4 * _dz4 <= 900:
+                    self._add_pend(_p4.cid, 'notice',
+                                   {'text': '掉落：%s 走过去自动捡 ✓' % drop})
+        except Exception as _de:
+            print('[prop] drop failed: %r' % (_de,))
 
     def _prop_flush(self, now):
         if not self._prop_bc:

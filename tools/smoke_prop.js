@@ -100,7 +100,10 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     await sleep(700);
   }
   // ★ 砍倒的瞬间应该有一个独立模型在倒 ✓
-  const fall = await ev('return JSON.stringify({ falling: (_falling||[]).length, played: (window._fallN||0), err: (window._fallErr||"").slice(0,200) });');
+  const fall = await ev([
+    'var ln = (typeof NET.loot === "object" && NET.loot) ? Object.keys(NET.loot).length : -1;',
+    'return JSON.stringify({ played: (window._fallN||0), loot: ln });',
+  ].join(''));
   console.log('  倒地动画: ' + fall);
   await sleep(1200);
   const after = await ev([
