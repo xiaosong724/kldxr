@@ -436,51 +436,120 @@ function terCrack(gx, gz, got, need) {
   }
 }
 
-/* 碎块：从这一格炸出去 ✓ */
-function terDebris(gx, gz, mat) {
+/* ★★★ round312（用户："破坏的动画不好看，应该是有方块碎裂小石头掉落"）★★★
+   上一版：8 个小方块往外飞 ✗ 一边飞一边缩小 ✗ 像"放烟花"✓ 不像"碎石头"✓
+   这一版：14 块石头 ✗ 受重力【真的落到地上】✗ 停一会儿再淡出 ✓
+         落地会弹一下（像石子 ✓）
+   ★ 落点用【破坏前那一格的高度】✗ 不重新查地形 ✓（查了会取到已经变矮的值 ✓）*/
+function terDebris(gx, gz, mat, baseH) {
   terPoolInit();
   var col = TER_COL[mat] || TER_COL.grass;
-  var h = terH(gx, gz) * TER.LEVEL_H;
-  var want = 8, made = 0;
+  var want = 14, made = 0;
+  var cy = (baseH === undefined ? terH(gx, gz) : baseH) * TER.LEVEL_H;
   for (var i = 0; i < _deb.length && made < want; i++) {
     var d = _deb[i];
     if (d.on) { continue; }
     var m = _debPool[i];
-    d.on = 1; d.t = 0; d.life = 0.75;
-    d.sc = 0.05 + terRand01(gx, gz, 300 + i) * 0.07;
+    d.on = 1; d.t = 0; d.life = 2.0; d.landed = 0; d.fade = 0;
+    d.sc = 0.055 + terRand01(gx, gz, 300 + i) * 0.085;
     var ang = terRand01(gx, gz, 320 + i) * Math.PI * 2;
-    var sp = 1.2 + terRand01(gx, gz, 340 + i) * 1.6;
+    var sp = 0.7 + terRand01(gx, gz, 340 + i) * 1.9;
     d.vx = Math.cos(ang) * sp;
     d.vz = Math.sin(ang) * sp;
-    d.vy = 2.2 + terRand01(gx, gz, 360 + i) * 1.4;
-    m.position.set((gx + 0.5) * TER.LEVEL_H, h + 0.1, (gz + 0.5) * TER.LEVEL_H);
+    d.vy = 1.8 + terRand01(gx, gz, 360 + i) * 2.4;
+    d.gnd = cy + d.sc * 0.5;
+    m.position.set((gx + 0.2 + terRand01(gx, gz, 380 + i) * 0.6) * TER.LEVEL_H,
+                   cy + 0.3, (gz + 0.2 + terRand01(gx, gz, 390 + i) * 0.6) * TER.LEVEL_H);
     m.scale.setScalar(d.sc);
-    m.material.color.setRGB(col[0] * 0.9, col[1] * 0.9, col[2] * 0.9);
+    m.rotation.x = terRand01(gx, gz, 400 + i) * 3.14;
+    m.rotation.z = terRand01(gx, gz, 410 + i) * 3.14;
+    m.material.color.setRGB(Math.min(1, col[0] * 0.85 + 0.10),
+                            Math.min(1, col[1] * 0.85 + 0.10),
+                            Math.min(1, col[2] * 0.85 + 0.10));
+    m.material.transparent = false;
+    m.material.opacity = 1;
     m.visible = true;
     made++;
   }
+  /* ★ 尘烟：一格宽的扁片，扩散淡出（0.5 秒 ✓）
+     ★ 为什么要有：光有石头会很"脆"✗ 加一层灰才像"塌了"✓ */
+  terDust(gx, gz, cy, col);
 }
 
-/* 每帧推进碎块（★ 只在有活的碎块时才跑 ✓ 平时零开销 ✓）*/
+/* 尘烟（独立小池子 ✗ 6 个就够 ✓）*/
+var _dustPool = [], _dust = [];
+function terDust(gx, gz, cy, col) {
+  if (!_dustPool.length) {
+    var dg = new THREE.PlaneGeometry(1, 1);
+    for (var i = 0; i < 6; i++) {
+      var mm = new THREE.Mesh(dg, new THREE.MeshBasicMaterial({
+        color: 0xb9ab8e, transparent: true, opacity: 0, depthWrite: false }));
+      mm.rotation.x = -Math.PI / 2;
+      mm.visible = false;
+      mm.renderOrder = 4;
+      scene.add(mm);
+      _dustPool.push(mm);
+      _dust.push({ on: 0, t: 0, life: 0.5 });
+    }
+  }
+  for (var j = 0; j < _dust.length; j++) {
+    if (_dust[j].on) { continue; }
+    var dd = _dust[j], m = _dustPool[j];
+    dd.on = 1; dd.t = 0;
+    m.position.set((gx + 0.5) * TER.LEVEL_H, cy + 0.12, (gz + 0.5) * TER.LEVEL_H);
+    m.scale.setScalar(TER.LEVEL_H * 0.8);
+    m.material.color.setRGB(Math.min(1, col[0] + 0.35), Math.min(1, col[1] + 0.33),
+                            Math.min(1, col[2] + 0.30));
+    m.material.opacity = 0.55;
+    m.visible = true;
+    return;
+  }
+}
+
+/* 每帧推进碎块 + 尘烟（★ 只在有活的时才跑 ✓ 平时零开销 ✓）*/
 function terDebTick(dt) {
-  var any = 0;
   for (var i = 0; i < _deb.length; i++) {
     var d = _deb[i];
     if (!d.on) { continue; }
-    any++;
-    d.t += dt;
-    if (d.t >= d.life) { d.on = 0; _debPool[i].visible = false; continue; }
     var m = _debPool[i];
-    d.vy -= 12 * dt;
+    d.t += dt;
+    if (d.landed) {
+      d.fade += dt;
+      if (d.fade > 0.5) {
+        m.material.transparent = true;
+        m.material.opacity = Math.max(0, 1 - (d.fade - 0.5) / 0.5);
+      }
+      if (d.fade > 1.0) { d.on = 0; m.visible = false; m.material.transparent = false; }
+      continue;
+    }
+    d.vy -= 13 * dt;
     m.position.x += d.vx * dt;
     m.position.y += d.vy * dt;
     m.position.z += d.vz * dt;
-    m.rotation.x += dt * 6;
-    m.rotation.z += dt * 4;
-    var k = 1 - (d.t / d.life);
-    m.scale.setScalar(d.sc * k);
+    m.rotation.x += dt * 7;
+    m.rotation.z += dt * 5;
+    if (m.position.y <= d.gnd) {
+      m.position.y = d.gnd;
+      if (Math.abs(d.vy) > 1.1) {
+        d.vy = -d.vy * 0.32;
+        d.vx *= 0.45; d.vz *= 0.45;
+      } else {
+        d.vy = 0; d.vx = 0; d.vz = 0;
+        d.landed = 1; d.fade = 0;
+      }
+    }
+    if (d.t > d.life) { d.on = 0; m.visible = false; }
   }
-  if (!any) { return; }
+  for (var j = 0; j < _dust.length; j++) {
+    var dd = _dust[j];
+    if (!dd.on) { continue; }
+    dd.t += dt;
+    var k = dd.t / dd.life;
+    if (k >= 1) { dd.on = 0; _dustPool[j].visible = false; continue; }
+    var mm = _dustPool[j];
+    mm.scale.setScalar(TER.LEVEL_H * (0.8 + k * 1.5));
+    mm.material.opacity = 0.55 * (1 - k);
+  }
 }
 
 /* ★ 收到服务端的破坏广播：改覆盖 + 清缓存 + 只重建受影响的瓦片 ✓
@@ -503,7 +572,7 @@ function terApplyEdits(cells) {
       delete terOver[k]; delete terDmg[k];
     } else {
       // ★ 破坏成功：先炸碎块 ✗ 再改覆盖 ✓（顺序反了就取不到"碎之前"的高度了）
-      terDebris(gx, gz, mat);
+      terDebris(gx, gz, mat, terH(gx, gz));
       terOver[k] = nh; delete terDmg[k];
       // 把这格的裂纹收掉（已经碎了 ✗ 留着就穿帮 ✓）
       for (var ci = 0; ci < _crackPool.length; ci++) {

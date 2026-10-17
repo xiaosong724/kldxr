@@ -698,15 +698,23 @@ class World(object):
         except Exception as _mke:
             print('[mkt] tick failed: %r' % (_mke,))
 
-        # ★ round310（P1 破坏）：自愈清扫 + 广播（★ 一秒一次 ✗ 不占 tick ✓）
+        # ★★★ round312（用户："破坏延迟高了一点点"）★★★
+        #   根因：我把破坏广播塞进了"一秒一次"的节流里 ✗
+        #         → 打碎之后最多要等 1 秒客户端才看到 ✓
+        #   拆成两件事：
+        #     ① 广播【每帧都发】✗ 破坏是低频操作（一次几格 ✓ 不刷屏 ✓）
+        #     ② 自愈清扫还是【一秒一次】✗ 它没必要那么勤 ✓
+        try:
+            self._ter_flush(0)
+        except Exception as _te:
+            print('[ter] flush failed: %r' % (_te,))
         self._ter_acc = getattr(self, '_ter_acc', 0.0) + TICK_DT
         if self._ter_acc >= 1.0:
             self._ter_acc = 0.0
             try:
                 self._ter_sweep(dbmod.now_ms())
-                self._ter_flush(0)
-            except Exception as _te:
-                print('[ter] sweep failed: %r' % (_te,))
+            except Exception as _te2:
+                print('[ter] sweep failed: %r' % (_te2,))
 
         # ③ 僵尸：刷怪 / 回收 / AI（P2 第一刀）
         #    ★ 和玩家一样【只在 tick 线程跑】→ 一张快照发出去时，世界是"冻结"的 ✓
