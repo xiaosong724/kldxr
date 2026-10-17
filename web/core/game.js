@@ -4586,7 +4586,8 @@ function netUpdate(dt) {
     // ★ 他的挥剑动画（抬剑 → 下砍 ✓ 和本地共用 heroAtkPose → 动作一模一样 ✓）
     if (o.atkT >= 0) {
       o.atkT += dt * ATK_ANIM_SPD;   // ★ 第 169 轮：他们的动画也一起加速 ✓（看着才一致 ✓）
-      if (!heroAtkPose(o.hh, o.atkT, px, pz, o.cur.yaw, o.wlook, terYAt(px, pz))) {
+      if (!heroAtkPose(o.hh, o.atkT, px, pz, o.cur.yaw, o.wlook, terYAt(px, pz),
+                       (o.atkSeq >= 0 ? o.atkSeq : 0))) {
         o.atkT = -1;
         heroAtkReset(o.hh, px, pz, o.cur.yaw);
       }
@@ -4932,6 +4933,19 @@ var KF_STAB2 = [
   [ 0.00,  0.00,  0.15,  0.55,  0.00,  0.00, -0.15,  0.00,  0.00,  0.00,  0.00]   // 回位
 ];
 
+/* ★★★ round376（用户："斧头改成左劈一下，下次攻击变成右劈一下"）★★★
+   ★ 不手写第二套关键帧 ✗ 直接把第一套【镜像】过来 ✓
+     镜像规则：累加在"左右"上的三个通道取反 + 左右腿互换
+       1 = armR.y（手臂左右摆）· 2 = armR.z（手臂内外张）· 5 = 身体扭转
+       7/8 = 左右腿（互换）
+   ★ 为什么程序化：手抄 22 个数字必然打错一个 ✗ 而且改一处要改两处 ✓ */
+var KF_CHOP_R = KF_CHOP.map(function (row) {
+  var r = row.slice();
+  r[1] = -r[1]; r[2] = -r[2]; r[5] = -r[5];
+  var t = r[7]; r[7] = r[8]; r[8] = t;
+  return r;
+});
+
 var ATK_KF = { chop: KF_CHOP, sweep: KF_SWEEP, thrust: KF_THRUST, draw: KF_DRAW,
                stab2: KF_STAB2 };
 // 各自的节奏：劈最慢（收招重 ✓）· 扫居中 · 刺最快（秒收 ✓）
@@ -4947,7 +4961,7 @@ var ATK_T = {
 
 function atkArchOf(look) { return ATK_ARCH[look] || 'sweep'; }
 
-function heroAtkPose(heroObj, atkT, bx, bz, byaw, look, baseY) {
+function heroAtkPose(heroObj, atkT, bx, bz, byaw, look, baseY, side) {
   /* ★★★ round307 修的真 bug（用户："玩家攻击的时候会穿模，会掉落到方块下面去"）★★★
      根因：下面那句 `position.y = lp(10)` 用的是【关键帧里的绝对 Y】✗
            而关键帧是按"站在 y=0 的平地上"调的 ✓
@@ -4956,7 +4970,10 @@ function heroAtkPose(heroObj, atkT, bx, bz, byaw, look, baseY) {
      ★ 别的玩家也一样 ✗ 他们站在山上攻击时也会陷进去 ✓ 一起修了 ✓ */
   if (baseY === undefined) { baseY = 0; }
   var arch = atkArchOf(look);
-  var KF = ATK_KF[arch];
+  /* ★ 斧头左右交替：side 为奇数时用镜像那套 ✓
+     ★ 只对【斧】生效 ✗ 锤子还是同一个方向（它下一轮才改）✓ */
+  var _sideN = ((Math.abs(side | 0)) % 2);
+  var KF = (look === 'axe' && _sideN === 1) ? KF_CHOP_R : ATK_KF[arch];
   var TT = ATK_T[arch];
   var TOTAL = TT[TT.length - 1];
   /* ★★★ round374：帧数改成【通用】（原来写死 5 帧 / 4 段 ✗）
@@ -5604,7 +5621,8 @@ function frame(ts) {
        关节：右臂 X/Y/Z 三轴 + 肩部 + 重心 + 左手 + 双腿 */
     atkT += dt * ATK_ANIM_SPD;   // ★ 第 169 轮：动画快 20%（攻速不变 ✓）
     // ★ 直接调共用的挥剑动画（本地 / 别的玩家 同一套 → 动作一致 ✓）
-    if (!heroAtkPose(H, atkT, P.x, P.z, P.yaw, MY_WEAPON && MY_WEAPON.look, P.y)) {
+    if (!heroAtkPose(H, atkT, P.x, P.z, P.yaw, MY_WEAPON && MY_WEAPON.look, P.y,
+                     (NET && NET.atkSeq) || 0)) {
       atkT = -1;
       heroAtkReset(H, P.x, P.z, P.yaw);
     }

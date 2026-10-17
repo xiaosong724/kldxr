@@ -208,6 +208,24 @@ const PW = 'abc123456';
   ].join(''));
   console.log('  锁转时长: ' + lockTest);
 
+  // ★ 斧头左右交替：奇偶两次的姿态应该不同，且都不出 NaN
+  const axeTest = await ev([
+    'var h = hero(); var L = TER.LEVEL_H;',
+    'function poseAt(side) {',
+    '  heroAtkPose(h, 0.40, 0, 0, 0, "axe", 0, side);',
+    '  return [h.g.rotation.y, h.armR.rotation.z, h.armR.rotation.y];',
+    '}',
+    'var a = poseAt(0), b = poseAt(1);',
+    'var diff = 0;',
+    'for (var i = 0; i < 3; i++) { diff += Math.abs(a[i] - b[i]); }',
+    'var bad = false;',
+    'for (var j = 0; j < 3; j++) { if (!isFinite(a[j]) || !isFinite(b[j])) { bad = true; } }',
+    'return JSON.stringify({ diff: +diff.toFixed(3), nan: bad,',
+    '  a: a.map(function(v){return +v.toFixed(2);}),',
+    '  b: b.map(function(v){return +v.toFixed(2);}) });',
+  ].join(''));
+  console.log('  斧头交替: ' + axeTest);
+
   const ripple = await ev([
     'var live = 0;',
     'for (var i = 0; i < _ripple.length; i++) { if (_ripple[i].on) { live++; } }',
