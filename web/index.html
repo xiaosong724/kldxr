@@ -51,7 +51,10 @@
  #setBtn{right:8px;top:8px;padding:6px 12px;font-size:12px;cursor:pointer;user-select:none}
  #setBtn:active{transform:scale(.95)}
  /* ★ round355（用户："菜单旁边加一个键位按钮，点了调位置，再点保存"）*/
- #uiEdit{right:74px;top:8px;padding:6px 12px;font-size:12px;cursor:pointer;user-select:none}
+ /* ★ round356（用户："键位和菜单稍微分开一点，别贴在一起"）
+    菜单键 right:8px ✗ 宽约 62px → 它的左边缘在右边 70px 处 ✓
+    所以这里 right 给 88px ✗ 中间留出约 18px 的空隙 ✓ */
+ #uiEdit{right:88px;top:8px;padding:6px 12px;font-size:12px;cursor:pointer;user-select:none}
  #uiEdit:active{transform:scale(.95)}
  #uiEdit.on{background:#8ee0a833;border-color:#8ee0a8aa;color:#b8f0c8}
  /* ★ 攻击键（第 33 轮：用户从 5 个候选里选了「① 锈铁圆扣」，并要求半透明）
