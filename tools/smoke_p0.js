@@ -227,6 +227,19 @@ const PW = 'abc123456';
   ].join(''));
   console.log('  斧头交替: ' + axeTest);
 
+  // ★ 匕首：奇数刀投掷动作、偶数刀刺；投掷伤害按品阶
+  const dagTest = await ev([
+    'var h = hero();',
+    'heroAtkPose(h, 0.25, 0, 0, 0, "dagger", 0, 0);',
+    'var a = [h.armL.rotation.x, h.armR.rotation.x];',
+    'heroAtkPose(h, 0.25, 0, 0, 0, "dagger", 0, 1);',
+    'var b = [h.armL.rotation.x, h.armR.rotation.x];',
+    'var bad = !isFinite(a[0]) || !isFinite(b[0]);',
+    'return JSON.stringify({ evenLeft: +a[0].toFixed(2), oddLeft: +b[0].toFixed(2),',
+    '  diff: +Math.abs(a[0]-b[0]).toFixed(2), nan: bad });',
+  ].join(''));
+  console.log('  匕首双持: ' + dagTest);
+
   const ripple = await ev([
     'var live = 0;',
     'for (var i = 0; i < _ripple.length; i++) { if (_ripple[i].on) { live++; } }',

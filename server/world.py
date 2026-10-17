@@ -4169,6 +4169,31 @@ class World(object):
 
         p.atkSeq += 1        # ★★ 第 66 轮：这一刀要播给所有人看（别人靠它触发动作 ✓）
 
+        # ★★★ round386（用户："匕首第一下丢出去，第二下近身刺"）★★★
+        #   ★ 奇数刀 = 投掷（远程 ✓ 复用箭矢系统）
+        #     偶数刀 = 近身刺（走下面的正常近战 ✓）
+        #   ★ 投掷伤害按品阶：1 阶 20% → 12 阶 80%（每阶 +6%）
+        if wlook == 'dagger' and (p.atkSeq % 2) == 1:
+            if len(self.arrows) < ARROW_MAX:
+                self._arrow_id += 1
+                _atk2 = self._atk_of(p)
+                _dv2, _crit2 = mobs.roll_damage(
+                    _atk2, crit_pt=_T.get('crit_pt', 0.0),
+                    crit_dmg=_T.get('crit_dmg', 0.0))
+                _t2 = max(0, min(11, int(wtier)))
+                _ratio = 0.20 + 0.06 * max(0, _t2 - 1)
+                if _ratio > 0.80:
+                    _ratio = 0.80
+                _dv2 = max(1, int(round(_dv2 * _ratio)))
+                self.arrows[str(self._arrow_id)] = {
+                    'id': self._arrow_id,
+                    'x': p.x, 'z': p.z, 'yaw': p.yaw,
+                    'dx': math.sin(p.yaw), 'dz': math.cos(p.yaw),
+                    'dmg': _dv2, 'crit': bool(_crit2),
+                    'life': reach / ARROW_SPEED,
+                    'by': p.cid,
+                }
+            return
         # ★★ 第 69 轮：弓 = 远程投射物（不走下面的近战扇形 ✗）★★
         if wlook in weapons.RANGED:
             if len(self.arrows) < ARROW_MAX:
