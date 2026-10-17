@@ -5154,6 +5154,18 @@ function wsOnMessage(raw) {
     /* ★★★ round398（用户："这些动画要做同步，不然别人看不到"）★★★
        ★ 服务端现在会把特效广播给周围 ✗ 带上 by = 谁在放 ✓
        ★ 不是我就记到那个玩家身上 ✗ 渲染时按他的状态播 ✓ */
+    /* ★ round406（用户："玩家也会被长棍击退"）
+       ★ 玩家位置是客户端权威 ✗ 服务端只能发"推多少"让客户端自己执行 ✓
+       ★ 用 moveWithCollision → 撞墙不会穿过去 ✓ */
+    if (d.kind === 'kb') {
+      try {
+        if (typeof moveWithCollision === 'function' && typeof P !== 'undefined') {
+          moveWithCollision(+d.dx || 0, +d.dz || 0, G.BODY_W / 2, G.BODY_D / 2, true, null);
+          if (typeof shake !== 'undefined') { shake = 0.3; }
+        }
+      } catch (e) { }
+      return;
+    }
     /* ★ round404（用户："长枪挑飞，落地加落地音效"）*/
     if (d.kind === 'launch') {
       if (typeof NET !== 'undefined' && NET.rmobs && NET.rmobs[d.mid]) {

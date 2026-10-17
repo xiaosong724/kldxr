@@ -1687,6 +1687,39 @@ class World(object):
             if a['life'] <= 0:
                 self.arrows.pop(str(a['id']), None)
 
+    def _aoe_players(self, p, x, z, radius, dmg, push=None):
+        """范围伤害/控制也要作用到玩家身上（★ round406）
+
+        ★ push = 击退距离（米）✗ None = 只伤害不推 ✓
+        ★ 玩家位置是客户端权威 ✗ 所以【推】只能发事件让客户端自己执行 ✓
+        """
+        r2 = radius * radius
+        for q in self.players.values():
+            if q is p or int(q.hp or 0) <= 0:
+                continue
+            if (q.x - x) ** 2 + (q.z - z) ** 2 > r2:
+                continue
+            d = max(1, int(dmg))
+            q.hp = max(0, int(q.hp) - d)
+            self._add_pend(q.cid, 'hurts', {'dmg': d, 'x': round(x, 2),
+                                            'z': round(z, 2), 'by': p.name, 'pvp': 1})
+            if push:
+                # ★ 沿"攻击者 → 被打的人"方向推 ✓
+                dx = q.x - p.x
+                dz = q.z - p.z
+                ln = (dx * dx + dz * dz) ** 0.5
+                if ln < 0.01:
+                    dx, dz, ln = math.sin(p.yaw), math.cos(p.yaw), 1.0
+                try:
+                    self._send_cid(q.cid, P.pack('fx', kind='kb',
+                                                 dx=round(dx / ln * push, 2),
+                                                 dz=round(dz / ln * push, 2)))
+                except Exception:
+                    pass
+            if int(q.hp) <= 0:
+                q.hp = 0
+                self._send_cid(q.cid, P.pack('dead', by=p.name))
+
     def _report_hit(self, p, mid, dmg, crit, x, z, extra=None):
         """打中反馈：给我 mhits + 广播给周围的人（★ round402）
 
@@ -4546,6 +4579,9 @@ class World(object):
                 if o.hp <= 0:
                     o.hp = 0
                     self._mob_died(p, o)
+            # ★ 溅射也打玩家（以主目标为中心 ✓）
+            self._aoe_players(p, m.x, m.z, weapons.SPLASH_R,
+                              max(1, int(round(dv * fx['value']))))
         elif nm == '旋击':
             # ★ round381（用户："锤子触发了就转圈打整个一圈"）
             #   ★ 半径 2.2 米（≈ 锤的攻击距离）✗ 不看朝向 = 360° ✓
@@ -4565,6 +4601,9 @@ class World(object):
                 if o.hp <= 0:
                     o.hp = 0
                     self._mob_died(p, o)
+            # ★ 旋击也打玩家（半径 4.4 ✓）
+            self._aoe_players(p, m.x, m.z, 4.4,
+                              max(1, int(round(dv * fx['value']))))
         elif nm == '连刺':
             # ★ round379（用户："单手剑改成连刺，概率造成两次伤害"）
             #   ★ 触发时【再结算一次 dv】✗ 不是把 dv 翻倍 ✓
