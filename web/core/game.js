@@ -5666,7 +5666,11 @@ function frame(ts) {
       var _jp = 1 - (_jumpAtkUntil - performance.now()) / _jumpAtkDur;
       if (_jp < 0) { _jp = 0; }
       if (_jp > 1) { _jp = 1; }
-      H.g.position.y += Math.sin(_jp * Math.PI) * 0.45;
+      /* ★ round384（用户："跳起来不明显，要跳得比按弹跳键还高"）
+         ★ 弹跳键的视觉最高点 ≈ 1.98 格（物理 1.04 × 1.9 倍视觉加成 ✓）
+         ★ 0.45 只有它的四分之一 ✗ 难怪看不出来 ✓
+         ★ 2.4 格 = 明显高过普通跳跃 ✓ */
+      H.g.position.y += Math.sin(_jp * Math.PI) * 2.4;
     }
   }
   if (atkCd > 0) { atkCd -= dt; }
