@@ -315,6 +315,17 @@ SPLASH_R = 1.5                # 溅射半径（米）
 SPLASH_MAX = 2                # 溅射最多几个（★ 斧头按品阶覆盖：2~13 ✓ 见 world.py）
 
 
+# ★ round399：弯刀连砍刀数（用户给的阶梯表 ✗ 不是线性 ✓）
+#   1-2阶1刀 · 2-3阶2刀 · 4-5阶3刀 · 6-7阶4刀 · 7-8阶5刀 · 9-10阶6刀 · 11阶7刀 · 12阶8刀
+#   ★ 区间有重叠（1-2 和 2-3 都含 2 阶）✗ 按【后写的为准】取 ✓
+SABER_CHOPS = (1, 2, 2, 3, 3, 4, 5, 5, 6, 6, 7, 8)   # 索引 = 品阶-1
+
+
+def saber_chops(tier):
+    t = max(0, min(11, int(tier) - 1)) if int(tier) >= 1 else 0
+    return SABER_CHOPS[t]
+
+
 def fx_of(look, tier):
     """取某把武器的机制数值（按品阶加成 ✓）
 
@@ -329,6 +340,9 @@ def fx_of(look, tier):
     # ★ 只有"概率触发"的才套 75% 上限 ✓ 必定触发的保持 1.0（那种靠场合门槛限制 ✓）
     chance = (cb if cb >= 1.0 else min(FX_MAX_CHANCE, cb + ci * t))
     value = vb + vi * t
+    # ★ round399：弯刀刀数走阶梯表 ✗ 不用线性公式 ✓
+    if look == 'saber':
+        value = saber_chops(tier)
     if unit == 'pct':
         vshow = round(value * 100)
     elif unit == 'int':

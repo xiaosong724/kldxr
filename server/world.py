@@ -4356,6 +4356,10 @@ class World(object):
                                             'x': round(m.x, 2), 'z': round(m.z, 2)})
 
             # ★★ 命中后按武器类型触发机制 ★★
+            # ★ round399（用户："暴击跳打也要同步"）
+            #   ★ 暴击是 mhits 里的信息 ✗ 只发给我 ✓ → 额外广播一条 ✓
+            if crit:
+                self._fx_broadcast(p, {'kind': 'crit'})
             self._weapon_fx(p, m, _fxRun, dv)
 
             if m.hp <= 0:

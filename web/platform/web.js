@@ -5163,6 +5163,9 @@ function wsOnMessage(raw) {
         if (d.kind === 'saber') { _ro.multiN = Math.max(2, Math.min(13, +d.n || 2)); _ro.multiT0 = performance.now(); }
         if (d.kind === 'staff') { _ro.staffT0 = performance.now() - 120; _ro.staffLen = +d.len || 4; }
         if (d.kind === 'spin') { _ro.spinUntil = performance.now() + 560; }
+        if (d.kind === 'crit') { _ro.critUntil = performance.now() + 400; }
+        if (d.kind === 'crit' || d.kind === 'spin' || d.kind === 'staff' ||
+            d.kind === 'saber') { return; }
       }
     }
     /* ★ round395：弯刀连砍 → 循环播 N 刀的动画 */

@@ -4663,6 +4663,13 @@ function netUpdate(dt) {
           o.hh.sw.scale.set(1, 1, 1);
         }
       }
+      /* ★ round399：别人的暴击跳打（和本地同一套抛物线 ✓）*/
+      if (o.critUntil && _rNow < o.critUntil) {
+        var _cp = 1 - (o.critUntil - _rNow) / 400;
+        if (_cp < 0) { _cp = 0; }
+        if (_cp > 1) { _cp = 1; }
+        o.hh.g.position.y += Math.sin(_cp * Math.PI) * 3.4;
+      }
       if (o.spinUntil && _rNow < o.spinUntil) {
         var _sp2 = 1 - (o.spinUntil - _rNow) / 560;
         if (_sp2 < 0) { _sp2 = 0; }
