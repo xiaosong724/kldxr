@@ -13,7 +13,7 @@ import time
 
 # ============================================================ 版本与迁移
 
-SCHEMA_VERSION = 8   # ★ round311：地形破坏（terrain_damage 表 ✓）
+SCHEMA_VERSION = 9   # ★ round347：流体存库（terrain_fluid 表 ✓）
 
 # 每个版本一组 SQL。**新版本往后追加，不要改历史版本** ✓
 MIGRATIONS = {
@@ -342,6 +342,20 @@ MIGRATIONS[7] = [
 #   ★ 只存【被破坏的格子】✗ 天然地形是种子算出来的 ✓ 不用存 ✓
 #   ★ 表平时是【空的】✗ 只有玩家真挖过的格子才有一行 ✓ 不会暴涨 ✓
 #   ★ ts = 破坏时刻 ✗ 服务端按它算"什么时候恢复"（20 分钟 ✓ 方案 §5.7）
+# ★★★ round347：流体存库（用户："继续做流体存库"）★★★
+#   ★ 和 terrain_damage 同一个思路：只存【玩家真的挖出来/灌了水】的格子 ✓
+#   ★ 天然的水（沼泽/地火）不用存 ✗ 种子算得出来 ✓
+MIGRATIONS[9] = [
+    """CREATE TABLE IF NOT EXISTS terrain_fluid (
+        x     INTEGER NOT NULL,
+        z     INTEGER NOT NULL,
+        kind  INTEGER NOT NULL,
+        level INTEGER NOT NULL,
+        ts    INTEGER NOT NULL,
+        PRIMARY KEY (x, z)
+    )""",
+]
+
 MIGRATIONS[8] = [
     """CREATE TABLE IF NOT EXISTS terrain_damage (
         x   INTEGER NOT NULL,

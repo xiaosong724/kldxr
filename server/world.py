@@ -389,6 +389,7 @@ class World(object):
         self.prop_dead = set()
         self._prop_bc = []
         self._ter_load()                       # ★ 启动时读一次（这是 boot ✗ 不是 tick ✓）
+        self._fluid_load()                     # ★ round347：流体也要读回来 ✓
         self._ticker_last = {}          # 第 247 轮：同类弹幕最后发送时间（1 秒合并）
         self._ticker_dup = {}           # 被合并掉了几条
         # ★ 本 tick 的治疗事件（第 46 轮）：[[医生x, 医生z, 目标x, 目标z, 回了多少], ...]
@@ -1335,6 +1336,7 @@ class World(object):
         if not nk:
             return
         self.fluid_ov[(gx, gz)] = (nk, 0)
+        self._fluid_save(gx, gz, nk, 0)      # ★ round347：落库（重启后还在 ✓）
         msg = [[gx, gz, nk, 0]]
         for p in self.players.values():
             ddx = gx * termod.LEVEL_H - p.x
@@ -1380,6 +1382,33 @@ class World(object):
             n += 1
         if n:
             print('[ter] 读回 %d 格破坏记录' % n)
+
+    def _fluid_load(self):
+        """启动时把上次的水/地火读回内存（★ 只读一次 ✗ 不进 tick ✓）"""
+        try:
+            with dbmod.db(self.cfg) as c:
+                rows = c.execute(
+                    'SELECT x, z, kind, level FROM terrain_fluid').fetchall()
+        except Exception:
+            return
+        n = 0
+        for x, z, kind, level in rows:
+            try:
+                self.fluid_ov[(int(x), int(z))] = (int(kind), int(level))
+                n += 1
+            except Exception:
+                pass
+        if n:
+            print('[fluid] 读回 %d 格流体记录' % n)
+
+    def _fluid_save(self, gx, gz, kind, level):
+        """写一格流体（★ 只在【变化时】写 ✗ 不是每帧 ✓）"""
+        try:
+            self.post_save('INSERT OR REPLACE INTO terrain_fluid(x, z, kind, level, ts)'
+                           ' VALUES(?,?,?,?,?)',
+                           (int(gx), int(gz), int(kind), int(level), dbmod.now_ms()))
+        except Exception as _fe:
+            print('[fluid] save failed: %r' % (_fe,))
 
     def _ter_sweep(self, now):
         """自愈：过期的破坏全部撤销（★ 惰性 ✗ 不在每格上跑定时器 ✓）
