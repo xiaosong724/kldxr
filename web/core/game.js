@@ -5176,11 +5176,29 @@ function frame(ts) {
       var _agx = Math.floor(P.x / TER.LEVEL_H), _agz = Math.floor(P.z / TER.LEVEL_H);
       var _fx = Math.floor((P.x + Math.sin(P.yaw) * TER.LEVEL_H * 1.2) / TER.LEVEL_H);
       var _fz = Math.floor((P.z + Math.cos(P.yaw) * TER.LEVEL_H * 1.2) / TER.LEVEL_H);
-      /* ★ 先判树（比地形优先 ✗ 站在树前面砍 ✗ 应该砍树 ✓）*/
-      var _pk = propAt[_fx + ',' + _fz] || propAt[_agx + ',' + _agz];
-      if (_pk && !propDead[_fx + ',' + _fz]) {
-        wsSend('mineprop', { gx: _fx, gz: _fz });
-        propDmg[_fx + ',' + _fz] = (propDmg[_fx + ',' + _fz] || 0) + 1;
+      /* ★★★ round337 修的真 bug（用户："测试了破坏树和石头不行"）★★★
+         根因：原来只查【前方 1.2 格那一个格子】✗
+               而树的碰撞盒会把玩家挡在 1~1.5 格外 ✓
+               → 1.2 格经常正好落在树的【前一格或后一格】✗ 没选中 ✓
+         修：查一组候选格（前方 + 四周 + 自己脚下）✗ 取最近的且有东西的那格 ✓
+         ★ 为什么不用更远的"射线"：这一步只是选目标 ✗ 距离校验在服务端 ✓
+           客户端选准一点就行 ✓ 选宽一点也不会让玩家砍到够不着的树（服务端会拒 ✓）*/
+      var _propHit = null, _propBest = 1e9;
+      for (var _ox = -1; _ox <= 1; _ox++) {
+        for (var _oz = -1; _oz <= 1; _oz++) {
+          var _cx = _fx + _ox, _cz = _fz + _oz;
+          var _ck = _cx + ',' + _cz;
+          if (!propAt[_ck]) { continue; }
+          // 还要够得着（玩家脚下那格也算 ✓ 因为碰撞盒可能把它挤开）
+          var _dd = Math.max(Math.abs(_cx - _agx), Math.abs(_cz - _agz));
+          if (_dd > 2) { continue; }
+          if (_dd < _propBest) { _propBest = _dd; _propHit = [_cx, _cz]; }
+          if (_dd === 0) { break; }
+        }
+      }
+      if (_propHit && !propDead[_propHit[0] + ',' + _propHit[1]]) {
+        wsSend('mineprop', { gx: _propHit[0], gz: _propHit[1] });
+        propDmg[_propHit[0] + ',' + _propHit[1]] = (propDmg[_propHit[0] + ',' + _propHit[1]] || 0) + 1;
         return;                       // ★ 打了树就不打地形/怪 ✓
       }
       var _curH = terH(_agx, _agz), _tgtH = terH(_fx, _fz);
@@ -5543,17 +5561,7 @@ function frame(ts) {
          ★ 为什么加这个：我连续三轮靠读代码猜 ✗ 猜错了 ✗
            这三个数（人数 / 他的 y / 他的跳跃偏移）能一次定位问题在哪一层 ✓
          ★ 定位完就删掉 ✓ */
-      var _dbgO = '(无)';
-      if (NET.on && NET.others) {
-        var _ks = Object.keys(NET.others);
-        if (_ks.length) {
-          var _o0 = NET.others[_ks[0]];
-          _dbgO = _ks.length + '人 y=' +
-            (_o0 && _o0.g ? _o0.g.position.y.toFixed(2) : '?') +
-            ' jy=' + (_o0 ? (+_o0.tgtJy || 0).toFixed(2) : '?');
-        } else { _dbgO = '0人'; }
-      } else { _dbgO = 'OFF'; }
-      UI.text('fps', Math.round(1000 / ms) + ' FPS · ' + ms.toFixed(1) + 'ms ｜ ' + _dbgO);
+      UI.text('fps', Math.round(1000 / ms) + ' FPS · ' + ms.toFixed(1) + 'ms');
       if (UI.visible('infoBox')) { UI.text('infoBox', infoText()); }
       UI.text('setFps', Math.round(1000 / ms) + ' FPS');
     }
