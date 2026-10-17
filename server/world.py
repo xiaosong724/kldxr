@@ -1689,8 +1689,15 @@ class World(object):
                 self.arrows.pop(str(a['id']), None)
 
     def _later_tick(self):
-        """到点就结算的延迟伤害（★ round382：单手剑连刺第二段 ✓）"""
-        if not self._later:
+        """到点结算的延迟【伤害】和延迟【发射】（round382 / 391 ✓）
+
+        ★★ 自测踩到（用户："飞刀没有了"）★★
+           这里原来是 `if not self._later: return` ✗
+           而【投掷队列】的处理写在这个 return 之后 ✓
+           → 只要没有待结算的伤害 ✗ 投掷就永远不会被发射 ✓
+           ★ 教训：一个函数管两件事时，早退条件必须同时看两个队列 ✓
+        """
+        if not self._later and not self._later_arrow:
             return
         _now = now_s()
         _keep = []
