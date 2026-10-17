@@ -6257,7 +6257,17 @@ function frame(ts) {
                  : (_fo.jyS + (_tj - _fo.jyS) * Math.min(1, dt * 14));
       if (!isFinite(_fo.jyS)) { _fo.jyS = _tj; }
       var _gy = terYAt(_mg.position.x, _mg.position.z);
-      _mg.position.y = _gy + Math.max(0, _fo.jyS);
+      /* ★★★ round401 修的真 bug（用户："暴击跳起来打没有"）★★★
+         ★ 根因：暴击跳打是在【动画那段】把 y 加上去的 ✗
+           而这个【渲染前统一覆盖】每帧重设 y ✗ 把加上去的部分抹掉了 ✓
+           → 本地看得见（本地没有这个覆盖）✗ 别人看不见 ✓
+         ★ 修：把暴击的抛物线也算进这个最终 y 里 ✓ */
+      var _hop = 0;
+      if (_fo.critUntil) {
+        var _hp2 = 1 - (_fo.critUntil - performance.now()) / 400;
+        if (_hp2 > 0 && _hp2 < 1) { _hop = Math.sin(_hp2 * Math.PI) * 3.4; }
+      }
+      _mg.position.y = _gy + Math.max(0, _fo.jyS) + _hop;
     }
   }
 
