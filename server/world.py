@@ -4174,7 +4174,7 @@ class World(object):
         #   ★ 奇数刀 = 投掷（远程 ✓ 复用箭矢系统）
         #     偶数刀 = 近身刺（走下面的正常近战 ✓）
         #   ★ 投掷伤害按品阶：1 阶 20% → 12 阶 80%（每阶 +6%）
-        if wlook == 'dagger' and (p.atkSeq % 2) == 1:
+        if wlook == 'dagger':
             if len(self.arrows) < ARROW_MAX:
                 self._arrow_id += 1
                 _atk2 = self._atk_of(p)
@@ -4200,7 +4200,9 @@ class World(object):
                     'life': 14.0 / ARROW_SPEED,
                     'by': p.cid,
                 }
-            return
+            # ★ round390（用户："两次攻击作为一次，分成两段，像单手剑一样"）
+            #   ★ 这里【不 return】✗ 继续往下走普通近战 ✓
+            #   → 一次按键 = 先扔出一把（远程）✗ 再近身刺一刀 ✓
         # ★★ 第 69 轮：弓 = 远程投射物（不走下面的近战扇形 ✗）★★
         if wlook in weapons.RANGED:
             if len(self.arrows) < ARROW_MAX:

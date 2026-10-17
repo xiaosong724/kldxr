@@ -251,6 +251,19 @@ const PW = 'abc123456';
   ].join(''));
   console.log('  左手槽: ' + ohTest);
 
+  // ★ 匕首：一次攻击 = 扔 + 刺（同一套动作里两段）
+  const dag2 = await ev([
+    'var h = hero();',
+    'var rows = [];',
+    'for (var t = 0; t <= 0.80; t += 0.10) {',
+    '  heroAtkPose(h, t, 0, 0, 0, "dagger", 0, 0);',
+    '  rows.push([+t.toFixed(2), +h.armL.rotation.x.toFixed(2), +h.armR.rotation.x.toFixed(2)]);',
+    '}',
+    'var ok = rows.every(function(r){ return isFinite(r[1]) && isFinite(r[2]); });',
+    'return JSON.stringify({ ok: ok, frames: rows });',
+  ].join(''));
+  console.log('  匕首两段: ' + dag2);
+
   const ripple = await ev([
     'var live = 0;',
     'for (var i = 0; i < _ripple.length; i++) { if (_ripple[i].on) { live++; } }',
