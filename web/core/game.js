@@ -5142,7 +5142,15 @@ function autoRelease() {
      ★ 只清【我自己写的】✗ 玩家手指还按在摇杆上就不动它 ✓（AUTO.setInput 标记 ✓）*/
   /* ★ round371：关掉时必须清干净 ✗ 但只清"我写的"（AUTO.setInput ✓）
      ★ 另外把速度也掐掉：冰面上会滑很久 ✗ 看着就像"还在跑"✓ */
-  if (AUTO.setInput) { jx = 0; jy = 0; AUTO.setInput = false; }
+  /* ★★★ round372（用户："显示上已经关了，但人一直往一个方向跑"）★★★
+     ★ 根因：这里只在 AUTO.setInput 为真时才清 ✗
+       一旦标记和实际状态失步（某个分支清了标记但没清 jx/jy ✓）
+       → 摇杆值永远停在最后那个方向 ✗ 人一直走 ✓
+     ★ 修：不管标记 ✗ 只要【手指不在摇杆上】就一律清零 ✓
+       （手指在摇杆上时不动它 ✓ 不然会把玩家自己的操作清掉 ✓）*/
+  var _stickHeld = (typeof STICK_ACTIVE !== 'undefined') && STICK_ACTIVE;
+  if (!_stickHeld) { jx = 0; jy = 0; AUTO.setInput = false; }
+  else if (AUTO.setInput) { jx = 0; jy = 0; AUTO.setInput = false; }
   if (typeof MOV !== 'undefined') { MOV.tx = 0; MOV.tz = 0; }
   /* ★★ 第 214 轮修的真 bug（用户："点击攻击按钮没有反应了"）★★
      病根：这里原来无条件写 atkHeld = false ✗

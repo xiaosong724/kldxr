@@ -327,6 +327,7 @@ function _sfxFallback(key, buf, mime, label, attempt) {
    ★ 按【频道】播放：同频道再播会先掐掉旧的 ✗ 可以单独 stop ✓
    ★ 为什么不用全局 stop：会把打斗音效一起掐掉 ✓ */
 var SFX_CH = {};
+var STICK_ACTIVE = false;   // ★ round372：手指在摇杆上（core 据此决定能不能清摇杆值）
 function sfxStop(ch) {
   var e = SFX_CH[ch];
   if (!e) { return; }
@@ -644,6 +645,7 @@ function bindInput() {
       var l2 = Math.hypot(dx, dy);
       jx = (l2 < 10) ? 0 : dx / R;
       jy = (l2 < 10) ? 0 : dy / R;
+      STICK_ACTIVE = true;            // ★ round372：手指真的在摇杆上 ✓
     }
   }, { passive: false });
   cv.addEventListener('touchend', function (e) {
@@ -651,9 +653,10 @@ function bindInput() {
     var ts = evTouches(e);
     for (var i = 0; i < ts.length; i++) {
       if (ts[i].identifier === joyId) { joyId = null; jx = 0; jy = 0; }
+      if (joyId === null) { STICK_ACTIVE = false; }
     }
   }, { passive: false });
-  cv.addEventListener('touchcancel', function (e) { e.preventDefault(); joyId = null; jx = 0; jy = 0; }, { passive: false });
+  cv.addEventListener('touchcancel', function (e) { e.preventDefault(); joyId = null; jx = 0; jy = 0; STICK_ACTIVE = false; }, { passive: false });
   addEventListener('keydown', function (e) {
     var k = evKey(e);
     if (k) { keys[k] = true; }
