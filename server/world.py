@@ -371,6 +371,15 @@ class World(object):
         #   ★ 自愈：每格记一个时刻 ✗ 超过 REGEN_MS 就删掉覆盖 ✓ 地形自己回来 ✓
         self.ter_over = {}
         self.ter_hp = {}
+        # ★★★ round318（F1 流水）★★★
+        #   fluid_ov  ：和生成值不同的格子 → (kind, level) ✓
+        #   fluid_act ：【活跃集合】✗ 只有这里面的格子会被更新 ✓
+        #   ★ 这是 F1 的性能命门：全世界 100 万格 ✗ 平时这里只有几十个 ✓
+        self.fluid_ov = {}
+        self.fluid_act = set()
+        self.FLUID_BUDGET = 120          # 每 tick 最多处理几格（★ 实测 ≈0.3ms）
+        self.FLUID_MAXLV = {2: 7, 3: 3}  # 水铺 7 格 ✗ 地火只铺 3 格 ✓
+        self.FLUID_BC = []               # 本 tick 要广播的流体变化
         self.TER_REGEN_MS = 20 * 60 * 1000     # 20 分钟完全恢复（方案 §5.7 ✓）
         self._ter_bc = []                      # 本 tick 要广播的破坏事件
         self._ter_load()                       # ★ 启动时读一次（这是 boot ✗ 不是 tick ✓）
@@ -704,8 +713,16 @@ class World(object):
         #   拆成两件事：
         #     ① 广播【每帧都发】✗ 破坏是低频操作（一次几格 ✓ 不刷屏 ✓）
         #     ② 自愈清扫还是【一秒一次】✗ 它没必要那么勤 ✓
+        # ★ F1 流水：每 tick 跑一小批（★ 有预算 ✗ 平时活跃集合是空的 ✓）
+        try:
+            _fn = self._fluid_tick()
+            if _fn:
+                self._fluid_n = getattr(self, '_fluid_n', 0) + _fn
+        except Exception as _fe:
+            print('[fluid] tick failed: %r' % (_fe,))
         try:
             self._ter_flush(0)
+            self._fluid_flush(0)
         except Exception as _te:
             print('[ter] flush failed: %r' % (_te,))
         self._ter_acc = getattr(self, '_ter_acc', 0.0) + TICK_DT
@@ -1243,6 +1260,120 @@ class World(object):
     #  ★ 能打多远的格子（格 ✗ 玩家离格子的距离上限 ✓）
     TER_REACH = 3
 
+    # ------------------------------------------------ F1 流水（活跃集合 + 预算）
+    def fstate(self, gx, gz):
+        """这一格现在的流体 → (kind, level) ✗ level −1 = 没有 ✓ 0 = 满 ✓ 7 = 快没了 ✓"""
+        ov = self.fluid_ov.get((gx, gz))
+        if ov is not None:
+            return ov
+        k, _d = termod.fluid_of(gx, gz)
+        if k:
+            return (k, 0)          # ★ 生成出来的水都是【源头】（满的 ✓）
+        return (0, -1)
+
+    def fput(self, gx, gz, kind, lv):
+        """写一格流体 ✗ 顺手把它和四邻丢进活跃集合 ✓"""
+        key = (gx, gz)
+        old = self.fluid_ov.get(key)
+        if old == (kind, lv):
+            return
+        if lv < 0:
+            self.fluid_ov.pop(key, None)
+            # ★ 和【生成值】一样就不用记覆盖（省内存 ✓）
+            gk, _gd = termod.fluid_of(gx, gz)
+            if kind == 0 or gk != kind:
+                self.fluid_ov[key] = (kind, lv) if kind else (0, -1)
+        else:
+            self.fluid_ov[key] = (kind, lv)
+        self.fluid_act.add(key)
+        self.fluid_act.add((gx + 1, gz))
+        self.fluid_act.add((gx - 1, gz))
+        self.fluid_act.add((gx, gz + 1))
+        self.fluid_act.add((gx, gz - 1))
+
+    def factivate(self, gx, gz):
+        """把一格和四邻丢进活跃集合（地形被破坏了 ✗ 水要重新算 ✓）"""
+        for (dx, dz) in ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)):
+            self.fluid_act.add((gx + dx, gz + dz))
+
+    def _fluid_step(self, gx, gz):
+        """处理一格（★ 只做"平衡"✗ 不做"往外推" ✓ 推是平衡的副作用 ✓）
+
+        ★★ 用的是 MC 那条最经典、也最省的规则 ★★
+           一个流动格的等级 = min(四个邻居里同级流体的等级) + 1
+           没有邻居喂它 → 它自己变浅 → 浅到 8 就消失
+           ★ 好处：不需要"谁推谁"的配对逻辑 ✗ 一次遍历全部收敛 ✓
+           ★ 好处：水把坑填满之后【自动停住】✗ 不需要特判 ✓
+        """
+        kind, lv = self.fstate(gx, gz)
+        h = self.ter_h_at(gx, gz)
+        # ① 水 + 地火 相遇 → 都变石头（★ 核心玩法 ✓）
+        if kind:
+            for (dx, dz) in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nk, _nl = self.fstate(gx + dx, gz + dz)
+                if kind in (1, 2) and nk == 3:
+                    self.ter_over[(gx, gz)] = [h, dbmod.now_ms()]
+                    self.ter_over[(gx + dx, gz + dz)] = [
+                        self.ter_h_at(gx + dx, gz + dz), dbmod.now_ms()]
+                    self.fput(gx, gz, 0, -1)
+                    self.fput(gx + dx, gz + dz, 0, -1)
+                    self._ter_bc.append([gx, gz, h])
+                    self._ter_bc.append([gx + dx, gz + dz, self.ter_h_at(gx + dx, gz + dz)])
+                    return
+        if lv < 0:
+            return
+        # ② 源头不动（★ 只有玩家倒水/地形变了才会变 ✓）
+        if lv == 0:
+            # ★ 但源头要负责【往下倒】—— 下面空着就把下面填成满的 ✓
+            for (dx, dz) in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nh = self.ter_h_at(gx + dx, gz + dz)
+                if nh < h - 0.01:
+                    nk, nl = self.fstate(gx + dx, gz + dz)
+                    if nk == 0 or nl > 0:
+                        self.fput(gx + dx, gz + dz, kind, 0)
+            return
+        # ③ 流动格：等级 = 邻居最小值 + 1 ✗ 没有就变浅 ✓
+        best = 9
+        low_nb = None
+        for (dx, dz) in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nk, nl = self.fstate(gx + dx, gz + dz)
+            nh = self.ter_h_at(gx + dx, gz + dz)
+            if nk == kind and nl < best:
+                best = nl
+            # ★ 邻居那边更低 → 水会往那边掉（那边会自己变成源头 ✓）
+            if nh < h - 0.01 and (nk == 0 or nk == kind):
+                self.fput(gx + dx, gz + dz, kind,
+                          0 if lv == 0 else min(self.FLUID_MAXLV.get(kind, 7), lv))
+                low_nb = True
+        if low_nb:
+            return
+        want = min(self.FLUID_MAXLV.get(kind, 7), best + 1)
+        if want >= 8:
+            self.fput(gx, gz, 0, -1)          # ★ 没来源了 → 干掉 ✓
+        elif want != lv:
+            self.fput(gx, gz, kind, want)
+
+    def _fluid_tick(self):
+        """每 tick 跑一批（★ 有预算 ✗ 处理不完留到下 tick ✓）"""
+        if not self.fluid_act:
+            return 0
+        n = 0
+        todo = []
+        for key in self.fluid_act:
+            todo.append(key)
+            if len(todo) >= self.FLUID_BUDGET:
+                break
+        for key in todo:
+            self.fluid_act.discard(key)
+            if key[0] * key[0] + key[1] * key[1] > 4000000:   # 太远的不算（≈2000 格）
+                continue
+            try:
+                self._fluid_step(key[0], key[1])
+                n += 1
+            except Exception:
+                pass
+        return n
+
     def ter_h_at(self, gx, gz):
         """这一格【当前】的高度（含破坏覆盖 ✓ 和客户端的 terH 等价 ✓）"""
         ov = self.ter_over.get((gx, gz))
@@ -1336,6 +1467,32 @@ class World(object):
         self._ter_bc.append([gx, gz, nh])
         # ★ 掉东西（P1 先不掉 ✗ 等背包/掉落接进来 ✓ 方案 §5.2 写着 ✓）
         self._send_cid(p.cid, P.pack('notice', text='这一格碎了（%s）' % mat))
+
+    def _flux(self):
+        """把 fluid_ov 里"和生成值不同"的格子整理成要广播的样子"""
+        return [[k[0], k[1], v[0], v[1]] for k, v in self.fluid_ov.items()
+                if v[1] >= 0 or v[0]]
+
+    def _fluid_flush(self, now):
+        """把流体变化发给附近的人（★ 一秒最多 4 次 ✗ 流体不用每帧同步 ✓）
+
+        ★ 为什么不每帧发：水的流动是"慢慢铺"的 ✗ 每帧发一次的话
+          每秒 30 条 ✗ 手机上真没必要 ✓ 4 次看起来已经连续了 ✓
+        """
+        self._fl_acc = getattr(self, '_fl_acc', 0.0) + TICK_DT
+        if self._fl_acc < 0.25:
+            return
+        self._fl_acc = 0.0
+        if not self.fluid_ov:
+            return
+        cells = self._flux()
+        if not cells:
+            return
+        for p in self.players.values():
+            try:
+                self._send_cid(p.cid, P.pack('fluedit', cells=cells))
+            except Exception:
+                pass
 
     def _ter_flush(self, now):
         """把本 tick 的破坏广播出去（★ 一秒最多一次 ✗ 别刷屏 ✓）"""

@@ -383,7 +383,11 @@ function terBiome(gx, gz) {
 
 /* ★★★ F0 静水（和 server/terrain.py 的 fluid_of 逐位等价 ✓）★★★ */
 var TER_F_DEPTH = { 2: 0.70, 3: 0.80 };
+/* ★ F1：服务端会改流体（流动 ✓）→ 覆盖表优先于"算出来的" ✓ */
+var fluidOv = {};       // key -> [kind, level]   level −1 = 没有
 function terFluid(gx, gz) {
+  var _fo = fluidOv[_terKey(gx, gz)];
+  if (_fo !== undefined) { return _fo[0]; }
   if (!terBasin(gx, gz)) { return 0; }
   var b = terBiome(gx, gz);
   if (b === 'swamp') { return 2; }   // 污水
@@ -398,7 +402,10 @@ function terFluid(gx, gz) {
 function terFluidY(gx, gz) {
   var k = terFluid(gx, gz);
   if (!k) { return null; }
-  return (terH(gx, gz) + (TER_F_DEPTH[k] || 0.7)) * TER.LEVEL_H;
+  var _fo = fluidOv[_terKey(gx, gz)];
+  var d = TER_F_DEPTH[k] || 0.7;
+  if (_fo && _fo[1] > 0) { d = d * (1 - _fo[1] / 8); }   // ★ 流出来的越远越浅
+  return (terH(gx, gz) + d) * TER.LEVEL_H;
 }
 
 function terMat(gx, gz) {
@@ -646,6 +653,31 @@ function terDebTick(dt) {
 
 /* ★ 收到服务端的破坏广播：改覆盖 + 清缓存 + 只重建受影响的瓦片 ✓
    ★ 为什么不全部重建：一片 16×16 格 ✗ 全重建要 20ms ✓ 只重建 1~4 片 ✓ */
+/* ★ F1：服务端说"这些格子的水变了" → 改覆盖 + 重建那几片 ✓ */
+function fluApplyEdits(cells) {
+  if (!cells || !cells.length) { return; }
+  var dirty = {};
+  for (var i = 0; i < cells.length; i++) {
+    var gx = cells[i][0], gz = cells[i][1], kind = cells[i][2], lv = cells[i][3];
+    var k = _terKey(gx, gz);
+    if (lv < 0 || !kind) { delete fluidOv[k]; }
+    else { fluidOv[k] = [kind, lv]; }
+    var ti = Math.floor(gx / TER.TILE), tj = Math.floor(gz / TER.TILE);
+    dirty[ti + ',' + tj] = 1;
+  }
+  for (var key in dirty) {
+    if (!_terTiles[key]) { continue; }
+    scene.remove(_terTiles[key]);
+    if (_terTiles[key]._fluid) {
+      scene.remove(_terTiles[key]._fluid);
+      if (_terTiles[key]._fluid.geometry) { _terTiles[key]._fluid.geometry.dispose(); }
+    }
+    if (_terTiles[key].geometry) { _terTiles[key].geometry.dispose(); }
+    delete _terTiles[key];
+    _terTileN--;
+  }
+}
+
 function terApplyEdits(cells) {
   if (!cells || !cells.length) { return; }
   var dirty = {};
@@ -706,11 +738,12 @@ var TER_COL = {
   grass: [0.60, 0.68, 0.37],
   dirt:  [0.65, 0.49, 0.31],
   stone: [0.70, 0.69, 0.65],
-  /* ★ 冰面 = 雪白（用户 2026-10-18）
-     ★★ 为什么要 > 1：地形是【贴图 × 顶点色】✗ 泥土贴图本身偏褐（约 0.5,0.4,0.3）✓
-        顶点色写 1.0 的话 出来还是褐的 ✗ 必须超过 1 才压得住贴图 ✓
-        1.75 倍 → 贴图那点褐色基本被冲掉 ✗ 留下一点雪面颗粒感 ✓ */
-  ice:   [1.72, 1.78, 1.88],
+  /* ★ 冰面 = MC 的【蓝冰】（用户 2026-10-18 第二次改：雪白 → 冰蓝）
+     ★★ 换算：地形是【贴图 × 顶点色】✗ 泥土贴图约 (0.55,0.50,0.45) 偏褐 ✓
+        目标色（MC 蓝冰 #74A8F7 ≈ 0.46,0.66,0.97）÷ 贴图 ≈ (0.83,1.32,2.15)
+        ★ 红通道还要再压低（贴图红多 ✗ 不压就发灰紫 ✓）
+        → 最终 (0.62,1.30,2.10) ✗ 出来是那种"透亮的冰蓝"✓ */
+  ice:   [0.62, 1.30, 2.10],
   swamp: [0.42, 0.48, 0.31],
   brick: [0.70, 0.42, 0.31]
 };
@@ -1225,7 +1258,8 @@ function buildTerrainTile(ti, tj) {
       /* ★ F0 流体：一格一个面（水位 = 地面 + 深度 ✓） */
       var _fk = terFluid(gx, gz);
       if (_fk) {
-        var _fy = (h + (TER_F_DEPTH[_fk] || 0.55)) * LH;
+        var _fyv = terFluidY(gx, gz);
+        var _fy = (_fyv === null) ? (h * LH) : _fyv;
         var _fc = (_fk === 3) ? [1.0, 0.42, 0.10] : [0.20, 0.52, 0.60];
         // 地火略微动一下明暗（像在烧 ✗ 但只是顶点色 ✗ 零开销 ✓）
         if (_fk === 3) {
