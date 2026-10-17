@@ -2347,10 +2347,16 @@ function hero() {
   /* ★★★ round387（用户："匕首只是模型做拿两个，不需要第二格武器槽"）★★★
      ★ 纯粹是【视觉】：左手也挂一个武器模型 ✗ 背包/属性完全不变 ✓
      ★ 只有匕首会用到 ✗ 其它武器左手空着（和以前一样 ✓）*/
+  /* ★ round388（用户："位置不对在肩膀上了，应该也在手上握着"）
+     ★ 根因：我直接把武器挂到了【手臂】上 ✗ 手臂的原点在肩膀 ✓
+     ★ 修：和右手一样，先建一个"手部锚点"（在手臂下端）✗ 再挂武器 ✓ */
+  var handPivotL = new THREE.Group();
+  handPivotL.position.set(0.0, -0.95, 0.02);   // 和右手同一个偏移 ✓
+  armL.add(handPivotL);
   var swL = new THREE.Group();
   swL.rotation.x = 0.55;
   swL.visible = false;
-  armL.add(swL);
+  handPivotL.add(swL);
   return { g: g, armL: armL, armR: armR, legL: legL, legR: legR, sw: sw, swL: swL };
 }
 
@@ -3182,6 +3188,20 @@ function wsApplyWorld(d) {
       /* ★★ 第 70 轮 用户报：“一点也不像箭” ★★
          以前是一个光秃秃的黄方块 ✗
          现在拼一支真的：细杆 + 尖头（锥）+ 尾羽（两片）✓ */
+      /* ★ round389（用户："风格还是要匕首，不要做成箭"）
+         ★ 匕首投掷复用箭的系统 ✗ 但模型要换成匕首 ✓
+         ★ 用 buildWeaponMesh('dagger') ✗ 和手上那把同一个模型 ✓ */
+      if (aa[4] === 1) {
+        am = new THREE.Group();
+        var _dg = buildWeaponMesh('dagger', 2);
+        _dg.rotation.x = Math.PI / 2;      // ★ 横过来 ✗ 像飞出去的刀 ✓
+        _dg.scale.set(1.05, 1.05, 1.05);
+        am.add(_dg);
+        am.position.y = 1.15;
+        scene.add(am);
+        NET.arrows[aid] = am;
+        continue;
+      }
       am = new THREE.Group();
       /* ★ 第 71 轮 用户要求：银色箭头 + 灰色箭身 ✓ */
       var _shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.85, 6),

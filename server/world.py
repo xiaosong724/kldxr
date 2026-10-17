@@ -885,7 +885,8 @@ class World(object):
                         if (_a['x'] - p.x) ** 2 + (_a['z'] - p.z) ** 2 > VIEW * VIEW:
                             continue
                         _ar.append([_a['id'], round(_a['x'], 2), round(_a['z'], 2),
-                                    round(_a['yaw'], 2)])
+                                    round(_a['yaw'], 2),
+                                    1 if _a.get('kind') == 'dagger' else 0])
                     if _ar:
                         d['ar'] = _ar
                 lt = self._loot_for(p)          # ★ 地上掉的（第 38 轮）
@@ -4181,7 +4182,9 @@ class World(object):
                     _atk2, crit_pt=_T.get('crit_pt', 0.0),
                     crit_dmg=_T.get('crit_dmg', 0.0))
                 _t2 = max(0, min(11, int(wtier)))
-                _ratio = 0.20 + 0.06 * max(0, _t2 - 1)
+                # ★ round388：和武器文案【同一个公式】✗ 别各写一套 ✓
+                #   文案是 0.20 + 0.0545 × 品阶 ✗ 封顶 0.80 ✓
+                _ratio = 0.20 + 0.0545 * _t2
                 if _ratio > 0.80:
                     _ratio = 0.80
                 _dv2 = max(1, int(round(_dv2 * _ratio)))
@@ -4190,7 +4193,11 @@ class World(object):
                     'x': p.x, 'z': p.z, 'yaw': p.yaw,
                     'dx': math.sin(p.yaw), 'dz': math.cos(p.yaw),
                     'dmg': _dv2, 'crit': bool(_crit2),
-                    'life': reach / ARROW_SPEED,
+                    'kind': 'dagger',                 # ★ round389：客户端按它选模型 ✓
+                    # ★ round388（用户："第一次攻击要像箭一样射出去，距离也和箭一样"）
+                    #   ★ 原来用的是【匕首的近战距离 1.8 米】✗ 飞一下就没了 ✓
+                    #   ★ 现在用【弓的距离 14 米】✗ 和箭完全一致 ✓
+                    'life': 14.0 / ARROW_SPEED,
                     'by': p.cid,
                 }
             return
