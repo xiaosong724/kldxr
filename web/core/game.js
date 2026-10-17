@@ -542,6 +542,65 @@ function terDebris(gx, gz, mat, baseH) {
      方块和物件是【按材质合并】的 ✗ 改一个材质的颜色会让整片一起白 ✓
      而命中点闪白不碰材质 ✗ 只管一个独立的小面片 ✓ 开销几乎为零 ✓ */
 var _flashPool = [], _flash = [];
+/* ★★★ round341（用户："闪白是被攻击的对应模型闪白，而不是在上方闪白"）
+   ★ 上一版是"命中点冒一个面片"✗ 看着像凭空亮了一下 ✓
+   ★ 现在改成：把【被击中的那个模型】克隆一份 ✗ 整体染白 ✗ 0.12 秒淡出 ✓
+     · 方块 → 克隆一个白色方块
+     · 树/石头/房子 → 克隆那件物件
+     · 僵尸 → 克隆那只僵尸
+   ★ 为什么可以克隆：命中是低频操作（每秒几次 ✓）✗ 0.12 秒就回收 ✓ */
+var _flashClones = [];
+function flashCloneMesh(obj) {
+  if (!obj) { return; }
+  var wm = new THREE.MeshBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.8,
+    depthWrite: false, blending: THREE.AdditiveBlending });
+  var c;
+  try { c = obj.clone(true); } catch (e) { return; }
+  c.traverse(function (o) {
+    if (o.isMesh || o.isInstancedMesh) { o.material = wm; o.castShadow = false; }
+  });
+  c.position.copy(obj.position);
+  c.rotation.copy(obj.rotation);
+  c.scale.copy(obj.scale);
+  c.visible = true;
+  if (obj.parent) { obj.parent.add(c); } else { scene.add(c); }
+  _flashClones.push({ o: c, t: 0, m: wm });
+  if (_flashClones.length > 8) {
+    var f0 = _flashClones.shift();
+    if (f0.o.parent) { f0.o.parent.remove(f0.o); }
+    f0.m.dispose();
+  }
+}
+function flashCloneTick(dt) {
+  for (var i = _flashClones.length - 1; i >= 0; i--) {
+    var f = _flashClones[i];
+    f.t += dt;
+    var k = f.t / 0.14;
+    if (k >= 1) {
+      if (f.o.parent) { f.o.parent.remove(f.o); }
+      f.m.dispose();
+      _flashClones.splice(i, 1);
+    } else {
+      f.m.opacity = 0.8 * (1 - k);
+    }
+  }
+}
+/* 方块：没有现成对象 ✗ 现造一个白色方块（和地形格子同尺寸 ✓） */
+var _blockFlashGeo = null;
+function flashBlock(gx, gz) {
+  if (!_blockFlashGeo) { _blockFlashGeo = new THREE.BoxGeometry(TER.LEVEL_H, TER.LEVEL_H, TER.LEVEL_H); }
+  var wm = new THREE.MeshBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.7,
+    depthWrite: false, blending: THREE.AdditiveBlending });
+  var m = new THREE.Mesh(_blockFlashGeo, wm);
+  m.position.set((gx + 0.5) * TER.LEVEL_H,
+                 (terH(gx, gz) - 0.5) * TER.LEVEL_H,
+                 (gz + 0.5) * TER.LEVEL_H);
+  m.rotation.y = 0.6;
+  scene.add(m);
+  _flashClones.push({ o: m, t: 0, m: wm });
+}
 function hitFlash(wx, wy, wz, big) {
   if (!_flashPool.length) {
     var fg = new THREE.PlaneGeometry(1, 1);
@@ -709,13 +768,12 @@ function terDebTick(dt) {
    ★ 为什么绕树根：几何体是按【世界坐标】建出来的 ✗
      所以要把顶点平移成"以树根为原点"✗ 再把整个组摆到树根 ✓（见 geo.translate）*/
 var _falling = [], _fallMax = 6;
-function propFallAnim(kind, gx, gz) {
+/* ★ 造一件物件的独立模型（倒地动画 / 命中闪白 共用 ✓）
+   ★ 顶点按世界坐标建 ✗ 所以要平移到"以物件中心为原点"✗ 再把组摆回原位 ✓ */
+function buildPropSolid(kind, gx, gz) {
   try {
-    /* ★★ 必须和 buildChunk 一样有 fallback ✗
-       树有 tree2/tree3 几种 ✗ 但 PROP_PARTS 里只存了 'tree' 一套零件 ✓
-       建块时靠 `|| PROP_PARTS.tree` 兜底 ✗ 我第一版漏了这句 → 直接 return ✗ 动画不动 ✓ */
     var parts = (PROP_PARTS && PROP_PARTS[kind]) || (PROP_PARTS && PROP_PARTS.tree);
-    if (!parts || !parts.length) { return; }
+    if (!parts || !parts.length) { return null; }
     var s2 = G.PROP_SCALE;
     var hh2 = ((gx * 2654435761) ^ (gz * 40503)) & 0xffffffff;
     var q2 = Math.abs(hh2 % 1000);
@@ -735,12 +793,20 @@ function propFallAnim(kind, gx, gz) {
     grp.position.set(wx2, baseY, wz2);
     for (mk in acc) {
       var geo = mergeGeos(acc[mk]);
-      geo.translate(-wx2, -baseY, -wz2);      // ★ 枢轴挪到树根 ✓
+      geo.translate(-wx2, -baseY, -wz2);
       var mm = new THREE.Mesh(geo, M[mk] || M.dirt);
       mm.castShadow = true;
       grp.add(mm);
       for (var di = 0; di < acc[mk].length; di++) { acc[mk][di].dispose(); }
     }
+    return grp;
+  } catch (e) { return null; }
+}
+
+function propFallAnim(kind, gx, gz) {
+  try {
+    var grp = buildPropSolid(kind, gx, gz);
+    if (!grp) { return; }
     scene.add(grp);
     if (_falling.length >= _fallMax) {
       var old0 = _falling.shift();
@@ -3137,8 +3203,9 @@ function wsApplyWorld(d) {
                (e2.back ? ' 背击' : '') + (e2.splash ? ' 溅射' : '');
     dmg(etxt, +e2.x, 2.4, +e2.z, !!e2.crit);
     /* ★ round340：僵尸被打中闪白（用户要求 ✓）环境伤害不闪 ✓ */
-    if (!e2.env && typeof hitFlash === 'function') {
-      hitFlash(+e2.x, 1.0, +e2.z, !!e2.crit);
+    if (!e2.env) {
+      var _rm2 = NET.rmobs && NET.rmobs[e2.mid];
+      if (_rm2 && _rm2.g) { flashCloneMesh(_rm2.g); }
     }
     /* ★ round324（用户："僵尸进岩浆受伤，为什么我的屏幕也会抖动"）
        env=1 = 环境伤害（岩浆烧僵尸）✗ 只是"别人在掉血"✓
@@ -5230,6 +5297,7 @@ function frame(ts) {
   if (typeof rippleTick === 'function') { rippleTick(dt); }
   if (typeof propFallTick === 'function') { propFallTick(dt); }
   if (typeof hitFlashTick === 'function') { hitFlashTick(dt); }
+  if (typeof flashCloneTick === 'function') { flashCloneTick(dt); }
   if (atkT < 0) {
     /* ★ 跳跃的"视觉加高"：只有【从地面跳起来】才加（摔下去不加 ✓）
        加的量 = 当前离地高度 × 0.9 → 顶点 0.713 格时多看 0.64 格
@@ -5328,20 +5396,19 @@ function frame(ts) {
         }
       }
       if (_propHit && !propDead[_propHit[0] + ',' + _propHit[1]]) {
-        // ★ 打击反馈：音效 + 命中点闪白 ✓
-        if (typeof sfx === 'function') { sfx('hit', 0.75); }
-        hitFlash((_propHit[0] + 0.5) * TER.LEVEL_H,
-                 terH(_propHit[0], _propHit[1]) * TER.LEVEL_H,
-                 (_propHit[1] + 0.5) * TER.LEVEL_H, true);
+        // ★ 打击反馈：物件本身闪白（不是上方冒光 ✓）
+        if (typeof sfx === 'function') { sfx('step', 0.95); }
+        var _fb = buildPropSolid(propAt[_propHit[0] + ',' + _propHit[1]], _propHit[0], _propHit[1]);
+        if (_fb) { flashCloneMesh(_fb); scene.remove(_fb); }
         wsSend('mineprop', { gx: _propHit[0], gz: _propHit[1] });
         propDmg[_propHit[0] + ',' + _propHit[1]] = (propDmg[_propHit[0] + ',' + _propHit[1]] || 0) + 1;
         return;                       // ★ 打了树就不打地形/怪 ✓
       }
       var _curH = terH(_agx, _agz), _tgtH = terH(_fx, _fz);
       if (_tgtH > _curH + 0.5) {
-        // ★ 打方块也要音效 + 闪白（用户："加一个破坏的打击音效"）
-        if (typeof sfx === 'function') { sfx('hit', 0.7); }
-        hitFlash((_fx + 0.5) * TER.LEVEL_H, _tgtH * TER.LEVEL_H, (_fz + 0.5) * TER.LEVEL_H, false);
+        // ★ 打方块：方块本体闪白 + 闷响
+        if (typeof sfx === 'function') { sfx('step', 0.9); }
+        flashBlock(_fx, _fz);
         wsSend('mine', { gx: _fx, gz: _fz });
         terDmg[_terKey(_fx, _fz)] = (terDmg[_terKey(_fx, _fz)] || 0) + 1;
       }

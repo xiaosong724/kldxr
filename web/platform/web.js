@@ -1969,7 +1969,7 @@ var ITEM_ICON = {
   box:    ICON_SVG('<path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M4 7l8 4 8-4M12 11v10"/>'),
   /* ★ round340（用户："石头和木材图标要看起来像对应的材料"）
      三种建材的图标：原木（带年轮）/ 石头（多面块）/ 砖头（砌法）*/
-  wood:   ICON_SVG('<path d="M7 6h11a3 3 0 0 1 0 12H7"/><ellipse cx="7" cy="12" rx="3" ry="6"/><path d="M7 9a1.6 1.6 0 0 0 0 6M7 11a.9.9 0 0 0 0 2"/>'),
+  wood:   ICON_SVG('<path d="M4 7h13l3 2-3 2H4z"/><path d="M4 13h13l3 2-3 2H4z"/><path d="M7 8.6v2.8M11 8.6v2.8M7 14.6v2.8M11 14.6v2.8"/>'),
   stone:  ICON_SVG('<path d="M6 8l5-4 7 2 2 7-4 6-7 1-4-5z"/><path d="M11 4l1 6 6-1M12 10l-3 4 5 1"/>'),
   brick:  ICON_SVG('<path d="M3 6h18v12H3z"/><path d="M3 12h18M9 6v6M15 12v6M9 12v6M15 6v6"/>')
 };
