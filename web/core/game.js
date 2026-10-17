@@ -4674,7 +4674,7 @@ function netUpdate(dt) {
         var _sp2 = 1 - (o.spinUntil - _rNow) / 560;
         if (_sp2 < 0) { _sp2 = 0; }
         if (_sp2 > 1) { _sp2 = 1; }
-        o.hh.g.rotation.y = o.cur.yaw + Math.PI * 4 * _sp2;
+        o.hh.g.rotation.y = o.cur.yaw + Math.PI * 10 * _sp2;   /* round403: 五圈 */
       }
     }
     // 头顶昵称
@@ -5783,7 +5783,7 @@ function frame(ts) {
       var _sp = 1 - (_spinUntil - performance.now()) / _spinDur;
       if (_sp < 0) { _sp = 0; }
       if (_sp > 1) { _sp = 1; }
-      H.g.rotation.y = P.yaw + Math.PI * 4 * _sp;   /* round382: 两圈 */
+      H.g.rotation.y = P.yaw + Math.PI * 10 * _sp;   /* round403: 五圈 */
       if (H.shadow) { H.shadow.visible = true; }
     }
     /* ★ round383：暴击跳打 —— 叠一个竖直抛物线 ✓
