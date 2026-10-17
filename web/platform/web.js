@@ -2443,11 +2443,14 @@ function jumpBind() {
   var b = document.getElementById('jmp');
   if (!b || b._jmpB) { return; }
   b._jmpB = true;
+  /* ★★★ round326（用户："点按键跳僵尸会停顿，空格跳没事，手机不卡"）★★★
+     ★ 原来是 classList.add('on') + setTimeout(remove) ✗
+       一次点击 = 两次 DOM 变更 + 两次 backdrop-filter 重算 ✓
+       而这一帧正在画 3D ✗ 撞一起就掉帧 ✓ 僵尸的插值就"冻"一下 ✓
+     ★ 现在完全不碰 DOM ✗ 按下效果交给 CSS 的 :active ✓ */
   var press = function (e) {
     if (e && e.preventDefault) { e.preventDefault(); }
     if (typeof jumpHeld !== 'undefined') { jumpHeld = 1; }
-    b.classList.add('on');
-    setTimeout(function () { b.classList.remove('on'); }, 110);
   };
   b.addEventListener('pointerdown', press);
   b.addEventListener('contextmenu', function (e) { e.preventDefault(); });

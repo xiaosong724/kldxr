@@ -4278,7 +4278,7 @@ function netUpdate(dt) {
     if (!netSample(rm.buf, srvRender, rm.cur)) {
       if (rm.vx === undefined) { continue; }
       rm.exT = (rm.exT || 0) + dt;
-      if (rm.exT > 0.2) { continue; }
+      if (rm.exT > 0.35) { continue; }
       rm.g.position.x += rm.vx * dt;
       rm.g.position.z += rm.vz * dt;
       if (rm.shadow) { rm.shadow.position.x = rm.g.position.x; rm.shadow.position.z = rm.g.position.z; }

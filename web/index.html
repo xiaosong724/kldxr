@@ -79,12 +79,20 @@
       #6f7d6955 0%,#54614f4d 38%,#35402f3d 76%,#1f271c30 100%);
     border:2px solid #86967a88;
     box-shadow:0 3px 9px #00000055,inset 0 1px 0 #ffffff22,inset 0 -6px 12px #0000002a;
-    backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
     user-select:none;cursor:pointer;z-index:30;
     transition:transform .07s ease,box-shadow .15s ease}
- #jmp .jic{width:46%;height:46%;color:#dfe8d4;opacity:.95}
- #jmp.on{transform:scale(.92);border-color:#b7e0a2cc;
+ /* ★★★ round326（用户实测：空格跳不卡、点按钮跳卡、手机不卡）★★★
+    根因候选：① 这里原来有 backdrop-filter:blur(2px) ✗
+                每次重绘都要重算模糊 ✗ 某些显卡上直接掉一帧 ✓
+              ② JS 里点击时 classList.add('on') + setTimeout 移除 ✗
+                一次点击两次 DOM 变更 + 两次模糊重算 ✓
+    修：① 去掉 backdrop-filter（这一层本来就是半透明渐变 ✗ 不需要模糊 ✓）
+        ② 用 CSS 的 :active ✗ 完全不碰 DOM ✓
+    ★ 为什么只改跳跃键不改攻击键：攻击键是常按的 ✗ 用户没报它卡 ✓
+      而且攻击键的模糊在常驻状态不重绘 ✓ 跳跃键每次点击都要切类 ✓ */
+ #jmp:active{transform:scale(.92);border-color:#b7e0a2cc;
    box-shadow:0 0 0 2px #b7e0a255,inset 0 1px 0 #ffffff22}
+ #jmp .jic{width:46%;height:46%;color:#dfe8d4;opacity:.95}
  #jmp.cool{opacity:.45}
 /* ★★ 第 233 轮（用户要求）：损坏的装备要有明显样式 ★★
    为什么：挂机回来只看到"少了一件"✗ 分不清是坏了还是丢了 ✓
