@@ -131,6 +131,20 @@ const PW = 'abc123456';
   ].join(''));
   console.log('  键位: ' + editTest);
 
+  // ★ 自动战斗：安全区里应该往外走
+  const autoTest = await ev([
+    'P.x = 0; P.z = 0; P.y = terYAt(0, 0); P.air = false; P.gy = P.y;',
+    'if (typeof AUTO !== "undefined") { AUTO.on = true; AUTO.tgt = ""; AUTO.pauseUntil = 0; }',
+    'if (typeof autoTick === "function") { autoTick(0.016); }',
+    'var ix = (typeof jx !== "undefined") ? jx : null;',
+    'var iy = (typeof jy !== "undefined") ? jy : null;',
+    'return JSON.stringify({ jx: ix, jy: iy,',
+    '  info: (typeof AUTO !== "undefined") ? AUTO.info : null,',
+    '  moved: !!(ix || iy) });',
+  ].join(''));
+  console.log('  安全区: ' + autoTest);
+  await ev('if (typeof AUTO !== "undefined") { AUTO.on = false; } return 1;');
+
   const ripple = await ev([
     'var live = 0;',
     'for (var i = 0; i < _ripple.length; i++) { if (_ripple[i].on) { live++; } }',

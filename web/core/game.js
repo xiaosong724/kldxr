@@ -5085,10 +5085,16 @@ function autoRevive() {
     if (now - AUTO.deaths[i] < 30000) { recent++; }
   }
   if (recent >= 3) {
-    /* ★★ 硬保险：连死 3 次自动关掉 ✗ 防挂机送死（每死一次魔气 -1 ✓）*/
-    AUTO.on = false;
-    AUTO.info = '';
-    if (typeof toast === 'function') { toast('你被反复击杀，自动战斗已关闭'); }
+    /* ★★★ round362（用户："死亡了会停止自动战斗，不知道什么原因"）★★★
+       ★ 根因：这就是原因 —— 30 秒内死 3 次 → 直接【永久关闭】✗
+         （原本是为了防"挂机送死"✓ 但用户以为是 bug ✓）
+       ★ 改成：暂停 20 秒 ✗ 20 秒后自己恢复 ✓
+         20 秒足够回气 + 离开危险区 ✓ 又不会真的关掉 ✓ */
+    AUTO.pauseUntil = now + 20000;
+    AUTO.phase = 'find'; AUTO.tgt = ''; AUTO.t = 0;
+    AUTO.deaths.length = 0;
+    AUTO.info = '自动战斗：连死 3 次，暂停 20 秒';
+    if (typeof toast === 'function') { toast('连死 3 次 → 暂停 20 秒（不会关闭自动战斗）'); }
     return;
   }
   wsSend('revive', {});
@@ -5117,13 +5123,21 @@ function autoRelease() {
 
 function autoTick(dt) {
   var now = performance.now();
-  /* ★ 第 211 轮：如果人已经在安全区里（比如刚传送回来 ✓）
-     → 原地待命 ✗ 不主动出去送死 ✓
-     出去（手动走两步）之后自动继续 ✓ */
+  /* ★★★ round362（用户："进入安全区后自己走出去，而不是停下来"）★★★
+     ★ 这段原来（第 211 轮）是"原地待命"✗ 理由是"不主动出去送死"✓
+       但对用户来说就是"自动战斗在安全区里不动了"✓
+     ★ 现在：主动朝【远离中心】的方向走出去 ✗ 出去之后自然继续 ✓
+       ★ 站在正中心（0,0）没有"远离方向"✗ 固定往 +z 走 ✓
+       ★ 走的时候【不打】✗ 免得一出门就扑上去 ✓ */
   if (AUTO.on && autoInSafe(P.x, P.z) && !dead) {
-    jx = 0; jy = 0; if (AUTO.setInput) { AUTO.setInput = false; }
-    atkHeld = false;
-    AUTO.info = '自动战斗：在安全区内待命（走出去就继续）';
+    var _sdx = P.x, _sdz = P.z;
+    if (Math.abs(_sdx) < 0.01 && Math.abs(_sdz) < 0.01) { _sdx = 0; _sdz = 1; }
+    var _sdl = Math.hypot(_sdx, _sdz) || 1;
+    jx = _sdx / _sdl; jy = _sdz / _sdl;
+    AUTO.setInput = true;
+    P.yaw = autoFacing(jx, jy * G.FLIP_Z);
+    atkHeld = false; AUTO.attacking = false;
+    AUTO.info = '自动战斗：走出安全区';
     return;
   }
   if (!AUTO.on) { autoRelease(); return; }
@@ -5170,6 +5184,25 @@ function autoTick(dt) {
         jx = 0; jy = 0; AUTO.setInput = true;
         return;
       }
+    }
+    /* ★★★ round362（用户："进入安全区后会自动走出去，而不是停下来"）★★★
+       ★ 原来：没怪就停住 ✗ 而安全区里永远没怪（僵尸不进安全区 ✓）
+         → 一进安全区自动战斗就"卡住"✓
+       ★ 现在：在安全区（或边界缓冲带）里 → 朝【远离中心】的方向走出去 ✓
+         走出去之后自然会重新找到怪 ✓
+       ★ 站在正中心（x=z=0）时没有"远离方向"✗ 固定往 +z 走 ✓ */
+    var _sd = Math.hypot(P.x, P.z);
+    var _slim = autoSafeMargin() + 4.0;
+    if (_sd < _slim) {
+      var _ux = P.x, _uz = P.z;
+      if (Math.abs(_ux) < 0.01 && Math.abs(_uz) < 0.01) { _ux = 0; _uz = 1; }
+      var _ul = Math.hypot(_ux, _uz) || 1;
+      jx = _ux / _ul; jy = _uz / _ul;
+      AUTO.setInput = true;
+      P.yaw = autoFacing(jx, jy * G.FLIP_Z);   // ★ 朝着走的方向 ✓（和主循环一致）
+      atkHeld = false; AUTO.attacking = false;
+      AUTO.info = '自动战斗：走出安全区 ' + _sd.toFixed(0) + 'm';
+      return;
     }
     jx = 0; jy = 0; AUTO.setInput = true;
     AUTO.info = '自动战斗：附近没有僵尸';
