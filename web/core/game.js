@@ -1887,9 +1887,9 @@ function terrainV(dt) {
         var n = Math.floor(drop) - 2;              // 落差 3 → 1 格 ✓
         var dv = n * FALL_DMG;
         if (dv > 0) {
-          /* ★ 表现先走（飘字 + 屏幕震 ✗ 立刻有反馈 ✓）
-             真正扣血由服务端做 ✗ 它会把结果推回来 ✓ 别在客户端改 HP ✓ */
-          if (typeof dmg === 'function') { dmg('-' + dv, P.x, P.y + 1.15, P.z, false); }
+          /* ★ round325（用户："我摔伤也有两个飘字，改成保留红色的就可以了"）
+             根因和岩浆那次一模一样：本地弹一个白字 + 服务端 hurts 回来弹一个红字 ✓
+             修：本地不弹 ✗ 让服务端的红字显示 ✓ */
           shake = 0.25;
           wsSend('falldmg', { d: dv });
         }
