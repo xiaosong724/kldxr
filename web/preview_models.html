@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>小镇建筑模型预览</title>
+<style>
+  html,body{margin:0;height:100%;background:#15171a;color:#e9e1cf;font:13px system-ui;overflow:hidden}
+  #c{display:block;width:100vw;height:100vh}
+  #ui{position:fixed;left:14px;top:14px;width:280px;max-height:calc(100vh - 28px);overflow:auto;
+    background:#111417ee;border:1px solid #ffffff22;border-radius:12px;padding:12px;box-shadow:0 12px 40px #000a}
+  #ui h1{font-size:16px;margin:0 0 6px;color:#ffe9b0}
+  #ui label{display:block;margin:8px 0 3px;color:#b9ad98;font-size:12px}
+  #ui select,#ui input{width:100%;background:#0b0d0f;border:1px solid #ffffff2a;color:#eee;
+    border-radius:6px;padding:7px;box-sizing:border-box}
+  #ui .row{display:flex;gap:8px}
+  #ui .row input{flex:1}
+  #ui .chk{display:flex;align-items:center;gap:6px;margin:8px 0;color:#ddd}
+  #ui .chk input{width:auto}
+  #picked{margin-top:10px;padding-top:8px;border-top:1px solid #ffffff18;display:none}
+  #pickedName{color:#ffd166;font-size:13px}
+  #pickedInfo{color:#a9b0b5;font-size:11px;line-height:1.6;margin:5px 0}
+  #pickedInfo code{color:#9fd8e8}
+  #parts{display:flex;flex-direction:column;gap:3px;max-height:34vh;overflow:auto;margin-top:6px}
+  #parts button{text-align:left;background:#1b2126;border:1px solid #ffffff14;color:#cfd6da;
+    border-radius:5px;padding:4px 6px;font-size:11px;cursor:pointer}
+  #parts button:hover{background:#26313a;color:#fff}
+  #partTip{position:fixed;display:none;pointer-events:none;background:#0b0d0fee;color:#ffe9b0;
+    border:1px solid #ffd16666;border-radius:5px;padding:3px 6px;font-size:12px;z-index:20}
+  #hint{position:fixed;right:14px;bottom:12px;color:#8b9399;font-size:11px}
+  @media(max-width:720px){#ui{width:220px;padding:9px;font-size:12px}#ui h1{font-size:14px}}
+</style></head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <h1>小镇建筑模型</h1>
+  <label>选择模型</label>
+  <select id="models"></select>
+  <div class="row">
+    <div><label>墙面</label><input id="wall" type="color" value="#d9cdb8"></div>
+    <div><label>屋顶</label><input id="roof" type="color" value="#4a5458"></div>
+    <div><label>饰边</label><input id="trim" type="color" value="#6b4a32"></div>
+  </div>
+  <label>招牌文字</label>
+  <input id="signText" maxlength="12" placeholder="店名">
+  <label class="chk"><input id="cutaway" type="checkbox" checked> 剖切模式（看室内）</label>
+  <label class="chk"><input id="spin" type="checkbox" checked> 自动旋转</label>
+  <div id="picked">
+    <b id="pickedName">零件列表</b>
+    <div id="pickedInfo">点击模型上的任意部分，或点下面的中文零件名。</div>
+    <div id="parts"></div>
+  </div>
+  <div id="furnWrap" style="display:none;margin-top:10px;padding-top:8px;border-top:1px solid #ffffff18">
+    <b style="color:#9fe0a8;font-size:12px">可放置家具 <span id="furnCount"></span></b>
+    <div id="furnList" style="display:flex;flex-direction:column;gap:3px;max-height:26vh;overflow:auto;margin-top:6px"></div>
+  </div>
+</div>
+<div id="partTip"></div>
+<div id="hint">拖动旋转 · 滚轮缩放</div>
+<script src="/lib/three.min.js"></script>
+<script src="/core/town_models.js"></script>
+<script src="/core/town_villas.js"></script>
+<script src="/core/town_hall.js"></script>
+<script src="/core/town_shops2.js"></script>
+<script src="/core/town_shops3.js"></script>
+<script src="/core/town_shops4.js"></script>
+<script src="/core/town_veg.js"></script>
+<script src="/core/town_props.js"></script>
+<script>
+(function(){
+  var cv=document.getElementById('c');
+  var rd=new THREE.WebGLRenderer({canvas:cv,antialias:true});
+  rd.setPixelRatio(Math.min(2,devicePixelRatio||1));
+  rd.shadowMap.enabled=true;
+  var scene=new THREE.Scene();
+  scene.background=new THREE.Color(0x15171a);
+  var cam=new THREE.PerspectiveCamera(40,1,0.1,400);
+  var root=new THREE.Group();scene.add(root);
+  scene.add(new THREE.HemisphereLight(0xffffff,0x445566,0.95));
+  var sun=new THREE.DirectionalLight(0xfff4dd,1.0);sun.position.set(18,30,18);
+  sun.castShadow=true;sun.shadow.mapSize.set(1024,1024);scene.add(sun);
+  var fill=new THREE.DirectionalLight(0x88bbdd,0.35);fill.position.set(-18,16,-12);scene.add(fill);
+
+  var ground=new THREE.Mesh(new THREE.PlaneGeometry(160,160),
+    new THREE.MeshLambertMaterial({color:0x2b3035}));
+  ground.rotation.x=-Math.PI/2;ground.position.y=-0.02;ground.receiveShadow=true;scene.add(ground);
+  var grid=new THREE.GridHelper(160,80,0x44505a,0x30383f);grid.position.y=0;scene.add(grid);
+
+  var cur=null, selBox=null;
+  var yaw=0.72,pitch=0.35,dist=28,drag=null,moved=false;
+  var spin=true;
+  var ray=new THREE.Raycaster(),mouse=new THREE.Vector2();
+  var tipObj=null;
+  var sel=document.getElementById('models');
+  var signInput=document.getElementById('signText');
+  var picked=document.getElementById('picked');
+  var pickedName=document.getElementById('pickedName');
+  var pickedInfo=document.getElementById('pickedInfo');
+  var partList=document.getElementById('parts');
+  var partTip=document.getElementById('partTip');
+  var cutBox=document.getElementById('cutaway');
+  try{ if(typeof tmMergeProps==='function'){ tmMergeProps(); } }catch(eM){}
+  var keys=Object.keys(TOWN_MODELS);
+  keys.forEach(function(k){
+    var o=document.createElement('option');o.value=k;
+    o.textContent=TOWN_MODELS[k].name;sel.appendChild(o);
+  });
+  var q=new URLSearchParams(location.search);
+  if(q.get('model')&&TOWN_MODELS[q.get('model')]){sel.value=q.get('model');}
+  if(q.get('cut')==='0'){cutBox.checked=false;}
+
+  function hex(id){return parseInt(document.getElementById(id).value.slice(1),16);}
+  function applyCut(){
+    if(!cur)return;
+    var on=!!cutBox.checked;
+    var hide=['f1_front','f2_front','f3_front','f4_front','door_','entrance_canopy',
+      'canopy_','sign_','roof_','parapet_','gable_','ridge','column_','f1_window_',
+      'f2_window_','f1_balcony_','f2_balcony_','f1_belt_band','mart_entry','mart_pylon',
+      'porch_','balcony_','f1_overhang','hall_front','hall_portico','hall_entry','hall_pediment','hall_roof'];
+    cur.traverse(function(o){
+      var n=o.userData&&o.userData.partName;
+      if(!n)return;
+      var h=false;
+      for(var i=0;i<hide.length;i++){if(n.indexOf(hide[i])===0){h=true;break;}}
+      o.visible=!(on&&h);
+    });
+  }
+  function makeSignTexture(text){
+    var cv2=document.createElement('canvas');cv2.width=512;cv2.height=160;
+    var c=cv2.getContext('2d');
+    c.fillStyle='#e8dcc8';c.fillRect(0,0,512,160);
+    c.strokeStyle='#6b4a32';c.lineWidth=6;c.strokeRect(3,3,506,154);
+    c.fillStyle='#1f2a2e';c.textAlign='center';c.textBaseline='middle';
+    c.font='700 66px "Microsoft YaHei",system-ui,sans-serif';
+    c.fillText(text||'小店',256,86,470);
+    var t=new THREE.CanvasTexture(cv2);
+    try{t.colorSpace=THREE.SRGBColorSpace;}catch(e){}
+    t.minFilter=THREE.LinearFilter;
+    return t;
+  }
+  function applySignText(){
+    if(!cur)return;
+    var names={'sign_face':1,'mart_pylon_face':1,'mart_entry_sign_face':1};
+    var text=(signInput.value||'').trim();
+    cur.traverse(function(o){
+      if(o.userData&&names[o.userData.partName]){
+        o.material=new THREE.MeshBasicMaterial({map:makeSignTexture(text),side:THREE.DoubleSide});
+      }
+    });
+  }
+  function buildPartList(){
+    partList.innerHTML='';
+    if(!cur)return;
+    var seen={};
+    cur.traverse(function(o){
+      var n=o.userData&&o.userData.partName;
+      if(!n||seen[n])return;
+      seen[n]=1;
+      var b=document.createElement('button');
+      b.textContent=o.userData.partLabel||townPartCn(n)||n;
+      b.onclick=function(){select(o);};
+      partList.appendChild(b);
+    });
+  }
+
+
+  var FURN_CN = {
+    bed_single:'单人床', bed_nightstand:'床头柜', bed_lamp:'床头灯', wardrobe:'衣柜',
+    sofa_modern_2:'双人沙发', coffee_table:'茶几', tv_wall:'壁挂电视', tv_stand:'电视柜',
+    rug_rect:'地毯', bookshelf:'书架', dining_table:'餐桌', chair_wood:'木椅',
+    kitchen_counter:'厨房操作台', kitchen_sink:'水槽', kitchen_stove:'灶台',
+    kitchen_oven:'烤箱', kitchen_cabinet:'厨房吊柜', kitchen_island:'厨房中岛',
+    fridge_display:'展示冰箱', toilet:'马桶', bath_vanity:'洗手台', bath_mirror:'浴室镜',
+    shower_tray:'淋浴间', bathtub:'浴缸', desk:'书桌', desk_chair:'书桌椅',
+    shop_counter:'咖啡馆柜台', coffee_machine:'咖啡机', menu_board:'菜单板',
+    wall_menu:'墙菜单', wall_art:'挂画', wall_clock:'挂钟', shop_shelf:'咖啡店货架',
+    checkout_counter:'收银台', cash_register:'收银机', aisle_shelf:'超市货架通道',
+    shopping_cart:'购物车', basket_stack:'购物篮堆', promo_board:'促销牌',
+    outdoor_table:'户外桌', umbrella:'遮阳伞', hall_chair:'大厅座椅',
+    plant_pot:'盆栽', ceiling_lamp:'吊灯'
+  };
+  function buildFurnitureList(){
+    var wrap=document.getElementById('furnWrap');
+    var list=document.getElementById('furnList');
+    var cnt=document.getElementById('furnCount');
+    var f=(cur&&cur.userData&&cur.userData.furniture)||[];
+    if(!f.length){ if(wrap) wrap.style.display='none'; return; }
+    wrap.style.display='block';
+    cnt.textContent='（'+f.length+' 件）';
+    list.innerHTML='';
+    var byCat={};
+    for(var i=0;i<f.length;i++){var c=f[i].catalog;byCat[c]=(byCat[c]||0)+1;}
+    Object.keys(byCat).sort().forEach(function(cid){
+      var b=document.createElement('button');
+      b.textContent=(FURN_CN[cid]||cid)+' × '+byCat[cid];
+      b.onclick=function(){
+        /* 找到这件家具对应的 piece，取其中第一个 mesh 来高亮 */
+        var pieces=(cur&&cur.userData&&cur.userData.pieces)||[];
+        var target=null;
+        for(var k=0;k<pieces.length;k++){
+          if(pieces[k].catalog===cid && pieces[k].meshes && pieces[k].meshes.length){
+            target=pieces[k].meshes[0]; break;
+          }
+        }
+        if(target){ select(target); return; }
+        /* 回退：按目录 id 找同名网格 */
+        cur.traverse(function(o){
+          if(!target && o.isMesh && o.userData && o.userData.partName &&
+             o.userData.partName.indexOf(cid)===0){ target=o; }
+        });
+        if(target){ select(target); }
+      };
+      list.appendChild(b);
+    });
+  }
+
+  function rebuild(){
+    if(cur){root.remove(cur);cur=null;}
+    if(selBox){root.remove(selBox);selBox=null;}
+    var spec=TOWN_MODELS[sel.value];
+    if(!spec)return;
+    document.getElementById('wall').value='#'+('000000'+(+spec.wall).toString(16)).slice(-6);
+    document.getElementById('roof').value='#'+('000000'+(+spec.roofColor).toString(16)).slice(-6);
+    document.getElementById('trim').value='#'+('000000'+(+spec.trim).toString(16)).slice(-6);
+    cur=buildTownModel(spec,{wall:hex('wall'),roof:hex('roof'),trim:hex('trim')});
+    root.add(cur);
+    if(signInput){signInput.value=q.get('sign')||spec.signText||spec.name||'';}
+    applyCut();
+    applySignText();
+    buildPartList();
+    buildFurnitureList();
+    picked.style.display='block';
+    pickedName.textContent='零件列表';
+    pickedInfo.textContent='点击模型上的任意部分，或点下面的中文零件名。';
+  }
+  function describe(o){
+    var p=o.geometry&&o.geometry.parameters?o.geometry.parameters:{};
+    var dims=(p.width||0).toFixed(2)+' × '+(p.height||0).toFixed(2)+' × '+(p.depth||0).toFixed(2);
+    pickedName.textContent=o.userData.partLabel||o.userData.partName||o.type;
+    pickedInfo.innerHTML='零件 ID：<code>'+(o.userData.partName||'')+'</code><br>类型：'+
+      o.type+'<br>尺寸：'+dims+' m<br>局部位置：'+
+      o.position.x.toFixed(2)+', '+o.position.y.toFixed(2)+', '+o.position.z.toFixed(2);
+    picked.style.display='block';
+  }
+  function select(o){
+    if(selBox){root.remove(selBox);selBox.geometry.dispose();selBox.material.dispose();selBox=null;}
+    if(o){
+      selBox=new THREE.BoxHelper(o,0xffd166);root.add(selBox);describe(o);
+      tipObj=o;
+      if(o.userData.partLabel||o.userData.partName){
+        partTip.textContent=o.userData.partLabel||o.userData.partName;
+        partTip.style.display='block';
+      }
+    }else{
+      tipObj=null;partTip.style.display='none';pickedName.textContent='零件列表';
+      pickedInfo.textContent='点击模型上的任意部分，或点下面的中文零件名。';
+    }
+  }
+  function rayPick(e){
+    if(!cur)return null;
+    var r=cv.getBoundingClientRect();
+    mouse.x=((e.clientX-r.left)/r.width)*2-1;
+    mouse.y=-((e.clientY-r.top)/r.height)*2+1;
+    ray.setFromCamera(mouse,cam);
+    var hits=ray.intersectObject(cur,true);
+    for(var i=0;i<hits.length;i++){
+      var obj=hits[i].object,pn=obj,vis=true;
+      while(pn){if(pn.visible===false){vis=false;break;}pn=pn.parent;}
+      if(!vis)continue;
+      if(obj.userData&&obj.userData.partName)return obj;
+    }
+    return null;
+  }
+  cv.addEventListener('pointerdown',function(e){
+    drag={x:e.clientX,y:e.clientY};moved=false;cv.setPointerCapture(e.pointerId);
+  });
+  cv.addEventListener('pointermove',function(e){
+    if(!drag)return;
+    var dx=e.clientX-drag.x,dy=e.clientY-drag.y;
+    if(Math.abs(dx)+Math.abs(dy)>3)moved=true;
+    yaw-=dx*0.008;
+    pitch=Math.max(-0.15,Math.min(1.15,pitch+dy*0.006));
+    drag={x:e.clientX,y:e.clientY};
+  });
+  cv.addEventListener('pointerup',function(e){
+    var wasMoved=moved;drag=null;moved=false;
+    if(wasMoved)return;
+    select(rayPick(e));
+  });
+  cv.addEventListener('wheel',function(e){
+    dist=Math.max(7,Math.min(80,dist+e.deltaY*0.02));e.preventDefault();
+  },{passive:false});
+  document.getElementById('spin').onchange=function(){spin=this.checked;};
+  cutBox.onchange=applyCut;
+  signInput.oninput=applySignText;
+  sel.onchange=rebuild;
+  ['wall','roof','trim'].forEach(function(id){
+    document.getElementById(id).oninput=function(){
+      if(!cur)return;
+      var spec=TOWN_MODELS[sel.value];
+      root.remove(cur);
+      cur=buildTownModel(spec,{wall:hex('wall'),roof:hex('roof'),trim:hex('trim')});
+      root.add(cur);applyCut();applySignText();buildPartList();buildFurnitureList();
+    };
+  });
+  window.__pv={get cur(){return cur;},get cam(){return cam;},get root(){return root;}};
+  function resize(){
+    var w=innerWidth,h=innerHeight;
+    rd.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix();
+  }
+  addEventListener('resize',resize);resize();
+  var last=performance.now();
+  function loop(t){
+    var dt=Math.min(0.05,(t-last)/1000);last=t;
+    if(spin&&!drag)yaw+=dt*0.22;
+    var cy=Math.cos(pitch)*dist,y=Math.sin(pitch)*dist;
+    cam.position.set(Math.sin(yaw)*cy,y+2.0,Math.cos(yaw)*cy);
+    cam.lookAt(0,2.0,0);
+    if(cur&&cur.userData&&typeof cur.userData.animate==='function'){cur.userData.animate(t/1000);}
+    if(selBox)selBox.update();
+    if(tipObj){
+      var wp=new THREE.Vector3();tipObj.getWorldPosition(wp);wp.project(cam);
+      partTip.style.left=((wp.x*0.5+0.5)*innerWidth+12)+'px';
+      partTip.style.top=((-wp.y*0.5+0.5)*innerHeight-18)+'px';
+    }
+    rd.render(scene,cam);requestAnimationFrame(loop);
+  }
+  rebuild();requestAnimationFrame(loop);
+})();
+</script>
+</body></html>
