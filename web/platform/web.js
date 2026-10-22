@@ -2341,7 +2341,12 @@ function doNearAction(c) {
 /* 0 个：清空；1 个：沿用单项提示；多个：合并提示 + 按钮变"交互 N" */
 UI.interactNear = function (list) {
   /* 坐着/睡着时由 seatState / bedNear 那套接管，别把"起身/起床"按钮冲掉 */
-  if (typeof MY_SEAT !== 'undefined' && MY_SEAT) { return; }
+  if (typeof MY_SEAT !== 'undefined' && MY_SEAT) {
+    /* 坐下之后提示要收掉（用户要求：坐下不需要提示） */
+    ['sitPrompt', 'tpPrompt', 'shopPrompt', 'sleepPrompt', 'housePrompt', 'whPrompt']
+      .forEach(function (id) { showPrompt(id, ''); });
+    return;
+  }
   if (typeof MY_SLEEP !== 'undefined' && MY_SLEEP) { return; }
   NEAR_CANDS = (list || []).slice();
   /* ★ 2026-10-22（用户：走近时提示"显示 3 秒后消失，再走近要重新出现"）：
@@ -7135,7 +7140,9 @@ UI.seatState = function (on) {
   var wp = document.getElementById('whPrompt');
   if (on) {
     if (atk) { atk.classList.remove('interact', 'seat'); atk.classList.add('stand'); atk.title = '起身'; }
-    if (prompt) { prompt.textContent = '坐着 · 按 E / 点按钮 / 移动 起身'; prompt.style.display = 'block'; }
+    /* ★ 2026-10-22（用户：坐下后提示又显示出来，坐下不需要提示）
+       坐着时只把按钮改成"起身"，不再弹提示文字 */
+    if (prompt) { prompt.style.display = 'none'; }
     if (wp) { wp.style.display = 'none'; }
   } else {
     if (atk) { atk.classList.remove('stand'); }

@@ -175,6 +175,15 @@ async def main_async(token):
             isSeat = await c.ev('return !!MY_SEAT;')
             print('  seated:', isSeat)
             assert isSeat, 'did not sit down'
+            # 坐下后不应该再显示提示
+            pr = await c.ev(
+                "var ids=['sitPrompt','shopPrompt','sleepPrompt','tpPrompt','housePrompt','whPrompt'];"
+                "var vis=[]; ids.forEach(function(id){var e=document.getElementById(id);"
+                " if(e && getComputedStyle(e).display!=='none') vis.push(id);});"
+                "return vis;")
+            print('  prompts visible while seated:', pr)
+            assert not pr, 'prompt still shown while seated: %r' % (pr,)
+
             act = await c.ev(
                 "var called=null; var oldStand=window.tryStand;"
                 "window.tryStand=function(){called='stand'; return oldStand.apply(window,arguments);};"

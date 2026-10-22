@@ -159,8 +159,32 @@ async def observer(tok, uid, snap):
                 await asyncio.sleep(0.2)
             await asyncio.sleep(0.8)
 
-            dbg = await c.ev('return window.__seatDbg || null;')
-            print('  seat debug:', dbg)
+            dbg = await c.ev(
+                "var name=%s; var o=null;"
+                "for(var k in NET.others){ if(NET.others[k] && NET.others[k].name===name){o=NET.others[k];break;} }"
+                "return o? {seated:o.seated, seat:String(o.seat), flips:o.__seatedFlips|0,"
+                " prev:o.__seatedPrev} : 'notfound';" % json.dumps(snap.get('name') or ''))
+            print('  seated state:', dbg)
+            # 高频采样（每 30ms）看姿态是否在坐/站之间跳
+            fast = []
+            for _ in range(60):
+                v = await c.ev(
+                    "var name=%s; var o=null;"
+                    "for(var k in NET.others){ if(NET.others[k] && NET.others[k].name===name){o=NET.others[k];break;} }"
+                    "if(!o||!o.hh||!o.hh.g) return null;"
+                    "return {rx:+o.hh.g.rotation.x.toFixed(3),"
+                    " legx:+o.hh.legL.rotation.x.toFixed(3),"
+                    " seat:String(o.seat), se:!!o.seated};" % json.dumps(snap.get('name') or ''))
+                if v:
+                    fast.append(v)
+                await asyncio.sleep(0.03)
+            import collections
+            rxset = sorted(set(x['rx'] for x in fast))
+            legset = sorted(set(x['legx'] for x in fast))
+            print('  fast samples n=%d rx=%r legx=%r' % (len(fast), rxset[:5], legset[:5]))
+            seatset = sorted(set((x['seat'], x['se'])) for x in fast)
+            print('  seat states seen:', seatset[:5])
+
             samples = []
             for _ in range(40):
                 v = await c.ev(
@@ -168,7 +192,8 @@ async def observer(tok, uid, snap):
                     "for(var k in NET.others){ if(NET.others[k] && NET.others[k].name===name){o=NET.others[k];break;} }"
                     "if(!o||!o.hh||!o.hh.g) return null;"
                     "return {x:o.hh.g.position.x, z:o.hh.g.position.z,"
-                    " ry:o.hh.g.rotation.y, seat:String(o.seat), seated:!!o.seated};"
+                    " ry:o.hh.g.rotation.y, seat:String(o.seat), seated:!!o.seated,"
+                    " legx:+o.hh.legL.rotation.x.toFixed(3)};"
                     % json.dumps(snap.get('name') or ''))
                 if v:
                     samples.append(v)
@@ -178,8 +203,10 @@ async def observer(tok, uid, snap):
             xs = [s['x'] for s in samples]
             zs = [s['z'] for s in samples]
             rys = [s['ry'] for s in samples]
+            legs = sorted(set(s.get('legx') for s in samples))
             return {
                 'n': len(samples),
+                'legx': legs[0] if len(legs) == 1 else legs,
                 'posSpread': max(max(xs) - min(xs), max(zs) - min(zs)),
                 'yawSpread': max(rys) - min(rys),
                 'seat': samples[-1]['seat'],
@@ -225,7 +252,8 @@ def main():
         print('  samples:', res)
         assert snap.get('sit') == 'seated', 'actor failed to sit'
         assert res and res['n'] > 20, 'observer saw too few frames'
-        assert res['seated'], 'observer never saw the seated flag (seat=%r)' % (res['seat'],)
+        assert res.get('legx') == -1.35, 'seated legs not stable: %r' % (res.get('legx'),)
+        # 以"腿一直抬着 + 位置不动"作为稳定判据（seat 字段在不同条目上可能不一致）
         assert res['posSpread'] < 0.05, 'seated player jitters %.3f m' % res['posSpread']
         assert res['yawSpread'] < 0.05, 'seated player spins %.3f rad' % res['yawSpread']
         ok = True

@@ -7491,38 +7491,43 @@ function netUpdate(dt) {
   var srvRender = now - (NET.srv && NET.srv.off ? NET.srv.off : 0) - srvDelay;   // ★ 服务器钟里的"该渲染哪一刻"
   for (var uid in NET.others) {
     var o = NET.others[uid];
+    /* ★★★ 2026-10-22（用户："坐着/站着反复切换"）★★★
+       病根：坐姿/躺姿的判断原来放在 netSample 之后 ——
+         人坐着不动时不产生新样本 → netSample 经常返回 false → 直接 continue
+         → 坐姿代码【这一帧不执行】、下一帧执行一次 → 大腿在 0 和 -1.35 之间跳
+         → 看着就是"坐一下站一下"。
+       修：坐/躺先用座位状态直接定姿态，不依赖位置采样。 */
+    var _seated0 = (o.seated != null) ? !!o.seated
+      : (o.seat != null && String(o.seat) !== '-1' && String(o.seat) !== '');
+    if ((_seated0 || o.sleep) && o.hh && o.hh.g) {
+      var _gs0 = o.hh.g;
+      o.walkT = 0;
+      _gs0.rotation.z = 0;
+      _gs0.rotation.order = 'YXZ';
+      if (o.sleep) {
+        var _sy3 = +((o.snapYaw != null) ? o.snapYaw : (o.cur.yaw || 0));
+        var _so3 = (typeof SLEEP_OFF !== 'undefined') ? SLEEP_OFF : 0.55;
+        var _y3b = (typeof supportYAt === 'function') ? supportYAt(o.cur.x, o.cur.z) : 0;
+        _gs0.position.set(o.cur.x + Math.sin(_sy3) * _so3, _y3b + 0.62,
+                          o.cur.z + Math.cos(_sy3) * _so3);
+        _gs0.rotation.set(-1.45, _sy3, 0);
+        o.hh.legL.rotation.x = 0; o.hh.legR.rotation.x = 0;
+      } else {
+        var _y3c = (typeof supportYAt === 'function') ? supportYAt(o.cur.x, o.cur.z) : 0;
+        _gs0.position.set(o.cur.x, _y3c + 0.30, o.cur.z);
+        _gs0.rotation.set(0, o.cur.yaw || 0, 0);
+        o.hh.legL.rotation.x = -1.35; o.hh.legR.rotation.x = -1.35;
+        o.hh.armL.rotation.x = 0.15; o.hh.armR.rotation.x = 0.15;
+      }
+      if (o.hh.sw) { o.hh.sw.visible = false; }
+      o.last.x = o.cur.x; o.last.z = o.cur.z;
+    }
     // ★ 用【他的钟】换算该渲染哪一刻 → 网络抖动不再变成走路的忽快忽慢 ✓
     if (!netSample(o.buf, netRenderAt(o, now, dt), o.cur)) { continue; }
     var px = o.cur.x, pz = o.cur.z;
-    /* ★★ 2026-10-22：他坐着 / 躺着时【不要再走插值】★★
-       以前这里只管走路 → 坐下那一刻服务端把他瞬移到椅子上，
-       插值一路追、姿态又是站姿 → 别人看着一直在抽动。
-       现在坐/躺直接吸附到服务端坐标，并摆出对应姿势。 */
-    var _seated = (o.seated != null) ? !!o.seated
-      : (o.seat != null && String(o.seat) !== '-1' && String(o.seat) !== '');
-    if (_seated || o.sleep) {
-      var _gs = o.hh.g;
-      o.walkT = 0;
-      o.hh.legL.rotation.x = 0; o.hh.legR.rotation.x = 0;
-      o.hh.armL.rotation.x = 0.15; o.hh.armR.rotation.x = 0.15;
-      _gs.rotation.z = 0;
-      _gs.rotation.order = 'YXZ';
-      if (o.sleep) {
-        var _sy2 = +((o.snapYaw != null) ? o.snapYaw : (o.cur.yaw || 0));
-        var _so2 = (typeof SLEEP_OFF !== 'undefined') ? SLEEP_OFF : 0.55;
-        var _y2 = (typeof supportYAt === 'function') ? supportYAt(px, pz) : 0;
-        _gs.position.set(px + Math.sin(_sy2) * _so2, _y2 + 0.62, pz + Math.cos(_sy2) * _so2);
-        _gs.rotation.set(-1.45, _sy2, 0);
-      } else {
-        var _y3 = (typeof supportYAt === 'function') ? supportYAt(px, pz) : 0;
-        _gs.position.set(px, _y3 + 0.30, pz);
-        _gs.rotation.set(0, o.cur.yaw || 0, 0);
-        /* 坐姿：大腿抬平、小腿垂下 */
-        o.hh.legL.rotation.x = -1.35; o.hh.legR.rotation.x = -1.35;
-      }
-      o.last.x = px; o.last.z = pz;
-      continue;
-    }
+    var _seated = (_seated0 != null) ? !!_seated0 : false;
+    /* 坐姿/躺姿已经在采样前处理过了，这里直接跳过站立渲染 */
+    if (_seated || o.sleep) { continue; }
     _gs_reset_order(o);
     o.hh.g.position.set(px, 0, pz);
     o.hh.g.rotation.y = o.cur.yaw;
