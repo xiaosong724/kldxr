@@ -747,7 +747,6 @@ class World(object):
                 next_t = time.perf_counter()
 
     def _step(self):
-        # ★ 2026-10-22：皮肤卡用掉的结果（saver 写库 → 这里发网络）
         try:
             self._skin_drain()
         except Exception as _sde:
@@ -1208,7 +1207,6 @@ class World(object):
                 # round294: gold goes out with `me` (one extra int, no new message).
                 #   The client adopts it field-wise, so a missing value never zeroes it.
                 _me0['gold'] = int(getattr(p, 'gold', 0) or 0)
-                # ★ 2026-10-22：头顶称号（自己也看得见）
                 _tt_me, _tm_me = self._title_of(p)
                 _me0['tt'] = _tt_me
                 _me0['tm'] = _tm_me
@@ -8004,7 +8002,7 @@ class World(object):
             pass
         return _v
 
-    def _atk_of(self, p):
+    def _hp_max(self, p):
         """生命上限（角色基础 + 防具的 hp / hp%% ✓ 第 67 轮）
 
         ★ 一定要【一处算、处处用】✗
@@ -10402,19 +10400,19 @@ class World(object):
             print('[place] building_at failed: %r' % (e,))
         return best
 
-    def _intent_skinbid(self, p, d):
-        """给某个皮肤出价（原版：金币扣了不退，按累计排名）"""
-        try:
-            self._skin_bid(p, str((d or {}).get('key') or ''), (d or {}).get('amount'))
-        except Exception as e:
-            print('[skin] bid failed: %r' % (e,))
-
     def _intent_setskin(self, p, d):
-        """换上某个皮肤 → 云端原版 _skin_set（没解锁 / 被别人独占 → 拒绝）"""
+        """换上某个皮肤 → 云端原版 _skin_set"""
         try:
             self._skin_set(p, str((d or {}).get('key') or ''))
         except Exception as e:
             print('[skin] set failed: %r' % (e,))
+
+    def _intent_skinbid(self, p, d):
+        """给某个皮肤出价（原版）"""
+        try:
+            self._skin_bid(p, str((d or {}).get('key') or ''), (d or {}).get('amount'))
+        except Exception as e:
+            print('[skin] bid failed: %r' % (e,))
 
     def _intent_customset(self, p, d):
         """保存皮肤自定义（瞳色/发色/衣服色…）→ 更新内存 + 让客户端重建"""
