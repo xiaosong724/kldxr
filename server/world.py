@@ -369,8 +369,6 @@ class World(object):
         self.inbox = queue.Queue()      # 网络线程 → tick 线程
         self.saves = queue.Queue()      # 任何线程 → 存档线程
         self._joinq = queue.Queue()     # 认证通过的人（网络线程放，tick 消费）
-        # ★ 2026-10-22：刷新页面后恢复"我正坐着 / 我正躺着"（role_id -> pose）
-        self.last_pose = {}
         self._floor_now = ()      # 室内地板矩形（每 10 帧刷一次）
         self._floor_acc = 0
         # ★ round304b：上线时读好的货架（网络线程读 ✓ tick 只往内存里放 ✓）
@@ -670,27 +668,6 @@ class World(object):
             except Exception:
                 pass
             _np = Player(conn.cid, role)
-            # ★ 2026-10-22：刷新/重连后恢复上次的坐姿或睡姿（90 秒内有效）
-            try:
-                _pose = self.last_pose.get(int(role.get('id') or 0))
-                if _pose and (now_s() - float(_pose.get('t') or 0)) < 90.0:
-                    if _pose.get('k') == 'seat':
-                        _st = self._seat_lookup(str(_pose.get('id') or ''))
-                        if _st:
-                            _np.seat = _st['idx']
-                            _np.x = float(_st['x'])
-                            _np.z = float(_st['z'])
-                            _np.yaw = float(_st.get('yaw') or 0)
-                    elif _pose.get('k') == 'sleep':
-                        _np.sleepHouse = str(_pose.get('id') or '')
-                        _np.sleepAcc = 0.0
-                else:
-                    self.last_pose.pop(int(role.get('id') or 0), None)
-                print('[pose] join restore: role=%r pose=%r -> seat=%r sleep=%r'
-                      % (role.get('id'), _pose, getattr(_np, 'seat', None),
-                         getattr(_np, 'sleepHouse', '')))
-            except Exception as _pe:
-                print('[pose] restore failed: %r' % (_pe,))
             try:
                 self._send_houses(_np)
             except Exception as _hse:
@@ -1065,11 +1042,6 @@ class World(object):
                 # round294: gold goes out with `me` (one extra int, no new message).
                 #   The client adopts it field-wise, so a missing value never zeroes it.
                 _me0['gold'] = int(getattr(p, 'gold', 0) or 0)
-                # ★ 2026-10-22：刷新页面后要能恢复"我正坐着 / 我正躺着"
-                _me0['seat'] = str(getattr(p, 'seat', -1))
-                _me0['sleep'] = str(getattr(p, 'sleepHouse', '') or '')
-                if getattr(p, 'sleepHouse', ''):
-                    _me0['syaw'] = round(float(getattr(p, 'sleepYaw', 0.0) or 0.0), 3)
                 # ★★★ round349 修的真 bug（用户："没有听到逃跑音效"）★★★
                 #   根因：这里【只认 hurts / mhits】✗ 别的事件被静默丢掉 ✓
                 #         我加的 'flee' 走 _add_pend 上来 ✗ 到这里就被扔了 ✓
@@ -1412,10 +1384,6 @@ class World(object):
                 p.footY = float(getattr(p, 'footY', 0.0) or 0.0)
             except Exception:
                 p.footY = 0.0
-            try:
-                self.last_pose[int(p.role_id)] = {'k': 'sleep', 'id': hid, 't': now_s()}
-            except Exception:
-                pass
             # ★ 2026-10-22：只发给本人 —— 以前广播给所有人，
             #   客户端 sleepApply 不看 id 就把自己挪过去 → "别人一睡觉，你也跟着上床"
             pk = dict(on=1, id=hid, x=bx, z=bz, yaw=p.sleepYaw, self=1)
@@ -1443,10 +1411,6 @@ class World(object):
             return
         p.sleepHouse = ''
         # ★ 2026-10-22：起床了就把"上次的姿态"清掉，否则 90 秒内刷新还会恢复成在睡觉
-        try:
-            self.last_pose.pop(int(p.role_id), None)
-        except Exception:
-            pass
         try:
             self._send_cid(p.cid, P.pack('sleep_state', on=0, x=p.x, z=p.z))
         except Exception:
@@ -1996,11 +1960,6 @@ class World(object):
         except Exception:
             p.footY = 0.0
         p.yaw = float(seat.get('yaw') or seat.get('ry') or 0)
-        try:
-            self.last_pose[int(p.role_id)] = {'k': 'seat', 'id': str(seat['idx']),
-                                              't': now_s()}
-        except Exception:
-            pass
         p.jy = 0.0
         self._send_cid(p.cid, P.pack('seated', id=seat['idx'], x=sx, z=sz,
                                      yaw=p.yaw, y=float(seat.get('y') or 0.30)))
@@ -2010,10 +1969,6 @@ class World(object):
         if sid in (-1, '', None):
             return
         p.seat = -1
-        try:
-            self.last_pose.pop(int(p.role_id), None)
-        except Exception:
-            pass
         seat = self._seat_lookup(str(sid))
         if seat:
             p.x = float(seat['x']) + 0.85

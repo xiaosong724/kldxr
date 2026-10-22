@@ -182,8 +182,6 @@ var MY_SLEEP = '';         /* 正在睡的住宅 id */
 var SLEEP_OFF = 0.55;      /* 躺下时沿床朝向的偏移（脚放床尾，头不要伸出床头） */
 /* 2026-10-22: run toggle - tap to keep running, tap again to stop, 1 qi per second */
 var RUN = { on: false, want: false };
-/* 2026-10-22：坐姿在 objects 到达前先记着，到了再应用（刷新恢复用） */
-var PENDING_SEAT = null;
 var SHOP_NEAR = null;      /* 离我最近的商店 */
 var FRIDGE_NEAR = null;    /* 离我最近的自家冰箱 */
 var SIT_K = 0;             /* 坐下动画混合 0→1 */
@@ -6093,41 +6091,6 @@ function wsApplyWorld(d) {
     updHP();
   }
 
-  if (d.me && d.me.seat != null) {
-    /* ★ 2026-10-22：服务端发的是字符串（'obj334' / '-1'），以前按 number 判断永远不生效
-       → 刷新页面后坐姿/睡姿丢掉。现在按字符串处理，并且能恢复。 */
-    var _mySeat = String(d.me.seat);
-    if (_mySeat !== '-1' && _mySeat !== '') {
-      if (!MY_SEAT || String(MY_SEAT.idx) !== _mySeat) {
-        try { townSeatApply({ id: _mySeat }); } catch (eMS) { }
-        /* ★ 2026-10-22：刷新后 objects 还没到 → townSeatById 找不到这张椅子，
-           townSeatApply 会直接 return。记下来，等 objects 到了再试一次。 */
-        if (!MY_SEAT || String(MY_SEAT.idx) !== _mySeat) {
-          PENDING_SEAT = _mySeat;
-        }
-      } else {
-        PENDING_SEAT = null;
-      }
-    } else if (MY_SEAT) {
-      PENDING_SEAT = null;
-      try { townSeatClear(null); } catch (eMT) { }
-    }
-  }
-  if (d.me && d.me.sleep != null) {
-    var _mySleep = String(d.me.sleep || '');
-    if (_mySleep && _mySleep !== '0') {
-      if (String(MY_SLEEP || '') !== _mySleep) {
-        try {
-          MY_SLEEP = _mySleep;
-          if (typeof d.me.syaw === 'number') { P.sleepYaw = +d.me.syaw; }
-          if (typeof UI !== 'undefined' && UI.sleepState) { UI.sleepState(true); }
-        } catch (eSl2) { }
-      }
-    } else if (MY_SLEEP) {
-      MY_SLEEP = '';
-      try { if (typeof UI !== 'undefined' && UI.sleepState) { UI.sleepState(false); } } catch (eSl3) { }
-    }
-  }
   if (d.me) {
     if (WSC.role) {
       /* ★★★ 第 249 轮修的真 bug（用户："杀怪看不到经验条动，并且显示0"）★★★
@@ -10184,7 +10147,12 @@ function frame(ts) {
       } else {
         _mg.position.y = _gy + Math.max(0, _fo.jyS) + _hop + _fly;
         if (_fo.hh) {
-          if (_fo.hh.sw && _fo.hh.sw.visible === false) { _fo.hh.sw.visible = true; }
+          /* ★ 2026-10-22（用户：别人武器又显示出来了）：远处队友这里原来【无条件】把武器显示回来，
+             盖掉了"镇上不举剑"的隐藏 → 小镇里又能看到别人的武器了。这里也要按 _foTown 判断。 */
+          if (_fo.hh.sw) {
+            var _visFo = !_foTown;
+            if (_fo.hh.sw.visible !== _visFo) { _fo.hh.sw.visible = _visFo; }
+          }
           if (_fo.hh.legL.children[0]) { _fo.hh.legL.children[0].rotation.x = 0; }
           if (_fo.hh.legR.children[0]) { _fo.hh.legR.children[0].rotation.x = 0; }
         }

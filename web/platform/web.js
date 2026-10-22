@@ -5871,28 +5871,6 @@ UI.setSafeMode = function (on) {
 
 /* ★ 2026-10-22：记住"我正坐在哪 / 睡在哪"，刷新页面后自动恢复 */
 /* 重连后恢复上次的坐/睡（服务端已经没这个状态了 → 重新发一次请求） */
-/* ★ 2026-10-22（用户：刷新后明明没睡却显示在睡觉）：
-   以前这里只要 localStorage 里有记录就【重放】一次 sit/house_sleep ——
-   可是起身时如果没走到那条清记录的路径（比如直接关页面/断线），
-   下次刷新就会把人重新塞回床上。
-   现在【不再重放】：坐/睡状态完全由服务端在登录时恢复（world.last_pose，90 秒内有效），
-   服务端记的是"离开那一刻的真实状态"，起身了就是没在睡。 */
-function tryRestorePose() {
-  try {
-    if (UI.savePose) { UI.savePose('seat', ''); UI.savePose('sleep', ''); }
-  } catch (e) { }
-}
-
-UI.savePose = function (kind, val) {
-  try {
-    if (val) { localStorage.setItem('pose_' + kind, String(val)); }
-    else { localStorage.removeItem('pose_' + kind); }
-  } catch (e) { }
-};
-UI.getPose = function (kind) {
-  try { return localStorage.getItem('pose_' + kind) || ''; } catch (e) { return ''; }
-};
-
 UI.townCanvas = function (w, h) {
   var c = document.createElement('canvas');
   c.width = w || 256; c.height = h || 128;
@@ -6841,7 +6819,6 @@ function sleepApply(d) {
   if (!d.self) { return; }
   if (d.on) {
     MY_SLEEP = d.id || '';
-    try { if (UI.savePose) { UI.savePose('sleep', MY_SLEEP); } } catch (ePose) { }
     if (typeof d.x === 'number') { P.x = +d.x; P.z = +d.z; }
     /* ★ 2026-10-22：床的朝向（服务端给的），躺姿用它，不要用玩家自己的朝向 */
     if (typeof d.yaw === 'number') { P.sleepYaw = +d.yaw; P.yaw = +d.yaw; }
@@ -6851,7 +6828,6 @@ function sleepApply(d) {
     try { if (UI.sleepState) { UI.sleepState(true); } } catch (e3) { }
   } else {
     MY_SLEEP = '';
-    try { if (UI.savePose) { UI.savePose('sleep', ''); } } catch (ePose2) { }
     if (typeof d.x === 'number') { P.x = +d.x; P.z = +d.z; }
     try { if (UI.sleepState) { UI.sleepState(false); } } catch (e4) { }
   }
@@ -10884,13 +10860,6 @@ function wsOnMessage(raw) {
     try {
       setTimeout(function () { try { wsSend('town_objects', {}); } catch (eTo) { } }, 900);
     } catch (eTp) { }
-    /* ★ 2026-10-22：刷新页面后，把上次的坐姿/睡姿恢复回来 */
-    try {
-      /* 重试几次：刚连上时服务端可能还没把 me 状态算好 */
-      [700, 1500, 2600].forEach(function (ms) {
-        setTimeout(function () { tryRestorePose(); }, ms);
-      });
-    } catch (eTp2) { }
     return; }
   if (t === 'world') {
     window._lastWorldT = Date.now();
@@ -11309,14 +11278,6 @@ function wsOnMessage(raw) {
         if (window.PlaceMode && window.PlaceMode.refreshAux) { window.PlaceMode.refreshAux(); }
       } catch (eAux2) { }
       if (typeof window.onObjects === 'function') { window.onObjects(window.MY_OBJECTS, d.town); }
-      /* ★ 2026-10-22：坐姿在 objects 之前就到的话，这里补应用一次 */
-      try {
-        var _ps = (typeof PENDING_SEAT !== 'undefined') ? PENDING_SEAT : null;
-        if (_ps && typeof townSeatApply === 'function') {
-          townSeatApply({ id: _ps });
-          if (typeof MY_SEAT !== 'undefined' && MY_SEAT) { PENDING_SEAT = null; }
-        }
-      } catch (ePS) { }
     } catch (eO) { }
     return;
   }

@@ -144,10 +144,11 @@ async def main_async(token):
             assert away == 'none', 'prompt still shown after walking away'
             assert back != 'none', 'prompt did not reappear when walking back'
 
-            # ② 刷新后坐姿要恢复
+            # ② 刷新【不再】恢复坐姿（用户要求删掉保存功能）
             await c.ev("SEAT_NEAR = townSeatNear(P.x,P.z); trySit(); return 1;")
             await asyncio.sleep(1.5)
             before = await c.ev('return MY_SEAT ? String(MY_SEAT.idx) : null;')
+            assert before, 'did not sit before reload'
             await c.ev('location.reload(); return 1;')
             for _ in range(80):
                 await asyncio.sleep(0.3)
@@ -156,17 +157,12 @@ async def main_async(token):
                         break
                 except Exception:
                     pass
-            for _ in range(30):
-                await asyncio.sleep(0.4)
-                after = await c.ev('return MY_SEAT ? String(MY_SEAT.idx) : null;')
-                if after:
-                    break
-            stillSeated = await c.ev('return MY_SEAT ? true : false;')
-            print('  seatid before reload: %r  after reload: %r' % (before, after))
-            assert before, 'did not sit before reload'
-            assert stillSeated, 'seat state lost after page reload'
+            await asyncio.sleep(3.0)
+            after = await c.ev('return MY_SEAT ? String(MY_SEAT.idx) : null;')
+            print('  seatid before reload: %r  after reload: %r (应为 None)' % (before, after))
+            assert after is None, 'pose persistence should have been removed, but got %r' % (after,)
             await c.ev('tryStand(); return 1;')
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.8)
 
             # ③ 坐着时点交互 = 起身
             seated = await c.ev(
