@@ -7266,6 +7266,35 @@ class World(object):
                     except Exception:
                         pass
             m.flyT = 0.0
+        # ★★★ round407（交接文档第四节 ④）：被挑飞的【玩家】落地 ★★★
+        #   ★ 和上面那段怪完全同一个规则：到点 → 砸 2 米范围伤害 + 播落地特效 ✓
+        #   ★ 落点用【受害者最后上报的坐标】✗ 服务端本来就没有更准的位置 ✓
+        #     （升空期间客户端锁了移动 → 落点 ≈ 起跳点 ✓）
+        #   ★ 伤害走 _aoe_players（p=None = 没有具体施法者 ✓）
+        #     src = 原攻击者 ✗ 所以仍然守 PvP 开关 / 队友 / 安全区 ✓
+        if getattr(self, '_flyq', None):
+            _now = now_s()
+            _keep = []
+            for (_due, _ac, _vc, _dmg) in self._flyq:
+                if _now < _due:
+                    _keep.append((_due, _ac, _vc, _dmg))
+                    continue
+                _victim = self.players.get(_vc)
+                _atk = self.players.get(_ac)
+                if _victim is None:
+                    continue                      # 半路下线了 ✓ 不砸了
+                _vx, _vz = float(_victim.x), float(_victim.z)
+                self._aoe_players(None, _vx, _vz, FLY_LAND_R, _dmg, src=_atk)
+                # ★ 落地特效（音效 + 尘土 —— 和怪的 land 同一个 kind ✓）
+                for _q in self.players.values():
+                    if (_q.x - _vx) ** 2 + (_q.z - _vz) ** 2 <= 1600:
+                        try:
+                            self._send_cid(_q.cid, P.pack('fx', kind='land',
+                                                          x=round(_vx, 2),
+                                                          z=round(_vz, 2)))
+                        except Exception:
+                            pass
+            self._flyq = _keep
 
     def _later_tick(self):
         """到点结算的延迟【伤害】和延迟【发射】（round382 / 391 ✓）
