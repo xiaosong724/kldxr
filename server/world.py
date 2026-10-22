@@ -39,6 +39,13 @@ import mq as mqmod      # ★ 第 149 轮：魔气规则中心 ✓
 import value as valuemod  # ★ round304b：价格/上限（和卖系统同一份 ✓）
 import weapons
 import worldgen
+import town
+import houses as housemod
+import shops as shopmod
+import tableorders as tblmod
+import towns as townreg
+import town_objects as objreg
+import work as workmod
 import terrain as termod   # ★ round306：僵尸也要认地形高度 ✓
 import protocol as P
 
@@ -47,7 +54,8 @@ TICK_DT = 1.0 / TICK_HZ
 VIEW = 100.0                     # round 244: user wants players visible at 100m (was 60)
 MAX_DRAIN = 4000                # 单个 tick 最多处理多少条意图（防止一条洪水把 tick 打饿）
 MAX_INTENT_PER_TICK = 90        # 单连接每 tick 的意图上限（30Hz 正常也就 30 条，3 倍冗余）
-SPAWN_SAFE = 20.0               # 出生点/安全区半径：这里不刷怪（方案 §2.1 末日堡垒）
+SPAWN_SAFE = 250.0              # 小镇安全区半径：这里不刷怪
+TOWN_R = 250.0                  # 镇内怪物一律回收
 
 
 REVIVE_INVULN = 1.5
@@ -199,7 +207,10 @@ class Player(object):
                  'moveT', 'moveBad', 'suspect',
                  # ★ round330（用户："看不到其他玩家的跳跃动作"）
                  #   jy = 离地高度（跳起来那一段 ✗ 0 = 站在地上 ✓）
-                 'jy')   # 第 173 轮：传送读条结束时刻（0 = 没在读条）      # ★ 第 168 轮（用户 #5）：离线宽限的时刻 ✓
+                 'jy',
+                 'seat', 'tpEnd', 'tpAt',
+                 'sleepHouse', 'sleepAcc',
+                 'job', 'jobShop', 'jobT', 'jobAcc', 'qiAcc', 'qiLast', 'qiSync')
 
     def __init__(self, cid, role):
         self.cid = cid
@@ -209,6 +220,18 @@ class Player(object):
         # session at 0 and a reload silently wipes the balance (verified: 159 -> 0).
         self.gold = int(role.get('gold') or 0)
         self.goldDirty = False
+        self.seat = -1
+        self.tpEnd = 0.0
+        self.tpAt = 0.0
+        self.sleepHouse = ''
+        self.sleepAcc = 0.0
+        self.job = ''
+        self.jobShop = ''
+        self.jobT = 0.0
+        self.jobAcc = 0.0
+        self.qiAcc = 0.0
+        self.qiLast = -1
+        self.qiSync = 0.0
         self.goldLog = []
         self.name = role.get('name') or '?'
         self.role_id = role.get('id')
@@ -218,6 +241,8 @@ class Player(object):
         self.suspect = 0        # 累计可疑次数（管理页看 ✓）
         self.x = float(role.get('x') or 0.0)
         self.z = float(role.get('z') or 0.0)
+        if abs(self.x) < 1.0 and abs(self.z) < 1.0:
+            self.x, self.z = town.SPAWN
         self.yaw = float(role.get('yaw') or 0.0)
         self.ct = 0.0
         # ★★ 第 62 轮修的真 bug：这里以前直接写 role.hp ✗
@@ -232,6 +257,8 @@ class Player(object):
             import mobs as _mobs0
             self.hp = int(_mobs0.level_hp(role.get('level') or 1))
         self.qi = int(role.get('qi') or 0)
+        if self.qi <= 0:
+            self.qi = int(role.get('qimax') or role.get('qiMax') or 100)
         self.atk = 0
         # ★★ 第 66 轮：挥砍序号 ★★
         #   客户端一直拿快照里的 'atk' 当"他挥了几刀"的计数器 ✓
@@ -287,6 +314,48 @@ class Player(object):
 class World(object):
     def __init__(self, cfg):
         self.cfg = cfg
+        self.houses = {}
+        try:
+            housemod.ensure_seed(cfg)
+            self.houses = housemod.load_all(cfg)
+        except Exception as _he:
+            print('[house] load failed: %r' % (_he,))
+        try:
+            with dbmod.db(cfg) as _hc:
+                _hc.execute('DELETE FROM terrain_fluid WHERE abs(x)<=250 AND abs(z)<=250')
+                _hc.execute('DELETE FROM terrain_damage WHERE abs(x)<=250 AND abs(z)<=250')
+                _hc.commit()
+        except Exception as _tc:
+            print('[town] clean terrain overrides failed: %r' % (_tc,))
+        self.jobRound = {}
+        self.towns = {}
+        self.town_perms = {}
+        self.town_catalog = []
+        self.town_seq = 0
+        self.dyn_shops = {}      # 已放置建筑生成的商店 {id: shop}
+        # ★ v4.5 点单：桌位由家具实时算出；订单/杯位落库，启动时读回
+        self.shop_tables = {}    # 'tbl<objid>' -> table dict
+        self.seat_table = {}     # 'obj<seatid>' -> 'tbl<objid>'
+        self.cups = {}           # 'tbl<objid>' -> [cup dict]
+        self.table_orders = {}   # order id -> order dict (未上菜/未收走的)
+        try:
+            townreg.purge_expired(cfg)
+            for _tr in townreg.list_towns(cfg):
+                self.towns[int(_tr['id'])] = _tr
+                self.town_seq = max(self.town_seq, int(_tr['id']))
+            self.town_perms = townreg.load_perms(cfg)
+            self.town_catalog = townreg.list_catalog(cfg)
+        except Exception as _tve:
+            print('[town] load failed: %r' % (_tve,))
+        try:
+            self._rebuild_dyn_shops()
+            print('[shop] 动态商店 %d 个 · 桌位 %d 张' % (len(self.dyn_shops), len(self.shop_tables)))
+        except Exception as _dse:
+            print('[shop] rebuild failed: %r' % (_dse,))
+        try:
+            self._load_table_state(cfg)
+        except Exception as _tse:
+            print('[order] load table state failed: %r' % (_tse,))
         self.loop = None
         self.running = False
 
@@ -579,6 +648,10 @@ class World(object):
             except Exception:
                 pass
             _np = Player(conn.cid, role)
+            try:
+                self._send_houses(_np)
+            except Exception as _hse:
+                print('[house] join send failed: %r' % (_hse,))
             # ★★★ round320 修的真 bug（自测挖不动方块才发现）★★★
             #   根因：服务端记着"这几格已经被挖过"（内存 + 库）✗
             #         但客户端【登录时从来没收到过】这份状态 ✓
@@ -864,6 +937,14 @@ class World(object):
             self._party_acc = 0.0
             for pid in list(self.parties.keys()):
                 self._party_push(pid)        # ★ 每秒补推一次（血条要动 ✓）
+        try:
+            self._house_expire_tick()
+            self._work_tick()
+            self._qi_regen_tick()
+            self._sleep_tick()
+            self._table_tick()
+        except Exception as _tk:
+            print('[tick] town systems failed: %r' % (_tk,))
         self._mob_tick(TICK_DT)
         self._later_tick()
         self._fly_tick()
@@ -1045,8 +1126,1477 @@ class World(object):
         st['hpm'] = self._hp_max(p)
         self._send_cid(p.cid, P.pack('talents', **st))
 
+    def _send_houses(self, p):
+        try:
+            lst = [housemod.public(h) for h in self.houses.values()]
+            self._send_cid(p.cid, P.pack('houses', list=lst))
+        except Exception as e:
+            print('[house] send failed: %r' % (e,))
+
+    def _broadcast_houses(self):
+        for q in list(self.players.values()):
+            self._send_houses(q)
+
+    def _house_log(self, h, buyer, seller, kind, days, amount, refund, premium):
+        try:
+            self.post_save(
+                'INSERT INTO house_logs(house_id,buyer_id,seller_id,kind,days,amount,refund,premium,ts)'
+                ' VALUES(?,?,?,?,?,?,?,?,?)',
+                (str(h.get('id')), int(buyer or 0), int(seller or 0), str(kind),
+                 int(days or 0), int(amount or 0), int(refund or 0), int(premium or 0),
+                 housemod.now_ms()))
+        except Exception as e:
+            print('[house] log failed: %r' % (e,))
+
+    def _save_house(self, h):
+        try:
+            self.post_save(
+                'UPDATE houses SET owner_id=?, owner_name=?, paid_day=?, started_at=?, expires_at=?, updated_at=? WHERE id=?',
+                (int(h.get('owner_id') or 0) or None, h.get('owner_name') or '',
+                 int(h.get('paid_day') or 0), int(h.get('started_at') or 0),
+                 int(h.get('expires_at') or 0), housemod.now_ms(), str(h.get('id'))))
+        except Exception as e:
+            print('[house] save failed: %r' % (e,))
+
+    def _pay_seller(self, seller_id, amount, why):
+        if int(amount or 0) <= 0:
+            return
+        for q in list(self.players.values()):
+            if int(getattr(q, 'role_id', 0) or 0) == int(seller_id):
+                self._gain_gold(q, int(amount), why)
+                return
+        try:
+            self.post_save('INSERT INTO pending_gold(role, amount, why, ts, done) VALUES(?,?,?,?,0)',
+                           (int(seller_id), int(amount), str(why), housemod.now_ms()))
+        except Exception as e:
+            print('[house] refund pending failed: %r' % (e,))
+
+    def _house_near_ok(self, p, hid):
+        # 动态房屋：建筑中心 6m 内即可
+        dh = self._dyn_house(str(hid))
+        if dh:
+            dx = p.x - float(dh['x']); dz = p.z - float(dh['z'])
+            return (dx * dx + dz * dz) <= 6.0 * 6.0
+        h = town.near_house(p.x, p.z)
+        return bool(h and str(h.get('id')) == str(hid))
+
+    def _house_send(self, p, hid=None):
+        h = None
+        if hid:
+            h = self.houses.get(str(hid))
+        else:
+            near = town.near_house(p.x, p.z)
+            if near:
+                h = self.houses.get(str(near.get('id')))
+        if not h:
+            self._send_cid(p.cid, P.pack('house', ok=0, msg='NO_HOUSE'))
+            return
+        self._send_cid(p.cid, P.pack('house', ok=1, id=h['id'], list=[housemod.public(h)]))
+
+    def _house_buy(self, p, d):
+        hid = str((d or {}).get('id') or '')
+        want = int((d or {}).get('days') or 1)
+        h = self.houses.get(hid)
+        if not h:
+            self._send_cid(p.cid, P.pack('house', ok=0, msg='NO_HOUSE'))
+            return
+        if not self._house_near_ok(p, hid):
+            self._send_cid(p.cid, P.pack('house', ok=0, msg='NOT_NEAR'))
+            return
+        owner = int(h.get('owner_id') or 0)
+        me = int(getattr(p, 'role_id', 0) or 0)
+        if owner != me:
+            for other in self.houses.values():
+                if int(other.get('owner_id') or 0) == me and str(other.get('id')) != hid:
+                    self._send_cid(p.cid, P.pack('house', ok=0, msg='ONE_HOUSE_ONLY'))
+                    return
+        okq, msg, cost, total, rem, premium, refund, paid_day = housemod.quote(h, me, want)
+        if not okq:
+            self._send_cid(p.cid, P.pack('house', ok=0, msg=msg))
+            return
+        if int(getattr(p, 'gold', 0) or 0) < cost:
+            self._send_cid(p.cid, P.pack('house', ok=0, msg='NOT_ENOUGH_GOLD'))
+            return
+        seller = owner if owner and owner != me else 0
+        if seller:
+            for q in list(self.players.values()):
+                if int(getattr(q, 'role_id', 0) or 0) == seller and getattr(q, 'sleepHouse', '') == hid:
+                    self._force_wake(q)
+        p.gold = int(getattr(p, 'gold', 0) or 0) - cost
+        p.goldDirty = True
+        now = housemod.now_ms()
+        if seller:
+            self._pay_seller(seller, refund, 'buyout')
+            self._house_log(h, me, seller, 'buyout', total, cost, refund, premium)
+        elif owner == me:
+            self._house_log(h, me, me, 'renew', total, cost, 0, 0)
+        else:
+            self._house_log(h, me, 0, 'purchase', total, cost, 0, 0)
+        if not int(h.get('started_at') or 0):
+            h['started_at'] = now
+        h['owner_id'] = me
+        h['owner_name'] = p.name
+        h['paid_day'] = int(paid_day or h.get('price_day') or 0)
+        h['expires_at'] = now + total * housemod.DAY_MS
+        h['updated_at'] = now
+        self._save_house(h)
+        self._send_cid(p.cid, P.pack('house', ok=1, id=hid, msg='OK', list=[housemod.public(h)]))
+        self._broadcast_houses()
+
+    def _house_leave(self, p, d):
+        hid = str((d or {}).get('id') or '')
+        h = self.houses.get(hid)
+        if not h:
+            self._send_cid(p.cid, P.pack('house', ok=0, msg='NO_HOUSE'))
+            return
+        me = int(getattr(p, 'role_id', 0) or 0)
+        if int(h.get('owner_id') or 0) != me:
+            self._send_cid(p.cid, P.pack('house', ok=0, msg='NOT_YOURS'))
+            return
+        self._force_wake(p)
+        rem = housemod.remaining_days(h.get('expires_at'))
+        refund = int(rem * int(h.get('paid_day') or 0) * 0.5)
+        h['owner_id'] = 0
+        h['owner_name'] = ''
+        h['paid_day'] = 0
+        h['started_at'] = 0
+        h['expires_at'] = 0
+        h['updated_at'] = housemod.now_ms()
+        self._save_house(h)
+        self._gain_gold(p, refund, 'leave')
+        self._house_log(h, 0, me, 'leave', rem, 0, refund, 0)
+        try:
+            import fridge as _frm
+            _frm.clear(self.cfg, hid)
+        except Exception:
+            pass
+        self._send_cid(p.cid, P.pack('house', ok=1, id=hid, msg='LEFT %d' % refund,
+                                     list=[housemod.public(h)]))
+        self._broadcast_houses()
+
+    def _house_sleep(self, p, d):
+        hid = str((d or {}).get('id') or '')
+        h = self._house_lookup(hid)
+        if not h:
+            self._send_cid(p.cid, P.pack('house', ok=0, msg='NO_HOUSE'))
+            return
+        owner = int(h.get('owner_id') or 0)
+        me = int(getattr(p, 'role_id', 0) or 0)
+        if owner and owner != me:
+            self._send_cid(p.cid, P.pack('house', ok=0, msg='NOT_YOURS'))
+            return
+        if h.get('placed'):
+            # 动态房屋：睡觉点 = 建筑中心附近，需在 6m 内
+            bx, bz = float(h['x']), float(h['z']) + 1.0
+            dx = p.x - float(h['x']); dz = p.z - float(h['z'])
+            if (dx * dx + dz * dz) > 6.0 * 6.0:
+                self._send_cid(p.cid, P.pack('house', ok=0, msg='NOT_NEAR_BED'))
+                return
+            p.sleepHouse = hid
+            p.sleepAcc = 0.0
+            p.x = bx
+            p.z = bz
+            p.seat = -1
+            self._send_cid(p.cid, P.pack('sleep_state', on=1, id=hid, x=bx, z=bz))
+            for q in list(self.players.values()):
+                if q is not p:
+                    try:
+                        self._send_cid(q.cid, P.pack('sleep_state', on=1, id=hid, x=bx, z=bz))
+                    except Exception:
+                        pass
+            return
+        # ---- 静态房屋（原逻辑）----
+        lay = next((x for x in town.HOUSES if str(x.get('id')) == hid), None)
+        if not lay:
+            self._send_cid(p.cid, P.pack('house', ok=0, msg='NO_LAYOUT'))
+            return
+        bx, bz = town.house_bed(lay)
+        if (p.x - bx) ** 2 + (p.z - bz) ** 2 > 2.6 * 2.6:
+            self._send_cid(p.cid, P.pack('house', ok=0, msg='NOT_NEAR_BED'))
+            return
+        p.sleepHouse = hid
+        p.sleepAcc = 0.0
+        p.x = bx
+        p.z = bz
+        p.seat = -1
+        self._send_cid(p.cid, P.pack('sleep_state', on=1, id=hid, x=bx, z=bz))
+        for q in list(self.players.values()):
+            if q is not p:
+                try:
+                    self._send_cid(q.cid, P.pack('sleep_state', on=1, id=hid, x=bx, z=bz))
+                except Exception:
+                    pass
+
+    def _force_wake(self, p):
+        if not getattr(p, 'sleepHouse', ''):
+            return
+        p.sleepHouse = ''
+        try:
+            self._send_cid(p.cid, P.pack('sleep_state', on=0, x=p.x, z=p.z))
+        except Exception:
+            pass
+
+    def _house_wake(self, p):
+        if not getattr(p, 'sleepHouse', ''):
+            return
+        hid = p.sleepHouse
+        lay = next((x for x in town.HOUSES if str(x.get('id')) == hid), None)
+        p.sleepHouse = ''
+        if lay:
+            p.x = float(lay['x0']) + 3.2
+            p.z = float(lay['z0']) + 2.2
+        self._send_cid(p.cid, P.pack('sleep_state', on=0, x=p.x, z=p.z))
+
+    def _qi_regen_tick(self):
+        # passive qi recovery: 1% max/s in town, 0.5/s outside
+        for p in list(self.players.values()):
+            if getattr(p, 'sleepHouse', ''):
+                continue
+            if int(getattr(p, 'hp', 0) or 0) <= 0:
+                continue
+            qm = max(1, self._qi_max(p))
+            if int(p.qi or 0) < qm:
+                _in_town = abs(p.x) <= 250.0 and abs(p.z) <= 250.0
+                rate = max(0.5, qm * 0.01) if _in_town else 0.5
+                p.qiAcc = float(getattr(p, 'qiAcc', 0.0) or 0.0) + rate * TICK_DT
+                if p.qiAcc >= 1.0:
+                    add = int(p.qiAcc)
+                    p.qiAcc -= add
+                    p.qi = min(qm, int(p.qi or 0) + add)
+            else:
+                p.qiAcc = 0.0
+            p.qiSync = float(getattr(p, 'qiSync', 0.0) or 0.0) + TICK_DT
+            if int(p.qi) != int(getattr(p, 'qiLast', -1)) or p.qiSync >= 1.0:
+                p.qiLast = int(p.qi)
+                p.qiSync = 0.0
+                try:
+                    self._send_cid(p.cid, P.pack('qi', q=int(p.qi)))
+                except Exception:
+                    pass
+
+    def _sleep_tick(self):
+        for p in list(self.players.values()):
+            if not getattr(p, 'sleepHouse', ''):
+                continue
+            p.sleepAcc = float(getattr(p, 'sleepAcc', 0) or 0) + TICK_DT
+            if p.sleepAcc < 1.0:
+                continue
+            p.sleepAcc -= 1.0
+            hpm = self._hp_max(p)
+            p.hp = min(hpm, int(p.hp or 0) + max(1, int(round(hpm * 0.01))))
+            try:
+                qm = self._qi_max(p)
+                p.qi = min(qm, int(p.qi or 0) + max(1, int(round(qm * 0.01))))
+            except Exception:
+                pass
+
+    def _house_expire_tick(self):
+        now = housemod.now_ms()
+        changed = False
+        for h in list(self.houses.values()):
+            exp = int(h.get('expires_at') or 0)
+            if not exp or exp > now:
+                continue
+            old = int(h.get('owner_id') or 0)
+            h['owner_id'] = 0
+            h['owner_name'] = ''
+            h['paid_day'] = 0
+            h['started_at'] = 0
+            h['expires_at'] = 0
+            h['updated_at'] = now
+            self._save_house(h)
+            self._house_log(h, 0, old, 'expire', 0, 0, 0, 0)
+            try:
+                import fridge as _frm
+                _frm.clear(self.cfg, h.get('id'))
+            except Exception:
+                pass
+            for q in list(self.players.values()):
+                if int(getattr(q, 'role_id', 0) or 0) == old:
+                    if getattr(q, 'sleepHouse', '') == h.get('id'):
+                        self._force_wake(q)
+                    try:
+                        self._send_cid(q.cid, P.pack('notice', text='HOUSE_EXPIRED'))
+                    except Exception:
+                        pass
+            changed = True
+        if changed:
+            self._broadcast_houses()
+
+    def _shop_ok(self, p, sid):
+        s = None
+        if sid in getattr(self, 'dyn_shops', {}):
+            s = self.dyn_shops[sid]
+        if not s:
+            s = shopmod.shop_by_id(sid)
+        if not s:
+            return None
+        if not town.in_town(p.x, p.z):
+            return None
+        if (p.x - s['x']) ** 2 + (p.z - s['z']) ** 2 > 3.2 * 3.2:
+            return None
+        return s
+
+    def _shop_open(self, p, d):
+        sid = str((d or {}).get('id') or '')
+        s = self._shop_ok(p, sid)
+        if not s:
+            self._send_cid(p.cid, P.pack('shop', ok=0, msg='COME_CLOSER'))
+            return
+        self._send_cid(p.cid, P.pack('shop', ok=1, id=s['id'], name=s['name'],
+                                     gold=int(getattr(p, 'gold', 0) or 0), items=s['items']))
+
+    def _shop_buy(self, p, d):
+        sid = str((d or {}).get('id') or '')
+        key = str((d or {}).get('item') or '')
+        s = self._shop_ok(p, sid)
+        if not s:
+            self._send_cid(p.cid, P.pack('shop', ok=0, msg='COME_CLOSER'))
+            return
+        item = next((x for x in s['items'] if x.get('key') == key), None)
+        if not item:
+            self._send_cid(p.cid, P.pack('shop', ok=0, msg='NO_ITEM'))
+            return
+        price = int(item.get('price') or 0)
+        if int(getattr(p, 'gold', 0) or 0) < price:
+            self._send_cid(p.cid, P.pack('shop', ok=0, msg='NOT_ENOUGH_GOLD'))
+            return
+        p.gold = int(getattr(p, 'gold', 0) or 0) - price
+        p.goldDirty = True
+        use = {}
+        for k in ('hp_pct', 'qi_pct', 'exp'):
+            if item.get(k):
+                use[k] = item[k]
+        it = {'name': item.get('name') or key, 'kind': 'food', 'tier': 0,
+              'icon': item.get('icon') or 'FOOD', 'model': item.get('model') or 'cup',
+              'desc': item.get('desc') or '', 'use': use}
+        try:
+            self.post_save(
+                'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
+                ' VALUES(?,0,-1,1,?,?)',
+                (int(p.role_id), __import__('json').dumps(it, ensure_ascii=False),
+                 housemod.now_ms()))
+        except Exception as e:
+            print('[shop] add item failed: %r' % (e,))
+        self._send_cid(p.cid, P.pack('shop', ok=1, id=sid, name=s['name'],
+                                     gold=int(p.gold), items=s['items'],
+                                     bagsig=housemod.now_ms(), msg='BOUGHT'))
+
+    def _use_food(self, p, d):
+        d = d or {}
+        hpm = self._hp_max(p)
+        qm = self._qi_max(p)
+        hp = int(round(hpm * float(d.get('hp_pct') or 0)))
+        qi = int(round(qm * float(d.get('qi_pct') or 0)))
+        if hp:
+            p.hp = min(hpm, int(p.hp or 0) + hp)
+        if qi:
+            p.qi = min(qm, int(p.qi or 0) + qi)
+        exp = int(d.get('exp') or 0)
+        if exp:
+            self._gain_exp(p, exp)
+        self._send_cid(p.cid, P.pack('eatfx', name=d.get('name') or 'FOOD',
+                                     model=d.get('model') or 'cup', hp=hp, qi=qi))
+
+    def _fridge_house(self, p, hid):
+        h = self._house_lookup(str(hid))
+        if not h:
+            return None, 'NO_HOUSE'
+        owner = int(h.get('owner_id') or 0)
+        me = int(getattr(p, 'role_id', 0) or 0)
+        # 动态房屋（无主/公共，owner=0）允许任何人使用
+        if owner and owner != me:
+            return None, 'OWNER_ONLY'
+        if not self._house_near_ok(p, hid):
+            return None, 'NOT_NEAR'
+        return h, ''
+
+    def _fridge_open(self, p, d):
+        hid = str((d or {}).get('id') or '')
+        h, msg = self._fridge_house(p, hid)
+        if not h:
+            self._send_cid(p.cid, P.pack('fridge', ok=0, msg=msg, house=hid))
+            return
+        try:
+            import fridge as frimod
+            data = frimod.public(self.cfg, hid, h.get('owner_id'), getattr(p, 'role_id', 0))
+            data['ok'] = 1
+            self._send_cid(p.cid, P.pack('fridge', **data))
+        except Exception as e:
+            print('[fridge] send failed: %r' % (e,))
+
+    def _work_slot_free(self, sid, slot):
+        for q in list(self.players.values()):
+            if getattr(q, 'jobShop', '') == sid and getattr(q, 'job', '') == slot:
+                return False
+        return True
+
+    def _work_start(self, p, d):
+        sid = str((d or {}).get('id') or '')
+        slot = str((d or {}).get('slot') or '')
+        s = shopmod.shop_by_id(sid)
+        if not s:
+            self._send_cid(p.cid, P.pack('work', ok=0, msg='NO_SHOP'))
+            return
+        if (p.x - s['x']) ** 2 + (p.z - s['z']) ** 2 > 4.6 * 4.6:
+            self._send_cid(p.cid, P.pack('work', ok=0, msg='COME_CLOSER'))
+            return
+        if getattr(p, 'job', ''):
+            self._send_cid(p.cid, P.pack('work', ok=0, msg='ALREADY_WORKING'))
+            return
+        if not self._work_slot_free(sid, slot):
+            self._send_cid(p.cid, P.pack('work', ok=0, msg='SLOT_TAKEN'))
+            return
+        try:
+            _ok, _msg = workmod.start(self.cfg, p.role_id, sid, slot)
+            if not _ok:
+                self._send_cid(p.cid, P.pack('work', ok=0, msg='SLOT_TAKEN'))
+                return
+        except Exception as _we:
+            print('[work] start db failed: %r' % (_we,))
+        p.job = slot
+        p.jobShop = sid
+        p.jobT = 0.0
+        p.jobAcc = 0.0
+        p.seat = -1
+        self._send_cid(p.cid, P.pack('work', ok=1, id=sid, slot=slot, on=1, msg='WORK_STARTED'))
+        self._send_cid(p.cid, P.pack('notice', text='WORK_STARTED'))
+
+    def _work_stop(self, p):
+        if not getattr(p, 'job', ''):
+            return
+        self._work_settle(p)
+        try:
+            workmod.stop(self.cfg, p.role_id)
+        except Exception as _we2:
+            print('[work] stop db failed: %r' % (_we2,))
+        p.job = ''
+        p.jobShop = ''
+        p.jobT = 0.0
+        p.jobAcc = 0.0
+        self._send_cid(p.cid, P.pack('work', ok=1, on=0, msg='WORK_STOPPED'))
+
+    def _job_step(self, p, d):
+        if not getattr(p, 'job', ''):
+            return
+        try:
+            p.jobT = float((d or {}).get('t') or 0)
+        except Exception:
+            p.jobT = 0.0
+        for q in list(self.players.values()):
+            if q is p:
+                continue
+            try:
+                self._send_cid(q.cid, P.pack('jobstep', cid=p.cid, job=p.job, t=p.jobT,
+                                             x=round(p.x, 2), z=round(p.z, 2)))
+            except Exception:
+                pass
+
+    def _work_settle(self, p):
+        if not getattr(p, 'job', ''):
+            return 0
+        hours = float(getattr(p, 'jobAcc', 0.0) or 0.0)
+        n_h = int(hours)
+        if n_h <= 0:
+            return 0
+        p.jobAcc = hours - n_h
+        lvl = int((p.role or {}).get('level') or 1)
+        exp = workmod.hourly_exp(lvl) * n_h
+        pay = workmod.hourly_pay() * n_h
+        self._gain_exp(p, int(exp))
+        self._gain_gold(p, int(pay), 'work')
+        try:
+            workmod.settle(self.cfg, p.role_id, p.jobShop, p.job, lvl, n_h, pay, exp)
+        except Exception as _se:
+            print('[work] settle db failed: %r' % (_se,))
+        self._send_cid(p.cid, P.pack('worksettle', hours=n_h, exp=int(exp), pay=int(pay)))
+
+    def _work_tick(self):
+        for p in list(self.players.values()):
+            if not getattr(p, 'job', ''):
+                continue
+            p.jobAcc = float(getattr(p, 'jobAcc', 0.0) or 0.0) + TICK_DT
+            if p.jobAcc >= 3600.0:
+                self._work_settle(p)
+
+    def _job_done(self, p, d):
+        if not getattr(p, 'job', ''):
+            return
+        n = int(self.jobRound.get(p.cid, 0)) + 1
+        self.jobRound[p.cid] = n
+        self._send_cid(p.cid, P.pack('jobround', n=n))
+
+    def _order_shop_near(self, p):
+        # 已放置的店：按建筑中心 + 半对角线判定（坐店里/外摆区都能点到）
+        for s in list(self.dyn_shops.values()):
+            if not s.get('served'):
+                continue
+            r = float(s.get('br') or 4.6)
+            if (p.x - float(s.get('bx') or s['x'])) ** 2 + \
+               (p.z - float(s.get('bz') or s['z'])) ** 2 <= r * r:
+                return s
+        for s in shopmod.shop_list():
+            if not s.get('served'):
+                continue
+            if (p.x - s['x']) ** 2 + (p.z - s['z']) ** 2 <= 4.6 * 4.6:
+                return s
+        return None
+
+    def _order_ready(self, p):
+        """点单前置：找到店 + 已坐下 + 椅子属于店里的桌子。返回 (shop, table, msg)"""
+        s = self._order_shop_near(p)
+        if not s:
+            return None, None, 'NOT_IN_SHOP'
+        if str(getattr(p, 'seat', -1)) in ('-1', '', 'None'):
+            return None, None, 'SIT_FIRST'
+        table = self._table_of_seat(getattr(p, 'seat', -1))
+        if not table:
+            return s, None, 'NO_TABLE'
+        # 桌子必须在这家店的范围里（别在别人家里坐下就能点隔壁店的单）
+        ax = float(s.get('bx') or s['x'])
+        az = float(s.get('bz') or s['z'])
+        r = float(s.get('br') or 4.6) + 3.0
+        if (table['x'] - ax) ** 2 + (table['z'] - az) ** 2 > r * r:
+            return s, None, 'NO_TABLE'
+        return s, table, ''
+
+    def _order_open(self, p, d):
+        s, table, msg = self._order_ready(p)
+        if msg:
+            self._send_cid(p.cid, P.pack('order', ok=0, msg=msg))
+            return
+        self._send_cid(p.cid, P.pack('order', ok=1, id=s['id'], name=s['name'],
+                                     items=s['items'], gold=int(getattr(p, 'gold', 0) or 0),
+                                     table=self._table_public(table)))
+
+    def _order_buy(self, p, d):
+        s, table, msg = self._order_ready(p)
+        if msg:
+            self._send_cid(p.cid, P.pack('order', ok=0, msg=msg))
+            return
+        key = str((d or {}).get('item') or '')
+        item = next((x for x in s['items'] if x.get('key') == key), None)
+        if not item:
+            self._send_cid(p.cid, P.pack('order', ok=0, msg='NO_ITEM'))
+            return
+        price = int(item.get('price') or 0)
+        if int(getattr(p, 'gold', 0) or 0) < price:
+            self._send_cid(p.cid, P.pack('order', ok=0, msg='NOT_ENOUGH_GOLD'))
+            return
+
+        # ★ 老静态店（椅子不在家具桌上）：保持原来的"直接进背包"
+        if table is None:
+            self._order_bag_legacy(p, s, item, key)
+            return
+
+        slot = self._table_free_slot(table)
+        if slot < 0:
+            self._send_cid(p.cid, P.pack('order', ok=0, msg='TABLE_FULL'))
+            return
+
+        p.gold = int(getattr(p, 'gold', 0) or 0) - price
+        p.goldDirty = True
+        now = dbmod.now_ms()
+        oid = tblmod.new_id('ord')
+        due = now + 2500
+        use = {}
+        for k in ('hp_pct', 'qi_pct', 'exp'):
+            if item.get(k):
+                use[k] = item[k]
+        order = {'id': oid, 'town': int(table.get('town') or 0), 'shop': str(s['id']),
+                 'table': table['id'], 'player': int(p.role_id), 'state': 'cooking',
+                 'created_at': now, 'due_at': due, 'served_at': 0,
+                 'items': {'key': key, 'name': item.get('name') or key,
+                           'price': price, 'slot': slot, 'use': use,
+                           'model': item.get('model') or 'cup'}}
+        self.table_orders[oid] = order
+        cup = self._table_place_cup(table, slot, item, oid, 'cooking', now)
+        order['cup'] = cup['id']
+        self.post_save(
+            'INSERT INTO table_orders(id,town_id,shop_id,table_obj,player_id,items_json,'
+            'state,created_at,due_at,served_at) VALUES(?,?,?,?,?,?,?,?,?,0)',
+            (oid, order['town'], order['shop'], int(table['obj']), int(p.role_id),
+             json.dumps(order['items'], ensure_ascii=False), 'cooking', now, due))
+        self._send_cid(p.cid, P.pack('order', ok=1, id=s['id'], name=s['name'],
+                                     items=s['items'], gold=int(p.gold),
+                                     order=oid, msg='ORDER_OK',
+                                     table=self._table_public(table)))
+        self._send_cid(p.cid, P.pack('notice', text='点好了，传菜员马上送到桌上'))
+
+    def _order_bag_legacy(self, p, s, item, key):
+        """没有家具桌位的老店：付款后直接进背包（旧行为，保持兼容）"""
+        price = int(item.get('price') or 0)
+        p.gold = int(getattr(p, 'gold', 0) or 0) - price
+        p.goldDirty = True
+        use = {}
+        for k in ('hp_pct', 'qi_pct'):
+            if item.get(k):
+                use[k] = item[k]
+        it = {'name': item.get('name') or key, 'kind': 'food', 'tier': 0,
+              'icon': item.get('icon') or 'FOOD', 'model': item.get('model') or 'plate',
+              'desc': item.get('desc') or '', 'use': use}
+        try:
+            self.post_save(
+                'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
+                ' VALUES(?,0,-1,1,?,?)',
+                (int(p.role_id), json.dumps(it, ensure_ascii=False), dbmod.now_ms()))
+        except Exception as e:
+            print('[order] add item failed: %r' % (e,))
+        self._send_cid(p.cid, P.pack('order', ok=1, id=s['id'], name=s['name'],
+                                     items=s['items'], msg='SERVED'))
+        self._send_cid(p.cid, P.pack('notice', text='SERVED'))
+
+    # ---------- 椅子 / 传送 ----------
+    SEAT_CATALOG = ('chair_wood', 'hall_chair', 'desk_chair',
+                    'prop_bench', 'sofa_modern_2')
+
+    def _seat_lookup(self, sid):
+        """座位解析：静态座位用数字 id；已放置的家具椅子用 'obj<id>'。"""
+        seat = town.seat_by_id(sid)
+        if seat:
+            return seat
+        if not str(sid).startswith('obj'):
+            return None
+        try:
+            import town_objects as objreg2
+            oid = int(str(sid)[3:])
+        except Exception:
+            return None
+        for tid in list(self.towns.keys()):
+            try:
+                rows = objreg2.nearby(self.cfg, tid, 0.0, 0.0, 400.0)
+            except Exception:
+                continue
+            for o in rows:
+                if int(o['id']) != oid:
+                    continue
+                cat = str(o.get('catalog_id') or '')
+                if cat not in self.SEAT_CATALOG:
+                    return None
+                return {
+                    'id': sid, 'idx': sid,
+                    'x': float(o['x']), 'z': float(o['z']),
+                    'y': 0.30,
+                    'yaw': float(o.get('rot') or 0) + 3.1415926,
+                    'k': cat, 'placed': True,
+                }
+        return None
+
+    def _seat_sit(self, p, d):
+        sid = str((d or {}).get('id') or '')
+        seat = self._seat_lookup(sid)
+        if not seat:
+            self._send_cid(p.cid, P.pack('seaterr', msg='NO_SEAT'))
+            return
+        sx, sz = float(seat['x']), float(seat['z'])
+        if (p.x - sx) ** 2 + (p.z - sz) ** 2 > town.SEAT_USE_R * town.SEAT_USE_R:
+            self._send_cid(p.cid, P.pack('seaterr', msg='TOO_FAR'))
+            return
+        for q in list(self.players.values()):
+            if q is p:
+                continue
+            if str(getattr(q, 'seat', '')) == str(seat['idx']):
+                self._send_cid(p.cid, P.pack('seaterr', msg='SEAT_TAKEN'))
+                return
+        p.seat = seat['idx']
+        p.x = sx
+        p.z = sz
+        p.yaw = float(seat.get('yaw') or seat.get('ry') or 0)
+        p.jy = 0.0
+        self._send_cid(p.cid, P.pack('seated', id=seat['idx'], x=sx, z=sz,
+                                     yaw=p.yaw, y=float(seat.get('y') or 0.30)))
+
+    def _seat_stand(self, p):
+        sid = getattr(p, 'seat', -1)
+        if sid in (-1, '', None):
+            return
+        p.seat = -1
+        seat = self._seat_lookup(str(sid))
+        if seat:
+            p.x = float(seat['x']) + 0.85
+            p.z = float(seat['z']) + 0.85
+        self._send_cid(p.cid, P.pack('stood', x=p.x, z=p.z, yaw=p.yaw))
+
+    def _do_teleport(self, p, d):
+        tid = str((d or {}).get('id') or '')
+        tp = town.teleport_of_id(tid)
+        if not tp:
+            self._send_cid(p.cid, P.pack('notice', text='NO_TELEPORT'))
+            return
+        now = now_s()
+        if now < float(getattr(p, 'tpAt', 0.0) or 0.0):
+            self._send_cid(p.cid, P.pack('notice', text='TELEPORT_COOLDOWN'))
+            return
+        if not town.in_town(p.x, p.z):
+            self._send_cid(p.cid, P.pack('notice', text='TELEPORT_IN_TOWN_ONLY'))
+            return
+        p.x = float(tp['x'])
+        p.z = float(tp['z']) + 3.0
+        p.seat = -1
+        p.tpAt = now + 3.0
+        self._send_cid(p.cid, P.pack('teleported', id=tid, x=p.x, z=p.z, name=tp.get('name') or ''))
+
+
+
+    # ---------- v4.4 动态房屋（已放置的建筑可睡/可用冰箱） ----------
+    HOUSE_CATALOG = ('house_flat_v1', 'shop_apartment_v1', 'shop_inn_v1',
+                     'house_villa_v1')
+
+    def _dyn_house(self, hid):
+        """hid = 'obj<对象id>' → 返回动态房屋条目（不缓存，实时查）。"""
+        if not str(hid).startswith('obj'):
+            return None
+        try:
+            import town_objects as objreg3
+            oid = int(str(hid)[3:])
+        except Exception:
+            return None
+        for tid in list(self.towns.keys()):
+            try:
+                rows = objreg3.nearby(self.cfg, tid, 0.0, 0.0, 400.0)
+            except Exception:
+                continue
+            for o in rows:
+                if int(o['id']) != oid:
+                    continue
+                cat = str(o.get('catalog_id') or '')
+                if cat not in self.HOUSE_CATALOG:
+                    return None
+                x, z = float(o['x']), float(o['z'])
+                return {
+                    'id': hid, 'owner_id': int(o.get('owner_id') or 0),
+                    'x': x, 'z': z,
+                    'door_x': x, 'door_z': z + 3.0,
+                    'tier': 'dynamic', 'placed': True,
+                }
+        return None
+
+    def _house_lookup(self, hid):
+        """静态房屋优先，动态房屋兜底。"""
+        h = self.houses.get(str(hid))
+        if h:
+            return h
+        return self._dyn_house(hid)
+
+    # ---------- v4.4 动态商店 ----------
+    def _shop_door_offset(self, w, d, rot):
+        """门口交互点（相对建筑中心）。所有店铺模型的门都朝 +Z（south）。"""
+        import math
+        lx, lz = 0.0, float(d) / 2.0 + 1.0
+        ca, sa = math.cos(float(rot or 0.0)), math.sin(float(rot or 0.0))
+        return (lx * ca + lz * sa, -lx * sa + lz * ca)
+
+    def _rebuild_dyn_shops(self):
+        """按已放置的建筑生成商店数据（交互点 = 门口，不是中心）；顺带算桌位。"""
+        out = {}
+        tables = {}
+        seat_table = {}
+        if not self.towns:
+            self.shop_tables, self.seat_table = tables, seat_table
+            return
+        try:
+            import town_objects as objreg2
+            cats = {str(c['id']): c for c in (self.town_catalog or [])}
+            for tid, trow in self.towns.items():
+                if str(trow.get('status')) != 'active':
+                    continue
+                rows = objreg2.nearby(self.cfg, tid, 0.0, 0.0, 400.0)
+                for o in rows:
+                    if int(o.get('parent_id') or 0) != 0:
+                        continue
+                    cat = str(o.get('catalog_id') or '')
+                    kind = self._shop_kind_of(cat)
+                    if not kind:
+                        continue
+                    sid = 'obj%d' % int(o['id'])
+                    items = self._shop_items_of(kind)
+                    if not items:
+                        continue
+                    crow = cats.get(cat) or {}
+                    w = float(crow.get('size_w') or 0.0)
+                    dd = float(crow.get('size_d') or 0.0)
+                    ox, oz = self._shop_door_offset(w, dd, o.get('rot') or 0.0)
+                    served = 1 if kind in ('cafe', 'dessert', 'ramen', 'izakaya', 'tea') else 0
+                    out[sid] = {
+                        'id': sid, 'name': self._shop_name_of(cat),
+                        'keeper': '店员', 'served': served,
+                        'x': float(o['x']) + ox, 'z': float(o['z']) + oz,
+                        'pass_at': [float(o['x']) + ox, float(o['z']) + oz],
+                        'items': items, 'object_id': int(o['id']),
+                        # 点单判定用建筑中心和"半对角线 + 1.5m"，坐店里都能点到
+                        'bx': float(o['x']), 'bz': float(o['z']),
+                        'br': math.hypot(w, dd) / 2.0 + 1.5,
+                    }
+                # ---- 桌位：桌子 + 附近的椅子（家具对象）----
+                seats = []
+                tbl_rows = []
+                for o in rows:
+                    if str(o.get('state') or 'active') != 'active':
+                        continue
+                    cat = str(o.get('catalog_id') or '')
+                    if cat in tblmod.SEAT_CATALOG:
+                        seats.append({'id': 'obj%d' % int(o['id']),
+                                      'x': float(o['x']), 'z': float(o['z']),
+                                      'rot': float(o.get('rot') or 0.0)})
+                    elif cat in tblmod.TABLE_CATALOG:
+                        tbl_rows.append(o)
+                for o in tbl_rows:
+                    chairs = tblmod.link_chairs(
+                        {'x': float(o['x']), 'z': float(o['z'])}, seats)
+                    if not chairs:
+                        continue
+                    key = 'tbl%d' % int(o['id'])
+                    tables[key] = {
+                        'id': key, 'obj': int(o['id']), 'town': int(tid),
+                        'x': float(o['x']), 'z': float(o['z']),
+                        'rot': float(o.get('rot') or 0.0),
+                        'parent': int(o.get('parent_id') or 0),
+                        'chairs': chairs, 'max': len(chairs),
+                    }
+                    for ch in chairs:
+                        seat_table[ch['id']] = key
+        except Exception as _e:
+            print('[shop] rebuild failed: %r' % (_e,))
+        self.dyn_shops = out
+        self.shop_tables = tables
+        self.seat_table = seat_table
+        # 桌子没了 → 杯子跟着收掉（内存；库里的下次启动也会被丢掉）
+        for k in list(self.cups.keys()):
+            if k not in tables:
+                self.cups.pop(k, None)
+
+    # ---------- v4.5 桌位 / 杯位 / 传菜 ----------
+
+    def _load_table_state(self, cfg):
+        """启动时把没结完的订单和桌上的杯子读回内存（tick 线程只读内存）"""
+        try:
+            with dbmod.db(cfg) as c:
+                orows = c.execute(
+                    "SELECT * FROM table_orders WHERE state IN ('cooking','carrying')").fetchall()
+                crows = c.execute(
+                    "SELECT * FROM table_cups WHERE state IN ('cooking','carrying','served')").fetchall()
+        except Exception as e:
+            print('[order] read failed: %r' % (e,))
+            return
+        for r in orows:
+            oid = str(r['id'])
+            self.table_orders[oid] = {
+                'id': oid, 'town': int(r['town_id'] or 0), 'shop': str(r['shop_id'] or ''),
+                'table': 'tbl%d' % int(r['table_obj'] or 0),
+                'player': int(r['player_id'] or 0), 'state': str(r['state'] or 'cooking'),
+                'created_at': int(r['created_at'] or 0), 'due_at': int(r['due_at'] or 0),
+                'served_at': int(r['served_at'] or 0),
+            }
+            try:
+                self.table_orders[oid]['items'] = json.loads(r['items_json'] or '{}')
+            except Exception:
+                self.table_orders[oid]['items'] = {}
+        for r in crows:
+            key = 'tbl%d' % int(r['table_obj'] or 0)
+            if key not in self.shop_tables:
+                continue
+            self.cups.setdefault(key, []).append({
+                'id': str(r['id']), 'table': key, 'order': str(r['order_id'] or ''),
+                'slot': int(r['slot'] or 0), 'item_key': str(r['item_key'] or ''),
+                'item_name': str(r['item_name'] or ''), 'model': str(r['model'] or 'cup'),
+                'state': str(r['state'] or 'served'), 'created_at': int(r['created_at'] or 0),
+            })
+        if self.table_orders or self.cups:
+            print('[order] 读回 %d 单 / %d 杯' % (len(self.table_orders),
+                                                sum(len(v) for v in self.cups.values())))
+
+    def _table_of_seat(self, sid):
+        """玩家坐的椅子属于哪张桌子 → table dict / None"""
+        key = self.seat_table.get(str(sid))
+        if not key:
+            return None
+        return self.shop_tables.get(key)
+
+    def _table_cups(self, table_key):
+        return self.cups.get(str(table_key)) or []
+
+    def _table_free_slot(self, table):
+        used = set(int(c.get('slot') or 0) for c in self._table_cups(table['id']))
+        for i in range(int(table.get('max') or 0)):
+            if i not in used:
+                return i
+        return -1
+
+    def _table_public(self, table):
+        return tblmod.table_public(table, self._table_cups(table['id']))
+
+    def _send_table(self, p, table):
+        self._send_cid(p.cid, P.pack('tablecups', table=self._table_public(table)))
+
+    def _table_tick(self):
+        """到点的订单上菜；桌面状态广播给附近的人"""
+        now = dbmod.now_ms()
+        done = []
+        for oid, o in list(self.table_orders.items()):
+            if o.get('state') != 'cooking' or int(o.get('due_at') or 0) > now:
+                continue
+            o['state'] = 'served'
+            o['served_at'] = now
+            table_key = str(o.get('table') or '')
+            table = self.shop_tables.get(table_key)
+            for cup in self._table_cups(table_key):
+                if cup.get('order') == oid:
+                    cup['state'] = 'served'
+            self.post_save("UPDATE table_orders SET state='served', served_at=? WHERE id=?",
+                           (now, oid))
+            self.post_save("UPDATE table_cups SET state='served' WHERE order_id=?", (oid,))
+            done.append((o, table))
+        for o, table in done:
+            if not table:
+                continue
+            pub = self._table_public(table)
+            for q in list(self.players.values()):
+                if (q.x - table['x']) ** 2 + (q.z - table['z']) ** 2 <= 12.0 * 12.0:
+                    self._send_cid(q.cid, P.pack('tablecups', table=pub))
+            # 点单人不在附近也要知道上菜了
+            for q in list(self.players.values()):
+                if int(getattr(q, 'role_id', 0) or 0) == int(o.get('player') or 0):
+                    self._send_cid(q.cid, P.pack('notice', text='你的餐好了，已经送到桌上'))
+                    break
+
+    def _table_place_cup(self, table, slot, item, order_id, state, now):
+        cup = {
+            'id': tblmod.new_id('cup'), 'table': table['id'], 'order': str(order_id),
+            'slot': int(slot), 'item_key': str(item.get('key') or ''),
+            'item_name': str(item.get('name') or ''), 'model': str(item.get('model') or 'cup'),
+            'state': str(state), 'created_at': int(now),
+        }
+        self.cups.setdefault(table['id'], []).append(cup)
+        self.post_save(
+            'INSERT INTO table_cups(id,town_id,table_obj,order_id,slot,item_key,item_name,'
+            'model,state,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+            (cup['id'], int(table.get('town') or 0), int(table['obj']), str(order_id),
+             int(slot), cup['item_key'], cup['item_name'], cup['model'], cup['state'], int(now)))
+        return cup
+
+    def _cup_take(self, p, d):
+        """喝掉 / 收走桌上的杯子：释放杯位，订单结单"""
+        d = d or {}
+        table = self.shop_tables.get(str(d.get('table') or ''))
+        if not table:
+            table = self._table_of_seat(getattr(p, 'seat', -1))
+        if not table:
+            self._send_cid(p.cid, P.pack('notice', text='NO_TABLE'))
+            return
+        if (p.x - table['x']) ** 2 + (p.z - table['z']) ** 2 > 3.5 * 3.5:
+            self._send_cid(p.cid, P.pack('notice', text='离桌子太远'))
+            return
+        try:
+            slot = int(d.get('slot'))
+        except Exception:
+            slot = -1
+        cup = None
+        for c in self._table_cups(table['id']):
+            if int(c.get('slot') or 0) == slot and c.get('state') not in ('drunk', 'gone'):
+                cup = c
+                break
+        if not cup:
+            self._send_cid(p.cid, P.pack('notice', text='这个位置没有杯子'))
+            return
+        order = self.table_orders.get(str(cup.get('order')))
+        drink = bool(int(d.get('drink') or 0))
+        if drink and order:
+            it = dict(order.get('items') or {})
+            use = dict(it.get('use') or {})
+            use['name'] = it.get('name') or ''
+            use['model'] = it.get('model') or 'cup'
+            if use.get('hp_pct') or use.get('qi_pct') or use.get('exp'):
+                self._use_food(p, use)
+        cup['state'] = 'drunk' if drink else 'gone'
+        self.cups[table['id']] = [c for c in self._table_cups(table['id']) if c is not cup]
+        self.post_save('DELETE FROM table_cups WHERE id=?', (cup['id'],))
+        if order:
+            order['state'] = 'done'
+            self.table_orders.pop(order['id'], None)
+            self.post_save("UPDATE table_orders SET state='done' WHERE id=?", (order['id'],))
+        pub = self._table_public(table)
+        for q in list(self.players.values()):
+            if (q.x - table['x']) ** 2 + (q.z - table['z']) ** 2 <= 12.0 * 12.0:
+                self._send_cid(q.cid, P.pack('tablecups', table=pub))
+
+
+    def _shop_kind_of(self, catalog_id):
+        m = {
+            'shop_cafe_v1': 'cafe', 'shop_cafe_v2': 'cafe', 'shop_mart_v1': 'mart',
+            'shop_ramen_v1': 'ramen', 'shop_bakery_v1': 'bakery',
+            'shop_general_v1': 'general', 'shop_flower_v1': 'flower',
+            'shop_bookstore_v1': 'book', 'shop_izakaya_v1': 'izakaya',
+            'shop_clinic_v1': 'clinic', 'shop_tea_v1': 'tea',
+            'shop_dessert_v1': 'dessert', 'shop_post_v1': 'post',
+            'shop_smith_v1': 'smith', 'shop_warehouse_v1': None,
+            'shop_bathhouse_v1': 'bath', 'shop_koban_v1': None,
+        }
+        return m.get(catalog_id)
+
+    def _shop_name_of(self, catalog_id):
+        n = {
+            'shop_cafe_v1': '咖啡店', 'shop_cafe_v2': '咖啡店', 'shop_mart_v1': '超市',
+            'shop_ramen_v1': '面馆', 'shop_bakery_v1': '面包店',
+            'shop_general_v1': '杂货铺', 'shop_flower_v1': '花店',
+            'shop_bookstore_v1': '书店', 'shop_izakaya_v1': '居酒屋',
+            'shop_clinic_v1': '药铺', 'shop_tea_v1': '茶馆',
+            'shop_dessert_v1': '甜品店', 'shop_post_v1': '邮局',
+            'shop_smith_v1': '铁匠铺', 'shop_bathhouse_v1': '澡堂',
+        }
+        return n.get(catalog_id, '商店')
+
+    def _shop_items_of(self, kind):
+        """按店铺类型给商品。复用静态店里的 list 作为模板。"""
+        try:
+            for s2 in shopmod.shop_list():
+                if s2.get('id') == kind and s2.get('items'):
+                    return s2['items']
+        except Exception:
+            pass
+        # 新店种：没有静态模板，这里给默认商品
+        extra = {
+            'book': [
+                {'key': 'book_qi', 'name': '练气心法', 'price': 40, 'qi_pct': 0.4,
+                 'icon': '📖', 'model': 'scroll', 'desc': '灵气 +40%'},
+                {'key': 'book_hp', 'name': '强身拳谱', 'price': 40, 'hp_pct': 0.4,
+                 'icon': '📖', 'model': 'scroll', 'desc': '生命 +40%'},
+            ],
+            'post': [
+                {'key': 'letter', 'name': '信纸', 'price': 10,
+                 'icon': '✉️', 'model': 'scroll', 'desc': '一叠信纸'},
+                {'key': 'parcel', 'name': '包裹', 'price': 25,
+                 'icon': '📦', 'model': 'crate', 'desc': '寄给远方的包裹'},
+            ],
+            'smith': [
+                {'key': 'whetstone', 'name': '磨刀石', 'price': 35,
+                 'icon': '🪨', 'model': 'stone', 'desc': '武器耐久 +30'},
+                {'key': 'iron', 'name': '铁锭', 'price': 60,
+                 'icon': '🔩', 'model': 'brick', 'desc': '锻造材料'},
+            ],
+            'bath': [
+                {'key': 'bath_ticket', 'name': '澡票', 'price': 20, 'hp_pct': 0.3,
+                 'icon': '♨️', 'model': 'ticket', 'desc': '泡汤恢复 30% 生命'},
+                {'key': 'hot_spring', 'name': '温泉蛋', 'price': 15, 'hp_pct': 0.2,
+                 'icon': '🥚', 'model': 'plate', 'desc': '生命 +20%'},
+            ],
+        }
+        return extra.get(kind, [])
+
+    # ---------- v4 multi-town ----------
+    def _town_of_owner(self, role_id):
+        for r in self.towns.values():
+            if int(r.get('owner_id') or 0) == int(role_id) and not int(r.get('is_system') or 0):
+                if str(r.get('status') or '') in ('active', 'frozen', 'restoring'):
+                    return r
+        return None
+
+    def _town_public(self, r):
+        d = townreg.public_row(r)
+        if d:
+            d['objects'] = 0
+        return d
+
+    def _town_send_list(self, p):
+        rows = [r for r in self.towns.values()
+                if int(r.get('owner_id') or 0) == int(getattr(p, 'role_id', 0) or 0)]
+        rows.sort(key=lambda x: int(x['id']))
+        self._send_cid(p.cid, P.pack('towns', list=[self._town_public(r) for r in rows],
+                                     catalog=self.town_catalog,
+                                     owned=[int(r['id']) for r in rows]))
+
+    def _town_result(self, p, ok, msg='', town=None):
+        kw = {'ok': 1 if ok else 0, 'msg': str(msg or '')}
+        if town is not None:
+            kw['town'] = self._town_public(town)
+        self._send_cid(p.cid, P.pack('townresult', **kw))
+
+    def _intent_town_list(self, p, d=None):
+        self._town_send_list(p)
+
+    def _intent_town_catalog(self, p, d=None):
+        self._send_cid(p.cid, P.pack('towns', list=[], catalog=self.town_catalog, owned=[]))
+
+
+    # ---------- v4.2 object placement ----------
+    def _obj_town_ok(self, p):
+        """the town the player may build in (own town, or the system town)."""
+        own = self._town_of_owner(getattr(p, 'role_id', 0))
+        if own and str(own.get('status')) == 'active':
+            return own
+        for r in self.towns.values():
+            if int(r.get('is_system') or 0) and str(r.get('status')) == 'active':
+                return r
+        return None
+
+    def _obj_pub(self, o):
+        d = {
+            'id': int(o['id']), 'catalog': str(o['catalog_id']),
+            'x': round(float(o['x']), 3), 'z': round(float(o['z']), 3),
+            'rot': round(float(o['rot']), 4),
+            'model': str(o.get('model_id') or ''),
+            'ver': str(o.get('model_version') or 'v1'),
+            'parent': int(o.get('parent_id') or 0),
+            'floor': int(o.get('floor') or 0),
+        }
+        # ★ 商店建筑：交互点在门口，不是建筑中心（2026-10-22 A2）
+        #   中心 + 半深 + 1m，再按 rot 旋转；客户端直接用这两个值，不再自己算一遍
+        s = self.dyn_shops.get('obj%d' % int(o['id']))
+        if s:
+            d['shop_x'] = round(float(s['x']), 3)
+            d['shop_z'] = round(float(s['z']), 3)
+        return d
+
+    def _send_objects(self, p, town_row, limit=400):
+        # 主城是 500x500，玩家出生点和建筑群可能相距很远：
+        # 用 260m 覆盖整个主城，避免“看不到建筑”的错觉
+        rows = objreg.nearby(self.cfg, town_row['id'], p.x, p.z, 260.0)[:limit]
+        self._send_cid(p.cid, P.pack('objects', town=int(town_row['id']),
+                                     list=[self._obj_pub(o) for o in rows]))
+
+    def _intent_town_objects(self, p, d=None):
+        r = self._obj_town_ok(p)
+        if not r:
+            self._send_cid(p.cid, P.pack('objects', town=0, list=[]))
+            return
+        self._send_objects(p, r)
+
+    def _intent_place(self, p, d):
+        d = d or {}
+        r = self._obj_town_ok(p)
+        if not r:
+            self._town_result(p, False, '没有可用小镇')
+            return
+        # 系统主城：所有玩家都可以放置（主城是公共建造区）
+        # 玩家自己的小镇：必须拥有 move 权限
+        if not int(r.get('is_system') or 0):
+            try:
+                allowed = townreg.has_perm(self.cfg, getattr(p, 'role_id', 0),
+                                           r, townreg.P_MOVE)
+            except Exception:
+                allowed = False
+            if not allowed:
+                self._town_result(p, False, '没有放置权限')
+                return
+        cid = str(d.get('catalog') or '')
+        try:
+            x = float(d.get('x')); z = float(d.get('z'))
+            rot = float(d.get('rot') or 0.0)
+        except Exception:
+            self._town_result(p, False, '坐标错误')
+            return
+        try:
+            sx0, sz0, sx1, sz1 = townreg.safe_bounds_of(r)
+            if not (sx0 <= x <= sx1 and sz0 <= z <= sz1):
+                self._town_result(p, False, '不在小镇范围内')
+                return
+        except Exception:
+            pass
+        cat = objreg._catalog(self.cfg, cid)
+        if not cat:
+            self._town_result(p, False, '目录里没有这个物件')
+            return
+        price = int(cat.get('price') or 0)
+        gold = int(getattr(p, 'gold', 0) or 0)
+        if price > gold:
+            self._town_result(p, False, '金币不足')
+            return
+        ok, err, row = objreg.place_object(self.cfg, r, cid, x, z, rot,
+                                           owner_id=getattr(p, 'role_id', 0),
+                                           price_paid=price)
+        if not ok:
+            self._town_result(p, False, err)
+            return
+        try:
+            p.gold = gold - price
+            p.goldDirty = True
+        except Exception:
+            pass
+        self._send_cid(p.cid, P.pack('placed', object=self._obj_pub(row)))
+
+    def _intent_place_building(self, p, d):
+        d = d or {}
+        r = self._obj_town_ok(p)
+        if not r:
+            self._town_result(p, False, '没有可用小镇')
+            return
+        cid = str(d.get('catalog') or '')
+        try:
+            x = float(d.get('x')); z = float(d.get('z'))
+            rot = float(d.get('rot') or 0.0)
+        except Exception:
+            self._town_result(p, False, '坐标错误')
+            return
+        if not int(r.get('is_system') or 0):
+            try:
+                allowed = townreg.has_perm(self.cfg, getattr(p, 'role_id', 0),
+                                           r, townreg.P_MOVE)
+            except Exception:
+                allowed = False
+            if not allowed:
+                self._town_result(p, False, '没有放置权限')
+                return
+        cat = objreg._catalog(self.cfg, cid)
+        if not cat:
+            self._town_result(p, False, '目录里没有这个建筑')
+            return
+        price = int(cat.get('price') or 0)
+        gold = int(getattr(p, 'gold', 0) or 0)
+        if price > gold:
+            self._town_result(p, False, '金币不足')
+            return
+        ok, err, res = objreg.place_building(self.cfg, r, cid, x, z, rot,
+                                             owner_id=getattr(p, 'role_id', 0))
+        if not ok:
+            self._town_result(p, False, err)
+            return
+        try:
+            p.gold = gold - price
+            p.goldDirty = True
+        except Exception:
+            pass
+        self._send_cid(p.cid, P.pack(
+            'placed',
+            object=self._obj_pub(res['building']),
+            furniture=res['furniture_count'],
+            list=[self._obj_pub(o) for o in res.get('furniture', [])]))
+        try:
+            self._rebuild_dyn_shops()
+        except Exception:
+            pass
+
+    def _intent_move_object(self, p, d):
+        d = d or {}
+        r = self._obj_town_ok(p)
+        if not r:
+            self._town_result(p, False, '没有可用小镇')
+            return
+        try:
+            oid = int(d.get('id'))
+            x = float(d.get('x')); z = float(d.get('z'))
+            rot = d.get('rot')
+            rot = None if rot is None else float(rot)
+        except Exception:
+            self._town_result(p, False, '参数错误')
+            return
+        ok, err, res = objreg.move_object(self.cfg, r, oid, x, z, rot)
+        if not ok:
+            self._town_result(p, False, err)
+            return
+        self._send_cid(p.cid, P.pack('moved', object=res))
+
+    def _intent_remove_object(self, p, d):
+        d = d or {}
+        try:
+            oid = int(d.get('id'))
+        except Exception:
+            self._town_result(p, False, '参数错误')
+            return
+        ok, err = objreg.remove_object(self.cfg, oid,
+                                       cascade=bool(d.get('cascade', 1)))
+        if not ok:
+            self._town_result(p, False, err)
+            return
+        self._send_cid(p.cid, P.pack('removed', id=oid))
+        try:
+            self._rebuild_dyn_shops()
+        except Exception:
+            pass
+
+    def _intent_town_create(self, p, d):
+        d = d or {}
+        try:
+            tier = int(d.get('tier'))
+            x = float(d.get('x'))
+            z = float(d.get('z'))
+        except Exception:
+            self._town_result(p, False, 'bad params')
+            return
+        if tier not in townreg.TIERS:
+            self._town_result(p, False, 'unsupported size')
+            return
+        if not (math.isfinite(x) and math.isfinite(z)):
+            self._town_result(p, False, 'bad coords')
+            return
+        if self._town_of_owner(p.role_id):
+            self._town_result(p, False, 'one town per player')
+            return
+        name, err = townreg.validate_name(str(d.get('name') or ''))
+        if not name:
+            self._town_result(p, False, err)
+            return
+        for r in self.towns.values():
+            if str(r.get('name') or '').lower() == name.lower():
+                self._town_result(p, False, 'name exists')
+                return
+        if not townreg.gap_ok_rows(list(self.towns.values()), tier, x, z, 0):
+            self._town_result(p, False, 'need 50 grid gap')
+            return
+        fee = townreg.fee_for(tier)
+        if int(getattr(p, 'gold', 0) or 0) < fee:
+            self._town_result(p, False, 'not enough gold: %d' % fee)
+            return
+        now = townreg.now_ms()
+        self.town_seq += 1
+        tid = self.town_seq
+        row = {'id': tid, 'owner_id': int(p.role_id), 'name': name,
+               'tier': tier, 'size_m': townreg.size_m(tier), 'x': x, 'z': z,
+               'status': 'active', 'is_system': 0, 'auto_pay': 1,
+               'created_at': now, 'expires_at': now + townreg.DAY_MS,
+               'last_fee_at': now, 'original_x': x, 'original_z': z,
+               'deleted_at': 0, 'updated_at': now}
+        self.towns[tid] = row
+        self.town_perms[(tid, int(p.role_id))] = townreg.P_ALL
+        p.gold = int(getattr(p, 'gold', 0) or 0) - fee
+        p.goldDirty = True
+        self.post_save(
+            'INSERT INTO towns(id,owner_id,name,tier,size_m,x,z,status,is_system,'
+            'auto_pay,created_at,expires_at,last_fee_at,original_x,original_z,'
+            'deleted_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (tid, int(p.role_id), name, tier, townreg.size_m(tier), x, z,
+             'active', 0, 1, now, now + townreg.DAY_MS, now, x, z, 0, now))
+        self.post_save('INSERT OR REPLACE INTO town_perms(town_id,player_id,mask,granted_by,granted_at)'
+                       ' VALUES(?,?,?,?,?)',
+                       (tid, int(p.role_id), townreg.P_ALL, int(p.role_id), now))
+        self._town_result(p, True, 'created fee %d' % fee, row)
+        self._town_send_list(p)
+
+    def _town_owner_ok(self, p, r):
+        return int(r.get('owner_id') or 0) == int(getattr(p, 'role_id', 0) or 0)
+
+    def _intent_town_perm_list(self, p, d):
+        try:
+            tid = int((d or {}).get('id'))
+        except Exception:
+            self._town_result(p, False, 'bad params')
+            return
+        r = self.towns.get(tid)
+        if not r:
+            self._town_result(p, False, 'no town')
+            return
+        if not (self._town_owner_ok(p, r) or int(getattr(p, 'role', {}).get('admin') or 0)):
+            self._town_result(p, False, 'no permission')
+            return
+        out = []
+        for (town_id, player_id), mask in self.town_perms.items():
+            if town_id == tid:
+                out.append({'player': player_id, 'mask': mask})
+        self._send_cid(p.cid, P.pack('towns', list=[self._town_public(r)],
+                                     catalog=[], owned=[], perms=out))
+
+    def _intent_town_perm_set(self, p, d):
+        d = d or {}
+        try:
+            tid = int(d.get('id'))
+            target = int(d.get('player'))
+            mask = int(d.get('mask')) & townreg.P_ALL
+        except Exception:
+            self._town_result(p, False, 'bad params')
+            return
+        r = self.towns.get(tid)
+        if not r:
+            self._town_result(p, False, 'no town')
+            return
+        owner = self._town_owner_ok(p, r)
+        admin = bool(int(getattr(p, 'role', {}).get('admin') or 0))
+        if not owner and not admin:
+            if not (self.town_perms.get((tid, int(p.role_id)), townreg.P_VISITOR) & townreg.P_PERM):
+                self._town_result(p, False, 'no grant permission')
+                return
+        if target == int(r.get('owner_id') or 0):
+            self._town_result(p, False, 'cannot change owner')
+            return
+        self.town_perms[(tid, target)] = mask
+        self.post_save('INSERT OR REPLACE INTO town_perms(town_id,player_id,mask,granted_by,granted_at)'
+                       ' VALUES(?,?,?,?,?)', (tid, target, mask, int(p.role_id), townreg.now_ms()))
+        self._town_result(p, True, 'saved')
+        self._intent_town_perm_list(p, {'id': tid})
+
+    def _intent_town_restore(self, p, d):
+        d = d or {}
+        try:
+            tid = int(d.get('id'))
+        except Exception:
+            self._town_result(p, False, 'bad params')
+            return
+        r = self.towns.get(tid)
+        if not r:
+            self._town_result(p, False, 'no town')
+            return
+        if not self._town_owner_ok(p, r):
+            self._town_result(p, False, 'not yours')
+            return
+        if r.get('status') not in ('frozen', 'restoring'):
+            self._town_result(p, False, 'not frozen')
+            return
+        tier = int(r['tier'])
+        try:
+            nx = float(d.get('x')) if d.get('x') is not None else float(r.get('original_x') or 0)
+            nz = float(d.get('z')) if d.get('z') is not None else float(r.get('original_z') or 0)
+        except Exception:
+            self._town_result(p, False, 'bad coords')
+            return
+        if not townreg.gap_ok_rows(list(self.towns.values()), tier, nx, nz, tid):
+            nx, nz = float(r.get('original_x') or 0), float(r.get('original_z') or 0)
+            if not townreg.gap_ok_rows(list(self.towns.values()), tier, nx, nz, tid):
+                self._town_result(p, False, 'coords occupied')
+                return
+        fee = townreg.fee_for(tier)
+        if int(getattr(p, 'gold', 0) or 0) < fee:
+            self._town_result(p, False, 'not enough gold: %d' % fee)
+            return
+        now = townreg.now_ms()
+        p.gold = int(getattr(p, 'gold', 0) or 0) - fee
+        p.goldDirty = True
+        r['x'], r['z'] = nx, nz
+        r['status'] = 'active'
+        r['deleted_at'] = 0
+        r['expires_at'] = now + townreg.DAY_MS
+        r['last_fee_at'] = now
+        r['updated_at'] = now
+        self.post_save('UPDATE towns SET x=?,z=?,status=?,deleted_at=0,expires_at=?,'
+                       'last_fee_at=?,updated_at=? WHERE id=?',
+                       (nx, nz, 'active', now + townreg.DAY_MS, now, now, tid))
+        self._town_result(p, True, 'restored fee %d' % fee, r)
+        self._town_send_list(p)
+
+    def _intent_town_dissolve(self, p, d):
+        try:
+            tid = int((d or {}).get('id'))
+        except Exception:
+            self._town_result(p, False, 'bad params')
+            return
+        r = self.towns.get(tid)
+        if not r:
+            self._town_result(p, False, 'no town')
+            return
+        if not self._town_owner_ok(p, r):
+            self._town_result(p, False, 'not yours')
+            return
+        now = townreg.now_ms()
+        r['status'] = 'frozen'
+        r['original_x'], r['original_z'] = float(r['x']), float(r['z'])
+        r['deleted_at'] = now + townreg.RETENTION_DAYS * townreg.DAY_MS
+        r['updated_at'] = now
+        self.post_save('UPDATE towns SET status=?,original_x=?,original_z=?,deleted_at=?,'
+                       'updated_at=? WHERE id=?',
+                       ('frozen', r['original_x'], r['original_z'], r['deleted_at'], now, tid))
+        self._town_result(p, True, 'dissolved, keep 7 days', r)
+        self._town_send_list(p)
+
     def _handle_intent(self, p, t, d):
+        _TP = ('house_info', 'house_buy', 'house_leave', 'house_sleep', 'house_wake',
+               'shop_open', 'shop_buy', 'usefood', 'fridge_open', 'order_open',
+               'order_buy', 'cup_take', 'work_start', 'work_stop', 'jobstep', 'jobdone',
+               'town_list', 'town_create', 'town_perm_list', 'town_perm_set',
+               'town_restore', 'town_dissolve', 'town_catalog',
+               'place', 'place_building', 'move_object', 'remove_object',
+               'town_objects')
+        if t in _TP:
+            getattr(self, '_intent_' + t)(p, d)
+            return
         if t == 'move':
+            if getattr(p, 'sleepHouse', ''):
+                return
             # ★ round330：收下"离地高度"✗ 夹在 0..3 格（≈1.9 米）✓
             try:
                 _jy = float(d.get('jy') or 0)
@@ -1153,6 +2703,12 @@ class World(object):
             self._talent_op(p, d)          # ★ 第 116 轮：天赋加点 ✓
         elif t == 'atk':
             self._intent_atk(p, d)
+        elif t == 'sit':
+            self._seat_sit(p, d)
+        elif t == 'stand':
+            self._seat_stand(p)
+        elif t == 'teleport':
+            self._do_teleport(p, d)
         elif t == 'pick':
             self._intent_pick(p, d)           # ★ 捡东西（第 38 轮）
         elif t == 'spawn':
@@ -1954,6 +3510,10 @@ class World(object):
                 m.awayT += dt
             else:
                 m.awayT = 0.0
+            # 镇内不刷新怪物：走进安全区的怪物直接回收
+            if abs(m.x) <= TOWN_R and abs(m.z) <= TOWN_R:
+                self.mobs.pop(m.mid, None)
+                continue
             if m.awayT >= mobs.AWAY_GRACE:
                 self.mobs.pop(m.mid, None)
                 continue
@@ -2260,8 +3820,8 @@ class World(object):
         dist = mobs.SPAWN_MIN + random.random() * (mobs.SPAWN_MAX - mobs.SPAWN_MIN)
         x = p.x + math.sin(ang) * dist
         z = p.z + math.cos(ang) * dist
-        if x * x + z * z < SPAWN_SAFE * SPAWN_SAFE:
-            return                       # 安全区里不刷（方案 §2.1 末日堡垒）✓
+        if abs(x) <= SPAWN_SAFE and abs(z) <= SPAWN_SAFE:
+            return                       # 安全区里不刷（方形 500x500）
         # 组队时：以刷新点 SPAWN_TEAM_R 内【随机一个】队员的等级为准（§3.1）✓
         near = [q for q in ps if (q.x - x) ** 2 + (q.z - z) ** 2 <= mobs.SPAWN_TEAM_R ** 2]
         base = (random.choice(near) if near else p).role.get('level', 1) or 1
@@ -2613,6 +4173,15 @@ class World(object):
         except Exception:
             import mobs as _mobs2
             return int(_mobs2.level_hp((role or {}).get('level') or 1))
+
+    def _qi_max(self, p):
+        # 灵气上限：老角色没有 qimax 字段时按 100 兜底
+        try:
+            r = p.role or {}
+            v = int(r.get('qimax') or r.get('qiMax') or 100)
+            return max(1, v)
+        except Exception:
+            return 100
 
     def _hp_max(self, p):
         """生命上限（角色基础 + 防具的 hp / hp%% ✓ 第 67 轮）
@@ -4766,6 +6335,54 @@ class World(object):
                  e['item'].get('slot') or 'mat']
                 for _, lid, e in cand]
 
+    def _intent_house_info(self, p, d):
+        self._house_send(p, (d or {}).get('id'))
+
+    def _intent_house_buy(self, p, d):
+        self._house_buy(p, d)
+
+    def _intent_house_leave(self, p, d):
+        self._house_leave(p, d)
+
+    def _intent_house_sleep(self, p, d):
+        self._house_sleep(p, d)
+
+    def _intent_house_wake(self, p, d=None):
+        self._house_wake(p)
+
+    def _intent_shop_open(self, p, d):
+        self._shop_open(p, d)
+
+    def _intent_shop_buy(self, p, d):
+        self._shop_buy(p, d)
+
+    def _intent_usefood(self, p, d):
+        self._use_food(p, d)
+
+    def _intent_fridge_open(self, p, d):
+        self._fridge_open(p, d)
+
+    def _intent_order_open(self, p, d):
+        self._order_open(p, d)
+
+    def _intent_order_buy(self, p, d):
+        self._order_buy(p, d)
+
+    def _intent_cup_take(self, p, d):
+        self._cup_take(p, d)
+
+    def _intent_work_start(self, p, d):
+        self._work_start(p, d)
+
+    def _intent_work_stop(self, p, d=None):
+        self._work_stop(p)
+
+    def _intent_jobstep(self, p, d):
+        self._job_step(p, d)
+
+    def _intent_jobdone(self, p, d):
+        self._job_done(p, d)
+
     def _intent_pick(self, p, d):
         """捡东西 —— ★ 服务器判距离（客户端说捡到了不算数 ✓）"""
         lid = str(d.get('id') or '')
@@ -4923,6 +6540,12 @@ class World(object):
                 'y': round(o.yaw, 3),
                 # ★ round330：离地高度 ✗ 别人的客户端拿它还原跳跃动作 ✓
                 'jy': round(getattr(o, 'jy', 0.0) or 0.0, 3),
+                'seat': str(getattr(o, 'seat', -1)),
+                'sleep': 1 if getattr(o, 'sleepHouse', '') else 0,
+                'job': getattr(o, 'job', ''),
+                'sk': str((o.role or {}).get('skin') or ''),
+                'skc': (((o.role or {}).get('skcMap') or {}).get(
+                    str((o.role or {}).get('skin') or '')) or None),
                 't': round(o.ct, 3),      # ★ 对方自己的钟 → 客户端做插值时间轴
                 'hp': o.hp,
                 # ★★★ 第 220 轮修的真 bug（用户自己发现的！）★★★

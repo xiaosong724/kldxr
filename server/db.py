@@ -13,10 +13,12 @@ import time
 
 # ============================================================ 版本与迁移
 
-SCHEMA_VERSION = 9   # ★ round347：流体存库（terrain_fluid 表 ✓）
+SCHEMA_VERSION = 23  # v4.5：咖啡店点单 / 桌上杯位 / 传菜任务
 
 # 每个版本一组 SQL。**新版本往后追加，不要改历史版本** ✓
 MIGRATIONS = {
+
+
     1: [
         # ---------------- 账号 ----------------
         """CREATE TABLE IF NOT EXISTS accounts (
@@ -146,6 +148,67 @@ MIGRATIONS = {
             k   TEXT PRIMARY KEY,
             v   TEXT
         )""",
+    ],
+    21: [
+        # ---------------- v21锛氬缓绛戞ā鍨嬬粦瀹?+ 榛樿瀹跺叿甯冨眬 ----------------
+        'ALTER TABLE town_catalog ADD COLUMN model_id TEXT NOT NULL DEFAULT ""',
+        'ALTER TABLE town_catalog ADD COLUMN model_version TEXT NOT NULL DEFAULT "v1"',
+        'ALTER TABLE town_catalog ADD COLUMN layout_json TEXT NOT NULL DEFAULT "{}"',
+        'ALTER TABLE town_catalog ADD COLUMN place_mode TEXT NOT NULL DEFAULT "grid"',
+        'ALTER TABLE town_catalog ADD COLUMN movable INTEGER NOT NULL DEFAULT 1',
+        "CREATE INDEX IF NOT EXISTS ix_catalog_cat ON town_catalog(category, enabled)",
+    ],
+    22: [
+        # v22: 物件放置 / 建筑-家具父子关系 / 模型版本
+        "ALTER TABLE town_objects ADD COLUMN model_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE town_objects ADD COLUMN model_version TEXT NOT NULL DEFAULT 'v1'",
+        "ALTER TABLE town_objects ADD COLUMN parent_id INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE town_objects ADD COLUMN floor INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE town_objects ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'",
+        "CREATE INDEX IF NOT EXISTS ix_obj_parent ON town_objects(parent_id)",
+        "CREATE INDEX IF NOT EXISTS ix_obj_town_state ON town_objects(town_id, state)",
+    ],
+    23: [
+        # v23: 咖啡店点单 / 桌上杯位 / 传菜任务（A2）
+        #   ★ 桌子本身不落库：它由 town_objects 里的 dining_table/outdoor_table 实时算出 ✓
+        #     （家具会被移动/删除，存一份快照只会和世界对不上）
+        """CREATE TABLE IF NOT EXISTS table_orders (
+            id          TEXT PRIMARY KEY,
+            town_id     INTEGER NOT NULL DEFAULT 0,
+            shop_id     TEXT    NOT NULL DEFAULT '',
+            table_obj   INTEGER NOT NULL DEFAULT 0,
+            player_id   INTEGER NOT NULL DEFAULT 0,
+            items_json  TEXT    NOT NULL DEFAULT '{}',
+            state       TEXT    NOT NULL DEFAULT 'cooking',
+            created_at  INTEGER NOT NULL DEFAULT 0,
+            due_at      INTEGER NOT NULL DEFAULT 0,
+            served_at   INTEGER NOT NULL DEFAULT 0
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_table_orders_state ON table_orders(state, due_at)",
+        """CREATE TABLE IF NOT EXISTS table_cups (
+            id          TEXT PRIMARY KEY,
+            town_id     INTEGER NOT NULL DEFAULT 0,
+            table_obj   INTEGER NOT NULL DEFAULT 0,
+            order_id    TEXT    NOT NULL DEFAULT '',
+            slot        INTEGER NOT NULL DEFAULT 0,
+            item_key    TEXT    NOT NULL DEFAULT '',
+            item_name   TEXT    NOT NULL DEFAULT '',
+            model       TEXT    NOT NULL DEFAULT 'cup',
+            state       TEXT    NOT NULL DEFAULT 'cooking',
+            created_at  INTEGER NOT NULL DEFAULT 0
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_table_cups ON table_cups(table_obj, state)",
+        """CREATE TABLE IF NOT EXISTS waiter_tasks (
+            id          TEXT PRIMARY KEY,
+            shop_id     TEXT    NOT NULL DEFAULT '',
+            order_id    TEXT    NOT NULL DEFAULT '',
+            table_obj   INTEGER NOT NULL DEFAULT 0,
+            path_json   TEXT    NOT NULL DEFAULT '[]',
+            state       TEXT    NOT NULL DEFAULT 'pending',
+            created_at  INTEGER NOT NULL DEFAULT 0,
+            done_at     INTEGER NOT NULL DEFAULT 0
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_waiter_tasks ON waiter_tasks(state, created_at)",
     ],
 }
 
@@ -368,6 +431,314 @@ MIGRATIONS[8] = [
 ]
 
 
+# ★★★ round424：排行榜（用户 2026-10-18：先做排行榜，成就最后）★★★
+#   ★ 为什么单开一张 role_stats 表：
+#     击杀数 / PvP 击杀数 / 在线时长 ✗ 现在任何表里都没有 ✓
+#     塞进 roles 也行 ✗ 但以后成就要用很多计数器 ✗ 单开一张好加字段 ✓
+#   ★ title_board：玩家选的「头顶显示哪个榜」✗ '' = 不显示 ✓
+#     和背包上锁一样必须持久化（重启不丢 ✓）
+MIGRATIONS[10] = [
+    """CREATE TABLE IF NOT EXISTS role_stats (
+        role_id    INTEGER PRIMARY KEY,
+        kills      INTEGER NOT NULL DEFAULT 0,
+        deaths     INTEGER NOT NULL DEFAULT 0,
+        pvp_kills  INTEGER NOT NULL DEFAULT 0,
+        play_sec   INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL DEFAULT 0
+    )""",
+    "ALTER TABLE roles ADD COLUMN title_board TEXT NOT NULL DEFAULT ''",
+    "CREATE INDEX IF NOT EXISTS ix_stats_kills ON role_stats(kills DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_stats_pvp   ON role_stats(pvp_kills DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_stats_time  ON role_stats(play_sec DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_roles_level ON roles(level DESC, exp DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_roles_gold  ON roles(gold DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_roles_mq    ON roles(mq DESC)",
+]
+
+
+# ★★★ round466：自动出售（用户："增加装备自动出售，可以设置低于多少阶获取后自动出售"）★★★
+#   ★ 坑：我第一次把它插进了 MIGRATIONS[10] ✗
+#     而本地/云端的库都已经是 v10 了 → 那一段不会再跑 ✗
+#     表现：meta 说是 11 ✗ 但 roles 里没有 autosell 列 ✗✗
+#   ★ 正确做法：新增一个版本号的迁移块 ✗ 一个版本一块 ✓
+MIGRATIONS[11] = [
+    "ALTER TABLE roles ADD COLUMN autosell INTEGER NOT NULL DEFAULT 0",
+]
+
+
+# ★★★ round485：皮肤系统（用户："40 个皮肤全留 + 独占竞价 + 魅力榜"）★★★
+#   ★ 一个版本一块 ✗ 别往 11 里塞（第 466 轮的坑：meta 说 12 但列没加 ✓）
+MIGRATIONS[12] = [
+    # 当前用的皮肤（'' = 老外观 ✓ 老存档不用迁移）
+    "ALTER TABLE roles ADD COLUMN skin TEXT NOT NULL DEFAULT ''",
+    # 已解锁的皮肤（掉落 / 初始赠送）
+    """CREATE TABLE IF NOT EXISTS skin_unlocks (
+        role_id  INTEGER NOT NULL,
+        key      TEXT    NOT NULL,
+        at       INTEGER NOT NULL,
+        PRIMARY KEY (role_id, key)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_skin_unlock_role ON skin_unlocks(role_id)",
+    # 独占竞价（累计，不退）total = 该玩家对这个皮肤累计出的金币
+    """CREATE TABLE IF NOT EXISTS skin_bids (
+        role_id  INTEGER NOT NULL,
+        key      TEXT    NOT NULL,
+        total    INTEGER NOT NULL DEFAULT 0,
+        times    INTEGER NOT NULL DEFAULT 0,
+        at       INTEGER NOT NULL,
+        PRIMARY KEY (role_id, key)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_skin_bid_key ON skin_bids(key, total DESC)",
+]
+
+
+
+# ★★★ round496：游戏内公告（用户："玩家打开游戏先看到公告，15 秒自动关"）★★★
+MIGRATIONS[13] = [
+    """CREATE TABLE IF NOT EXISTS announcements (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        ver          TEXT,
+        title        TEXT NOT NULL,
+        date         TEXT,
+        headline     TEXT,
+        badge        TEXT,
+        foot         TEXT,
+        items_json   TEXT NOT NULL DEFAULT '[]',
+        status       TEXT NOT NULL DEFAULT 'draft',
+        created_at   INTEGER NOT NULL,
+        updated_at   INTEGER,
+        published_at INTEGER
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_ann_status ON announcements(status, id DESC)",
+    # 玩家看到哪儿了（只增不减 ✓ 换设备也不会重复）
+    "ALTER TABLE roles ADD COLUMN announce_seen INTEGER NOT NULL DEFAULT 0",
+]
+
+# ★★ round510：皮肤自定义（捏脸/染色）★★
+#   ★ 按【皮肤】存 ✗ 不是按角色 ✓ → 双马尾染粉色，巫女还是原色 ✓
+#   ★ data 是个小 JSON：{"v":1,"ey":"narrow","mo":"smile","iris":0x...,"hair":0x...,"shirt":0x...}
+#     存 key 不存数字下标 ✗ 以后美术重做能映射 ✓（见 docs/皮肤自定义方案.md §v3）
+MIGRATIONS[16] = [
+    """CREATE TABLE IF NOT EXISTS vfx_params (
+        key  TEXT PRIMARY KEY,
+        data TEXT NOT NULL DEFAULT '{}',
+        at   INTEGER NOT NULL
+    )""",
+]
+
+MIGRATIONS[15] = [
+    """CREATE TABLE IF NOT EXISTS skill_learn (
+        role_id INTEGER NOT NULL,
+        key     TEXT    NOT NULL,
+        kind    TEXT    NOT NULL,
+        tier    INTEGER NOT NULL DEFAULT 1,
+        at      INTEGER NOT NULL,
+        PRIMARY KEY (role_id, key)
+    )""",
+    """CREATE TABLE IF NOT EXISTS skill_load (
+        role_id INTEGER NOT NULL,
+        kind    TEXT    NOT NULL,
+        slot    INTEGER NOT NULL,
+        key     TEXT    NOT NULL,
+        PRIMARY KEY (role_id, kind, slot)
+    )""",
+]
+
+MIGRATIONS[14] = [
+    """CREATE TABLE IF NOT EXISTS skin_custom (
+        role_id   INTEGER NOT NULL,
+        skin_key  TEXT    NOT NULL,
+        data      TEXT    NOT NULL DEFAULT '{}',
+        at        INTEGER NOT NULL,
+        PRIMARY KEY (role_id, skin_key)
+    )""",
+]
+
+# ★ round577：坦克引擎（B2）持久化
+#   · hp / base / size / n / at：上限、成长基数、体型、层数、最后在线时刻
+#   · 死亡 / 离线 >1 小时 → 由 world 重置为 0 / 1.0 / 0
+MIGRATIONS[17] = [
+    "ALTER TABLE roles ADD COLUMN sk_tank_hp   INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE roles ADD COLUMN sk_tank_base INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE roles ADD COLUMN sk_tank_size REAL    NOT NULL DEFAULT 1.0",
+    "ALTER TABLE roles ADD COLUMN sk_tank_n    INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE roles ADD COLUMN sk_tank_at   INTEGER NOT NULL DEFAULT 0",
+]
+
+
+
+# ★★★ 新手小镇 v3：住宅 / 打工 ★★★
+MIGRATIONS[18] = [
+    """CREATE TABLE IF NOT EXISTS houses (
+        id         TEXT PRIMARY KEY,
+        tier       TEXT NOT NULL,
+        name       TEXT NOT NULL,
+        price_day  INTEGER NOT NULL,
+        owner_id   INTEGER,
+        owner_name TEXT NOT NULL DEFAULT '',
+        paid_day   INTEGER NOT NULL DEFAULT 0,
+        started_at INTEGER NOT NULL DEFAULT 0,
+        expires_at INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL DEFAULT 0
+    )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_house_owner ON houses(owner_id) WHERE owner_id IS NOT NULL",
+    """CREATE TABLE IF NOT EXISTS house_logs (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        house_id  TEXT NOT NULL,
+        buyer_id  INTEGER NOT NULL DEFAULT 0,
+        seller_id INTEGER NOT NULL DEFAULT 0,
+        kind      TEXT NOT NULL,
+        days      INTEGER NOT NULL DEFAULT 0,
+        amount    INTEGER NOT NULL DEFAULT 0,
+        refund    INTEGER NOT NULL DEFAULT 0,
+        premium   INTEGER NOT NULL DEFAULT 0,
+        ts        INTEGER NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS work_state (
+        role_id     INTEGER NOT NULL,
+        shop_id     TEXT NOT NULL,
+        slot_id     TEXT NOT NULL,
+        started_at  INTEGER NOT NULL,
+        last_settle INTEGER NOT NULL,
+        carry_sec   INTEGER NOT NULL DEFAULT 0,
+        active      INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (role_id, shop_id, slot_id)
+    )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_work_slot ON work_state(shop_id, slot_id) WHERE active=1",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_work_role ON work_state(role_id) WHERE active=1",
+]
+
+
+# ★★★ 新手小镇 v3：住宅冰箱（饮料/食品存放） ★★★
+MIGRATIONS[19] = [
+    """CREATE TABLE IF NOT EXISTS house_fridge (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        house_id  TEXT NOT NULL,
+        slot      INTEGER NOT NULL,
+        item_json TEXT NOT NULL,
+        stack     INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL DEFAULT 0
+    )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_fridge_slot ON house_fridge(house_id, slot)",
+    # 打工：每个岗位同时只能有一个工人（同一时刻）
+    """CREATE TABLE IF NOT EXISTS work_slots (
+        shop_id   TEXT NOT NULL,
+        slot_id   TEXT NOT NULL,
+        owner_id  INTEGER NOT NULL DEFAULT 0,
+        since     INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (shop_id, slot_id)
+    )""",
+]
+
+
+# ★★★ 新手小镇 v4：多小镇 / 权限 / 放置物 / 经济 ★★★
+MIGRATIONS[20] = [
+    """CREATE TABLE IF NOT EXISTS towns (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_id     INTEGER NOT NULL DEFAULT 0,
+        name         TEXT    NOT NULL COLLATE NOCASE UNIQUE,
+        tier         INTEGER NOT NULL,
+        size_m       REAL    NOT NULL,
+        x            REAL    NOT NULL,
+        z            REAL    NOT NULL,
+        status       TEXT    NOT NULL DEFAULT 'active',
+        is_system    INTEGER NOT NULL DEFAULT 0,
+        auto_pay     INTEGER NOT NULL DEFAULT 1,
+        created_at   INTEGER NOT NULL DEFAULT 0,
+        expires_at   INTEGER NOT NULL DEFAULT 0,
+        last_fee_at  INTEGER NOT NULL DEFAULT 0,
+        original_x   REAL    NOT NULL DEFAULT 0,
+        original_z   REAL    NOT NULL DEFAULT 0,
+        deleted_at   INTEGER NOT NULL DEFAULT 0,
+        updated_at   INTEGER NOT NULL DEFAULT 0
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_towns_status ON towns(status, expires_at)",
+    "CREATE INDEX IF NOT EXISTS idx_towns_owner ON towns(owner_id, status)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_town_owner_active ON towns(owner_id)"
+    " WHERE owner_id > 0 AND is_system = 0 AND status IN ('active','frozen','restoring')",
+    """CREATE TABLE IF NOT EXISTS town_perms (
+        town_id    INTEGER NOT NULL,
+        player_id  INTEGER NOT NULL,
+        mask       INTEGER NOT NULL DEFAULT 0,
+        granted_by INTEGER NOT NULL DEFAULT 0,
+        granted_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (town_id, player_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_town_perms_player ON town_perms(player_id)",
+    """CREATE TABLE IF NOT EXISTS town_catalog (
+        id            TEXT PRIMARY KEY,
+        name          TEXT NOT NULL,
+        category      TEXT NOT NULL DEFAULT 'decor',
+        size_w        REAL NOT NULL DEFAULT 0.62,
+        size_d        REAL NOT NULL DEFAULT 0.62,
+        height        REAL NOT NULL DEFAULT 0.62,
+        price         INTEGER NOT NULL DEFAULT 0,
+        function_type TEXT NOT NULL DEFAULT 'none',
+        function_json TEXT NOT NULL DEFAULT '{}',
+        collision_json TEXT NOT NULL DEFAULT '[]',
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        sort          INTEGER NOT NULL DEFAULT 0,
+        updated_at    INTEGER NOT NULL DEFAULT 0
+    )""",
+    """CREATE TABLE IF NOT EXISTS town_objects (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        town_id       INTEGER NOT NULL,
+        catalog_id    TEXT    NOT NULL,
+        owner_id      INTEGER NOT NULL DEFAULT 0,
+        x             REAL    NOT NULL,
+        z             REAL    NOT NULL,
+        rot           REAL    NOT NULL DEFAULT 0,
+        place_mode    TEXT    NOT NULL DEFAULT 'grid',
+        price_paid    INTEGER NOT NULL DEFAULT 0,
+        state         TEXT    NOT NULL DEFAULT 'active',
+        collision_json TEXT  NOT NULL DEFAULT '[]',
+        function_json TEXT   NOT NULL DEFAULT '{}',
+        created_at    INTEGER NOT NULL DEFAULT 0,
+        updated_at    INTEGER NOT NULL DEFAULT 0
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_town_objects_town ON town_objects(town_id, state)",
+    """CREATE TABLE IF NOT EXISTS town_ground (
+        town_id    INTEGER NOT NULL,
+        gx         INTEGER NOT NULL,
+        gz         INTEGER NOT NULL,
+        material   TEXT    NOT NULL,
+        updated_at INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (town_id, gx, gz)
+    )""",
+    """CREATE TABLE IF NOT EXISTS town_ledger (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        town_id    INTEGER NOT NULL,
+        owner_id   INTEGER NOT NULL DEFAULT 0,
+        kind       TEXT    NOT NULL,
+        gross      INTEGER NOT NULL DEFAULT 0,
+        owner_gain INTEGER NOT NULL DEFAULT 0,
+        tax        INTEGER NOT NULL DEFAULT 0,
+        ref        TEXT    NOT NULL DEFAULT '',
+        ts         INTEGER NOT NULL DEFAULT 0
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_town_ledger_town ON town_ledger(town_id, ts)",
+    """CREATE TABLE IF NOT EXISTS town_payments (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        town_id    INTEGER NOT NULL,
+        kind       TEXT    NOT NULL,
+        amount     INTEGER NOT NULL DEFAULT 0,
+        due_at     INTEGER NOT NULL DEFAULT 0,
+        paid_at    INTEGER NOT NULL DEFAULT 0,
+        status     TEXT    NOT NULL DEFAULT 'pending',
+        meta       TEXT    NOT NULL DEFAULT '{}'
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_town_pay_due ON town_payments(status, due_at)",
+    """CREATE TABLE IF NOT EXISTS town_audit (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        admin_id   INTEGER NOT NULL DEFAULT 0,
+        action     TEXT    NOT NULL,
+        target     TEXT    NOT NULL DEFAULT '',
+        detail     TEXT    NOT NULL DEFAULT '{}',
+        ts         INTEGER NOT NULL DEFAULT 0
+    )""",
+]
+
+
 def ensure_tables(cfg):
     """幂等：可重复调用。返回 (起始版本, 结束版本, 本次执行了几条 SQL)"""
     c = connect(cfg)
@@ -394,7 +765,7 @@ def ensure_tables(cfg):
 
 
 def startup_unlock_items(cfg):
-    """启动清理：把 item_json 里残留的 locked_by / locked 清掉 → 清了几行
+    """启动清理：把 item_json 里残留的 locked_by 清掉 → 清了几行
 
     ★ round304b（方案 v3 第 5 节第 ③ 条）：服务器崩在"正在上架"中间时，
       物品可能带着 locked_by 留在背包里 ✗ 之后再也卖不掉/上架不了 ✓
@@ -402,14 +773,21 @@ def startup_unlock_items(cfg):
     ★ 为什么在启动时清而不是让业务代码容错：
       这条例外路径平时走不到 ✗ 散在业务里就是一行永远不会被执行的代码 ✓
       放在启动路径上 ✗ 每次重启都会真的跑一遍 ✓
+
+    ★★★ round414（用户："上锁了两个装备，服务器重启后上锁状态就没了"）★★★
+      病根：这里原来连【玩家自己上的锁】也一起删了 ✗
+        `json_remove(item_json,'$.locked_by','$.locked')` ✓
+      而 `locked` 从 round410 起是【玩家手动上的锁】（要长期保存 ✗ 防误卖）✓
+        和 `locked_by`（"正在交易所上架中"的【临时】标记 ✓ 重启必须清）不是一回事 ✓
+      → 重启一次 = 所有人的锁被静默清空 ✓✓ 一字不差
+      ★ 修：只清 locked_by ✗ 玩家的 locked 原样保留 ✓
     """
     n = 0
     try:
         with db(cfg) as c:
             cur = c.execute(
-                "UPDATE items SET item_json = json_remove(item_json,'$.locked_by','$.locked')"
-                " WHERE json_extract(item_json,'$.locked_by') IS NOT NULL"
-                "    OR json_extract(item_json,'$.locked') IS NOT NULL")
+                "UPDATE items SET item_json = json_remove(item_json,'$.locked_by')"
+                " WHERE json_extract(item_json,'$.locked_by') IS NOT NULL")
             try:
                 n = int(cur.rowcount or 0)
             except Exception:

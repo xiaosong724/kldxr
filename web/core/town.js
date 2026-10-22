@@ -164,7 +164,10 @@ function townPlacedShops() {
     if (!info) { continue; }
     out.push({
       id: 'obj' + o.id, name: info[1], kind: info[0],
-      x: +o.x, z: +o.z, items: [], placed: true
+      /* ★ 服务端给的门口点；老数据没有就退回建筑中心（A2） */
+      x: +(o.shop_x != null ? o.shop_x : o.x),
+      z: +(o.shop_z != null ? o.shop_z : o.z),
+      items: [], placed: true
     });
   }
   return out;
