@@ -3597,6 +3597,7 @@ function townPolesAndLights(g) {
     }
   }
   /* 广场串灯 */
+  if (!_legacyDecoOn()) { return; }
   var lampPts = [[-10.6, -10.6], [10.6, -10.6], [10.6, 10.6], [-10.6, 10.6]];
   for (var q = 0; q < 4; q++) {
     var a2 = lampPts[q], b2 = lampPts[(q + 1) % 4];
@@ -3635,6 +3636,7 @@ function townLanternString(parent, x0, z0, x1, z1, y, n, color) {
 
 /* 市集 / 生活气息：小推车、猫、花盆、晾衣、蒸汽 */
 function townMarketLife(g) {
+  if (!_legacyDecoOn()) { return; }
   /* 一只睡在长椅上的猫 */
   (function () {
     var x = -6.2, z = 6.2, y = 0.34;
@@ -3671,6 +3673,21 @@ function townMarketLife(g) {
 }
 
 /* 中央喷泉 / 广场 */
+
+/* ★ 2026-10-22（用户："不在物品清单的物品还没有删除完"）：
+   主城已经改成「放置对象」体系，但广场中心还有一整批【硬编码】的物件：
+     喷泉 / 广场四灯 / 4 个花坛 / 信息亭 / 小吃车 / 盆栽 / 猫 /
+     灯笼串 / 旗帜 / 花盆 / 串灯
+   它们不在放置清单里、也点不掉，全部默认关闭。
+   地面装饰（石板圈、地纹、井盖、光斑）保留，那是地面不是物件。
+   回滚：URL 加 ?legacydeco=1 */
+function _legacyDecoOn() {
+  try {
+    var q = (typeof UI !== 'undefined' && UI.search) ? (UI.search() || '') : '';
+    return q.indexOf('legacydeco=1') >= 0;
+  } catch (e) { return false; }
+}
+
 function townCenter(g) {
   var fx = 0, fz = 0;
   /* 从旧广场搬过来的外圈石带 + 同心圆环 + 井盖 */
@@ -3687,6 +3704,7 @@ function townCenter(g) {
   [[-2.6, 2.0], [2.4, -2.0], [3.6, 4.0]].forEach(function (p) {
     townCyl(g, 0.36, 0.36, 0.025, 0x3f423d, fx + p[0], 0.047, fz + p[1], 14);
   });
+  if (_legacyDecoOn()) {
   townCyl(g, 2.15, 2.25, 0.18, 0x9a9688, fx, 0.09, fz, 20);
   townCyl(g, 1.85, 2.00, 0.55, 0x8a8272, fx, 0.36, fz, 20);
   townCyl(g, 1.62, 1.62, 0.10, 0x4b8aa0, fx, 0.64, fz, 20);
@@ -3708,6 +3726,7 @@ function townCenter(g) {
     townBox(g, 0.50, 0.06, 0.50, 0x2f3438, p[0], 2.58, p[1]);
     townGlowPool(g, p[0], p[1], 2.4, 0xffd9a0, 0.40);
   });
+  }
   /* 中央地纹 */
   for (var r = 0; r < 8; r++) {
     var ang = r * Math.PI / 4;
@@ -3733,6 +3752,7 @@ function townBanner(parent, x, z, ry, col, text) {
 
 function townPlazaDetail(g) {
   var beds = [[-3.7, -3.7], [3.7, -3.7], [-3.7, 3.7], [3.7, 3.7]];
+  if (!_legacyDecoOn()) { return; }
   beds.forEach(function (p, i) {
     townSoftShadow(g, p[0] + 0.08, p[1] + 0.06, 2.0, 2.0, 0, 0.18);
     townBox(g, 1.65, 0.34, 1.65, 0x8a8272, p[0], 0.17, p[1]);
