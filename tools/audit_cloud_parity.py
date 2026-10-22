@@ -86,6 +86,32 @@ def main():
                                           'OK' if not missing else '缺 %s' % missing))
     bad += len(missing)
 
+    # ①b 函数体一致性 —— 光有定义不算搬完，同名函数体也必须一致
+    def bodies(src):
+        ls = src.split('\n')
+        out = {}
+        for i, l in enumerate(ls):
+            m = re.match(r'^    def (\w+)\(', l)
+            if m:
+                j = i + 1
+                while j < len(ls) and not (re.match(r'^    def \w+\(', ls[j])
+                                           or re.match(r'^class \w+', ls[j])):
+                    j += 1
+                out[m.group(1)] = '\n'.join(ls[i:j])
+        return out
+
+    def norm(b):
+        return '\n'.join(x for x in (ln.split('#')[0].rstrip().strip()
+                                      for ln in b.split('\n')) if x)
+
+    bc, bl = bodies(C), bodies(L)
+    want_bodies = set(sys.argv[2].split(',')) if len(sys.argv) > 2 else set()
+    bodydiff = [n for n in sorted(cm & lm)
+                if norm(bc[n]) != norm(bl[n]) and n not in want_bodies]
+    print('①b 函数体不一致      %d 个%s' % (
+        len(bodydiff), '' if not bodydiff else '（下面会列出来）'))
+    bad += len(bodydiff)
+
     gaps = {}
     for n in sorted(cm & lm):
         cc, ll = call_count(C, n), call_count(L, n)
@@ -125,6 +151,13 @@ def main():
 
     pk = sorted(packs(C) - packs(L))
     print('⑦ 消息类型          云端独有:%s' % (pk or '无'))
+
+    if bodydiff:
+        print()
+        print('①b 明细（同名但函数体不同，可能是旧版本没搬）:')
+        for n in bodydiff:
+            print('   %-24s 云端 %4d 行 / 本地 %4d 行' % (
+                n, bc[n].count('\n') + 1, bl[n].count('\n') + 1))
 
     if gaps:
         print()
