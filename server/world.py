@@ -472,6 +472,8 @@ class World(object):
         #   admin_stat = 给管理页看的【只读快照】，每隔十几 tick 换一个新 dict
         #   （HTTP 线程读它：读一次引用是安全的 ✓ 绝不让 HTTP 线程直接遍历世界状态 ✗）
         self.admin_stat = {'tick': 0, 'online': 0, 'mobs': 0, 'loot': 0, 'players': []}
+        # ★ 给 HTTP 线程一个"谁在线"的即时只读集合（每 tick 换一个新 frozenset）
+        self.online_names = frozenset()
         self._admin_acc = 0
         self.srv_conns = {}             # ★ 由 net.Net 填：连接表（只在 asyncio 循环里访问）
         self.tick_count = 0
@@ -576,6 +578,7 @@ class World(object):
         for q in self.players.values():
             ps.append({'name': q.name, 'level': int(q.role.get('level') or 1),
                        'hp': int(q.hp), 'x': round(q.x, 1), 'z': round(q.z, 1),
+                       'gold': int(getattr(q, 'gold', 0) or 0),
                        'weapon': ((q.weapon or {}).get('name') or '（默认单手剑）')})
         self.admin_stat = {
             'tick': self.tick_count, 'online': len(self.players),
@@ -1052,6 +1055,10 @@ class World(object):
         for p in self.players.values():
             p.intents = 0
         self.tick_count += 1
+        try:
+            self.online_names = frozenset(q.name for q in self.players.values())
+        except Exception:
+            pass
         # ★ 第 48 轮：每 15 tick 发一次管理页快照（15 × 33ms ≈ 半秒，够实时了 ✓）
         self._admin_acc += 1
         if self._admin_acc >= 15:
@@ -4415,6 +4422,44 @@ class World(object):
                 q = self._find_player(who)
                 if q is not None:
                     self.mob_cap_of.pop(getattr(q, 'role_id', None), None)
+            return
+        # ★ 2026-10-22：管理页加减金币（只处理在线玩家；离线在 HTTP 层直接写库）
+        if act == 'gold':
+            q = self._find_player(d.get('name'))
+            if q is None:
+                return
+            try:
+                if d.get('v') is not None:
+                    cur = int(getattr(q, 'gold', 0) or 0)
+                    add = int(d.get('v')) - cur
+                else:
+                    add = int(d.get('add') or 0)
+                applied = self._gain_gold(q, add, 'admin')
+            except Exception as e:
+                print('[gold] admin change failed: %r' % (e,))
+                return
+            q.goldDirty = True
+            self._send_cid(q.cid, P.pack(
+                'notice', text='管理员调整了你的金币：%+d（现在 %d）'
+                               % (applied, int(q.gold or 0))))
+            return
+        # ★ 2026-10-22：管理页改了小镇权限 → 让在线当事人的内存也立刻生效
+        if act == 'townperm':
+            try:
+                tid = int(d.get('id'))
+                pid = int(d.get('player'))
+                mask = int(d.get('mask')) & townreg.P_ALL
+            except Exception:
+                return
+            self.town_perms[(tid, pid)] = mask
+            q = self._player_by_role(pid)
+            if q is not None:
+                self._send_cid(q.cid, P.pack(
+                    'notice', text='管理员更新了你在小镇 #%d 的权限（掩码 %d）' % (tid, mask)))
+                try:
+                    self._intent_town_perm_list(q, {'id': tid})
+                except Exception:
+                    pass
             return
         q = self._find_player(d.get('name'))
         if q is None:

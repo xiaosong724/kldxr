@@ -143,9 +143,32 @@ async def cdP_ui():
             txt = await ev("return (document.getElementById('townRows')||{}).textContent||'';")
             print('  admin page: rows=%d catalogInputs=%d hasSystem=%s' % (
                 rows, cats, ('主城' in txt) or ('新手镇' in txt)))
-            await ev("var t=document.getElementById('townRows');"
-                     "if(t){t.scrollIntoView({block:'center'});} return 1;")
-            await asyncio.sleep(0.6)
+            # 权限按钮：主城行也有，点开应该出现 7 个复选框
+            perms = await ev("var b=document.querySelector('#townRows button[data-tperm=\"1\"]');"
+                             "if(!b){return -1;} b.click();"
+                             "return document.querySelectorAll('#permGrid input').length;")
+            boxvis = await ev("var p=document.getElementById('permBox');"
+                              "return p ? getComputedStyle(p).display : 'none';")
+            print('  perm editor: checkboxes=%s box=%s' % (perms, boxvis))
+            assert perms == 7 and boxvis != 'none', 'perm editor not wired'
+            await ev("var x=document.getElementById('permX'); if(x){x.click();} return 1;")
+            goldBtn = await ev("return document.getElementById('rows')"
+                               " ? document.getElementById('rows').innerHTML.indexOf('金币') >= 0 : false;")
+            print('  gold button in player list:', goldBtn)
+            assert goldBtn, 'gold button missing'
+            goldBox = await ev("var b=document.querySelector('#rows button[data-a=\"gold\"]');"
+                               "if(!b){return 'nobtn';} b.click();"
+                               "var g=document.getElementById('goldBox');"
+                               "return (g?getComputedStyle(g).display:'none') + '|' +"
+                               "(document.getElementById('goldNow')||{}).textContent;")
+            print('  gold dialog:', goldBox)
+            assert str(goldBox).startswith('flex|') and str(goldBox).split('|', 1)[1] not in ('', '—'), \
+                'gold dialog not wired'
+            await ev("var x=document.getElementById('goldX'); if(x){x.click();} return 1;")
+
+            await ev("var b=document.querySelector('#townRows button[data-tperm=\"1\"]');"
+                     "if(b){b.click();} return 1;")
+            await asyncio.sleep(0.5)
             shot = await send('Page.captureScreenshot', {'format': 'png'})
             with open(SHOT, 'wb') as f:
                 f.write(base64.b64decode(shot['result']['data']))

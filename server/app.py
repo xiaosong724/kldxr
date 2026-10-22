@@ -604,6 +604,47 @@ class Api(BaseHTTPRequestHandler):
             tid = int(body.get('id'))
         except Exception:
             return self._send(400, {'ok': False, 'error': '缺少小镇 id'})
+
+        # ★ 权限管理（主城也允许）：列表 / 设置
+        if act in ('perm_list', 'perm_set'):
+            t = townreg.get_town(self.cfg, tid)
+            if not t:
+                return self._send(404, {'ok': False, 'error': '没有这个小镇'})
+            if act == 'perm_list':
+                with dbmod.db(self.cfg) as c:
+                    rows = c.execute(
+                        'SELECT p.player_id, p.mask, p.granted_by, p.granted_at,'
+                        ' r.name AS player_name FROM town_perms p'
+                        ' LEFT JOIN roles r ON r.id = p.player_id'
+                        ' WHERE p.town_id=? ORDER BY p.player_id', (tid,)).fetchall()
+                return self._send(200, {'ok': True, 'id': tid, 'perms': [
+                    {'player': int(r['player_id']), 'name': r['player_name'] or '',
+                     'mask': int(r['mask'] or 0), 'granted_by': int(r['granted_by'] or 0),
+                     'granted_at': int(r['granted_at'] or 0)} for r in rows]})
+            try:
+                target = int(body.get('player'))
+                mask = int(body.get('mask')) & townreg.P_ALL
+            except Exception:
+                return self._send(400, {'ok': False, 'error': '权限参数不对'})
+            if target <= 0:
+                return self._send(400, {'ok': False, 'error': '要填玩家角色 ID'})
+            with dbmod.db(self.cfg) as c:
+                role = c.execute('SELECT id, name FROM roles WHERE id=?',
+                                 (target,)).fetchone()
+                if not role:
+                    return self._send(404, {'ok': False, 'error': '没有这个角色'})
+                c.execute('INSERT OR REPLACE INTO town_perms(town_id,player_id,mask,'
+                          'granted_by,granted_at) VALUES(?,?,?,?,?)',
+                          (tid, target, mask, 0, dbmod.now_ms()))
+                c.commit()
+                name = role['name'] or ''
+            if self.world is not None:
+                self.world.town_perms[(tid, target)] = mask
+                self.world.post_admin('townperm', {'id': tid, 'player': target,
+                                                   'mask': mask})
+            return self._send(200, {'ok': True, 'id': tid, 'player': target,
+                                    'name': name, 'mask': mask})
+
         t = townreg.get_town(self.cfg, tid)
         if not t:
             return self._send(404, {'ok': False, 'error': '没有这个小镇'})
@@ -667,13 +708,20 @@ class Api(BaseHTTPRequestHandler):
             return any(k and k in s for k in keys)
 
         online = set()
+        online_gold = {}
         if self.world:
             online = set(qq.get('name') for qq in
                          ((self.world.admin_stat or {}).get('players') or []))
+            for qq in ((self.world.admin_stat or {}).get('players') or []):
+                try:
+                    online_gold[str(qq.get('name'))] = int(qq.get('gold') or 0)
+                except Exception:
+                    pass
         rows, test_n = [], 0
         try:
             with dbmod.db(self.cfg) as c:
-                for r in c.execute('SELECT id, name, level, exp, hp, x, z, mq FROM roles'   # ★ 第 152 轮：带上魔气 ✓
+                for r in c.execute('SELECT id, name, level, exp, hp, x, z, mq, gold'
+                                   ' FROM roles'   # ★ 2026-10-22：带上金币 ✓
                                    ' ORDER BY level DESC, id DESC').fetchall():
                     nm = r[1]
                     if is_test(nm):
@@ -700,7 +748,10 @@ class Api(BaseHTTPRequestHandler):
                                  'hp': r[4], 'x': round(float(r[5] or 0), 1),
                                  'z': round(float(r[6] or 0), 1),
                                  'online': nm in online, 'test': is_test(nm), 'ov': _ov,
-                                 'mq': int(r[7] or 0)})   # ★ 第 152 轮：魔气 ✓
+                                 'mq': int(r[7] or 0),   # ★ 第 152 轮：魔气 ✓
+                                 # ★ 在线用内存金币（权威），离线用库里的
+                                 'gold': (online_gold.get(nm)
+                                          if nm in online_gold else int(r[8] or 0))})
         except Exception:
             pass
         # ★ 在线的排前面 ✓（其余保持"等级降序"✓）
@@ -766,6 +817,8 @@ class Api(BaseHTTPRequestHandler):
                        #   → 下次再加，只改一处就会报 400 "不认识的动作" ✓
                        # ★ B1：小镇立刻结算（扣维护费/冻结），自测和管理页用
                        'towndue',
+                       # ★ 2026-10-22：管理页加减玩家金币
+                       'gold',
                        'qq', 'trigB'):
             return self._send(400, {'ok': False, 'error': '不认识的动作'})
         if self.world is None:
@@ -837,6 +890,8 @@ class Api(BaseHTTPRequestHandler):
             return self._send(200, {'ok': True, 'act': act, 'saved': saved})
         if act == 'give':
             return self._admin_give(payload)
+        if act == 'gold':
+            return self._admin_gold(payload)
         if act in ('delplayer', 'delTest'):
             return self._admin_del(payload, all_test=(act == 'delTest'))
         self.world.post_admin(act, payload)
@@ -955,6 +1010,56 @@ class Api(BaseHTTPRequestHandler):
         out = [{'k': k, 'n': skinsmod.NAME.get(k, k),
                 'g': skinsmod.GENDER.get(k, '')} for k in skinsmod.KEYS]
         return self._send(200, {'ok': True, 'skins': out})
+
+    def _admin_gold(self, d):
+        """管理页给玩家加/减金币。
+
+        ★ 金币是【内存权威】：
+          在线 → 交给 tick 线程走 _gain_gold（会封顶/转金锭/立即排队存档）；
+          离线 → 直接 UPDATE roles.gold（登录时读库）。
+        ★ 减不能减成负数（在线/离线都一样）。
+        """
+        name = (d.get('name') or '').strip()
+        if not name:
+            return self._send(400, {'ok': False, 'error': '没写玩家名字'})
+        add = d.get('add')
+        setv = d.get('v')
+        try:
+            add = int(add) if add is not None else 0
+            setv = int(setv) if setv is not None else None
+        except Exception:
+            return self._send(400, {'ok': False, 'error': '金币数不对'})
+        if add == 0 and setv is None:
+            return self._send(400, {'ok': False, 'error': '没填加减多少'})
+        if abs(add) > 1000000000:
+            return self._send(400, {'ok': False, 'error': '一次最多 10 亿'})
+        with dbmod.db(self.cfg) as c:
+            row = c.execute('SELECT id, gold FROM roles WHERE name=? LIMIT 1',
+                            (name,)).fetchone()
+        if row is None:
+            return self._send(404, {'ok': False, 'error': '没有这个角色：%s' % name})
+        rid, old = int(row[0]), int(row[1] or 0)
+        online = False
+        if self.world is not None:
+            try:
+                online = name in (self.world.online_names or frozenset())
+            except Exception:
+                online = False
+        if online:
+            # 在线：只排队，tick 线程改内存并落库
+            self.world.post_admin('gold', {'name': name, 'add': add, 'v': setv})
+            return self._send(200, {'ok': True, 'name': name, 'online': True,
+                                    'gold': None, 'queued': True})
+        new = max(0, setv if setv is not None else old + add)
+        try:
+            with dbmod.db(self.cfg) as c:
+                c.execute('UPDATE roles SET gold=?, updated_at=? WHERE id=?',
+                          (new, dbmod.now_ms(), rid))
+                c.commit()
+        except Exception as e:
+            return self._send(500, {'ok': False, 'error': '存库失败：%s' % e})
+        return self._send(200, {'ok': True, 'name': name, 'online': False,
+                                'gold': new, 'before': old})
 
     def _admin_give(self, d):
         """给某个角色发一件武器（写库 ✓ 在线的话再顺手告诉他一声 ✓）"""

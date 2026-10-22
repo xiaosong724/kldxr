@@ -116,6 +116,60 @@
   </div>
 
   <!-- 面板 -->
+  <!-- ★ 2026-10-22：金币加减（在线走内存，离线写库） -->
+  <div id="goldBox" style="display:none;position:fixed;inset:0;z-index:50;background:#000a;
+       align-items:center;justify-content:center">
+    <div class="card" style="width:min(460px,94vw);margin:0">
+      <h2 style="display:flex;justify-content:space-between">
+        <span>给 <b id="goldWho" style="color:#ffd83d"></b> 调整金币</span>
+        <span style="cursor:pointer" id="goldX">✕</span>
+      </h2>
+      <div class="tip" style="margin-bottom:8px">
+        当前：<b id="goldNow" style="color:#7ee08a">—</b>
+        <span id="goldOnline" class="tip"></span>
+      </div>
+      <div class="row" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <input id="goldAmt" type="number" step="1000" value="100000" style="width:150px">
+        <button data-gold-add="1">增加</button>
+        <button data-gold-add="-1" class="warn">减少</button>
+      </div>
+      <div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+        <button data-gold-set="100000">设为 10 万</button>
+        <button data-gold-set="1000000">设为 100 万</button>
+        <button data-gold-set="10000000">设为 1000 万</button>
+        <button data-gold-set="0" class="warn">清零</button>
+      </div>
+      <div class="tip" style="margin-top:10px">减少不会减成负数；一次最多 10 亿。</div>
+    </div>
+  </div>
+
+  <!-- ★ 2026-10-22：小镇权限（主城也能设） -->
+  <div id="permBox" style="display:none;position:fixed;inset:0;z-index:50;background:#000a;
+       align-items:center;justify-content:center">
+    <div class="card" style="width:min(560px,94vw);max-height:90vh;overflow:auto;margin:0">
+      <h2 style="display:flex;justify-content:space-between">
+        <span>小镇 <b id="permTown" style="color:#ffd83d"></b> 的权限</span>
+        <span style="cursor:pointer" id="permX">✕</span>
+      </h2>
+      <div class="tip" style="margin-bottom:6px">
+        给某个角色 ID 单独授权（可先在上面的玩家列表里查 ID）。
+      </div>
+      <div class="row" style="display:flex;gap:6px;align-items:center">
+        <input id="permPlayer" type="number" placeholder="角色 ID" style="width:140px">
+        <button id="permLoad">读出该玩家权限</button>
+      </div>
+      <div id="permGrid" style="display:flex;flex-wrap:wrap;gap:10px;margin:12px 0"></div>
+      <div class="row" style="display:flex;gap:6px;align-items:center">
+        <button id="permSave" style="background:#2f6b3f;border-color:#7ee08a">保存</button>
+        <button id="permAll">全选</button>
+        <button id="permNone">全不选</button>
+        <span class="tip" id="permMsg"></span>
+      </div>
+      <div class="tip" style="margin-top:10px">列表（已授权）：</div>
+      <div id="permList" class="tip" style="max-height:180px;overflow:auto"></div>
+    </div>
+  </div>
+
   <div id="panel" class="hide">
     <div class="card">
       <h2>世界状态 <span class="tip" id="auto"></span></h2>
@@ -225,7 +279,7 @@
         <button class="warn" id="btnClean">清理测试账号</button>
       </h2>
       <table>
-        <thead><tr><th>状态</th><th>名字</th><th>等级</th><th>经验</th><th>坐标</th><th>魔气</th><th>操作</th></tr></thead>
+        <thead><tr><th>状态</th><th>名字</th><th>等级</th><th>金币</th><th>经验</th><th>坐标</th><th>魔气</th><th>操作</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
       <!-- ★ 第 64 轮：分页（在线优先 ✓ 服务器排好序了 ✓）-->
@@ -654,7 +708,9 @@ function refresh() {
       return '<tr' + (p.test ? ' style="opacity:.55"' : '') + '><td>' +
         (p.online ? '<span class="on">在线</span>' : '<span class="off">离线</span>') +
         '</td><td>' + nm + (p.test ? ' <span class="tip">测试</span>' : '') +
-        '</td><td>' + p.level + '</td><td>' + p.exp + '</td>' +
+        '</td><td>' + p.level + '</td>' +
+        '<td>' + fmtGold(p.gold) + '</td>' +
+        '<td>' + p.exp + '</td>' +
         '<td>' + p.x + ', ' + p.z + '</td>' +
         /* ★ 第 153 轮：魔气列（有魔气时按深浅上色 ✓ 一眼看出谁凶 ✓）*/
         '<td>' + ((+p.mq > 0)
@@ -692,6 +748,7 @@ function refresh() {
         '<button data-a="spawn" data-n="' + nm + '" data-rank="2">刷 Boss</button>' +
         '<button data-a="special" data-n="' + nm + '">召唤选中</button>' +
         '<button data-a="give" data-n="' + nm + '">给装备</button>' +
+        '<button data-a="gold" data-n="' + nm + '">金币</button>' +
         '<button data-a="heal" data-n="' + nm + '">治疗</button>' +
         (p.online ? '<button class="warn" data-a="kill" data-n="' + nm + '">打倒</button>' +
                     '<button class="warn" data-a="kick" data-n="' + nm + '">踢下线</button>'
@@ -699,6 +756,109 @@ function refresh() {
         '</td></tr>';
     }).join('') || '<tr><td colspan="7" class="tip">还没有角色</td></tr>';
   });
+}
+
+/* ---------- 2026-10-22：玩家金币加减 ---------- */
+function fmtGold(v) {
+  var n = Math.round(+v || 0);
+  if (n >= 100000000) { return (n / 100000000).toFixed(2) + ' 亿'; }
+  if (n >= 10000) { return (n / 10000).toFixed(1) + ' 万'; }
+  return String(n);
+}
+var GOLD_WHO = '';
+function openGold(name, gold, online) {
+  GOLD_WHO = name;
+  $('goldWho').textContent = name;
+  $('goldNow').textContent = (Math.round(+gold || 0)).toLocaleString('zh-CN');
+  $('goldOnline').textContent = online ? '（在线，改内存）' : '（离线，写库）';
+  $('goldBox').style.display = 'flex';
+  $('goldAmt').focus();
+  $('goldAmt').select();
+}
+function closeGold() { $('goldBox').style.display = 'none'; GOLD_WHO = ''; }
+function goldOp(kind, val) {
+  if (!GOLD_WHO) { return; }
+  var body = { act: 'gold', name: GOLD_WHO };
+  if (kind === 'set') { body.v = Math.round(val); }
+  else { body.add = Math.round(val) * (kind === 'sub' ? -1 : 1); }
+  api('/api/admin/act', { method: 'POST', body: JSON.stringify(body) }).then(function (r) {
+    if (!r.ok) { return msg(r.error || '失败'); }
+    if (r.queued) { msg('已排队：' + GOLD_WHO + '（在线，下一拍生效）', '#7ee08a'); }
+    else { msg(GOLD_WHO + ' 金币 → ' + fmtGold(r.gold), '#7ee08a'); }
+    closeGold();
+    setTimeout(refresh, 400);
+  });
+}
+
+/* ---------- 2026-10-22：小镇权限（主城也支持） ---------- */
+var PERMS = [
+  [1, '可移动'], [2, '可交互'], [4, '可交易'], [8, '可权限'],
+  [16, '可移除'], [32, '可调价格'], [64, '可传送']
+];
+var PERM_TOWN = 0, PERM_TOWN_NAME = '';
+function permMsg(t, ok) {
+  var el = $('permMsg');
+  if (el) { el.textContent = t || ''; el.style.color = ok ? '#7ee08a' : '#ffb4a0'; }
+}
+function openPerm(id, name) {
+  PERM_TOWN = +id;
+  PERM_TOWN_NAME = name || ('#' + id);
+  $('permTown').textContent = PERM_TOWN_NAME;
+  $('permPlayer').value = '';
+  permMsg('');
+  $('permGrid').innerHTML = PERMS.map(function (p) {
+    return '<label style="display:flex;align-items:center;gap:6px;cursor:pointer">' +
+      '<input type="checkbox" class="permBit" value="' + p[0] + '">' + p[1] + '</label>';
+  }).join('');
+  $('permBox').style.display = 'flex';
+  loadPermList();
+}
+function closePerm() { $('permBox').style.display = 'none'; PERM_TOWN = 0; }
+function permMaskOf() {
+  var mask = 0;
+  document.querySelectorAll('.permBit:checked').forEach(function (c) { mask |= +c.value; });
+  return mask;
+}
+function setPermMask(mask) {
+  document.querySelectorAll('.permBit').forEach(function (c) {
+    c.checked = ((+mask) & (+c.value)) !== 0;
+  });
+}
+function loadPermList() {
+  if (!PERM_TOWN) { return; }
+  api('/api/admin/town', { method: 'POST',
+    body: JSON.stringify({ act: 'perm_list', id: PERM_TOWN }) }).then(function (r) {
+    if (!r.ok) { permMsg(r.error || '读取失败'); return; }
+    $('permList').innerHTML = (r.perms || []).length
+      ? r.perms.map(function (p) {
+          return '<div>#' + p.player + ' ' + (p.name || '') + ' · 掩码 ' + p.mask +
+            ' · <button data-permedit="' + p.player + '">编辑</button></div>';
+        }).join('')
+      : '<span class="tip">还没有单独授权的玩家</span>';
+  });
+}
+function loadPermOf(player) {
+  if (!PERM_TOWN || !player) { return; }
+  api('/api/admin/town', { method: 'POST',
+    body: JSON.stringify({ act: 'perm_list', id: PERM_TOWN }) }).then(function (r) {
+    if (!r.ok) { return; }
+    var one = (r.perms || []).filter(function (p) { return +p.player === +player; })[0];
+    setPermMask(one ? one.mask : 0);
+    permMsg(one ? ('读到 #' + player + '：' + one.mask) : ('#' + player + ' 还没有授权'), true);
+  });
+}
+function savePerm() {
+  var player = +(($('permPlayer') || {}).value || 0);
+  if (!PERM_TOWN) { return; }
+  if (!player) { permMsg('先填角色 ID'); return; }
+  var mask = permMaskOf();
+  api('/api/admin/town', { method: 'POST',
+    body: JSON.stringify({ act: 'perm_set', id: PERM_TOWN, player: player, mask: mask }) })
+    .then(function (r) {
+      if (!r.ok) { permMsg(r.error || '保存失败'); return; }
+      permMsg('已保存：' + (r.name || ('#' + player)) + ' → ' + r.mask, true);
+      loadPermList();
+    });
 }
 
 /* ---------- C1：小镇管理 ---------- */
@@ -722,15 +882,17 @@ function loadTowns() {
     var rows = r.towns || [];
     $('townInfo').textContent = '共 ' + rows.length + ' 座';
     $('townRows').innerHTML = rows.map(function (t) {
-      var ops;
+      var permBtn = '<button data-tperm="' + t.id + '" data-tname="' +
+        String(t.name || '').replace(/"/g, '&quot;') + '">权限</button>';
       if (+t.is_system) {
-        ops = '<span class="tip">系统主城</span>';
+        ops = permBtn + '<span class="tip">系统主城</span>';
       } else if (t.status === 'active') {
-        ops = '<button data-town="' + t.id + '" data-tact="settle">立刻结算</button>' +
+        ops = permBtn +
+              '<button data-town="' + t.id + '" data-tact="settle">立刻结算</button>' +
               '<button class="warn" data-town="' + t.id + '" data-tact="freeze">冻结</button>' +
               '<button class="warn" data-town="' + t.id + '" data-tact="dissolve">解散</button>';
       } else {
-        ops = '<button data-town="' + t.id + '" data-tact="restore">恢复</button>';
+        ops = permBtn + '<button data-town="' + t.id + '" data-tact="restore">恢复</button>';
       }
       return '<tr><td>' + t.id + '</td><td>' + (t.name || '') + '</td><td>' +
         (t.owner_name || (t.owner_id ? '#' + t.owner_id : '系统')) + '</td><td>' +
@@ -766,9 +928,42 @@ $('btnOut').onclick = doLogout;
 $('btnRefresh').onclick = function () { refresh(); loadTowns(); };
 $('btnTownRefresh').onclick = loadTowns;
 $('townRows').onclick = function (e) {
+  var pb = e.target && e.target.closest ? e.target.closest('button[data-tperm]') : null;
+  if (pb) {
+    openPerm(+pb.getAttribute('data-tperm'), pb.getAttribute('data-tname') || '');
+    return;
+  }
   var b = e.target && e.target.closest ? e.target.closest('button[data-tact]') : null;
   if (!b) { return; }
   townAct(+b.getAttribute('data-town'), b.getAttribute('data-tact'));
+};
+
+/* ---------- 金币 / 权限弹窗的按钮 ---------- */
+$('goldX').onclick = closeGold;
+$('goldBox').onclick = function (e) { if (e.target === this) { closeGold(); } };
+document.querySelectorAll('#goldBox [data-gold-add]').forEach(function (b) {
+  b.onclick = function () {
+    var sign = +b.getAttribute('data-gold-add');
+    var v = +(($('goldAmt') || {}).value || 0);
+    if (!v || v < 0) { return msg('先填一个正数'); }
+    goldOp(sign > 0 ? 'add' : 'sub', v);
+  };
+});
+document.querySelectorAll('#goldBox [data-gold-set]').forEach(function (b) {
+  b.onclick = function () { goldOp('set', +b.getAttribute('data-gold-set')); };
+});
+$('permX').onclick = closePerm;
+$('permBox').onclick = function (e) { if (e.target === this) { closePerm(); } };
+$('permLoad').onclick = function () { loadPermOf(+(($('permPlayer') || {}).value || 0)); };
+$('permSave').onclick = savePerm;
+$('permAll').onclick = function () { setPermMask(127); };
+$('permNone').onclick = function () { setPermMask(0); };
+$('permList').onclick = function (e) {
+  var b = e.target && e.target.closest ? e.target.closest('button[data-permedit]') : null;
+  if (!b) { return; }
+  var pid = +b.getAttribute('data-permedit');
+  $('permPlayer').value = pid;
+  loadPermOf(pid);
 };
 $('catalogRows').onclick = function (e) {
   var b = e.target && e.target.closest ? e.target.closest('button[data-price]') : null;
@@ -804,6 +999,10 @@ $('rows').onclick = function (e) {
     act('spawn', { name: n, n: 1, rank: +(spp[0] || 1), skin: spp[1] || 'rift' });
   }
   else if (a === 'heal') { act('heal', { name: n }); }
+  else if (a === 'gold') {
+    var one = (CUR_PLAYERS || []).filter(function (x) { return x.name === n; })[0] || {};
+    openGold(n, one.gold || 0, !!one.online);
+  }
   else if (a === 'kill') { if (confirm('把 ' + n + ' 打倒？')) { act('kill', { name: n }); } }
   else if (a === 'kick') { if (confirm('把 ' + n + ' 踢下线？')) { act('kick', { name: n }); } }
   else if (a === 'del') { delPlayer(n); }
