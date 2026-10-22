@@ -1144,7 +1144,19 @@
     isPlacing: function () { return P.placing; },
     startPlace: function (item) { startPlace(item); },
     stopPlace: function () { stopPlace(); },
-    debugEdit: function () { return { on: EDIT.on, id: EDIT.id, moving: EDIT.moving }; }
+    debugEdit: function () { return { on: EDIT.on, id: EDIT.id, moving: EDIT.moving }; },
+    /* 2026-10-22 调试：物件在屏幕上的位置 + 该位置能拾取到什么 */
+    debugScreen: function (objId) {
+      var e = P.objs[objId]; var c = editCam();
+      if (!e || !e.mesh || !c) { return null; }
+      var b = new THREE.Box3().setFromObject(e.mesh);
+      var tp = new THREE.Vector3((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2,
+                                 (b.min.z + b.max.z) / 2);
+      tp.project(c);
+      var cx = (tp.x * 0.5 + 0.5) * innerWidth, cy = (-tp.y * 0.5 + 0.5) * innerHeight;
+      return { cx: Math.round(cx), cy: Math.round(cy), nz: +tp.z.toFixed(3),
+               picked: editPick(cx, cy) };
+    }
   };
 
   /* web.js 收到消息后回调这些 */
