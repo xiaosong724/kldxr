@@ -154,6 +154,12 @@
         g.add(uf);
       }
     } catch (eRoof) { }
+    /* ★ 2026-10-22（用户：别人脚下的阴影看不到）：放置的模型原来既不投影也不接影，
+       结果站在室内地板上的人，阴影投在楼下的地形上、被地板挡住 → 看着没影子。
+       这里让建筑（尤其地板）能接收阴影。 */
+    try {
+      g.traverse(function (m) { if (m.isMesh) { m.receiveShadow = true; } });
+    } catch (eRS) { }
     return batchModel(g);
   }
 

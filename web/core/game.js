@@ -7531,14 +7531,16 @@ function netUpdate(dt) {
       if (_sleep0) {
         var _sy3 = +((o.snapYaw != null) ? o.snapYaw : (o.cur.yaw || 0));
         var _so3 = (typeof SLEEP_OFF !== 'undefined') ? SLEEP_OFF : 0.55;
+        /* ★ 2026-10-22（用户：躺/坐的高度要和地板一样）：不再额外加高，
+           直接站在"脚下地板高度"上（躺姿只沿朝向偏一点，保持躺在床上）。 */
         var _y3b = (typeof o.fy === 'number') ? o.fy : 0;
-        _gs0.position.set(_pX + Math.sin(_sy3) * _so3, _y3b + 0.62,
+        _gs0.position.set(_pX + Math.sin(_sy3) * _so3, _y3b,
                           _pZ + Math.cos(_sy3) * _so3);
         _gs0.rotation.set(-1.45, _sy3, 0);
         o.hh.legL.rotation.x = 0; o.hh.legR.rotation.x = 0;
       } else {
         var _y3c = (typeof o.fy === 'number') ? o.fy : 0;
-        _gs0.position.set(_pX, _y3c + 0.30, _pZ);
+        _gs0.position.set(_pX, _y3c, _pZ);
         _gs0.rotation.set(0, o.cur.yaw || 0, 0);
         o.hh.legL.rotation.x = -1.35; o.hh.legR.rotation.x = -1.35;
         o.hh.armL.rotation.x = 0.15; o.hh.armR.rotation.x = 0.15;
@@ -10097,7 +10099,14 @@ function frame(ts) {
       _fo.jyS = (_fo.jyS === undefined) ? _tj
                  : (_fo.jyS + (_tj - _fo.jyS) * Math.min(1, dt * 14));
       if (!isFinite(_fo.jyS)) { _fo.jyS = _tj; }
-      var _gy = terYAt(_mg.position.x, _mg.position.z);
+      /* ★★★ 2026-10-22（用户：别人站在加高地板建筑里脚在地板里）★★★
+         这里原来用 terYAt（只有地形高度，不含室内地板），而且 _mg 就是【真人模型】，
+         每帧把他的 y 设成地形高度 → 把 netUpdate 里设好的 fy 又归零了。
+         这就是"站在有地板的建筑里脚陷进去"的真正原因。 */
+      var _gy = (typeof _fo.fy === 'number') ? _fo.fy
+        : ((typeof supportYAt === 'function')
+           ? supportYAt(_mg.position.x, _mg.position.z)
+           : terYAt(_mg.position.x, _mg.position.z));
       /* ★★★ round401 修的真 bug（用户："暴击跳起来打没有"）★★★
          ★ 根因：暴击跳打是在【动画那段】把 y 加上去的 ✗
            而这个【渲染前统一覆盖】每帧重设 y ✗ 把加上去的部分抹掉了 ✓
@@ -10133,7 +10142,10 @@ function frame(ts) {
                  && typeof townSeatById === 'function') ? townSeatById(_fo.seat) : null;
       if (_os) {
         _gy = terYAt(_os.x, _os.z);
-        _mg.position.set(_os.x, _gy - 0.06, _os.z);
+        /* ★ 2026-10-22（用户：坐下高度不对）：这里原来写死 _gy - 0.06（沉到地面下），
+           改成和服务端一致的"地板高度 + 坐高"。 */
+        var _seatY = (typeof _fo.fy === 'number') ? _fo.fy : _gy;
+        _mg.position.set(_os.x, _seatY, _os.z);
         _mg.rotation.set(0, _os.yaw, 0);
         if (_fo.hh) {
           _fo.hh.legL.rotation.x = -1.34;
@@ -10143,6 +10155,14 @@ function frame(ts) {
           _fo.hh.sw.visible = false;
           if (_fo.hh.legL.children[0]) { _fo.hh.legL.children[0].rotation.x = 0.82; }
           if (_fo.hh.legR.children[0]) { _fo.hh.legR.children[0].rotation.x = 0.82; }
+        }
+      } else if (_fo.pose === 'sit' || _fo.pose === 'sleep') {
+        /* ★ 2026-10-22：坐/躺的 y 由 netUpdate 里按姿态算好（fy + 坐高/躺高），
+           这里【不要再覆盖】—— 否则坐/睡高度会被按"站着"重算，位置也跑偏。
+           只把武器按"镇内不显示"处理一下。 */
+        if (_fo.hh && _fo.hh.sw) {
+          var _visFs = !_foTown;
+          if (_fo.hh.sw.visible !== _visFs) { _fo.hh.sw.visible = _visFs; }
         }
       } else {
         _mg.position.y = _gy + Math.max(0, _fo.jyS) + _hop + _fly;

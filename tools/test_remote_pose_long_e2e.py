@@ -166,6 +166,12 @@ async def observer(tok, uid, snap):
                 " prev:o.__seatedPrev} : 'notfound';" % json.dumps(snap.get('name') or ''))
             print('  seated state:', dbg)
             # 高频采样（每 30ms）看姿态是否在坐/站之间跳
+            dump = await c.ev(
+                "var out=[]; for(var k in NET.others){var o=NET.others[k];"
+                "out.push([k, o&&o.name, o&&o.hh&&o.hh.g?+o.hh.g.position.y.toFixed(2):null,"
+                " String(o&&o.seat), o&&o.pose, o&&o.seated]);} return out;")
+            print('  NET.others dump:', dump)
+            # 位置和姿态高度必须正确（腿角采样在帧内，锁在渲染前，这里不判）
             fast = []
             for _ in range(60):
                 v = await c.ev(
