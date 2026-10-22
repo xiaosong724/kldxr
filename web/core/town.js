@@ -219,7 +219,8 @@ function townTeleportList() {
     if (!cat || String(cat.function_type || '') !== 'teleport') { continue; }
     out.push({
       id: 'obj' + o.id, objId: o.id,
-      name: String(cat.name || o.catalog).replace(/\s+v\d+$/, ''),
+      /* 物件自带名字优先（meta_json 里的 name），否则用目录名 */
+      name: String(o.label || cat.name || o.catalog).replace(/\s+v\d+$/, ''),
       x: +o.x, z: +o.z
     });
   }
@@ -3431,13 +3432,23 @@ function townShopLabelsRebuild() {
     /* 只有真正能交互的商店才飘字（服务端 _rebuild_dyn_shops 会给 shop_x/shop_z） */
     if (o.shop_x == null && o.shop_z == null) { continue; }
     /* 目录名形如「药铺 v1」——飘字上去掉版本后缀 */
-    var nm = String(cat.name || o.catalog).replace(/\s+v\d+$/, '');
+    var nm = String(o.label || cat.name || o.catalog).replace(/\s+v\d+$/, '');
     var sub = (String(cat.function_type || '').indexOf('eat') >= 0) ? '堂食 · 可交易' : '可交易';
     /* 2026-10-22 用户要求：飘字高度提升 100%（3.75 → 7.5） */
     townFloatingLabel(grp, nm, sub, +o.x, 7.50, +o.z,
       sub.indexOf('堂食') >= 0 ? 'rgba(255,200,140,0.95)' : 'rgba(160,235,255,0.9)');
     var last = TOWN_LABELS[TOWN_LABELS.length - 1];
     if (last) { last.isShopLabel = true; last.objId = o.id; }
+  }
+
+  /* ★ 2026-10-22（用户："传送的传送点漂浮名称怎么没有了"）：
+     传送阵飘字也按实际放置的物件重建，跟着传送阵走。 */
+  var tps = (typeof townTeleportList === 'function') ? townTeleportList() : [];
+  for (var q = 0; q < tps.length; q++) {
+    var tp = tps[q];
+    townFloatingLabel(grp, tp.name, '传送点', tp.x, 3.05, tp.z, 'rgba(140,230,255,0.95)');
+    var lt = TOWN_LABELS[TOWN_LABELS.length - 1];
+    if (lt) { lt.isShopLabel = true; lt.objId = tp.objId; lt.isTpLabel = true; }
   }
 }
 
@@ -3521,6 +3532,32 @@ function townNpcTick(px, pz, dt) {
     n.g.rotation.y = cur + diff * Math.min(1, st * 7);
     n.t += st;
     n.g.position.y = n.baseY + (near ? Math.sin(n.t * 3.2) * 0.035 : 0);
+  }
+}
+
+/* ★★★ 2026-10-22（用户："传送阵的粒子动画怎么没有了"）★★★
+   模型里有 `userData.animate(t)`（上升粒子、核心光晕呼吸），
+   但从来没人每帧调它 —— 静态传送阵走的是另一套画法，物件这条路没人管动画。
+   这里做一个登记表 + 每帧 tick。 */
+var TOWN_ANIM_MODELS = [];
+function townAnimRegister(m) {
+  if (!m || !m.userData || typeof m.userData.animate !== 'function') { return; }
+  if (m.userData._animOn) { return; }
+  m.userData._animOn = true;
+  TOWN_ANIM_MODELS.push(m);
+}
+function townAnimUnregister(m) {
+  if (!m) { return; }
+  for (var i = TOWN_ANIM_MODELS.length - 1; i >= 0; i--) {
+    if (TOWN_ANIM_MODELS[i] === m) { TOWN_ANIM_MODELS.splice(i, 1); }
+  }
+  try { m.userData._animOn = false; } catch (e) { }
+}
+function townAnimClear() { TOWN_ANIM_MODELS = []; }
+function townAnimTick(now) {
+  if (!TOWN_ANIM_MODELS.length) { return; }
+  for (var i = 0; i < TOWN_ANIM_MODELS.length; i++) {
+    try { TOWN_ANIM_MODELS[i].userData.animate(now); } catch (e) { }
   }
 }
 

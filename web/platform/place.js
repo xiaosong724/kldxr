@@ -265,13 +265,18 @@
     /* 旧建筑由原有渲染器负责，不在这里重复画 */
     if (isLegacy(o)) { return; }
     var old = P.objs[o.id];
-    if (old && old.mesh) { grp.remove(old.mesh); }
+    if (old && old.mesh) {
+      try { if (typeof townAnimUnregister === 'function') { townAnimUnregister(old.mesh); } } catch (eAU) { }
+      grp.remove(old.mesh);
+    }
     var mesh = buildMesh(o);
     /* ★ 2026-10-22：室内家具要抬到建筑地板高度（服务端下发 o.y），
        否则从 y=0 起画的模型（椅子/桌子）会陷进 0.26 高的室内地板。 */
     mesh.position.set(+o.x + _TOFF.x, +o.y || 0, +o.z + _TOFF.z);
     mesh.rotation.y = +o.rot || 0;
     mesh.userData.objId = o.id;          /* 2026-10-22：编辑模式拾取用 */
+    /* ★ 2026-10-22：有 userData.animate 的模型（传送阵粒子）登记进每帧 tick */
+    try { if (typeof townAnimRegister === 'function') { townAnimRegister(mesh); } } catch (eA) { }
     if (isBuildingCat(o.catalog)) {
       /* ★ 2026-10-22：进屋要单独淡化这栋建筑 → 材质必须每栋一份，不能共用 */
       mesh.userData.isBuilding = true;
@@ -376,6 +381,7 @@
       }
     }
     P.objs = {};
+    try { if (typeof townAnimClear === 'function') { townAnimClear(); } } catch (eAC) { }
     syncSolids();
     syncFloors();
   }
@@ -1241,6 +1247,10 @@
           if (kill[q].parent) { kill[q].parent.remove(kill[q]); }
         }
       } catch (eSweep) { }
+      try { if (typeof townAnimUnregister === 'function') {
+        var _rm = P.objs[id] && P.objs[id].mesh;
+        if (_rm) { townAnimUnregister(_rm); }
+      } } catch (eAU2) { }
       try { syncSolids(); } catch (eS1) { }
       try { syncFloors(); } catch (eS2) { }
       rebuildLabels();

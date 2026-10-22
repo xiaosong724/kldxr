@@ -2634,6 +2634,17 @@ class World(object):
             'parent': int(o.get('parent_id') or 0),
             'floor': int(o.get('floor') or 0),
         }
+        # ★ 2026-10-22（用户："传送点里面的名字怎么全部变成一样的了"）：
+        #   物件可以自带名字（存在 meta_json 里），没有就用目录名
+        try:
+            _meta = o.get('meta_json')
+            if _meta:
+                import json as _json
+                _m = _json.loads(_meta) if isinstance(_meta, str) else _meta
+                if isinstance(_m, dict) and _m.get('name'):
+                    d['label'] = str(_m['name'])[:24]
+        except Exception:
+            pass
         # ★ 商店建筑：交互点在门口，不是建筑中心（2026-10-22 A2）
         #   中心 + 半深 + 1m，再按 rot 旋转；客户端直接用这两个值，不再自己算一遍
         s = self.dyn_shops.get('obj%d' % int(o['id']))

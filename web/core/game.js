@@ -9504,6 +9504,8 @@ function frame(ts) {
     if (typeof townLabelTick === 'function') { townLabelTick(P.x, P.z); }
     /* ★ 2026-10-22：店铺店员——靠近时转头看你 + 轻微起伏（交互动画） */
     if (typeof townNpcTick === 'function') { townNpcTick(P.x, P.z, dt); }
+    /* ★ 2026-10-22：物件自带动画（传送阵粒子等） */
+    if (typeof townAnimTick === 'function') { townAnimTick(ts / 1000); }
     if (typeof UI !== 'undefined' && UI.warehouseFloat) {
       /* ★ 2026-10-22：飘字挂在【仓库建筑对象】上（以前钉在旧柜台坐标 → 建筑挪走了它不动，
          删掉了它还悬在那儿）。找不到仓库对象就不显示。 */
