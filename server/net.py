@@ -925,8 +925,8 @@ class Net(object):
         # ★ 2026-10-22：进世界就把「已学 / 已装配」的 A 技能缓存进内存
         #   （技能释放要在 tick 线程做，而 tick 不许读库）
         try:
-            import skills as _skm0
-            with dbmod.db(self.cfg) as _c0:
+            import db as _db0
+            with _db0.db(self.cfg) as _c0:
                 _le = [r['key'] for r in _c0.execute(
                     'SELECT key FROM skill_learn WHERE role_id=?', (int(role.get('id') or 0),))]
                 _ld = [r['key'] for r in _c0.execute(
