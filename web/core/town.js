@@ -154,16 +154,39 @@ function townHouseFridgeNear(x, z) {
   return null;
 }
 
+/* ★ 2026-10-22：TOWN_SHOP_CATALOG 从来没定义过（放置商店一被扫到就 ReferenceError）。
+   改成从目录的 function_json / catalog 命名推出来。 */
+function townPlacedShopInfo(o) {
+  var cat = null;
+  try {
+    var cats = (typeof window !== 'undefined' && window.MY_TOWN_CATALOG) || [];
+    for (var i = 0; i < cats.length; i++) { if (cats[i] && cats[i].id === o.catalog) { cat = cats[i]; break; } }
+  } catch (e) { cat = null; }
+  if (cat) {
+    var fn = null;
+    try { fn = cat.function_json ? JSON.parse(cat.function_json) : null; } catch (e2) { fn = null; }
+    if (fn && fn.shop) { return { kind: fn.shop, name: cat.name || fn.shop }; }
+  }
+  var m = /^shop_([a-z_]+?)_v\d+$/.exec(String(o.catalog || ''));
+  if (m) {
+    for (var k = 0; k < TOWN_SHOPS.length; k++) {
+      if (TOWN_SHOPS[k].id === m[1]) { return { kind: m[1], name: TOWN_SHOPS[k].name }; }
+    }
+    return { kind: m[1], name: m[1] };
+  }
+  return null;
+}
+
 function townPlacedShops() {
   var out = [];
   var list = (typeof TOWN_OBJECTS_CACHE !== 'undefined' && TOWN_OBJECTS_CACHE) || [];
   for (var i = 0; i < list.length; i++) {
     var o = list[i];
     if (!o || o.parent) { continue; }
-    var info = TOWN_SHOP_CATALOG[o.catalog];
+    var info = townPlacedShopInfo(o);
     if (!info) { continue; }
     out.push({
-      id: 'obj' + o.id, name: info[1], kind: info[0],
+      id: 'obj' + o.id, name: info.name, kind: info.kind,
       /* ★ 服务端给的门口点；老数据没有就退回建筑中心（A2） */
       x: +(o.shop_x != null ? o.shop_x : o.x),
       z: +(o.shop_z != null ? o.shop_z : o.z),

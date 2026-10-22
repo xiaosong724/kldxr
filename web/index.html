@@ -2,9 +2,16 @@
 <html lang="zh-CN"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>修仙 3D</title>
+<meta name="screen-orientation" content="any">
+<meta name="x5-orientation" content="any">
+<meta name="full-screen" content="yes">
+<link rel="manifest" href="/manifest.webmanifest">
+<title>块来修仙 · 末日丧尸 × 组队修仙</title>
 <!-- ★ 内联图标：省掉一次 /favicon.ico 请求（浏览器默认会去要，控制台一直报 404 很烦 ✓）-->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231b2430'/%3E%3Ctext x='16' y='24' font-size='21' text-anchor='middle' fill='%23ffd83d'%3E%E4%BB%99%3C/text%3E%3C/svg%3E">
+<style>
+body.safe-mode #skBar, body.safe-mode #auto { display:none !important; }
+</style>
 <style>
  html,body{margin:0;height:100%;background:#1a1208;overflow:hidden;color:#f2e8d8;
    font-family:ui-monospace,Consolas,monospace;-webkit-user-select:none;user-select:none}
@@ -26,6 +33,11 @@
  #exp{height:100%;width:0%;background:linear-gradient(180deg,#8ed2ff,#2f7fe0);border-radius:4px;transition:width .15s}
  #expTxt{position:absolute;left:0;right:0;top:0;height:7px;line-height:7px;text-align:center;
    font-size:7.5px;font-weight:700;color:#eaf4ff;text-shadow:0 1px 2px #000,0 0 3px #000;pointer-events:none}
+ /* ★ round583：灵气条（蓝色 + 数字在条内） */
+ #qiw{position:relative;margin-top:3px;width:150px;height:9px;background:#000000a8;border-radius:5px;overflow:hidden}
+ #qi{height:100%;width:0%;background:linear-gradient(180deg,#9fe8ff,#2f8fe0);border-radius:5px;transition:width .15s}
+ #qiTxt{position:absolute;left:0;right:0;top:0;height:9px;line-height:9px;text-align:center;
+   font-size:8px;font-weight:700;color:#eaf6ff;text-shadow:0 1px 2px #000,0 0 3px #000;pointer-events:none}
  /* ★ 死亡遮罩（只把画面压暗 ✓ 不染红 ✓ 血空 → 必须点复活才起来 ✓）*/
  #dead{position:fixed;inset:0;z-index:55;display:none;align-items:center;justify-content:center;
    background:rgba(6,8,12,.6);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
@@ -34,13 +46,25 @@
  #deadBy{color:#eef3fa;font-size:24px;font-weight:800;letter-spacing:3px;margin-bottom:8px;
    text-shadow:0 2px 14px #000}
  #deadTip{color:#93a0b0;font-size:12px;letter-spacing:1px;margin-bottom:28px}
- #reviveBtn{display:inline-block;padding:15px 56px;border-radius:999px;
-   background:linear-gradient(180deg,#ffeeb4,#f2bf46 48%,#cc9018);
-   color:#3a2400;font-size:19px;font-weight:900;letter-spacing:5px;text-indent:5px;
-   border:1px solid #fff6d099;
-   box-shadow:0 10px 26px #000b,0 0 0 5px #ffffff10,inset 0 1px 0 #fffc;
-   cursor:pointer;user-select:none;transition:transform .08s,filter .08s}
- #reviveBtn:active{transform:translateY(1px) scale(.985);filter:brightness(.95)}
+ /* ★ round460（用户："复活的按钮改一下参考登录按钮"）✗
+    和登录页那个按钮同一套方块风：直角 + 3px 粗边 + 立体斜面 + 硬阴影 + 按下沉 4px ✓ */
+ /* ★ round461（用户："边框感太重了"）✗ 把框减轻：
+    3px 实边 → 2px 半透明边；斜面 3px → 2px；底影 4px → 3px；
+    写实心色的阴影改成半透明 → 边框不扎眼但仍然是方块 ✓ */
+ /* ★★ round462（用户："不要金属质感，要像素风"）★★
+    像素风的规则：平涂（不渐变）+ 硬边（不模糊）+ 硬投影（不带模糊半径）✓
+    不用任何 linear-gradient / blur → 不再有金属反光感 ✓ */
+ #reviveBtn{display:inline-block;padding:15px 58px;border-radius:0;
+   background:#f2c14a;
+   color:#2a1c00;font-size:19px;font-weight:900;letter-spacing:6px;text-indent:6px;
+   border:3px solid #221a0e;
+   box-shadow:inset 0 3px 0 #ffe9a8, inset 0 -3px 0 #b07d10,
+              5px 5px 0 rgba(0,0,0,.55);
+   font-family:"Cascadia Mono",Consolas,ui-monospace,"Microsoft YaHei",monospace;
+   cursor:pointer;user-select:none;transition:none}
+ #reviveBtn:active{transform:translate(2px,2px);
+   box-shadow:inset 0 3px 0 #ffe9a8, inset 0 -3px 0 #b07d10,
+              3px 3px 0 rgba(0,0,0,.55)}
  /* ★ 右上角：帧数 + 诊断（第 32 轮合成一块两行）
     原来是 #diag 在左上、#fps / #stat 在右上三块散着 ——
     现在去掉没用的"物件/Mesh/地顶点"，把诊断挪上来跟帧数并成一块 ✓ */
@@ -114,28 +138,81 @@
     user-select:none;cursor:pointer;z-index:30;
     transition:transform .07s ease,box-shadow .15s ease;touch-action:none}
  #auto .aic{width:52%;height:52%;color:#dfe8d4;opacity:.95}
+/* ★ round415：掛机 = 两个字（不是图标）✗ 字号跟按钮大小走 ✓ */
+#auto .aitxt{font-size:calc(var(--atk,84px) * 0.195);font-weight:800;letter-spacing:1px;color:#dfe8d4;line-height:1;opacity:.95;font-family:system-ui,"Microsoft YaHei",sans-serif;text-shadow:0 1px 2px #0008;user-select:none;pointer-events:none}
  /* ★ 状态区分：开着 = 绿边框 + 呼吸光 ✓ 一眼看出在自动打 ✓ */
  #auto.on{border-color:#8ee0a8cc;
    box-shadow:0 0 0 2px #8ee0a855,0 0 12px #8ee0a866,inset 0 1px 0 #ffffff22;
    animation:autoPulse 1.6s ease-in-out infinite}
  #auto.on .aic{color:#b8f0c8}
+#auto.on .aitxt{color:#b8f0c8}
  @keyframes autoPulse{0%,100%{opacity:1}50%{opacity:.72}}
+ /* ★★★ round497：视角转动按钮（用户：图标带状态 + 像攻击键一样能移动）★★★
+    位置：挂在"挂机"左边一格 ✓ 拖动后位置存 uiPos_cam ✓（和攻击/跳跃/挂机同一套）*/
+ #cam{position:fixed;right:calc(18px + var(--atk,84px) + 74px + var(--atk,84px) * 0.62 + 14px);
+    bottom:calc(56px + var(--atk,84px) * 0.32);
+    width:calc(var(--atk,84px) * 0.62);height:calc(var(--atk,84px) * 0.62);
+    box-sizing:border-box;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 36% 30%,
+      #6f7d6955 0%,#54614f4d 38%,#35402f3d 76%,#1f271c30 100%);
+    border:2px solid #86967a88;
+    box-shadow:0 3px 9px #00000055,inset 0 1px 0 #ffffff22,inset 0 -6px 12px #0000002a;
+    user-select:none;cursor:pointer;z-index:30;
+    transition:transform .07s ease,box-shadow .15s ease;touch-action:none}
+ #cam .camic{width:54%;height:54%;color:#dfe8d4;opacity:.95}
+ /* ★ 状态一：锁定（默认）→ 灰 + 中间一个小锁点 */
+ #cam .camdot{position:absolute;right:12%;bottom:12%;width:22%;height:22%;
+    border-radius:50%;background:#8f9a84;border:1px solid #00000066;
+    box-shadow:0 1px 3px #0008;pointer-events:none}
+ /* ★ 状态二：可转（解锁）→ 金色呼吸光 + 金点 */
+ #cam.on{border-color:#ffd83dcc;
+   box-shadow:0 0 0 2px #ffd83d55,0 0 12px #ffd83d66,inset 0 1px 0 #ffffff22;
+   animation:camPulse 1.6s ease-in-out infinite}
+ #cam.on .camic{color:#ffe9a0}
+ #cam.on .camdot{background:#ffd83d;border-color:#7a5c10}
+ @keyframes camPulse{0%,100%{opacity:1}50%{opacity:.78}}
+ /* ★ 回正中（长按触发）→ 一秒钟的绿闪，告诉你"已经回正了" */
+ #cam.reset{border-color:#8ee0a8cc;box-shadow:0 0 0 2px #8ee0a855,0 0 14px #8ee0a866}
+  /* round606：横屏独立布局（JS 给 body 加 landscape）——不依赖浏览器 orientation 媒体查询 */
+  body.landscape #atk{
+    right:16px;left:auto;top:auto;
+    bottom:max(90px, 22vh);
+  }
+  body.landscape #jmp{
+    right:16px;left:auto;top:auto;
+    bottom:max(184px, 38vh);
+  }
+  body.landscape #auto, body.landscape #cam{
+    left:auto;top:auto;
+    bottom:max(126px, 28vh);
+  }
+  body.landscape #auto{ right:calc(16px + var(--atk,84px) + 84px); }
+  body.landscape #cam{ right:calc(16px + var(--atk,84px) + 84px + var(--atk,84px) * 0.62 + 14px); }
+  body.landscape #skBar{ bottom:max(118px, 28vh); }
+  body.landscape #autoInfo{ bottom:max(164px, 36vh); }
+  body.landscape #camTools{ top:72px; }
+
+
  /* ★ 拖动中：浮起来 ✓ 给点反馈 ✓ */
  /* ★ round358（用户："除了攻击键，其它按钮都有蓝色透明框"）
     ★ 统一去掉：点击高亮 + 焦点框 ✗ 四个键表现一致 ✓
       （移动端长按/点击时浏览器会画一层半透明高亮 ✗
         有的浏览器是蓝色 ✗ 看着就是"蓝框" ✓）*/
- #atk,#jmp,#auto,#uiEdit,#setBtn{
-   -webkit-tap-highlight-color:transparent;outline:none}
- #atk:focus,#jmp:focus,#auto:focus,#uiEdit:focus,#setBtn:focus{outline:none}
+ #atk,#jmp,#auto,#cam,#uiEdit,#setBtn{
+   -webkit-tap-highlight-color:transparent;outline:none;
+   -webkit-user-select:none;user-select:none}
+ /* ★ round500（用户："视角按钮点击有透明的蓝色框，参考跳跃的点击效果改"）
+    → 把 #cam 并进 round358 那条统一规则里 ✓ 四个键 + 视角键表现完全一致 */
+ #atk:focus,#jmp:focus,#auto:focus,#cam:focus,#uiEdit:focus,#setBtn:focus{outline:none}
+ #cam:active,#jmp:active,#auto:active{-webkit-tap-highlight-color:transparent}
  .uiDrag{outline:2px dashed #ffd83d99;outline-offset:4px;
-   transform:none!important;animation:none!important;transition:none!important}
+   transform:none;animation:none;transition:none!important}
 /* ★★ 第 233 轮（用户要求）：损坏的装备要有明显样式 ★★
    为什么：挂机回来只看到"少了一件"✗ 分不清是坏了还是丢了 ✓
    现在坏了的还在背包里 ✓ 格子上红框 + 压暗 + 右上角一个叉 ✓ */
 .slot.broken{
   position:relative;
-  box-shadow:inset 0 0 0 2px #ff5a4a99, 0 0 8px #ff5a4a44 !important;
+  box-shadow:inset 0 0 0 2px #ff5a4a99, 0 0 8px #ff5a4a44 ;
   filter:grayscale(0.75) brightness(0.75)
 }
 .slot.broken::after{
@@ -145,7 +222,7 @@
 }
 /* ★★ 第 206 轮：自动战斗视觉提示 ★★ */
 #atk.auto{
-  border-color:#6ee08a99 !important;
+  border-color:#6ee08a99 ;
   animation:autoBreath 1.8s ease-in-out infinite
 }
 @keyframes autoBreath{
@@ -251,7 +328,7 @@
         · 画面面板 order:3 ✓
         · 操作面板 order:4 ✓
    ★ 不搬 HTML ✗ 只调顺序 ✓（今天搬结构栽过好几次 ✓） */
-#setPanel.merge #setBox{display:flex !important;flex-direction:column !important}
+#setPanel.merge #setBox{display:flex ;flex-direction:column !important}
 #setPanel.merge #setBox > span,
 #setPanel.merge #setBox > #setX,
 #setPanel.merge #setBox > #verTag,
@@ -270,6 +347,11 @@
 </style>
 
 <style>
+/* ★ round531：设置二级导航 */
+.setSub .sub{padding:5px 15px;border-radius:18px;border:1px solid #ffffff22;
+  background:#ffffff0d;font-size:12.5px;color:#c9d3ba;cursor:pointer;user-select:none;
+  transition:background .12s,color .12s}
+.setSub .sub.on{background:#ffd83d;color:#1a1d18;border-color:#ffd83d;font-weight:800}
 /* ★ 第 273 轮：设置页要"一个页面"✗ 不要三条滑动条 ✓
    做法：merge 模式下把三个面板的【各自滚动】关掉 ✗ 高度放开 ✓
         → 它们首尾相接 ✗ 由外层统一滚动 ✓ 只有一条滚动条 ✓✓ */
@@ -278,12 +360,12 @@
      → 内容直接溢出菜单盒子 ✗ 下面的东西看不到 ✓
    ★ 修：让【菜单盒子】来滚 ✗ 三个面板仍然不滚 ✓
      → 仍然只有一条滚动条 ✗ 但内容不会跑出菜单 ✓✓ */
-#setPanel.merge #setBox{overflow-y:auto !important;overflow-x:hidden !important;
+#setPanel.merge #setBox{overflow-y:auto ;overflow-x:hidden ;
   max-height:86vh !important}
-#setPanel.merge .tabpane{overflow:visible !important;height:auto !important;
-  max-height:none !important;flex:none !important}
-#setPanel.merge .tabpane + .tabpane{margin-top:14px !important;
-  padding-top:10px !important;border-top:1px solid #ffffff14 !important}
+#setPanel.merge .tabpane{overflow:visible ;height:auto ;
+  max-height:none ;flex:none !important}
+#setPanel.merge .tabpane + .tabpane{margin-top:14px ;
+  padding-top:10px ;border-top:1px solid #ffffff14 !important}
 </style>
 
 
@@ -293,18 +375,18 @@
    ★ 只改【内边距 + 字号 + 间距】✗ 不碰容器的 flex/overflow ✓
      （容器布局动过一次 ✗ 把导航栏搞坏了 ✓ 这里绝不再碰 ✓） */
 #setTabs{
-  overflow:visible !important;
-  overflow-x:visible !important;
-  display:flex !important;
-  flex-wrap:wrap !important;      /* 换行而不是溢出 ✓ */
-  row-gap:4px !important;
+  overflow:visible ;
+  overflow-x:visible ;
+  display:flex ;
+  flex-wrap:wrap ;      /* 换行而不是溢出 ✓ */
+  row-gap:4px ;
 }
 #setTabs .tab{
-  padding:5px 9px !important;     /* 原 7px 13px → 紧凑 ✓ */
-  font-size:11.5px !important;    /* 原 12.5px ✓ */
-  border-radius:7px !important;
-  margin:0 3px 0 0 !important;    /* 原 4px ✓ */
-  line-height:1.35 !important;
+  padding:5px 9px ;     /* 原 7px 13px → 紧凑 ✓ */
+  font-size:11.5px ;    /* 原 12.5px ✓ */
+  border-radius:7px ;
+  margin:0 3px 0 0 ;    /* 原 4px ✓ */
+  line-height:1.35 ;
 }
 </style>
 
@@ -342,25 +424,79 @@
 <style>
 /* ---- 登录浮层（独立版新加：自建账号，不再跟 MC 客户端共用登录）---- */
 #login{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;
-  background:radial-gradient(circle at 50% 35%,#1b2430,#080a0e 70%);font-family:system-ui,"Microsoft YaHei",sans-serif}
+  /* ★ round448：半透明 ✗ 后面正在跑的 3D 世界能隐约看见 ✓（比纯色背景有氛围）*/
+  background:radial-gradient(circle at 50% 46%,rgba(0,0,0,.02),rgba(0,0,0,.20) 74%,rgba(0,0,0,.40));
+  font-family:system-ui,"Microsoft YaHei",sans-serif}
 #login.show{display:flex}
-#loginCard{width:min(92vw,360px);padding:30px 26px;border-radius:18px;text-align:center;
-  background:rgba(18,22,28,.92);border:1px solid rgba(160,190,220,.14);
-  box-shadow:0 20px 60px rgba(0,0,0,.6)}
-#loginCard h1{margin:0 0 6px;font-size:21px;letter-spacing:2px;color:#e8eef5;font-weight:600}
-#loginCard .sub{font-size:12.5px;color:#8fa3b8;margin-bottom:20px;line-height:1.6}
-#loginCard input{width:100%;box-sizing:border-box;margin-bottom:10px;padding:13px 14px;
-  border-radius:11px;border:1px solid rgba(160,190,220,.2);background:rgba(0,0,0,.32);
-  color:#e8eef5;font-size:15px;outline:none}
-#loginCard input:focus{border-color:#f2bf46}
+/* ★★ round453：登录时把游戏 HUD 全藏起来 ✗
+   （不然登录界面背后还露着血条卡片、攻击键、挂机按钮 ✗✗）
+   ★ canvas 不藏 ✗ 它就是背景画面 ✓ */
+body.atLogin #top, body.atLogin #topright, body.atLogin #hud, body.atLogin #uiEdit,
+body.atLogin #setBtn, body.atLogin #fps, body.atLogin #ticker, body.atLogin #autoStat,
+body.atLogin #diag, body.atLogin #atk, body.atLogin #jmp, body.atLogin #auto,
+body.atLogin #safeTp, body.atLogin #autoInfo, body.atLogin #mobui,
+body.atLogin #markui, body.atLogin #dead {
+  display:none !important}
+/* ★ 登录时的画面压暗（不然白天的空地太亮，字看不清 ✗）*/
+body.atLogin #cv{filter:brightness(1.02) saturate(1.04)}
+/* 氛围层（灰烬 + 远处闪电）✓ */
+/* ★★★ round454：方块风（用户："可以方块风格一点，因为我们的游戏也是方块"）★★★
+   原则：直角（不圆角）、粗描边、立体斜面、硬阴影（不带模糊）、等宽字体 ✓
+   用户名字：块来修仙 ✓ */
+#loginCard{position:relative;width:min(92vw,368px);padding:30px 24px 24px;border-radius:0;text-align:center;
+  font-family:"Cascadia Mono",Consolas,ui-monospace,"Microsoft YaHei",monospace;
+  /* ★ round462：像素风（用户："不要金属质感，要像素风"）✗
+     去掉渐变 + 去掉模糊光晕 → 平涂 + 硬边 + 硬投影 ✓
+     （格子底纹保留：它本来就是硬边的像素格 ✓）*/
+  background:
+    repeating-linear-gradient(0deg,rgba(255,255,255,.05) 0 1px,transparent 1px 16px),
+    repeating-linear-gradient(90deg,rgba(255,255,255,.05) 0 1px,transparent 1px 16px),
+    rgba(96,88,70,.62);
+  border:3px solid #221a0e;
+  box-shadow:
+    inset 0 3px 0 rgba(255,248,222,.14),
+    inset 0 -3px 0 rgba(0,0,0,.30),
+    6px 6px 0 rgba(0,0,0,.42);
+  animation:lgIn .34s steps(4) both}
+@keyframes lgIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+/* 顶部一排小方块（方块世界观 ✓）*/
+#loginCard::before{content:"";position:absolute;left:10px;right:10px;top:8px;height:6px;
+  background:repeating-linear-gradient(90deg,#f2bf46 0 6px,transparent 6px 12px);
+  opacity:.7}
+/* 四角的“转角块”（像游戏里的边框 ✓）*/
+#loginCard::after{content:"";position:absolute;inset:-3px;pointer-events:none;
+  box-shadow:inset 0 0 0 3px rgba(0,0,0,.18)}
+#loginCard h1{margin:10px 0 6px;font-size:23px;letter-spacing:4px;font-weight:800;
+  color:#ffd83d;
+  /* 硬阴影（不带模糊 → 像素字 ✓）*/
+  text-shadow:2px 2px 0 #6b4a08, 4px 4px 0 rgba(0,0,0,.45)}
+#loginCard .sub{font-size:12.5px;color:#eee3c8;margin-bottom:18px;line-height:1.65;text-shadow:1px 1px 0 rgba(0,0,0,.62)}
+#loginCard input{width:100%;box-sizing:border-box;margin-bottom:10px;padding:12px 13px;
+  border-radius:0;border:3px solid #3a3226;background:rgba(26,23,17,.62);
+  box-shadow:inset 0 3px 0 rgba(0,0,0,.34);
+  color:#fffaf0;font-size:15px;outline:none;
+  font-family:inherit}
+#loginCard input:focus{border-color:#ffe27a;background:rgba(34,30,22,.72);
+  box-shadow:inset 0 3px 0 rgba(0,0,0,.34)}
+#loginCard input::placeholder{color:#b8ae95}
 #loginCard .row{display:flex;gap:10px;margin-top:6px}
-#loginCard button{flex:1;padding:13px 0;border:0;border-radius:11px;font-size:15px;
-  letter-spacing:3px;cursor:pointer;font-weight:600}
-#btnLogin{background:linear-gradient(180deg,#ffeeb4,#f2bf46 48%,#cc9018);color:#3a2a06}
-#btnReg{background:rgba(160,190,220,.14);color:#cfe0f0}
+#loginCard button{flex:1;padding:12px 0;border-radius:0;font-size:15px;
+  letter-spacing:4px;cursor:pointer;font-weight:800;font-family:inherit;
+  border-width:3px;border-style:solid;background-image:none}
+#btnLogin{background:#f2c14a;color:#2a1c00;border-color:#221a0e;
+  box-shadow:inset 0 3px 0 #ffe9a8, inset 0 -3px 0 #b07d10, 4px 4px 0 rgba(0,0,0,.5)}
+#btnReg{background:#b9b3a3;color:#241f16;border-color:#221a0e;
+  box-shadow:inset 0 3px 0 #e8e2d2, inset 0 -3px 0 #7a7466, 4px 4px 0 rgba(0,0,0,.45)}
 #loginCard button:disabled{opacity:.5;cursor:default}
-#loginHint{margin-top:14px;font-size:12.5px;color:#e0776a;min-height:17px;line-height:1.5}
-#loginCard .tip{margin-top:12px;font-size:11.5px;color:#63768a}
+/* ★ round462：按下 = 硬位移 2px（像素风不做缩放、不做模糊 ✓）*/
+#loginCard button:active{transform:translate(2px,2px);
+  box-shadow:inset 0 3px 0 #ffe9a8, inset 0 -3px 0 #b07d10, 2px 2px 0 rgba(0,0,0,.5)}
+#btnReg:active{box-shadow:inset 0 3px 0 #e8e2d2, inset 0 -3px 0 #7a7466, 2px 2px 0 rgba(0,0,0,.45)}
+#btnLogin:hover{filter:brightness(1.06)}
+#btnReg:hover{filter:brightness(1.06)}
+#loginHint{margin-top:12px;font-size:12.5px;color:#ff8f7a;min-height:17px;line-height:1.5;
+  text-shadow:1px 1px 0 rgba(0,0,0,.6)}
+#loginCard .tip{margin-top:10px;font-size:11.5px;color:#d6cdb6;text-shadow:1px 1px 0 rgba(0,0,0,.62)}
 
 /* ---- 背包 / 装备面板（第 47 轮）---- */
 /* ★★ round304d（用户要求）：交易所 = 【独立页签】✗ 不再塞在背包里 ✓
@@ -433,7 +569,7 @@
 .mktInput::placeholder{color:#5b6675}
 #mktPanel .bagBtns{flex-wrap:wrap;gap:6px}
 #mktPanel .bagB{padding:4px 9px;font-size:12px}
-.bagGrid{display:grid;grid-template-columns:repeat(7,40px);gap:4px;
+.bagGrid{display:grid;grid-template-columns:repeat(6,40px);gap:4px;
   max-height:34vh;overflow:auto;padding:2px}
 .slot{position:relative;width:40px;height:40px;border-radius:4px;
   background:rgba(0,0,0,.42);
@@ -529,6 +665,13 @@
   font-size:12px;line-height:15px;text-align:center;font-weight:700;z-index:2;
   pointer-events:none}
 .slot.pick .pickbox{background:#ffd83d;color:#1b232c;border-color:#ffd83d}
+/* ★ round410：锁住的物品右上角一把小锁（灰白 ✗ 不抢品阶颜色 ✓）*/
+/* ★ round411：锁住的格子要【一眼看得出】✗ 10px 太小了看不见 ✓
+   · 右上角一把金色小锁（比品阶字大一点）
+   · 整个格子再加一圈金色虚线 ✗ 与「已装备」的绿点、「发挥不足」的黄标都不撞色 ✓ */
+.slot .lk{position:absolute;right:-2px;top:-3px;font-size:13px;line-height:14px;
+  z-index:3;pointer-events:none;filter:drop-shadow(0 1px 2px #000)}
+.slot.locked{outline:1px dashed #ffd83d99;outline-offset:-3px}
 .bagB.on{background:#4a3d1c;border-color:#ffd83d99}
 /* ★ 等级不够：压暗 + 左下角标"需要 N 级"（一眼看出不是我不想穿 ✓）*/
 /* ★ 第 53/56 轮：等级不够【不禁止穿】—— 只用右上角一个百分比小字提示 ✓ 不画框 ✗ */
@@ -559,19 +702,19 @@
    ② 右上角（帧数/诊断）整体缩小 + 半透明底色
    ③ 左上角玩家信息 也改半透明底色
    —— 两块都用 .pane ✓ 所以底色一起改 ✓ */
-.pane{background:rgba(0,0,0,.30) !important;border-radius:8px}
+.pane{background:rgba(0,0,0,.30) ;border-radius:8px}
 /* ★★ 第 120 轮（用户："帧数和延迟信息框再小一半，里面文字也小一些"）★★
    上一轮是 10px（本来就比原来小了 ✓）这次再砍一半：
      字号 10px → 8px ✓ 行高 1.32 → 1.15 ✓ 内边距 3/7 → 1/5 ✓
      数字本身也收窄（font-variant-numeric + letter-spacing 负值 ✓）*/
 /* ★ 第 126 轮（用户："还是不够小，字体也再小一点"）：8px → 7px ✓
    内边距 1/5 → 0/4 ✓ 行高 1.15 → 1.05 ✓ 底色再淡一点（更不抢视线 ✓）*/
-#topright{font-size:7px !important;padding:0 4px !important;line-height:1.05 !important;
+#topright{font-size:7px ;padding:0 4px ;line-height:1.05 ;
   max-width:34vw;border-radius:5px;letter-spacing:-0.3px;font-variant-numeric:tabular-nums;
   background:rgba(0,0,0,.26) !important}
-#topright div{font-size:7px !important;line-height:1.05 !important}
+#topright div{font-size:7px ;line-height:1.05 !important}
 #topright div{font-size:10px !important}
-#top{font-size:11px !important;padding:5px 8px !important;line-height:1.45 !important}
+#top{font-size:11px ;padding:5px 8px ;line-height:1.45 !important}
 #top #uName{font-size:12px !important}
 /* ★ 第 91 轮：背包格子的耐久条（在格子下方 ✓ 用户要求"格子下方就显示出来"）*/
 .slot .durbar{left:2px;right:2px;bottom:1px;height:3px}
@@ -581,7 +724,7 @@
    页签已经 8 个了 ✓ 加上天赋就是 9 个 ✗ 窄屏/手机上右边的会被挤出屏幕 ✗
    → 横向可滑 ✓ 不换行 ✓ 隐藏滚动条（滑动时自会看到内容动 ✓）
    ★ 手机上还要 -webkit-overflow-scrolling: touch ✓ 才有惯性滑动 ✓ */
-#setTabs{overflow-x:auto;overflow-y:hidden;flex-wrap:nowrap;white-space:nowrap;
+#setTabs{overflow:visible;overflow-x:visible;overflow-y:visible;flex-wrap:wrap;white-space:normal;
   -webkit-overflow-scrolling:touch;scrollbar-width:none;-ms-overflow-style:none;
   scroll-behavior:smooth;padding-bottom:2px}
 #setTabs::-webkit-scrollbar{display:none;height:0}
@@ -621,7 +764,533 @@
 #setTabsWrap::after{content:'';position:absolute;right:0;top:0;bottom:2px;width:18px;
   pointer-events:none;background:linear-gradient(90deg,#0000,#00000088)}
 </style>
-</head><body>
+<style>
+/* round606：菜单界面游戏化 + 顶部导航/关闭按钮固定 */
+#setPanel{background:radial-gradient(ellipse at 50% 20%,#2a1d10cc 0%,#080604ee 70%),#000000dd!important;backdrop-filter:blur(3px)!important}
+#setBox{width:min(560px,94vw)!important;height:min(84vh,680px)!important;padding:0!important;
+  background:linear-gradient(180deg,#2b2015f8,#130d08f8)!important;border:2px solid #b98a42!important;
+  border-radius:8px!important;box-shadow:0 0 0 1px #000000aa,0 12px 40px #000000cc,inset 0 0 28px #00000066!important;
+  overflow:hidden!important;color:#f1e3c6!important;font-family:system-ui,"Microsoft YaHei",sans-serif!important}
+#setHead{flex:0 0 auto;padding:13px 16px 9px!important;background:linear-gradient(180deg,#352617,#24180e);
+  border-bottom:1px solid #b98a4255}
+#setHead>div:first-child{font-size:19px!important;letter-spacing:5px!important;color:#ffe6a0!important;
+  text-shadow:0 1px 0 #000,0 0 12px #ffb02055}
+#setHead>div:last-child>div:first-child{color:#b8a483!important;font-size:10px!important}
+#setX{width:31px!important;height:31px!important;border-radius:4px!important;border:1px solid #d4a24a!important;
+  background:#2a1a0e!important;color:#ffd83d!important;font-size:15px!important;line-height:29px!important;
+  box-shadow:inset 0 1px 0 #ffffff22,0 2px 6px #00000088!important}
+#setX:hover{background:#4a2a12!important;color:#fff0b0!important}
+#setTabsWrap{flex:0 0 auto;padding:9px 14px 0!important;background:#1b120a}
+#setTabs{display:flex!important;flex-wrap:wrap!important;gap:5px!important;margin:0 0 8px!important;
+  padding-bottom:8px!important;border-bottom:1px solid #b98a4244!important;overflow:visible!important}
+#setTabs .tab{padding:5px 9px!important;border-radius:4px!important;border:1px solid #8a6538!important;
+  background:linear-gradient(180deg,#342315,#24170d)!important;color:#cdbb98!important;font-size:11.5px!important;
+  font-weight:600;box-shadow:inset 0 1px 0 #ffffff12}
+#setTabs .tab:hover{border-color:#d4a24a!important;color:#ffe6a0!important}
+#setTabs .tab.on{background:linear-gradient(180deg,#ffefb0,#d6a24a 60%,#a97a28)!important;color:#2a1806!important;
+  border-color:#ffe9a8!important;text-shadow:0 1px 0 #ffffff55;box-shadow:0 0 10px #ffb02044}
+#setBody{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:10px 15px 16px!important;
+  scrollbar-width:thin;scrollbar-color:#8a6538 #1a1109}
+#setBody::-webkit-scrollbar{width:7px}
+#setBody::-webkit-scrollbar-thumb{background:#8a6538;border-radius:4px}
+#setBody::-webkit-scrollbar-track{background:#1a1109}
+#setBox .tabpane{flex:none!important;min-height:0!important;overflow:visible!important;padding:11px 12px!important;
+  background:#0e0905b8!important;border:1px solid #8a653844!important;border-radius:6px!important;margin-bottom:10px}
+#setPanel.merge #setBox{overflow:hidden!important}
+#setPanel.merge .tabpane{overflow:visible!important;height:auto!important}
+#setPanel.merge #setBox{overflow-y:hidden!important}
+.setLabel{color:#e2c07a!important;font-weight:700!important;margin:12px 0 5px!important;
+  padding-left:7px!important;border-left:3px solid #b98a42;line-height:1.5}
+.setSub .sub{background:linear-gradient(180deg,#332315,#24180e)!important;border:1px solid #8a6538!important;
+  color:#cdbb98!important;border-radius:4px!important}
+.setSub .sub.on{background:linear-gradient(180deg,#ffefb0,#d6a24a)!important;color:#2a1806!important;border-color:#ffe9a8!important}
+#setBox .bagB,#setBox .opt{background:linear-gradient(180deg,#3a2716,#24170d)!important;border:1px solid #8a6538!important;
+  color:#e8d4a8!important;border-radius:4px!important;box-shadow:inset 0 1px 0 #ffffff12}
+#setBox .bagB.on,#setBox .opt.on{background:linear-gradient(180deg,#ffefb0,#d6a24a)!important;color:#2a1806!important;border-color:#ffe9a8!important}
+#setBox select,#setBox input{background:#160f08!important;border:1px solid #8a6538!important;color:#f1e3c6!important;border-radius:4px!important}
+#setBox #infoBox,#setBox #aboutVer,#setBox .bagTip{color:#bfae8c!important}
+#setBox #infoBox{background:#160f08!important;border:1px solid #8a653844!important}
+</style>
+<style>
+/* round607：五套界面主题（登录 / 复活 / 菜单共用） */
+body[data-theme="dark"]{--ui-bg:rgba(26,18,8,.22);--ui-panel:rgba(43,32,21,.52);--ui-panel2:rgba(19,13,8,.38);--ui-border:#b98a42;
+ --ui-gold:#ffd83d;--ui-text:#f1e3c6;--ui-dim:#b8a483;--ui-btn:rgba(52,35,21,.65);--ui-btn2:rgba(36,23,13,.52);
+ --ui-input:rgba(22,15,8,.55);--ui-on:#2a1806;--ui-overlay:rgba(6,8,12,.55);--ui-shadow:#000000cc}
+body[data-theme="black"]{--ui-bg:rgba(5,6,8,.26);--ui-panel:rgba(16,19,24,.54);--ui-panel2:rgba(8,10,13,.40);--ui-border:#3d4a5a;
+ --ui-gold:#c8d8e8;--ui-text:#dce6f2;--ui-dim:#8291a3;--ui-btn:rgba(26,32,41,.65);--ui-btn2:rgba(12,16,20,.55);
+ --ui-input:rgba(6,8,11,.55);--ui-on:#0a0d10;--ui-overlay:rgba(0,0,0,.65);--ui-shadow:#000000dd}
+body[data-theme="glass"]{--ui-bg:rgba(245,248,252,.24);--ui-panel:rgba(255,255,255,.44);--ui-panel2:rgba(245,248,252,.30);--ui-border:rgba(255,255,255,.62);
+ --ui-gold:#9aa4ae;--ui-text:#1c1c1e;--ui-dim:#5f6673;--ui-btn:rgba(255,255,255,.55);--ui-btn2:rgba(240,243,248,.40);
+ --ui-input:rgba(255,255,255,.56);--ui-on:#1c1c1e;--ui-overlay:rgba(30,40,55,.18);--ui-shadow:rgba(40,60,90,.30)}
+body[data-theme="light"]{--ui-bg:rgba(205,185,151,.32);--ui-panel:rgba(233,215,180,.52);--ui-panel2:rgba(191,166,124,.38);--ui-border:#96682a;
+ --ui-gold:#a86a08;--ui-text:#2a1f12;--ui-dim:#66543b;--ui-btn:rgba(221,198,161,.62);--ui-btn2:rgba(203,177,136,.50);
+ --ui-input:rgba(242,230,204,.60);--ui-on:#f7ecd8;--ui-overlay:rgba(42,30,18,.30);--ui-shadow:#5a422955}
+body[data-theme="pink"]{--ui-bg:rgba(230,181,201,.33);--ui-panel:rgba(248,212,226,.54);--ui-panel2:rgba(217,162,185,.40);--ui-border:#d47f9f;
+ --ui-gold:#b34b78;--ui-text:#47202f;--ui-dim:#825064;--ui-btn:rgba(242,207,223,.65);--ui-btn2:rgba(232,188,208,.52);
+ --ui-input:rgba(253,233,241,.62);--ui-on:#ffffff;--ui-overlay:rgba(90,40,60,.28);--ui-shadow:#b9809555}
+body[data-theme="gray"]{--ui-bg:rgba(24,26,29,.26);--ui-panel:rgba(37,41,45,.54);--ui-panel2:rgba(21,24,27,.40);--ui-border:#8c99a6;
+ --ui-gold:#d8e0e8;--ui-text:#e6ebef;--ui-dim:#9aa6b2;--ui-btn:rgba(48,54,60,.65);--ui-btn2:rgba(33,37,41,.55);
+ --ui-input:rgba(20,23,26,.55);--ui-on:#171a1d;--ui-overlay:rgba(6,8,10,.60);--ui-shadow:#000000cc}
+body[data-theme="blue"]{--ui-bg:rgba(15,26,42,.28);--ui-panel:rgba(23,40,61,.54);--ui-panel2:rgba(12,22,36,.40);--ui-border:#5f9fd6;
+ --ui-gold:#9fe0ff;--ui-text:#e5f3ff;--ui-dim:#9fbdd6;--ui-btn:rgba(31,58,88,.65);--ui-btn2:rgba(19,38,56,.55);
+ --ui-input:rgba(11,21,34,.55);--ui-on:#082033;--ui-overlay:rgba(3,10,20,.55);--ui-shadow:#000000bb}
+
+/* 登录 */
+body[data-theme] #loginCard{background:linear-gradient(180deg,var(--ui-panel),var(--ui-panel2))!important;
+ border:2px solid var(--ui-border)!important;border-radius:8px!important;color:var(--ui-text)!important;
+ box-shadow:0 0 0 1px #00000066,0 12px 38px var(--ui-shadow),inset 0 0 24px #00000022!important}
+body[data-theme] #loginCard::before{background:repeating-linear-gradient(90deg,var(--ui-gold) 0 6px,transparent 6px 12px)!important;opacity:.7!important}
+body[data-theme] #loginCard::after{background:none!important;box-shadow:inset 0 0 0 3px var(--ui-border)!important}
+body[data-theme] #loginCard h1{color:var(--ui-gold)!important;text-shadow:0 1px 0 #00000055!important}
+body[data-theme] #loginCard .sub,body[data-theme] #loginCard .tip{color:var(--ui-dim)!important;text-shadow:none!important}
+body[data-theme] #loginCard input{background:var(--ui-input)!important;border-color:var(--ui-border)!important;color:var(--ui-text)!important}
+body[data-theme] #loginCard input::placeholder{color:var(--ui-dim)!important}
+body[data-theme] #loginCard button{background:var(--ui-gold)!important;color:var(--ui-on)!important;border-color:var(--ui-border)!important}
+body[data-theme] #loginCard button:active{box-shadow:inset 0 2px 0 #ffffff33,3px 3px 0 var(--ui-shadow)!important}
+
+/* 复活 */
+body[data-theme] #dead{background:var(--ui-overlay)!important}
+body[data-theme] #deadCard{background:linear-gradient(180deg,var(--ui-panel),var(--ui-panel2))!important;
+ border:2px solid var(--ui-border)!important;border-radius:8px!important;padding:26px 38px!important;
+ box-shadow:0 0 0 1px #00000066,0 12px 38px var(--ui-shadow)!important;color:var(--ui-text)!important}
+body[data-theme] #deadBy{color:var(--ui-text)!important;text-shadow:0 2px 12px #00000088!important}
+body[data-theme] #deadTip{color:var(--ui-dim)!important}
+body[data-theme] #reviveBtn{background:var(--ui-gold)!important;color:var(--ui-on)!important;border-color:var(--ui-border)!important;
+ box-shadow:inset 0 3px 0 #ffffff44,inset 0 -3px 0 #00000055,5px 5px 0 var(--ui-shadow)!important}
+
+/* 菜单 */
+body[data-theme] #setPanel{background:radial-gradient(ellipse at 50% 18%,var(--ui-panel) 0%,var(--ui-bg) 68%),var(--ui-overlay)!important}
+body[data-theme] #setBox{background:linear-gradient(180deg,var(--ui-panel),var(--ui-panel2))!important;
+ border-color:var(--ui-border)!important;color:var(--ui-text)!important;box-shadow:0 0 0 1px #00000066,0 12px 40px var(--ui-shadow),inset 0 0 28px #00000033!important}
+body[data-theme] #setHead{background:linear-gradient(180deg,var(--ui-panel),var(--ui-panel2))!important;border-bottom-color:var(--ui-border)!important}
+body[data-theme] #setHead>div:first-child{color:var(--ui-gold)!important;text-shadow:0 1px 0 #00000066!important}
+body[data-theme] #setHead>div:last-child>div:first-child{color:var(--ui-dim)!important}
+body[data-theme] #setX{background:var(--ui-btn)!important;border-color:var(--ui-border)!important;color:var(--ui-gold)!important}
+body[data-theme] #setTabsWrap{background:var(--ui-panel2)!important}
+body[data-theme] #setTabs{border-bottom-color:var(--ui-border)!important}
+body[data-theme] #setTabs .tab{background:linear-gradient(180deg,var(--ui-btn),var(--ui-btn2))!important;
+ border-color:var(--ui-border)!important;color:var(--ui-dim)!important}
+body[data-theme] #setTabs .tab.on{background:linear-gradient(180deg,var(--ui-gold),var(--ui-border))!important;color:var(--ui-on)!important;border-color:var(--ui-gold)!important}
+body[data-theme] #setBody{background:transparent!important;scrollbar-color:var(--ui-border) var(--ui-panel2)!important}
+body[data-theme] #setBody::-webkit-scrollbar-thumb{background:var(--ui-border)!important}
+body[data-theme] #setBody::-webkit-scrollbar-track{background:var(--ui-panel2)!important}
+body[data-theme] #setBox .tabpane{background:var(--ui-panel2)!important;border-color:var(--ui-border)!important;color:var(--ui-text)!important}
+body[data-theme] .setLabel{color:var(--ui-gold)!important;border-left-color:var(--ui-border)!important}
+body[data-theme] .setSub .sub{background:linear-gradient(180deg,var(--ui-btn),var(--ui-btn2))!important;border-color:var(--ui-border)!important;color:var(--ui-dim)!important}
+body[data-theme] .setSub .sub.on{background:linear-gradient(180deg,var(--ui-gold),var(--ui-border))!important;color:var(--ui-on)!important;border-color:var(--ui-gold)!important}
+body[data-theme] #setBox .bagB,body[data-theme] #setBox .opt{background:linear-gradient(180deg,var(--ui-btn),var(--ui-btn2))!important;border-color:var(--ui-border)!important;color:var(--ui-text)!important}
+body[data-theme] #setBox .bagB.on,body[data-theme] #setBox .opt.on{background:linear-gradient(180deg,var(--ui-gold),var(--ui-border))!important;color:var(--ui-on)!important;border-color:var(--ui-gold)!important}
+body[data-theme] #setBox select,body[data-theme] #setBox input{background:var(--ui-input)!important;border-color:var(--ui-border)!important;color:var(--ui-text)!important}
+body[data-theme] #setBox #infoBox{background:var(--ui-input)!important;border-color:var(--ui-border)!important;color:var(--ui-text)!important}
+body[data-theme] #setBox .bagTip,body[data-theme] #setBox #aboutVer{color:var(--ui-dim)!important}
+body[data-theme] #setBox,
+body[data-theme] #loginCard,
+body[data-theme] #deadCard{
+ -webkit-backdrop-filter:blur(18px) saturate(1.25)!important;
+ backdrop-filter:blur(18px) saturate(1.25)!important}
+body[data-theme] #setPanel{-webkit-backdrop-filter:blur(4px)!important;backdrop-filter:blur(4px)!important}
+body[data-theme="glass"] #setBox{box-shadow:0 0 0 1px rgba(255,255,255,.35),0 12px 44px rgba(40,60,90,.30),inset 0 0 30px rgba(255,255,255,.35)!important}
+/* round608：浅色系的图标/白字对比 */
+body[data-theme="light"] #setBody .slot,
+body[data-theme="pink"] #setBody .slot,
+body[data-theme="glass"] #setBody .slot{
+  background:rgba(28,24,20,.58)!important;border-color:rgba(0,0,0,.38)!important;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.16),inset 2px 2px 0 rgba(0,0,0,.35)!important}
+body[data-theme="glass"] #setBody .slot{background:rgba(30,34,40,.42)!important}
+body[data-theme="light"] #setBody .mktIco,
+body[data-theme="pink"] #setBody .mktIco,
+body[data-theme="glass"] #setBody .mktIco{background:rgba(20,18,15,.20)!important;border-color:rgba(0,0,0,.28)!important}
+body[data-theme="light"] #setBody img,
+body[data-theme="pink"] #setBody img,
+body[data-theme="glass"] #setBody img,
+body[data-theme="light"] #setBody .slot svg,
+body[data-theme="pink"] #setBody .slot svg,
+body[data-theme="glass"] #setBody .slot svg{
+  filter:drop-shadow(0 1px 1px rgba(0,0,0,.82)) drop-shadow(0 0 1px rgba(0,0,0,.55))}
+body[data-theme="light"] #setBody [style*="color:#e8eef6"],
+body[data-theme="light"] #setBody [style*="color:#dfe8f2"],
+body[data-theme="light"] #setBody [style*="color:#c9d6e4"],
+body[data-theme="light"] #setBody [style*="color:#cfd8e3"],
+body[data-theme="light"] #setBody [style*="color:#ffffff"],
+body[data-theme="light"] #setBody [style*="color:#fff"],
+body[data-theme="pink"] #setBody [style*="color:#e8eef6"],
+body[data-theme="pink"] #setBody [style*="color:#dfe8f2"],
+body[data-theme="pink"] #setBody [style*="color:#c9d6e4"],
+body[data-theme="pink"] #setBody [style*="color:#cfd8e3"],
+body[data-theme="pink"] #setBody [style*="color:#ffffff"],
+body[data-theme="pink"] #setBody [style*="color:#fff"],
+body[data-theme="glass"] #setBody [style*="color:#e8eef6"],
+body[data-theme="glass"] #setBody [style*="color:#dfe8f2"],
+body[data-theme="glass"] #setBody [style*="color:#c9d6e4"],
+body[data-theme="glass"] #setBody [style*="color:#cfd8e3"],
+body[data-theme="glass"] #setBody [style*="color:#ffffff"],
+body[data-theme="glass"] #setBody [style*="color:#fff"]{
+  color:var(--ui-text)!important}
+body[data-theme="light"] #setBody .slot [style*="color:#ffffff"],
+body[data-theme="light"] #setBody .slot [style*="color:#fff"],
+body[data-theme="pink"] #setBody .slot [style*="color:#ffffff"],
+body[data-theme="pink"] #setBody .slot [style*="color:#fff"],
+body[data-theme="glass"] #setBody .slot [style*="color:#ffffff"],
+body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!important}
+</style>
+<style>
+#whPrompt{position:fixed;left:50%;top:58%;transform:translate(-50%,-50%);z-index:31;display:none;padding:8px 18px;border-radius:6px;
+  background:var(--ui-panel2,#130d08ee);border:1px solid var(--ui-border,#b98a42);color:var(--ui-text,#f1e3c6);
+  font:16px system-ui,"Microsoft YaHei";font-weight:700;pointer-events:none;text-shadow:0 1px 2px #000}
+#interactFloat{position:fixed;z-index:32;display:none;transform:translate(-50%,-50%);
+  padding:4px 12px;border-radius:5px;background:var(--ui-panel2,#130d08dd);border:1px solid var(--ui-gold,#ffd83d);
+  color:var(--ui-text,#f1e3c6);font:700 12px system-ui,"Microsoft YaHei";white-space:nowrap;pointer-events:none;
+  text-shadow:0 1px 2px #000}
+#atk.interact .ic{display:none!important}
+#atk.interact .cd{display:none!important}
+#atk.interact::after{content:"交互";font:800 20px system-ui,"Microsoft YaHei";color:#2a1806;
+  text-shadow:0 1px 0 #ffffff88;letter-spacing:2px}
+#atk.interact{background:radial-gradient(circle at 36% 30%,#ffe9a8,#d6a24a 70%)!important;
+  border-color:#ffe9a8!important;box-shadow:0 0 0 2px #ffd83d55,0 0 14px #ffd83d66!important}
+/* ★ 2026-10-22：多个可交互对象时，按钮右上角显示数量 */
+#atkBadge{display:none;position:absolute;right:-4px;top:-4px;z-index:5;min-width:20px;height:20px;
+  padding:0 5px;border-radius:10px;background:#e04a3a;color:#fff;font:800 12px/20px system-ui;
+  text-align:center;box-shadow:0 1px 4px #000a;pointer-events:none}
+/* ★ 2026-10-22：交互选择弹窗 */
+#nearPick{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;
+  background:rgba(4,6,9,.42)}
+#nearPickBox{width:min(360px,88vw);max-height:70vh;overflow:auto;border-radius:12px;
+  background:var(--ui-panel,#17110bee);border:1px solid var(--ui-border,#b98a42);
+  color:var(--ui-text,#f1e3c6);box-shadow:0 10px 30px #000a}
+#nearPickHead{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;
+  font:800 15px system-ui,"Microsoft YaHei";border-bottom:1px solid #ffffff1a}
+#nearPickBody{padding:6px 8px 10px}
+.nearRow{display:flex;flex-direction:column;gap:2px;padding:10px 12px;margin:6px 0;border-radius:8px;
+  background:#ffffff0a;border:1px solid #ffffff14;cursor:pointer}
+.nearRow:hover,.nearRow:active{background:#ffd83d22;border-color:#ffd83d66}
+.nearRow b{font:700 15px system-ui,"Microsoft YaHei"}
+.nearRow .tip{font:12px system-ui,"Microsoft YaHei";opacity:.75}
+#sitPrompt{position:fixed;left:50%;top:62%;transform:translate(-50%,-50%);z-index:31;display:none;padding:8px 18px;border-radius:6px;
+  background:var(--ui-panel2,#130d08ee);border:1px solid var(--ui-border,#b98a42);color:var(--ui-text,#f1e3c6);
+  font:16px system-ui,"Microsoft YaHei";font-weight:700;pointer-events:none;text-shadow:0 1px 2px #000;white-space:nowrap}
+#atk.seat .ic,#atk.seat .cd,#atk.stand .ic,#atk.stand .cd{display:none!important}
+#atk.seat::after{content:"坐下";font:800 20px system-ui,"Microsoft YaHei";color:#122a16;
+  text-shadow:0 1px 0 #ffffff88;letter-spacing:2px}
+#atk.seat{background:radial-gradient(circle at 36% 30%,#c8ffb8,#6fbf72 70%)!important;
+  border-color:#b8ffb0!important;box-shadow:0 0 0 2px #7dffa855,0 0 14px #7dffa866!important}
+#atk.stand::after{content:"起身";font:800 19px system-ui,"Microsoft YaHei";color:#0e1c2a;
+  text-shadow:0 1px 0 #ffffff88;letter-spacing:2px}
+#atk.stand{background:radial-gradient(circle at 36% 30%,#bfe8ff,#5f9fc8 70%)!important;
+  border-color:#bfe8ff!important;box-shadow:0 0 0 2px #8fd6ff55,0 0 14px #8fd6ff66!important}
+#tpPrompt{position:fixed;left:50%;top:62%;transform:translate(-50%,-50%);z-index:31;display:none;padding:8px 18px;border-radius:6px;
+  background:var(--ui-panel2,#130d08ee);border:1px solid var(--ui-border,#b98a42);color:var(--ui-text,#f1e3c6);
+  font:16px system-ui,"Microsoft YaHei";font-weight:700;pointer-events:none;text-shadow:0 1px 2px #000;white-space:nowrap}
+#atk.teleport .ic,#atk.teleport .cd{display:none!important}
+#atk.teleport::after{content:"传送";font:800 20px system-ui,"Microsoft YaHei";color:#0e1c2a;
+  text-shadow:0 1px 0 #ffffff88;letter-spacing:2px}
+#atk.teleport{background:radial-gradient(circle at 36% 30%,#bfe8ff,#5f9fc8 70%)!important;
+  border-color:#bfe8ff!important;box-shadow:0 0 0 2px #8fd6ff55,0 0 14px #8fd6ff66!important}
+
+
+
+
+#townBtn{position:fixed;right:18px;top:138px;z-index:25;padding:8px 14px;border-radius:8px;
+  border:1px solid #ffffff2a;background:#1b1710ee;color:#ffe9b0;font:600 13px/1.2 system-ui;cursor:pointer}
+#townBtn:hover{background:#2b2015ee}
+#townPanel{display:none;position:fixed;inset:0;z-index:80;background:#0009;backdrop-filter:blur(3px);
+  align-items:center;justify-content:center}
+#townPanel.on{display:flex}
+#townBox{width:min(560px,calc(100vw - 24px));max-height:88dvh;overflow:auto;background:#15130f;
+  border:1px solid #ffffff2a;border-radius:14px;padding:16px;color:#e9e1cf;box-shadow:0 18px 60px #000a}
+#townHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+#townHead b{font-size:18px;color:#ffe9b0}
+#townClose{cursor:pointer;font-size:20px;padding:2px 8px}
+#townBox .row{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0}
+#townBox input,#townBox select{background:#0d0c0a;border:1px solid #ffffff2e;color:#eee;border-radius:7px;
+  padding:7px 9px;font:13px system-ui;min-width:80px}
+#townBox button{background:#2a2419;border:1px solid #ffffff2e;color:#ffe9b0;border-radius:7px;
+  padding:8px 12px;cursor:pointer;font:600 13px system-ui}
+#townBox button:hover{background:#3a3020}
+#townBox .townHint{font-size:12px;color:#a99c84;line-height:1.6}
+#townBox .permGrid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}
+#townBox .permGrid label{font-size:13px;color:#d8cdb8;display:flex;gap:6px;align-items:center}
+@media(max-width:760px){#townBtn{top:126px;right:12px;padding:7px 10px;font-size:12px}
+  #townBox{max-height:92dvh;padding:12px}}
+#mapBtn{position:fixed;right:18px;top:96px;z-index:25;padding:8px 14px;border-radius:8px;
+  border:1px solid var(--ui-border,#b98a42);background:var(--ui-panel2,#130d08ee);color:var(--ui-text,#f1e3c6);
+  font:800 14px system-ui,"Microsoft YaHei";cursor:pointer;box-shadow:0 6px 18px #0008}
+#mapBtn:hover{background:#2b2015ee}
+#mapPanel{position:fixed;inset:0;z-index:70;display:none;background:rgba(3,5,8,.62);
+  -webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+#mapBox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1120px,96vw);height:min(92vh,940px);
+  display:flex;flex-direction:column;background:linear-gradient(180deg,#241a11f8,#0d0906f8);
+  border:1px solid var(--ui-border,#b98a42);border-radius:13px;box-shadow:0 24px 80px #000c;overflow:hidden}
+#mapHead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #ffffff14}
+#mapTitle{font:800 18px system-ui,"Microsoft YaHei";color:#f1e3c6;flex:1}
+#mapLegend{font:600 12px system-ui,"Microsoft YaHei";color:#c8c0a8;white-space:nowrap}
+#mapZoom{display:flex;gap:6px}
+.mapZ{width:30px;height:30px;border-radius:7px;border:1px solid #ffffff22;background:#ffffff0d;color:#f1e3c6;font:800 16px system-ui;cursor:pointer}
+#mapClose{cursor:pointer;color:#f1e3c6;font:800 20px system-ui;padding:0 6px}
+
+#mapFilterBar{display:flex;gap:6px;padding:7px 12px;border-bottom:1px solid #ffffff12;overflow-x:auto;flex:0 0 auto}
+.mapF{padding:5px 10px;border-radius:14px;border:1px solid #ffffff22;background:#ffffff0a;color:#d8cdb4;
+  font:700 12px system-ui,"Microsoft YaHei";white-space:nowrap;cursor:pointer}
+.mapF.on{background:#ffd08a;color:#24180a;border-color:#ffd08a}
+#mapListBtn{display:none;width:100%;margin:6px 0;padding:6px;border-radius:7px;border:1px solid #ffffff22;
+  background:#ffffff0d;color:#d8cdb4;font:700 12px system-ui,"Microsoft YaHei";cursor:pointer}
+#mapFit{display:flex;gap:4px}
+.mapV{padding:5px 8px;border-radius:7px;border:1px solid #ffffff22;background:#ffffff0d;color:#f1e3c6;
+  font:700 12px system-ui,"Microsoft YaHei";cursor:pointer;white-space:nowrap}
+
+/* 横屏手机 / 矮屏：地图和菜单改成左右分栏，避免上下挤 */
+@media (orientation: landscape) and (max-height: 620px) {
+  #mapBox{width:100vw;height:100dvh;max-height:100dvh;border-radius:0;border:0}
+  #mapHead{padding:8px 12px;padding-top:calc(8px + env(safe-area-inset-top))}
+  #mapTitle{font-size:16px}
+  #mapLegend{display:none}
+  #mapBody{flex-direction:row}
+  #townMapCanvas{width:auto;height:100%;flex:1;min-width:0}
+  #mapSide{width:300px;height:auto;flex:0 0 300px;border-left:1px solid #ffffff14;border-top:0;
+    padding:8px 12px calc(8px + env(safe-area-inset-bottom));overflow:auto}
+  #mapInfo{min-height:40px;font-size:12px}
+  #mapList{display:block!important;max-height:calc(100dvh - 230px)}
+  #mapListBtn{display:none}
+  #mapCopy{display:block!important;padding:6px}
+  #mapFilterBar{padding:5px 10px}
+  .mapF{padding:4px 8px;font-size:11px}
+  #mapFit .mapV{padding:4px 6px;font-size:11px}
+  #mapZoom .mapZ{width:34px;height:34px}
+  /* 通用弹窗：横屏不超过 96dvh，内部滚动 */
+  #bagPanel, #setPanel, #whPanel, #mktPanel, #skCPanel, #tpPanel, #housePanel, #shopPanel, #mapPanel {
+    overflow:auto;
+  }
+  #houseBox, #shopBox, #tpBox, #whBox, #setBox, #mktBox, #skCBox {
+    max-height:96dvh; margin:auto;
+  }
+  #houseBody, #shopBody, #tpList { max-height:calc(96dvh - 60px); overflow:auto; }
+  #bagGrid { grid-template-columns:repeat(8,1fr); }
+}
+
+/* 手机竖屏/小屏菜单：面板占满高度，标签单行横滑 */
+@media (max-width: 760px) {
+  #setBox{width:calc(100vw - 16px)!important;max-width:440px;height:min(94dvh,100dvh)!important;padding:12px 12px 8px!important}
+  #setTabsWrap{overflow:visible;flex:0 0 auto;margin-top:6px;mask-image:none;-webkit-mask-image:none}
+  #setTabs{flex-wrap:wrap!important;gap:4px!important;width:auto}
+  #setTabs .tab{padding:5px 8px!important;font-size:12px!important;white-space:nowrap;flex:0 0 auto}
+  #setHead{flex-wrap:wrap;gap:6px}
+  #setHead > div:last-child{width:100%;justify-content:space-between}
+  #setX{width:38px;height:38px;font-size:18px}
+}
+@media (orientation: landscape) and (max-height: 620px) {
+  #setBox{height:min(96dvh,620px)!important;width:min(96vw,760px)!important;padding:8px 12px!important}
+  #setTabsWrap{overflow-x:auto;overflow-y:hidden;flex:0 0 auto;scrollbar-width:none}
+  #setTabs{flex-wrap:nowrap!important;width:max-content;gap:6px!important}
+  #setTabs .tab{padding:6px 10px!important;font-size:12px!important;white-space:nowrap;flex:0 0 auto}
+  #setHead{padding-bottom:4px}
+  #setX{width:32px;height:32px;font-size:16px}
+}
+@media (max-width:760px){
+  #mapPanel{background:#0b0906}
+  #mapBox{width:100vw;height:100dvh;max-height:100dvh;border-radius:0;border:0}
+  #mapHead{padding:10px 12px;padding-top:calc(10px + env(safe-area-inset-top))}
+  #mapTitle{font-size:16px}
+  #mapLegend{display:none}
+  #mapFit .mapV{padding:5px 6px;font-size:11px}
+  #mapZoom .mapZ{width:36px;height:36px}
+  #mapClose{font-size:24px;padding:0 8px}
+  #mapBody{flex-direction:column}
+  #townMapCanvas{width:100%;height:60vh;flex:0 0 60vh}
+  #mapSide{width:auto;height:30vh;flex:0 0 30vh;border-left:0;border-top:1px solid #ffffff14;padding:8px 12px calc(6px + env(safe-area-inset-bottom));overflow:auto}
+  #mapInfo{min-height:44px;font-size:13px}
+  #mapList{display:none;max-height:none;border-top:0;padding-top:0}
+  #mapListBtn{display:block}
+  #mapSide.listOn #mapList{display:block}
+  #mapSide.listOn #mapInfo{display:none}
+  #mapCopy{display:none!important}
+}
+#mapBody{flex:1;display:flex;min-height:0}
+#townMapCanvas{flex:1;min-width:0;height:100%;display:block;background:#596b4a;cursor:crosshair}
+#mapSide{width:275px;border-left:1px solid #ffffff14;padding:12px;color:#f1e3c6;font:13px system-ui,"Microsoft YaHei";overflow:auto}
+
+#mapList{max-height:calc(100% - 210px);overflow:auto;margin-top:8px;border-top:1px solid #ffffff14;padding-top:8px}
+.mapCat{font:800 12px system-ui,"Microsoft YaHei";color:#ffd08a;margin:8px 0 3px}
+.mapItem{display:flex;gap:6px;padding:3px 4px;border-radius:5px;cursor:pointer;color:#ded4bc;font-size:12px}
+.mapItem:hover{background:#ffffff10}
+.mapItem b{color:#9fe8ff;min-width:34px}
+.mapItem.road b{color:#c8c0a8}
+#mapInfo{min-height:90px;color:#c8c0a8;line-height:1.6}
+#mapInfo b{color:#ffe9b0}
+#mapCopy{display:none;width:100%;margin-top:8px;padding:8px;border-radius:7px;border:1px solid #8fd6ff66;
+  background:#8fd6ff1a;color:#dff6ff;font:800 13px system-ui,"Microsoft YaHei";cursor:pointer}
+.mapSideTitle{font:800 13px;color:#ffd08a;margin:8px 0 4px}
+.mapHint{color:#9a927e;font-size:11px;line-height:1.5}
+@media (max-width:760px){#mapBody{flex-direction:column}#mapSide{width:auto;height:130px;border-left:0;border-top:1px solid #ffffff14}#mapLegend{display:none}#mapBtn{top:84px;right:12px}}
+#shopPrompt{position:fixed;left:50%;top:62%;transform:translate(-50%,-50%);z-index:31;display:none;padding:8px 18px;border-radius:6px;
+  background:var(--ui-panel2,#130d08ee);border:1px solid var(--ui-border,#b98a42);color:var(--ui-text,#f1e3c6);
+  font:16px system-ui,"Microsoft YaHei";font-weight:700;pointer-events:none;text-shadow:0 1px 2px #000;white-space:nowrap}
+#atk.fridge .ic,#atk.fridge .cd{display:none!important}
+#atk.fridge::after{content:"冰箱";font:800 19px system-ui,"Microsoft YaHei";color:#0e2733;
+  text-shadow:0 1px 0 #ffffff88;letter-spacing:2px}
+#atk.fridge{background:radial-gradient(circle at 36% 30%,#d8f4ff,#7fc0d8 70%)!important;
+  border-color:#d8f4ff!important;box-shadow:0 0 0 2px #9fe8ff55,0 0 14px #9fe8ff66!important}
+#atk.shop .ic,#atk.shop .cd{display:none!important}
+#atk.shop::after{content:"购买";font:800 19px system-ui,"Microsoft YaHei";color:#1a2a14;
+  text-shadow:0 1px 0 #ffffff88;letter-spacing:2px}
+#atk.shop{background:radial-gradient(circle at 36% 30%,#d8ffd0,#7ac88a 70%)!important;
+  border-color:#d8ffd0!important;box-shadow:0 0 0 2px #8fffb055,0 0 14px #8fffb066!important}
+
+
+#orderPanel{position:fixed;inset:0;z-index:58;display:none;background:rgba(4,6,9,.42);
+  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+#orderBox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(520px,94vw);max-height:84vh;
+  display:flex;flex-direction:column;background:linear-gradient(180deg,#2a1f18f8,#120c08f8);
+  border:1px solid #d8a86a;border-radius:12px;box-shadow:0 18px 60px #000b;overflow:hidden}
+#orderHead{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #ffffff14;
+  color:#ffe9c8;font:800 18px system-ui,"Microsoft YaHei"}
+#orderClose{cursor:pointer;padding:4px 8px;color:#ffe9c8}
+#orderBody{padding:12px;overflow:auto;color:#f1e3c6;font:14px system-ui,"Microsoft YaHei"}
+#orderMsg{color:#ffd08a;font-size:13px;min-height:18px;margin:6px 0}
+#orderBody .shopRow{border-color:#d8a86a33;background:#ffffff08}
+#atk.order .ic,#atk.order .cd{display:none!important}
+#atk.order::after{content:"点单";font:800 19px system-ui,"Microsoft YaHei";color:#2a1806;
+  text-shadow:0 1px 0 #ffffff88;letter-spacing:2px}
+#atk.order{background:radial-gradient(circle at 36% 30%,#ffe0b0,#d09a5a 70%)!important;
+  border-color:#ffe0b0!important;box-shadow:0 0 0 2px #ffd08a55,0 0 14px #ffd08a66!important}
+#atk.work .ic,#atk.work .cd{display:none!important}
+#atk.work::after{content:"打工";font:800 19px system-ui,"Microsoft YaHei";color:#0e2a1a;
+  text-shadow:0 1px 0 #ffffff88;letter-spacing:2px}
+#atk.work{background:radial-gradient(circle at 36% 30%,#d8ffd0,#6fc07a 70%)!important;
+  border-color:#d8ffd0!important;box-shadow:0 0 0 2px #8fffa855,0 0 14px #8fffa866!important}
+#orderPrompt,#workPrompt{position:fixed;left:50%;top:62%;transform:translate(-50%,-50%);z-index:31;display:none;
+  padding:8px 18px;border-radius:6px;background:#130d08ee;border:1px solid #b98a42;color:#f1e3c6;
+  font:16px system-ui,"Microsoft YaHei";font-weight:700;pointer-events:none;text-shadow:0 1px 2px #000;white-space:nowrap}
+#fridgePanel{position:fixed;inset:0;z-index:58;display:none;background:rgba(4,6,9,.42);
+  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+#fridgeBox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(560px,94vw);max-height:84vh;
+  display:flex;flex-direction:column;background:linear-gradient(180deg,#22303af8,#0d1418f8);
+  border:1px solid #7fb8d8;border-radius:12px;box-shadow:0 18px 60px #000b;overflow:hidden}
+#fridgeHead{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #ffffff14;
+  color:#dff2ff;font:800 18px system-ui,"Microsoft YaHei"}
+#fridgeClose{cursor:pointer;padding:4px 8px;color:#dff2ff}
+#fridgeBody{padding:12px;overflow:auto;color:#dff2ff;font:14px system-ui,"Microsoft YaHei"}
+#fridgeGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.frSlot{height:64px;border-radius:9px;border:1px solid #7fb8d833;background:#7fb8d80d;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;cursor:pointer;font-size:11px;color:#cfe8f4}
+.frSlot:hover{border-color:#9fe8ff;background:#9fe8ff1a}
+.frSlot .ico{font-size:20px}
+#fridgeBag{margin-top:10px;border-top:1px solid #ffffff14;padding-top:8px}
+#fridgeBag .frItem{display:flex;align-items:center;gap:8px;padding:6px 4px}
+#fridgeMsg{color:#9fe8ff;font-size:13px;min-height:18px;margin:6px 0}
+#shopPanel{position:fixed;inset:0;z-index:58;display:none;background:rgba(4,6,9,.42);
+  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+#shopBox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(560px,94vw);max-height:84vh;
+  display:flex;flex-direction:column;background:linear-gradient(180deg,var(--ui-panel,#2b2015f8),var(--ui-panel2,#130d08f8));
+  border:1px solid var(--ui-border,#b98a42);border-radius:12px;box-shadow:0 18px 60px #000b;overflow:hidden}
+#shopHead{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #ffffff14;
+  color:var(--ui-text,#f1e3c6);font:800 18px system-ui,"Microsoft YaHei"}
+#shopGold{font:700 13px system-ui,"Microsoft YaHei";color:#ffd08a}
+#shopClose{cursor:pointer;padding:4px 8px;color:#f1e3c6}
+#shopBody{padding:12px;overflow:auto;color:#f1e3c6;font:14px system-ui,"Microsoft YaHei"}
+.shopRow{display:flex;align-items:center;gap:10px;padding:9px 10px;margin:7px 0;border-radius:9px;
+  border:1px solid #ffffff16;background:#ffffff08}
+.shopIco{font-size:22px;width:30px;text-align:center}
+.shopMain{flex:1;min-width:0}
+.shopName{font-weight:800}
+.shopDesc{color:#c8c0a8;font-size:12px;margin-top:2px}
+.shopPrice{color:#ffd08a;font-weight:800;margin-right:6px}
+.shopBuy{padding:7px 12px;border-radius:7px;border:1px solid #8fd6ff66;background:#8fd6ff1a;color:#dff6ff;
+  font:800 13px system-ui,"Microsoft YaHei";cursor:pointer}
+.shopBuy:disabled{opacity:.35;cursor:not-allowed}
+#shopMsg{color:#9fe8ff;font-size:13px;min-height:18px;margin:6px 0}
+#sleepPrompt{position:fixed;left:50%;top:62%;transform:translate(-50%,-50%);z-index:31;display:none;padding:8px 18px;border-radius:6px;
+  background:var(--ui-panel2,#130d08ee);border:1px solid var(--ui-border,#b98a42);color:var(--ui-text,#f1e3c6);
+  font:16px system-ui,"Microsoft YaHei";font-weight:700;pointer-events:none;text-shadow:0 1px 2px #000;white-space:nowrap}
+#atk.sleep .ic,#atk.sleep .cd,#atk.wake .ic,#atk.wake .cd{display:none!important}
+#atk.sleep::after{content:"睡觉";font:800 19px system-ui,"Microsoft YaHei";color:#241a0e;
+  text-shadow:0 1px 0 #ffffff88;letter-spacing:2px}
+#atk.sleep{background:radial-gradient(circle at 36% 30%,#d8c8ff,#8a7ac8 70%)!important;
+  border-color:#d8c8ff!important;box-shadow:0 0 0 2px #b8a8ff55,0 0 14px #b8a8ff66!important}
+#atk.wake::after{content:"起床";font:800 19px system-ui,"Microsoft YaHei";color:#1a2410;
+  text-shadow:0 1px 0 #ffffff88;letter-spacing:2px}
+#atk.wake{background:radial-gradient(circle at 36% 30%,#c8ffd8,#6fbf82 70%)!important;
+  border-color:#c8ffd8!important;box-shadow:0 0 0 2px #8fffa855,0 0 14px #8fffa866!important}
+#housePrompt{position:fixed;left:50%;top:62%;transform:translate(-50%,-50%);z-index:31;display:none;padding:8px 18px;border-radius:6px;
+  background:var(--ui-panel2,#130d08ee);border:1px solid var(--ui-border,#b98a42);color:var(--ui-text,#f1e3c6);
+  font:16px system-ui,"Microsoft YaHei";font-weight:700;pointer-events:none;text-shadow:0 1px 2px #000;white-space:nowrap}
+#atk.house .ic,#atk.house .cd{display:none!important}
+#atk.house::after{content:"房屋";font:800 19px system-ui,"Microsoft YaHei";color:#2a1806;
+  text-shadow:0 1px 0 #ffffff88;letter-spacing:2px}
+#atk.house{background:radial-gradient(circle at 36% 30%,#ffe0b0,#c89a5a 70%)!important;
+  border-color:#ffe0b0!important;box-shadow:0 0 0 2px #ffd08a55,0 0 14px #ffd08a66!important}
+#housePanel{position:fixed;inset:0;z-index:58;display:none;background:rgba(4,6,9,.42);
+  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+#houseBox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(480px,92vw);max-height:82vh;
+  display:flex;flex-direction:column;background:linear-gradient(180deg,var(--ui-panel,#2b2015f8),var(--ui-panel2,#130d08f8));
+  border:1px solid var(--ui-border,#b98a42);border-radius:12px;box-shadow:0 18px 60px #000b;overflow:hidden}
+#houseHead{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #ffffff14;
+  color:var(--ui-text,#f1e3c6);font:800 18px system-ui,"Microsoft YaHei"}
+#houseClose{cursor:pointer;padding:4px 8px;color:#f1e3c6}
+#houseBody{padding:14px;overflow:auto;color:#f1e3c6;font:14px system-ui,"Microsoft YaHei"}
+.hRow{display:flex;justify-content:space-between;gap:10px;margin:6px 0}
+.hMuted{color:#c8c0a8}
+.hPrice{color:#ffd08a;font-weight:800}
+.hBtn{width:100%;margin-top:10px;padding:10px;border-radius:8px;border:1px solid #8fd6ff66;
+  background:#8fd6ff1a;color:#dff6ff;font:800 16px system-ui,"Microsoft YaHei";cursor:pointer}
+.hBtn.alt{background:#ffd08a1a;border-color:#ffd08a66;color:#ffe9c0}
+.hBtn.danger{background:#ff6a6a1a;border-color:#ff8a8a66;color:#ffd0d0}
+.hBtn:disabled{opacity:.35;cursor:not-allowed}
+#houseDays{width:100%;padding:8px;border-radius:7px;border:1px solid #ffffff22;background:#ffffff0d;color:#f1e3c6;margin-top:6px}
+#houseMsg{margin-top:8px;color:#9fe8ff;font-size:13px;min-height:18px}
+#tpPanel{position:fixed;inset:0;z-index:58;display:none;background:rgba(4,6,9,.42);
+  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+#tpBox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(460px,92vw);max-height:80vh;
+  display:flex;flex-direction:column;background:linear-gradient(180deg,var(--ui-panel,#2b2015f8),var(--ui-panel2,#130d08f8));
+  border:1px solid var(--ui-border,#b98a42);border-radius:12px;box-shadow:0 18px 60px #000b;overflow:hidden}
+#tpHead{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #ffffff14;
+  color:var(--ui-text,#f1e3c6);font:800 18px system-ui,"Microsoft YaHei"}
+#tpClose{cursor:pointer;padding:4px 8px;color:#f1e3c6}
+#tpList{padding:10px;overflow:auto;display:flex;flex-direction:column;gap:8px}
+.tpBtn{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-radius:8px;
+  border:1px solid #ffffff18;background:#ffffff0a;color:#f1e3c6;font:700 15px system-ui,"Microsoft YaHei";cursor:pointer}
+.tpBtn span{color:#8fd6ff;font-size:12px}
+.tpBtn:hover{background:#8fd6ff1a;border-color:#8fd6ff66}
+
+#whPanel{position:fixed;inset:0;z-index:58;display:none;background:rgba(4,6,9,.42);
+  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+#whBox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(700px,96vw);max-height:88vh;
+  display:flex;flex-direction:column;background:linear-gradient(180deg,var(--ui-panel,#2b2015f8),var(--ui-panel2,#130d08f8));
+  color:var(--ui-text,#f1e3c6);border:2px solid var(--ui-border,#b98a42);border-radius:8px;
+  box-shadow:0 12px 40px #000c;backdrop-filter:blur(16px) saturate(1.2);-webkit-backdrop-filter:blur(16px) saturate(1.2)}
+#whHead{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;
+  border-bottom:1px solid var(--ui-border,#b98a42);background:var(--ui-panel2,#130d08aa)}
+#whHead .whTitle{font-size:19px;font-weight:800;letter-spacing:3px;color:var(--ui-gold,#ffd83d)}
+#whCount{font-size:11px;letter-spacing:0;color:var(--ui-dim,#b8a483);margin-left:8px}
+#whClose{width:30px;height:30px;border:1px solid var(--ui-border,#b98a42);border-radius:4px;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--ui-gold,#ffd83d);
+  background:var(--ui-btn,#342315)}
+#whCols{display:flex;gap:12px;padding:12px 16px;overflow:auto;flex:1;min-height:0}
+.whCol{flex:1;min-width:0;background:var(--ui-panel2,#130d08aa);border:1px solid var(--ui-border,#b98a4266);
+  border-radius:6px;padding:8px}
+.whColTitle{font-size:12px;color:var(--ui-gold,#ffd83d);font-weight:700;margin-bottom:6px;display:flex;justify-content:space-between}
+.whColTitle span{font-weight:400;color:var(--ui-dim,#b8a483)}
+.whGrid{display:grid;grid-template-columns:repeat(6,42px);gap:4px;justify-content:center}
+.whSlot{width:42px;height:42px;border-radius:4px;background:var(--ui-input,#160f08);border:1px solid #ffffff18;
+  display:flex;align-items:center;justify-content:center;position:relative;cursor:pointer;overflow:hidden}
+.whSlot svg{width:30px;height:30px}
+.whSlot img{width:30px;height:30px}
+.whSlot .n{position:absolute;right:2px;bottom:0;font-size:10px;color:#fff;text-shadow:0 1px 2px #000}
+.whSlot .t{position:absolute;left:2px;top:0;font-size:9px;font-weight:800;color:#ffd83d;text-shadow:0 1px 2px #000}
+.whSlot.sel{outline:2px solid var(--ui-gold,#ffd83d);outline-offset:-2px}
+.whSlot.picked{box-shadow:inset 0 0 0 2px var(--ui-gold,#ffd83d)}
+.whSlot .chk{position:absolute;left:2px;top:2px;width:13px;height:13px;border:1px solid #ffd83d99;
+  border-radius:3px;background:#00000066;display:none;align-items:center;justify-content:center;font-size:10px;color:#ffd83d}
+.whSlot.picked .chk{display:flex}
+.whSlot.empty{cursor:default;opacity:.55}
+.whPager{display:flex;justify-content:center;gap:8px;margin-top:6px}
+.whPager button,#whFooter button{cursor:pointer}
+.whPager button{background:var(--ui-btn,#342315);border:1px solid var(--ui-border,#b98a42);color:var(--ui-text,#f1e3c6);
+  border-radius:3px;padding:2px 12px}
+#whFooter{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--ui-border,#b98a42);background:var(--ui-panel2,#130d08aa)}
+#whMsg{font-size:11px;color:var(--ui-dim,#b8a483);margin-left:auto}
+@media(max-width:560px){.whGrid{grid-template-columns:repeat(6,36px);gap:3px}.whSlot{width:36px;height:36px}
+  #whCols{gap:6px;padding:8px}.whCol{padding:5px}}
+</style>
+</head><body data-theme="gray">
 <canvas id="cv"></canvas>
 <!-- ★★ 第 213 轮（用户）：云服务器慢的时候，别让玩家看"没加载好的页面" ★★
      以前：HTML 一到位就露出半个界面（血条是 "— / —"、世界是空的）✗
@@ -629,7 +1298,7 @@
      ★ 超过 12 秒还没好 → 自己冒出一个"重新载入"按钮 ✗
        （云服务器网络抖的时候，玩家知道该干嘛 ✓ 不用干等 ✓）-->
 <div id="boot">
-  <div class="bt">末日丧尸 · 组队修仙</div>
+  <div class="bt">块来修仙</div>
   <div class="bs"><i></i><i></i><i></i></div>
   <div class="bm" id="bootMsg">正在载入…</div>
   <div class="bh" id="bootHint" style="display:none">
@@ -642,6 +1311,7 @@
 <div id="top" class="pane"><span class="nm" id="uName">—</span> <span class="realm" id="uRealm"></span><br>
  <span id="uStat">载入中…</span>
  <div id="hpw"><div id="hp"></div><span id="hpTxt">— / —</span></div>
+ <div id="qiw"><div id="qi"></div><span id="qiTxt">灵气 — / —</span></div>
  <div id="expw"><div id="exp"></div><span id="expTxt">经验 — / —</span></div><div id="gw"><span id="goldTxt">金币 0</span></div></div>
 <!-- ★ 右上角：帧数 + 诊断合成一块【两行】（第 32 轮）
      原来这是散在左上/右上三块（#diag 在左上、#fps 和 #stat 在右上），
@@ -650,7 +1320,11 @@
  <div id="fps">-- FPS</div>
  <div id="diag">诊断…</div>
 </div>
-<div id="hud" class="pane">左半屏拖动 = 走 · 右下 = 攻击<br><span style="color:#8ee0a8">长按攻击键 3 秒 = 自动战斗（再长按 3 秒 = 取消）</span></div>
+<!-- ★ round550：技能栏（第一排 主动 5 格 · 可拖动/可隐藏）-->
+<div id="skBar" style="position:fixed;left:12px;bottom:112px;z-index:22;display:flex;gap:6px;
+     padding:10px 12px;border-radius:12px;background:#0b111a55;touch-action:none"></div>
+
+<div id="hud" class="pane">左半屏拖动 = 走 · 右下 = 攻击<br><span style="color:#8ee0a8">点【键位】可以移动按钮</span></div>
 <div id="uiEdit" class="pane">键位</div>
 <div id="setBtn" class="pane">☰ 菜单</div>
 
@@ -658,24 +1332,120 @@
 <div id="autoInfo"></div>
 <div id="safeTp"><i id="safeTpFill"></i><span id="safeTpTxt">回安全区</span></div>
 
-<div id="atk"><div class="cd"></div><svg class="ic" viewBox="0 0 24 24" fill="none"
+<div id="atk"><span id="atkBadge"></span><div class="cd"></div><svg class="ic" viewBox="0 0 24 24" fill="none"
   stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
   <polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5"/>
   <line x1="13" y1="19" x2="19" y2="13"/>
   <line x1="16" y1="16" x2="20" y2="20"/>
   <line x1="19" y1="21" x2="21" y2="19"/>
 </svg></div>
+
+<!-- ★ 2026-10-22：多个可交互对象 → 选择弹窗 -->
+<div id="nearPick">
+  <div id="nearPickBox">
+    <div id="nearPickHead">
+      <span>附近可以交互</span>
+      <span style="cursor:pointer" onclick="nearPickClose()">✕</span>
+    </div>
+    <div id="nearPickBody"></div>
+  </div>
+</div>
 <!-- ★ 第 306 轮：跳跃键（只能跳 1 格 ✗ 地形方案 §3.4）-->
+<!-- ★ round409（用户："跳跃向上的按钮图标太简单了"）
+     ★ 换成【双层箭头 + 地面线】：读起来就是"离地往上冲"✓
+       原来只有一个单箭头 ✗ 和"返回顶部"图标几乎一样 ✓ -->
 <div id="jmp"><svg class="jic" viewBox="0 0 24 24" fill="none"
   stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M12 19V6"/><polyline points="6 11 12 5 18 11"/>
+  <path d="M4.5 20.2h15"/>
+  <polyline points="6.8 15.2 12 10 17.2 15.2"/>
+  <polyline points="6.8 9.4 12 4.2 17.2 9.4"/>
+  <path d="M12 9.4v.6" opacity=".55"/>
 </svg></div>
-<div id="auto"><svg class="aic" viewBox="0 0 24 24" fill="none"
-  stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>
-  <circle cx="12" cy="12" r="4.2"/>
-  <path d="M6.2 6.2l2 2M15.8 15.8l2 2M17.8 6.2l-2 2M8.2 15.8l-2 2"/>
-</svg></div>
+<!-- ★ round413（用户：“自动战斗的按钮图标不像自动按钮”）
+     旧图标是个「太阳 / 齿轮」（十字光 + 圆圈）✗ 看不出是自动✓
+     新图标 = 【两个首尾相接的循环箭头】✗ “自动 / 循环”的通用符号✓
+     （和左边那个单箭头的跳跃键、右边的刀剑都不撞图✓） -->
+<!-- ★ round415（用户："自动战斗图标改成文字掛机"）
+     不再用图标 ✗ 直接写两个字 ✓ 一眼就知道是干什么的 ✓
+     ★ 字号按按钮大小自适应（--atk 驱动 ✗ 设置里调大按钮也跟着大 ✓）-->
+<div id="auto"><span class="aitxt">挂机</span></div>
+<!-- ★ round497：视角转动（点一下解锁可转 / 再点锁定 / 长按 1 秒回正）-->
+<div id="cam">
+  <svg class="camic" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <ellipse cx="12" cy="12" rx="9.2" ry="4.2"/>
+    <ellipse cx="12" cy="12" rx="4.2" ry="9.2" opacity=".55"/>
+    <path d="M18.6 6.6l2.2-2.2M20.8 6.6l-2.2-2.2" opacity=".9"/>
+  </svg>
+  <i class="camdot"></i>
+</div>
+<!-- round605：视角解锁后的画面大小滑条 + 第一/第三人称 -->
+<div id="camTools" style="position:fixed;left:50%;top:calc(env(safe-area-inset-top, 0px) + 76px);transform:translateX(-50%);z-index:90;display:none;pointer-events:auto;
+  background:#0b1018dd;border:1px solid #ffffff22;border-radius:10px;padding:7px 10px;
+  width:min(520px,94vw);color:#dfe8f2;font:12px 'Microsoft YaHei',sans-serif;pointer-events:auto">
+  <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+    <span style="color:#8fa3b8;white-space:nowrap">画面大小</span>
+    <input id="camZoom" type="range" min="60" max="300" value="100" style="flex:1;min-width:0">
+    <span id="camZoomVal" style="color:#ffd83d;min-width:38px;text-align:right">100%</span>
+  </div>
+  <div style="display:flex;gap:5px;flex-wrap:wrap">
+    <button id="camFirst" style="flex:1;min-width:74px;padding:5px 0;border-radius:7px;border:1px solid #ffffff22;
+      background:#ffffff10;color:#dfe8f2">第一人称</button>
+    <button id="camThird" style="flex:1;min-width:74px;padding:5px 0;border-radius:7px;border:1px solid #ffffff22;
+      background:#ffffff10;color:#dfe8f2">第三人称</button>
+    <button id="camFree" style="flex:1;min-width:74px;padding:5px 0;border-radius:7px;border:1px solid #ffffff22;
+      background:#ffffff10;color:#dfe8f2">自由视角</button>
+    <button id="camLand" style="flex:1;min-width:64px;padding:5px 0;border-radius:7px;border:1px solid #ffffff22;
+      background:#ffffff10;color:#dfe8f2">横屏</button>
+  </div>
+</div>
+<div id="whPrompt">按 E / 点击交互按钮 打开仓库</div>
+<div id="sitPrompt">按 E / 点击交互按钮 坐下</div>
+<div id="tpPrompt">按 E / 点击交互按钮 传送</div>
+<button id="mapBtn" title="小镇地图（M）">地图</button>
+<button id="townBtn" title="我的小镇">小镇</button>
+<div id="mapPanel"><div id="mapBox"><div id="mapHead"><div id="mapTitle">新手小镇 · 全景地图</div><div id="mapLegend">B 建筑 · H 住宅 · S 商店 · R 道路 · T 传送</div><div id="mapFit"><button class="mapV" onclick="mapFit('town')">小镇</button><button class="mapV" onclick="mapFit('all')">全图</button></div><div id="mapZoom"><button class="mapZ" onclick="mapZoom(-1)">−</button><button class="mapZ" onclick="mapZoom(1)">＋</button></div><div id="mapClose">✕</div></div><div id="mapFilterBar"><button class="mapF on" data-f="all" onclick="mapFilter('all')">全部</button><button class="mapF" data-f="center" onclick="mapFilter('center')">中心</button><button class="mapF" data-f="villa" onclick="mapFilter('villa')">别墅</button><button class="mapF" data-f="yard" onclick="mapFilter('yard')">小院</button><button class="mapF" data-f="flat" onclick="mapFilter('flat')">小楼</button><button class="mapF" data-f="shop" onclick="mapFilter('shop')">商店</button><button class="mapF" data-f="road" onclick="mapFilter('road')">道路</button></div><div id="mapBody"><canvas id="townMapCanvas"></canvas><div id="mapSide"><div class="mapSideTitle">点击地图上的编号</div><div id="mapInfo">点击建筑看名称、编号、坐标。<br><span class="mapHint">手机端默认隐藏密集文字；用筛选和下方编号列表定位。</span></div><button id="mapCopy" onclick="mapCopy()">复制坐标</button><button id="mapListBtn" onclick="mapListToggle()">展开编号列表</button><div class="mapSideTitle">全部编号</div><div id="mapList"></div><div class="mapHint">编号即定位编号；道路带名称。M 键开关地图。</div></div></div></div></div>
+<div id="shopPrompt">按 E / 点击交互按钮 购买</div>
+<div id="orderPrompt">按 E / 点击交互按钮 点单</div>
+<div id="workPrompt">按 E / 点击交互按钮 打工</div>
+<div id="orderPanel"><div id="orderBox"><div id="orderHead"><div id="orderTitle">点单</div><div id="orderClose">✕</div></div><div id="orderBody"></div></div></div>
+<div id="fridgePanel"><div id="fridgeBox"><div id="fridgeHead"><div>冰箱</div><div id="fridgeClose">✕</div></div><div id="fridgeBody"></div></div></div>
+<div id="shopPanel"><div id="shopBox"><div id="shopHead"><div id="shopTitle">商店</div><div id="shopGold">金币 0</div><div id="shopClose">✕</div></div><div id="shopBody"></div></div></div>
+<div id="sleepPrompt">按 E / 点击交互按钮 睡觉</div>
+<div id="housePrompt">按 E / 点击交互按钮 查看房屋</div>
+<div id="housePanel"><div id="houseBox"><div id="houseHead"><div>住宅</div><div id="houseClose">✕</div></div><div id="houseBody"></div></div></div>
+<div id="tpPanel"><div id="tpBox"><div id="tpHead"><div>传送阵</div><div id="tpClose">✕</div></div><div id="tpList"></div></div></div>
+<div id="interactFloat">仓库</div>
+<div id="whPanel">
+ <div id="whBox">
+  <div id="whHead">
+   <div class="whTitle">仓 库 <span id="whCount">0 / 90</span></div>
+   <div class="whX" id="whClose">✕</div>
+  </div>
+  <div id="whCols">
+   <div class="whCol">
+    <div class="whColTitle">背包 <span id="whBagPage">1 / 1</span></div>
+    <div id="whBag" class="whGrid"></div>
+    <div class="whPager"><button id="whBagPrev">‹</button><button id="whBagNext">›</button></div>
+   </div>
+   <div class="whCol">
+    <div class="whColTitle">仓库 <span id="whStorePage">1 / 1</span></div>
+    <div id="whStore" class="whGrid"></div>
+    <div class="whPager"><button id="whStorePrev">‹</button><button id="whStoreNext">›</button></div>
+   </div>
+  </div>
+  <div id="whFooter">
+   <button class="bagB" id="whPickPageB">背包整页勾选</button>
+   <button class="bagB" id="whPickPageS">仓库整页勾选</button>
+   <button class="bagB" id="whStoreBtn">存入 →</button>
+   <button class="bagB" id="whTakeBtn">← 取出</button>
+   <button class="bagB" id="whStoreSel">批量存入</button>
+   <button class="bagB" id="whTakeSel">批量取出</button>
+   <span id="whMsg"></span>
+  </div>
+ </div>
+</div>
+
 <div id="dead"><div id="deadCard">
  <div id="deadBy">你已陨落</div>
  <div id="deadTip">点击复活 · 原地满血起身</div>
@@ -691,7 +1461,7 @@
  <div id="setBox" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(440px,93vw);
    height:min(78vh,560px);display:flex;flex-direction:column;
    background:linear-gradient(180deg,#1e2630f5,#141a22f5);border:1px solid #ffffff28;border-radius:14px;padding:16px 18px;color:#e8eef6">
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+  <div id="setHead" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
    <div style="font-size:17px;font-weight:800;color:#ffd83d">菜单</div>
    <div style="display:flex;align-items:center;gap:10px">
      <div style="font-size:11px;color:#9aa4b2">改完立即生效 ✓ 自动保存 <span id="setFps" style="color:#8ee08a">FPS --</span></div>
@@ -710,6 +1480,11 @@
 <div id="setTabsWrap"><div id="setTabs">
    <div class="tab" data-page="1" data-tab="bag">背包</div>
    <div class="tab" data-page="1" data-tab="party">组队</div>
+   <!-- ★★ round467（用户："把装备栏和背包分开，装备栏单独设为导航栏"）★★ -->
+   <div class="tab" data-page="1" data-tab="equip">装备</div>
+   <div class="tab" data-page="1" data-tab="skin">皮肤</div>
+   <!-- ★ round538：技能（学习/装配/遗忘）-->
+   <div class="tab" data-page="1" data-tab="skill">技能</div>
    <div class="tab" data-page="1" data-tab="stat">属性</div>
    <div class="tab" data-page="1" data-tab="talent">天赋</div>
    <div class="tab on" data-page="1" data-tab="view">设置</div>
@@ -723,6 +1498,8 @@
           用户的实际体验是"找不到 / 挤在一起"✗ 以用户为准 ✓
         ★ 页签一多就会换行（第 169 轮的自动换行本来就在 ✓）→ 加一个不会挤坏 ✓ -->
    <div class="tab" data-page="1" data-tab="mkt">交易所</div>
+   <!-- ★★ round424（用户："在设置里排行榜导航，可以在这看排行榜"）★★ -->
+   <div class="tab" data-page="1" data-tab="rank">排行</div>
    <!-- ★ 第 128 轮（用户）：【调试】页签已移除 ✗
         那些开关（刷怪/无敌等）本来就只该管理员用 ✗
         → 现在全部收进【管理页】✓（本轮正在做）-->
@@ -731,6 +1508,7 @@
   </div><!-- ★ 第 169 轮（用户 #3）：这个箭头提示"右边还有页签，可以滑" ✓
             滑到最右（或者不用滑）时 JS 会给外层加 on 类 → 箭头和渐隐都淡出 ✓ --></div>
 
+  <div id="setBody">
   <div class="tabpane" data-pane="bag">
    <!-- ★ 第 48 轮：改成【格子背包】（用户要求：像我的世界那样用图标，不要纯文字）✓
         图标全部程序画（SVG 描边 + 品阶色 ✓）—— 不加任何素材 ✓ -->
@@ -739,7 +1517,7 @@
      <span class="bagTip" id="bagCount"></span>
    </div>
    <div id="bagGrid" class="bagGrid"></div>
-   <!-- ★ 第 171 轮（用户 #4）：背包分页 —— 每页 35 格（5 行 × 7 列）✓
+   <!-- ★ 第 171 轮（用户 #4）：背包分页 —— 每页 30 格（5 行 × 6 列）✓
         超过一页才显示这一行 ✓（没超过时 JS 会把它藏起来 ✓）-->
    <div id="bagPager" style="display:none;align-items:center;gap:10px;margin-top:6px">
      <button class="bagB" id="bagPrev">‹ 上一页</button>
@@ -762,6 +1540,8 @@
     <button id="bagUse" class="bagB" disabled>使 用</button>
     <button id="bagSell" class="bagB off" disabled>卖给系统</button>
     <button id="bagMkt" class="bagB off" disabled>挂交易所</button>
+    <!-- ★ round411：上锁按钮【搬进格子浮窗】了（这一排是藏起来的 ✗ 加了也看不到 ✓）
+         见 bagTipBtnsHTML 里的 data-tipact="lock" ✓ -->
     <input id="bagMktPrice" class="mktInput" type="text" inputmode="numeric"
            placeholder="价格" maxlength="10">
    </div>
@@ -770,6 +1550,11 @@
 
    <div id="bagRowBatch" class="bagBtns bagRow">
     <button id="bagPick" class="bagB">批量选择</button>
+    <!-- ★ round409（用户："背包出售再增加一个整页勾选的按钮"）
+         ★ 整页 = 只勾【当前这一页 30 格】✗ 不是整个背包 ✓
+           整个背包勾上再一键卖，手一滑就全没了 ✓
+         ★ 再点一次 = 取消本页的勾 ✗ 不会把别的页的勾也清掉 ✓ -->
+    <button id="bagPickPage" class="bagB">整页勾选</button>
     <!-- ★ round304v（用户："增加一个一键整理的按钮，按分类和种类品质进行排序"）★ -->
     <button id="bagSort" class="bagB">一键整理</button>
     <button id="bagSellMulti" class="bagB off" disabled>批量出售</button>
@@ -786,19 +1571,57 @@
    </div>
    <div class="bagStat" id="bagStat"></div>
 
-   <div class="bagHead" style="margin-top:12px">
+<!-- ★★ round466（用户："增加装备自动出售，可以设置低于多少阶获取后自动出售"）★★
+       拾取来那一刻就卖成金币（不进背包）✓ 价格和背包里卖系统一样 ✓ -->
+  <label style="display:flex;align-items:center;gap:8px;padding:7px 2px;font-size:13px;user-select:none">
+    <span style="flex:0 0 auto">自动出售装备</span>
+    <select id="setAutoSell" style="flex:1;padding:6px 8px;background:#0e1218;color:#dfe8f2;
+            border:2px solid #2a3442;border-radius:0;font-size:13px">
+      <option value="0">不自动卖</option>
+      <option value="2">低于 2 阶（即 1 阶）</option>
+      <option value="3">低于 3 阶（即 1~2 阶）</option>
+      <option value="4">低于 4 阶（即 1~3 阶）</option>
+      <option value="5">低于 5 阶（即 1~4 阶）</option>
+      <option value="6">低于 6 阶（即 1~5 阶）</option>
+      <option value="7">低于 7 阶（即 1~6 阶）</option>
+      <option value="8">低于 8 阶（即 1~7 阶）</option>
+      <option value="9">低于 9 阶（即 1~8 阶）</option>
+      <option value="10">低于 10 阶（即 1~9 阶）</option>
+      <option value="11">低于 11 阶（即 1~10 阶）</option>
+      <option value="12">低于 12 阶（即 1~11 阶）</option>
+    </select>
+  </label>
+  <div class="bagTip" id="setAutoSellHint" style="margin:0 0 6px">★ 只对装备生效（材料不卖）· 拾取就卖不进背包</div>
+   <div class="bagEmpty" id="bagMsg"></div>
+   <div id="bagTipBox" class="bagTipBox"></div>
+  </div>
+
+  <!-- ★★★ round467：装备页（从背包里分出来的独立导航）★★★
+       ★ 两个装备槽的 id 没变（bagEqSlot / bagEqArmor）✗
+         所以 bagRender 里那一大段渲染代码一行都不用改 ✓
+       ★ 新加一块 #eqDetail：装备的数值 / 词条 / 耐久 ✓ -->
+  <div class="tabpane" data-pane="equip">
+   <div class="bagHead">
      <span class="setLabel" style="margin:0">已装备</span>
      <span class="bagTip">点装备槽 = 脱下</span>
    </div>
+
    <div class="bagEquipRow">
      <div id="bagEqSlot" class="slot eqslot"></div>
      <!-- ★★ 第 68 轮：防具槽 ★★（用户："只有武器穿戴格子"✗ —— 上一轮忘了做 UI ✓）-->
      <div id="bagEqArmor" class="slot eqslot eqarmor"></div>
      <span class="bagTip" id="bagEqTip">左边武器 · 右边防具（点一下 = 脱下）</span>
    </div>
-   <div class="bagEmpty" id="bagMsg"></div>
-   <div id="bagTipBox" class="bagTipBox"></div>
+   <div class="bagHead" style="margin-top:12px">
+     <span class="setLabel" style="margin:0">属性详情</span>
+     <span class="bagTip">武器·防具的实际数值（含发挥度）</span>
+   </div>
+   <div class="bagStat" id="eqDetail"></div>
+   <div class="bagTip" style="margin-top:8px">
+     ★ 换装备在【背包】里点一下那件 → 使用
+   </div>
   </div>
+
 
   <!-- ★★ 第 83 轮：组队（独立页）★★ 上：我的队伍 · 中：待处理 · 下：大厅 -->
   <!-- ★★ 第 113 轮：玩家属性页（用户要求）★★ -->
@@ -815,14 +1638,78 @@
    </div>
   </div>
 
+  <!-- ★★★ round488：皮肤页（40 个都能看，没获得的也能预览 ✓）★★★
+       ★ 设置面板只有 ~460px 宽 ✗ 所以竖向排：预览在上、格子在下 ✓ -->
+  <div class="tabpane" data-pane="skin">
+    <!-- ★★ round518（用户："眼睛、嘴巴没办法预览"）
+         根因：面板在下面 ✗ 点选项时画布已经滚出屏幕了 ✓ 看不到变化 = "没法预览"
+         → 预览区【吸顶】✗ 滚到哪儿都看得见 ✓ -->
+    <div style="position:relative;width:100%;height:170px;
+                border-radius:12px;background:linear-gradient(180deg,#1a2230,#0d1218);overflow:hidden">
+      <!-- ★ round517（用户："不能上下拖动、左右拖动不流畅"）
+           → 根因是【浏览器把拖动当成滚动】✗ touch-action:none 才能自己接管 ✓ -->
+      <canvas id="skCv" width="420" height="240"
+              style="display:block;width:100%;height:100%;touch-action:none;cursor:grab"></canvas>
+      <div id="skTag" style="position:absolute;left:10px;top:8px;font-size:11px;color:#8fa3b8"></div>
+    </div>
+    <!-- ★★ round525（用户："把皮肤里做个二级导航，加一个自定义导航"）
+         皮肤页现在分两档：【皮肤】（看/用/出价）和【自定义】（捏脸染色）-->
+    <div id="skNav" style="position:sticky;top:0;z-index:7;display:flex;gap:6px;
+         margin:6px 0;padding:4px 0;background:linear-gradient(180deg,#151d27 70%,#151d2700)">
+      <div class="bagB on" data-sknav="main" style="padding:4px 14px;font-size:12.5px">皮肤</div>
+      <div class="bagB" data-sknav="custom" style="padding:4px 14px;font-size:12.5px">🎨 自定义</div>
+    </div>
+    <div id="skCPanel" style="display:none;margin-top:2px">
+      <div style="font-size:11.5px;color:#8fa3b8;margin-bottom:4px">
+        预览随便看 ✓ 点「确认更换」才消耗 <b style="color:#ffd83d">1 张该皮肤的重复卡</b>
+      </div>
+      <div id="skCTabs" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px"></div>
+      <div id="skCOpts" style="display:flex;gap:4px;flex-wrap:wrap"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+        <div id="skCCost" style="flex:1 1 auto;font-size:11px;color:#b8c6d6"></div>
+        <button class="bagB" id="skCCancel">返回</button>
+        <button class="bagB" id="skCOk" disabled>确认更换</button>
+      </div>
+    </div>
+    <div id="skMain">
+    <div id="skName" style="font-size:16px;font-weight:700;margin:8px 0 2px;color:#eaf2fb">—</div>
+    <div id="skState" class="bagTip" style="min-height:18px"></div>
+    <div id="skRank" style="margin:6px 0;font-size:12px;line-height:1.7;color:#b8c6d6"></div>
+    <div style="display:flex;gap:6px;align-items:center;margin-top:4px">
+      <button class="bagB" id="skUse" disabled>使 用</button>
+      <input id="skBidAmt" type="number" inputmode="numeric" min="0" step="1000"
+             style="width:96px;padding:6px 8px;border-radius:8px;border:1px solid #ffffff22;
+                    background:#10161f;color:#dfe8f2;font-size:13px">
+      <button class="bagB" id="skBid" disabled>出 价</button>
+      <button class="bagB" id="skCustom" disabled>自定义</button>
+    </div>
+    <!-- ★★ round511：皮肤自定义（捏脸/染色）✗ 点「自定义」展开 ✓ -->
+    <div class="bagTip" id="skMsg" style="margin-top:4px;min-height:14px"></div>
+    <div class="bagTip" style="margin:8px 0 4px">
+      ★ 没获得的也能点开看 · 出价金币【不退】· 前三名可用 · 第一名高出第二 30% 就独占
+    </div>
+    <div id="skGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px"></div>
+    </div><!-- /skMain -->
+  </div>
+
+  <div class="tabpane" data-pane="skill">
+   <div style="display:flex;gap:6px;margin:2px 0 10px" id="skKindTabs">
+     <div class="bagB on" data-sk="A" style="padding:4px 14px;font-size:12.5px">主动</div>
+     <div class="bagB" data-sk="B" style="padding:4px 14px;font-size:12.5px">被动释放</div>
+     <div class="bagB" data-sk="C" style="padding:4px 14px;font-size:12.5px">被动加成</div>
+   </div>
+   <div id="skInfo" style="font-size:11.5px;color:#8fa3b8;margin-bottom:6px"></div>
+   <div id="skSlots" style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap"></div>
+   <div id="skList" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px"></div>
+   <div class="bagTip" id="skMsg" style="margin-top:8px;min-height:14px"></div>
+   <div style="display:flex;gap:6px;margin-top:6px">
+     <button class="bagB" id="skForget">遗忘模式</button>
+   </div>
+  </div>
+
   <div class="tabpane" data-pane="stat">
-   <div class="setLabel">人物</div>
-   <div id="stSelf"></div>
-   <div class="setLabel">手上武器</div>
-   <div id="stWeapon"></div>
-   <div class="setLabel">身上防具</div>
-   <div id="stArmor"></div>
-   <div class="setLabel">合计（含队伍加成）</div>
+   <!-- ★★ round465（用户："不要手上武器和身上防具这些，就只要属性总揀"）★★
+        三块旧容器（人物/武器/防具）全部删掉 ✗ 只留一个属性总览容器 ✓ -->
    <div id="stTotal"></div>
   </div>
 
@@ -909,7 +1796,34 @@
    <div id="ptParties"></div>
   </div>
 
+  <div class="tabpane" data-pane="ui">
+    <div class="setSub" style="display:flex;gap:6px;margin:2px 0 10px;flex-wrap:wrap">
+      <div class="sub" data-sub="view">画面</div>
+      <div class="sub" data-sub="ctrl">操作</div>
+      <div class="sub" data-sub="audio">音效</div>
+      <div class="sub" data-sub="ui">UI</div>
+    </div>
+    <div class="setLabel">界面主题</div>
+    <div id="themeBtns" style="display:flex;gap:6px;flex-wrap:wrap;padding:4px 0 8px">
+      <button class="bagB" data-theme="dark">暖色</button>
+      <button class="bagB" data-theme="light">浅色</button>
+      <button class="bagB" data-theme="pink">粉色</button>
+      <button class="bagB" data-theme="gray">灰色</button>
+      <button class="bagB" data-theme="black">深色</button>
+      <button class="bagB" data-theme="glass">浅白</button>
+      <button class="bagB" data-theme="blue">浅蓝</button>
+    </div>
+  </div>
+
   <div class="tabpane on" data-pane="view">
+   <!-- ★★ round531（用户："设置页面二级菜单"）
+        设置里分三档：画面 / 操作 / 音效 ✗ 点哪个切到哪一页 ✓ -->
+   <div class="setSub" style="display:flex;gap:6px;margin:2px 0 10px;flex-wrap:wrap">
+     <div class="sub on" data-sub="view">画面</div>
+     <div class="sub" data-sub="ctrl">操作</div>
+     <div class="sub" data-sub="audio">音效</div>
+     <div class="sub" data-sub="ui">UI</div>
+   </div>
    <div class="setLabel">分辨率倍率（越高越清晰越吃性能）</div>
    <div id="rowDpr"></div>
    <div class="setLabel">阴影质量 <small style="opacity:.6">（卡就调低或关掉 ✓ 方块影子分辨率）</small></div>
@@ -918,21 +1832,59 @@
    <div id="rowAA"></div>
    <div class="setLabel">场景细节（可见范围）</div>
    <div id="rowDet"></div>
-   <div class="setLabel">显示</div>
+   <!-- ★ round422（用户："只放大游戏画面，UI 和按钮不变"）
+        ★ 100% = 现在的大小（最小档 ✓）既只放大也不会缩小 ✓ -->
+   <div class="setLabel">画面大小 <small style="opacity:.6">（只缩放游戏画面 ✗ 按钮和界面不变 ✓ 60% ~ 300%）</small></div>
+   <div id="rowZoom" style="display:flex;align-items:center;gap:10px;padding:6px 0">
+     <input id="zoomRange" type="range" min="60" max="300" step="5" value="100"
+            style="flex:1 1 auto;height:16px;accent-color:#ffd83d">
+     <span id="zoomVal" style="width:48px;text-align:right;font-size:13px;color:#ffd83d;
+           font-variant-numeric:tabular-nums">100%</span>
+   </div>
+   <div class="setLabel">视角模式</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;padding:4px 0 8px">
+      <button id="setCamFirst" class="bagB">第一人称</button>
+      <button id="setCamThird" class="bagB">第三人称</button>
+      <button id="setCamFree" class="bagB">自由视角</button>
+    </div>
+    <div class="setLabel">屏幕方向</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;padding:4px 0 8px">
+      <button id="setCamLand" class="bagB">横屏</button>
+      <button id="setCamPortrait" class="bagB">竖屏</button>
+    </div>
+    <div class="setLabel">显示</div>
    <div id="rowDisp"></div>
-  </div>
+  
+</div>
 
   <div class="tabpane" data-pane="ctrl">
+   <!-- ★★ round531（用户："设置页面二级菜单"）
+        设置里分三档：画面 / 操作 / 音效 ✗ 点哪个切到哪一页 ✓ -->
+   <div class="setSub" style="display:flex;gap:6px;margin:2px 0 10px;flex-wrap:wrap">
+     <div class="sub" data-sub="view">画面</div>
+     <div class="sub" data-sub="ctrl">操作</div>
+     <div class="sub" data-sub="audio">音效</div>
+     <div class="sub" data-sub="ui">UI</div>
+   </div>
 
    <div class="setLabel">攻击键大小</div>
    <div id="rowAtk"></div>
    <div style="font-size:11px;color:#7b8794;margin-top:14px;line-height:1.9">
-    左半屏拖动 = 走 · 右下角 = 攻击<br><span style="color:#8ee0a8">长按右下角攻击键 3 秒 = 自动战斗（再长按 3 秒关闭）</span><br>
+    左半屏拖动 = 走 · 右下角 = 攻击<br><span style="color:#8ee0a8">点右上角的【键位】可以拖动攻击 / 跳跃 / 自动三个按钮（再点一次保存）</span><br>
     WASD = 走 · 空格 / 鼠标左键 = 攻击
    </div>
   </div>
 
   <div class="tabpane" data-pane="audio">
+   <!-- ★★ round531（用户："设置页面二级菜单"）
+        设置里分三档：画面 / 操作 / 音效 ✗ 点哪个切到哪一页 ✓ -->
+   <div class="setSub" style="display:flex;gap:6px;margin:2px 0 10px;flex-wrap:wrap">
+     <div class="sub" data-sub="view">画面</div>
+     <div class="sub" data-sub="ctrl">操作</div>
+     <div class="sub" data-sub="audio">音效</div>
+     <div class="sub" data-sub="ui">UI</div>
+   </div>
+
    <div class="setLabel">音效</div>
    <div id="rowSfx"></div>
   </div>
@@ -941,6 +1893,65 @@
   <!-- ★★ 第 148 轮（用户要求）：百科全书 ★★
        目录 + 内容两块 ✓ 纯前端 ✗ 不发请求 ✓ 秒开 ✓
        加新条目只要在 platform/web.js 的 WIKI 数组里加一条 ✓ -->
+  <!-- ★★ round424：排行榜（用户：前 100 名 · 每页 10 个 · 自己多少名都能看到 ✓）-->
+  <style>
+  #rankChips{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 10px}
+  #rankChips .rchip{padding:5px 13px;border-radius:20px;border:1px solid #ffffff22;
+    background:#ffffff0d;font-size:12.5px;color:#c9d3ba;cursor:pointer;user-select:none;
+    transition:background .12s,color .12s}
+  #rankChips .rchip.on{background:#ffd83d;color:#1a1d18;border-color:#ffd83d;font-weight:700}
+  #rankList{border-top:1px solid #ffffff10}
+  .rrow{display:flex;align-items:center;gap:8px;padding:7px 6px;
+    border-bottom:1px solid #ffffff0d;font-size:13px;line-height:1.2}
+  .rrow .rk{width:38px;flex:0 0 38px;color:#8f9a84;font-variant-numeric:tabular-nums;
+    font-size:12.5px;text-align:right}
+  .rrow .rk.m1{color:#ffd83d;font-weight:800}
+  .rrow .rk.m2{color:#d7e0ea;font-weight:800}
+  .rrow .rk.m3{color:#e3a06a;font-weight:800}
+  .rrow .rn{flex:1;color:#dfe8d4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rrow .rv{flex:0 0 auto;color:#ffd83d;font-size:12.5px;text-align:right}
+  .rrow .on{color:#8ee0a8;font-size:10.5px}
+  .rrow.me{background:#ffd83d1f;border-radius:8px}
+  #rankPager{display:flex;align-items:center;justify-content:center;gap:12px;
+    margin-top:10px;font-size:12.5px;color:#b9c2a8}
+  #rankPager button{padding:4px 12px;border-radius:8px;border:1px solid #ffffff22;
+    background:#ffffff0d;color:#dfe8d4;font-size:12.5px}
+  #rankPager button:disabled{opacity:.35}
+  #rankMe{margin-top:8px;font-size:12.5px;color:#b9c2a8}
+  #rankMe b{color:#ffd83d}
+  #rankTitleBox{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;
+    color:#dfe8d4;user-select:none;flex-wrap:wrap}
+  #rankTitleChips{display:flex;flex-wrap:wrap;gap:5px}
+  #rankTitleChips .tchip{padding:3px 10px;border-radius:16px;border:1px solid #ffffff22;
+    background:#ffffff0d;font-size:12px;color:#c9d3ba;cursor:pointer;user-select:none}
+  #rankTitleChips .tchip.on{background:#8ee0a8;color:#11170f;border-color:#8ee0a8;font-weight:700}
+  #rankTitleChips .tchip.off{opacity:.4;pointer-events:none}
+  #rankTitleBox .tip{font-size:11px;color:#7b8794}
+  </style>
+  <div class="tabpane" data-pane="rank">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="setLabel" style="margin:0">排行榜</span>
+      <span id="rankTag" style="font-size:11px;color:#7b8794"></span>
+      <button id="rankRefresh" class="bagB" style="margin-left:auto;padding:4px 12px;font-size:12.5px">刷新</button>
+    </div>
+    <div id="rankChips"></div>
+    <div id="rankList"></div>
+    <div id="rankPager">
+      <button id="rankPrev">◀</button>
+      <span id="rankPageTxt">第 1/10 页</span>
+      <button id="rankNext">▶</button>
+    </div>
+    <div id="rankMe"></div>
+    <!-- ★★ round425（用户："显示什么称号可以选择，现在只能选择境界排行"）★★
+         原来的勾选框只会挂【当前正在看的那个榜】✗ 想换榜得先取消再勾 ✓ 很难懂 ✗
+         → 改成【一排按钮】✗ 点哪个就用哪个榜当称号 ✓ 第一个是"不显示" ✓ -->
+    <div id="rankTitleBox">
+      <span>头顶称号</span>
+      <span id="rankTitleChips"></span>
+      <span class="tip" id="rankTitleTip"></span>
+    </div>
+  </div>
+
   <div class="tabpane" data-pane="wiki">
    <div id="wikiNav" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
    <div id="wikiBody" class="bagTipBox" style="position:static;display:block;box-shadow:none;padding:8px 10px;width:100%;max-width:100%;box-sizing:border-box;word-break:break-word;overflow-wrap:anywhere"></div>
@@ -955,27 +1966,28 @@
    <div class="setLabel">版本</div>
    <div id="aboutVer" style="font-size:11px;color:#8fa3b8;line-height:1.9">—</div>
    <div style="display:flex;gap:8px;margin-top:18px">
-  <!-- ★ 第 210 轮：自动战斗的两个开关（放在设置面板底部 ✓ 每个分类都能看到 ✓）-->
-  <label style="display:flex;align-items:center;gap:8px;padding:7px 2px;font-size:13px;cursor:pointer;user-select:none">
-    <input type="checkbox" id="setAutoOn" style="width:17px;height:17px;flex:0 0 auto">
-    <span>自动战斗<span style="opacity:.6;font-size:11px">（也可长按攻击键 3 秒开关）</span></span>
-  </label>
-  <label style="display:flex;align-items:center;gap:8px;padding:7px 2px;font-size:13px;cursor:pointer;user-select:none">
-    <input type="checkbox" id="setAutoLoot" style="width:17px;height:17px;flex:0 0 auto">
-    <span>自动捡东西<span style="opacity:.6;font-size:11px">（周围没怪时走过去捡）</span></span>
-  </label>
+  <!-- ★★ round508（用户："把信息界面的自动战斗和自动捡东西按钮删了 ✗
+        界面有自动按钮了，这个就不需要了；这个位置加一个刷新按钮，叫界面刷新 ✗ 60 秒 CD"）
+       删掉两个复选框 ✗ 换成【界面刷新】✓ 不用重开 APP ✓ -->
+  <div style="display:flex;align-items:center;gap:10px;margin-top:6px;width:100%">
+    <div id="uiReload" class="bagB" style="flex:0 0 auto;min-width:104px;text-align:center">界面刷新</div>
+    <div id="uiReloadTip" style="font-size:11px;color:#8fa3b8;line-height:1.5">
+      界面卡住 / 热更新后用 · 点一下重新载入（60 秒只能点一次）
+    </div>
+  </div>
 
-    <div id="setReset" class="opt" style="flex:1;padding:10px">恢复默认</div>
+  <div id="setReset" class="opt" style="flex:1;padding:10px">恢复默认</div>
     <!-- ★ 第 56 轮：这里原来有个"关闭"按钮 —— 现在统一用右上角的 X 了 ✓
          （JS 里 setClose 可能还在找它 → 保留一个隐藏的占位，免得报错 ✗）-->
     <div id="setClose" style="display:none"></div>
    </div>
   </div>
+  </div><!-- /setBody -->
  </div>
 </div>
 <div id="login">
   <div id="loginCard">
-    <h1>末日丧尸 · 组队修仙</h1>
+    <h1>块 来 修 仙</h1>
     <div class="sub" id="loginMsg">输入游戏名，进入这个正在死掉的世界</div>
     <input id="loginName" placeholder="游戏名（2~10 字）" maxlength="10" autocomplete="username">
     <input id="loginPass" type="password" placeholder="密码（至少 6 位）" maxlength="64"
@@ -986,6 +1998,7 @@
     </div>
     <div id="loginHint"></div>
     <div class="tip">游戏名唯一 · 密码加密存储 · 忘了就没了</div>
+    <div class="tip" style="margin-top:6px;color:#4d5e71;letter-spacing:1px">— 末世不讲道理，修仙也不 —</div>
   </div>
 </div>
 
@@ -996,8 +2009,23 @@
      → 页面能跑，但登录浮层永远不出现，谁都进不去 ✗（第 26 轮发现）-->
 <script src="/ws-config.js"></script>
 <script src="/lib/three.min.js"></script>
+<script src="/icons.js"></script>
+<script src="/vfx.js"></script>
+<script src="/lib/annrender.js"></script>
 <script src="/platform/web.js"></script>
+<script src="/core/town_data.js"></script>
+<script src="/core/town.js"></script>
 <script src="/core/game.js"></script>
+<script src="/core/town_models.js"></script>
+<script src="/core/town_villas.js"></script>
+<script src="/core/town_hall.js"></script>
+<script src="/core/town_shops2.js"></script>
+<script src="/core/town_shops3.js"></script>
+<script src="/core/town_shops4.js"></script>
+<script src="/core/town_veg.js"></script>
+<script src="/core/town_props.js"></script>
+<script src="/platform/town_ui.js"></script>
+<script src="/platform/place.js"></script>
 
 
 
@@ -1073,4 +2101,11 @@
 window._tabMoreBound = function () { var m = document.getElementById('tabMore'); return !!(m && m._bound); };
 })();
 </script>
+
+<div id="townPanel"><div id="townBox">
+  <div id="townHead"><b>我的小镇</b><span id="townClose">✕</span></div>
+  <div id="townBody"></div>
+</div></div>
+
 </body></html>
+

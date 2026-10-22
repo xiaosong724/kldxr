@@ -1150,6 +1150,8 @@ function bindInput() {
   document.addEventListener('touchstart', firstTouch, { passive: true });
   document.addEventListener('mousedown', firstTouch);
   function atkDown(e) { if (e) { e.preventDefault(); } if (UI_EDIT) { return; }
+  /* ★ 2026-10-22：附近有多个可交互对象 → 先弹窗选，不直接执行 */
+  if (typeof NEAR_CANDS !== 'undefined' && NEAR_CANDS.length > 1) { nearPickOpen(); return; }
   if (typeof MY_SLEEP !== 'undefined' && MY_SLEEP) { tryWake(); return; }
   if (typeof SLEEP_NEAR !== 'undefined' && SLEEP_NEAR) { trySleep(); return; }
   if (typeof FRIDGE_NEAR !== 'undefined' && FRIDGE_NEAR) { fridgeOpen(FRIDGE_NEAR.id); return; }
@@ -2241,6 +2243,140 @@ function mkOpts(rowId, items, key, cur) {
     })(items[i]);
   }
 }
+
+/* ---------- 2026-10-22：交互提示统一显示（3 秒自动消失）----------
+   ★ 用户要求："提示信息显示三秒后应该自动消失"
+   ★ 所有 xxxPrompt 共用一份计时器；换成别的内容时重新计时 */
+var _PROMPT_TIMERS = {};
+var PROMPT_MS = 3000;
+function showPrompt(id, text) {
+  var el = document.getElementById(id);
+  if (!el) { return; }
+  if (!text) {
+    el.style.display = 'none';
+    if (_PROMPT_TIMERS[id]) { clearTimeout(_PROMPT_TIMERS[id]); _PROMPT_TIMERS[id] = null; }
+    return;
+  }
+  el.textContent = text;
+  el.style.display = 'block';
+  if (_PROMPT_TIMERS[id]) { clearTimeout(_PROMPT_TIMERS[id]); }
+  _PROMPT_TIMERS[id] = setTimeout(function () {
+    _PROMPT_TIMERS[id] = null;
+    try {
+      /* 如果这 3 秒里玩家还在原地、提示被重新显示过，就不要误关（以最后一次为准） */
+      el.style.display = 'none';
+    } catch (e) { }
+  }, PROMPT_MS);
+}
+window.showPrompt = showPrompt;
+
+/* ---------- 2026-10-22：多个可交互对象 → 点按钮弹窗选择 ----------
+   ★ 用户要求："如果近距离出现多个可交互的对象，点击后就弹窗进行选择，
+                 同时提示信息也合并显示"
+   ★ 候选列表由 core/game.js 每帧算好（NEAR_LIST），这里只负责显示与派发。 */
+var NEAR_CANDS = [];
+var NEAR_PICK_OPEN = false;
+var NEAR_KIND_LABEL = {
+  sit: '坐下', tp: '传送阵', sleep: '睡觉', house: '房屋',
+  fridge: '冰箱', shop: '商店', warehouse: '仓库'
+};
+function nearPickRender() {
+  var body = document.getElementById('nearPickBody');
+  if (!body) { return; }
+  body.innerHTML = NEAR_CANDS.map(function (c, i) {
+    return '<div class="nearRow" data-near="' + i + '">' +
+      '<b>' + (c.title || NEAR_KIND_LABEL[c.kind] || '交互') + '</b>' +
+      '<span class="tip">' + (c.sub || '') + (c.dist != null ? ' · ' + c.dist.toFixed(1) + 'm' : '') + '</span>' +
+      '</div>';
+  }).join('') || '<div class="tip">附近没有可交互的东西</div>';
+}
+function nearPickOpen() {
+  if (!NEAR_CANDS.length) { return; }
+  NEAR_PICK_OPEN = true;
+  var box = document.getElementById('nearPick');
+  if (box) { box.style.display = 'flex'; }
+  nearPickRender();
+}
+function nearPickClose() {
+  NEAR_PICK_OPEN = false;
+  var box = document.getElementById('nearPick');
+  if (box) { box.style.display = 'none'; }
+}
+window.nearPickClose = nearPickClose;
+(function nearPickBind() {
+  var body = document.getElementById('nearPickBody');
+  if (body && !body._bound) {
+    body._bound = true;
+    body.addEventListener('click', function (e) {
+      var row = e.target && e.target.closest ? e.target.closest('[data-near]') : null;
+      if (!row) { return; }
+      window.nearPickChoose(+row.getAttribute('data-near'));
+    });
+  }
+})();
+window.nearPickChoose = function (i) {
+  var c = NEAR_CANDS[+i];
+  nearPickClose();
+  if (!c) { return; }
+  try { doNearAction(c); } catch (e) { }
+};
+function doNearAction(c) {
+  if (!c) { return; }
+  if (c.kind === 'sit') { trySit(); return; }
+  if (c.kind === 'tp') { tpOpen(); return; }
+  if (c.kind === 'sleep') { trySleep(); return; }
+  if (c.kind === 'house') { houseOpen(); return; }
+  if (c.kind === 'fridge') { fridgeOpen(c.ref && c.ref.id); return; }
+  if (c.kind === 'shop') { shopOpen(); return; }
+  if (c.kind === 'warehouse') { try { whOpen(); } catch (e) { } return; }
+}
+
+/* 0 个：清空；1 个：沿用单项提示；多个：合并提示 + 按钮变"交互 N" */
+UI.interactNear = function (list) {
+  /* 坐着/睡着时由 seatState / bedNear 那套接管，别把"起身/起床"按钮冲掉 */
+  if (typeof MY_SEAT !== 'undefined' && MY_SEAT) { return; }
+  if (typeof MY_SLEEP !== 'undefined' && MY_SLEEP) { return; }
+  NEAR_CANDS = (list || []).slice();
+  var atk = document.getElementById('atk');
+  var ids = ['sitPrompt', 'tpPrompt', 'shopPrompt', 'sleepPrompt',
+             'housePrompt', 'whPrompt'];
+  if (!NEAR_CANDS.length) {
+    ids.forEach(function (id) { showPrompt(id, ''); });
+    if (atk) {
+      atk.classList.remove('seat', 'shop', 'sleep', 'house', 'teleport', 'interact');
+      atk.title = '';
+      var badge = document.getElementById('atkBadge');
+      if (badge) { badge.style.display = 'none'; }
+    }
+    return;
+  }
+  if (NEAR_CANDS.length === 1) {
+    var c = NEAR_CANDS[0];
+    /* 单项：只留它自己的那个提示（其它统一关掉），行为保持原样 */
+    ids.forEach(function (id) { if (id !== c.prompt) { showPrompt(id, ''); } });
+    if (c.prompt) { showPrompt(c.prompt, c.text); }
+    if (atk) {
+      atk.classList.remove('seat', 'shop', 'sleep', 'house', 'teleport', 'interact');
+      if (c.cls) { atk.classList.add(c.cls); }
+      atk.title = c.title || '';
+      var b1 = document.getElementById('atkBadge');
+      if (b1) { b1.style.display = 'none'; }
+    }
+    return;
+  }
+  /* 多个：统一一条提示，按钮显示"交互 N"，点击弹选择 */
+  ids.forEach(function (id) { showPrompt(id, ''); });
+  var names = NEAR_CANDS.map(function (x) { return x.title || NEAR_KIND_LABEL[x.kind] || '交互'; });
+  showPrompt('sitPrompt', '附近可交互：' + names.join(' · ') + '（点按钮选择）');
+  if (atk) {
+    atk.classList.remove('seat', 'shop', 'sleep', 'house', 'teleport');
+    atk.classList.add('interact');
+    atk.title = '交互：' + names.join(' / ');
+    var b2 = document.getElementById('atkBadge');
+    if (b2) { b2.style.display = 'block'; b2.textContent = String(NEAR_CANDS.length); }
+  }
+  if (NEAR_PICK_OPEN) { nearPickRender(); }
+};
 
 /* ---------- UI.atkCool（攻击键的冷却表现，第 33 轮）---------- */
 /* core 每帧把"还剩多少冷却"（0~1）推过来，这里只负责贴到 DOM 上 ✓
