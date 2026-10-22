@@ -1530,6 +1530,11 @@ class World(object):
         # ★ 第 117 轮：血量天赋会改生命上限 → 必须一起带上 ✓
         #   不然加完血量，界面上的血量上限不动 ✗（用户一定会问"生效了吗"✗）
         st['hpm'] = self._hp_max(p)
+        # ★ 2026-10-22（云端 round474）：移速词条 —— 客户端走路要用
+        try:
+            st['speedGear'] = round(self._aff(p, 'speed_pct'), 2)
+        except Exception:
+            pass
         # ★ 2026-10-22（用户："属性页面怎么没有显示"）：属性总览一直是空的，
         #   因为 pack_state() 里根本没有 stats 字段 —— 客户端只能显示"正在向服务器要…"
         try:
@@ -7129,6 +7134,7 @@ class World(object):
             # ★ round586：技能/AOE 打玩家也吃全能吸血
             self._lifesteal(p, d, q.x, q.z, show=True)
             if _was_q and int(q.hp or 0) <= 0:
+                self._tank_reset(q)          # ★ AOE 击杀也要清空坦克层数
                 self._tank_reset(q)      # ★ AOE 击杀也要清空坦克层数
             self._add_pend(q.cid, 'hurts', {'dmg': d, 'x': round(x, 2),
                                             'z': round(z, 2), 'by': _by, 'pvp': 1,
@@ -7513,10 +7519,24 @@ class World(object):
                     self._move_mob(m, math.sin(m.yaw) * step, math.cos(m.yaw) * step)
                     continue
                 m.yaw = math.atan2(near.x - m.x, near.z - m.z)
-                if d > mobs.CONTACT:
+                # ★ 2026-10-22（云端 round601）：精英/Boss 与程序员会停在射程内放远程弹
+                _rr = self._mob_ranged_range(m)
+                _contact = self._mob_contact_dist(m)
+                if _rr > 0 and d > _contact and d <= _rr:
+                    if m.atkT <= 0 and m.windT <= 0:
+                        m.windT = mobs.windup_of(m.kind)
+                        m.atkAnim = mobs.ATK_ANIM
+                    if m.windT > 0:
+                        m.windT -= dt
+                        if m.windT <= 0:
+                            m.windT = 0.0
+                            m.atkT = mobs.RECOVER
+                            self._mob_bite(m, near)
+                    continue
+                if d > _contact:
                     step = m.spd * dt
-                    if step > d - mobs.CONTACT:
-                        step = max(0.0, d - mobs.CONTACT)
+                    if step > d - _contact:
+                        step = max(0.0, d - _contact)
                     self._move_mob(m, math.sin(m.yaw) * step, math.cos(m.yaw) * step)
                     m.windT = 0.0            # ★ 走开了就取消蓄力（重新贴身要重新起手 ✓）
                 else:
@@ -9116,6 +9136,17 @@ class World(object):
             self._send_cid(q.cid, P.pack('notice', text='升到 %d 级！' % level, level=level))
             # ★ 第 247 轮：升级还要播报给全服（用户要求：谁升到了多少级）
             self._ticker('%s 升到了 %d 级' % (q.name, level), 'up', tag='up:%d' % q.role_id)
+            # ★ 2026-10-22（云端 round446）：突破动画也要同步给同屏的人
+            try:
+                _v2 = VIEW * VIEW
+                for _q2 in self.players.values():
+                    if (_q2.x - q.x) ** 2 + (_q2.z - q.z) ** 2 > _v2:
+                        continue
+                    self._add_pend(_q2.cid, 'lvfx',
+                                   [round(q.x, 2), round(q.z, 2), int(level),
+                                    1 if _q2 is q else 0])
+            except Exception:
+                pass
 
     # ================================================================ 组队（第 81 轮）
 
@@ -9388,7 +9419,8 @@ class World(object):
                 continue
             if (q.x - m.x) ** 2 + (q.z - m.z) ** 2 > d2:
                 continue                      # round 241: 距离已不限制，这句现在永不触发
-            self._gain_exp(q, share)
+            # ★ 2026-10-22（云端 round474）：队友各自吃自己的【经验】词条
+            self._gain_exp(q, int(round(share * (1.0 + self._aff(q, 'exp_pct') / 100.0))))
             # ★★ 第 86 轮（用户报）："这个没有真的加上，一刷新就没有了" ★★
             #   病根：分经验只改了内存里的 role['exp'] ✗
             #         而落库是靠"本人做了什么事"触发的（击杀/拾取时才排队保存 ✓）
@@ -10731,6 +10763,7 @@ class World(object):
         self._send_cid(p.cid, P.pack('skin', key=sk, c=cv))
         self._skin_broadcast(p, sk, cv)
         self._send_cid(p.cid, P.pack('notice', text='自定义已保存'))
+        self._skin_page_send(p)   # ★ 保存后刷新皮肤页
 
     def _skin_broadcast(self, p, key, cv):
         """别人的模型靠【世界快照】重建（快照里带 sk / skc，

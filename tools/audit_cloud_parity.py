@@ -29,6 +29,16 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# ★ 已知的"等价实现/不需要"清单：不算缺口，但审计里会照实列出来
+#   _pvp_ok     → 本地用 _can_hit_player（同一套判定）代替
+#   _save_use_skin → 本地皮肤卡走 net.py 直接写库 + 回包，这条 saver 分支用不到
+EQUIV = {
+    '_pvp_ok': '本地用 _can_hit_player 等价实现',
+    '_save_use_skin': '本地皮肤卡由 net.py 直接处理，saver 分支用不到',
+}
+# 客户端多读、但云端也不发的字段（客户端有 typeof 保护，不会清零）
+CLIENT_EXTRA_OK = {'exp', 'lv', 'need'}
+
 
 def uniq_defs(src):
     return set(re.findall(r'^    def (\w+)\(', src, re.M))
@@ -82,16 +92,19 @@ def main():
         if cc > ll:
             gaps[n] = (cc, ll)
     total = sum(c - l for c, l in gaps.values())
-    subst = min(len(re.findall(r'self\._can_hit_player\(', L)),
-                gaps.get('_pvp_ok', (0, 0))[0] - gaps.get('_pvp_ok', (0, 0))[1])
-    real = total - subst
-    print('② 调用点缺口        %d 处（其中 %d 处是 _pvp_ok→_can_hit_player 等价替换，实际缺 %d）'
-          % (total, subst, real))
+    equiv = sum(c - l for n, (c, l) in gaps.items() if n in EQUIV)
+    real = total - equiv
+    print('② 调用点缺口        %d 处（其中 %d 处是已知等价实现，实际缺 %d）'
+          % (total, equiv, real))
+    for n in sorted(EQUIV):
+        if n in gaps:
+            print('     %-20s %s' % (n, EQUIV[n]))
     bad += real
 
     lme, cme = me_fields(L), me_fields(C)
     cli = set(re.findall(r'd\.me\.(\w+)', G))
-    miss_srv, miss_cli = sorted(cme - lme), sorted(cli - lme)
+    miss_srv = sorted(cme - lme)
+    miss_cli = sorted(cli - lme - CLIENT_EXTRA_OK)
     print('③ me 字段           %d/%d  云端缺:%s  客户端缺:%s'
           % (len(lme), len(cme), miss_srv or '无', miss_cli or '无'))
     bad += len(miss_srv) + len(miss_cli)
