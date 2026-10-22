@@ -10702,6 +10702,23 @@ class World(object):
                               max(1, int(round(dv * fx['value']))))
 
     def _mob_died(self, p, m):
+        try:
+            if p is not None:
+                self._sk_b_on_kill(p, m)
+        except Exception as e:
+            print('[skill] 击杀触发失败：%r' % (e,))
+        # ★★ round424：屠戮榜计数（只算最后一刀是玩家的 ✗ 地火/流血也算 ✓）
+        #   ★ 这里只改内存 ✗ 落库在 _save_player 里（每 15 秒 / 下线 ✓）
+        #   ★ 不会重复计：这个函数本身就有"每只怪只结算一次"保护 ✓
+        if p is not None:
+            try:
+                p.st_kills = int(getattr(p, 'st_kills', 0) or 0) + 1
+            except Exception:
+                pass
+            try:
+                rptmod.add_kill(p)            # ★ round502
+            except Exception:
+                pass
         # ★★★ 第 217 轮修的真 bug（用户实测发现）★★★
         #   用户原话："出现给很多经验的情况是自动捡东西触发的，
         #             我看到这个系统提示一下刷新很多条，经验也跟着狂长"
@@ -10721,19 +10738,20 @@ class World(object):
         m.awarded = True
         # ★ 第 67 轮：击杀回灵气（防具词条 ✓）
         try:
-            _qi = armormod.stats_of(p.armor)['qi_kill']
+            _lvqi = (p.role or {}).get('level') or 1
+            _qi = armormod.stats_of(p.armor, weapons.mastery_of(p.armor, _lvqi), level=_lvqi)['qi_kill']
             if _qi > 0:
-                p.qi = min(int((p.role or {}).get('qiMax') or 100), int(p.qi) + int(_qi))
+                p.qi = min(self._qi_max(p), int(p.qi) + int(_qi))
         except Exception:
             pass
         """僵尸死了 → 给击杀者经验 → 队友分 10% → 落库"""
-        # ★ 2026-10-22：精英/Boss 按伤害贡献分经验（普通怪照旧）
         _rank0 = int(getattr(m, 'rank', 0) or 0)
         if _rank0 > 0:
             _top = self._award_special_exp(m, p)
             if p is None:
                 p = _top
         else:
+            # ★ round474：击杀者自己的【经验】词条（防具）在这里生效 ✓
             self._gain_exp(p, int(round(int(m.exp) * (1.0 + self._aff(p, 'exp_pct') / 100.0))))
         # round293: gold from kills. Base by kind, scaled by mob level.
         #   Small on purpose (~25 gold per mob) - user decision, see docs v3.
@@ -10752,20 +10770,19 @@ class World(object):
         except Exception as _ge:
             print('[gold] kill drop failed: %r' % (_ge,))
         # ★★ 第 81 轮：队友分经验（用户确认：每个队友拿该僵尸的 10% ✓）★★
-        self._party_share_exp(p, m)
-        self._save_role(p)
+        if _rank0 == 0:
+            self._party_share_exp(p, m)
+            self._save_role(p)
         # ★ 掉落（第 38 轮）：地上生成一件，走过去自动捡 ✓
-        self._roll_loot(p, m)
-        # ★ 2026-10-22：击杀类被动（坦克引擎 +1% 生命上限 / 嗜血 等）
-        try:
-            if int(getattr(m, 'rank', 0) or 0) >= 2:
-                self._mob_evt(m, 'death', 1000.0)
-        except Exception:
-            pass
-        try:
-            self._sk_b_on_kill(p, m)
-        except Exception as _bke:
-            print('[skill] 击杀被动失败：%r' % (_bke,))
+        if p is not None:
+            self._roll_loot(p, m)
+        if _rank0 >= 2:
+            self._boss_mid = ''
+            self._boss_next_at = now_s() + random.uniform(1200.0, 2400.0)
+            for _smid, _sm in list(self.mobs.items()):
+                if getattr(_sm, 'summoner', None) == m.mid:
+                    self.mobs.pop(_smid, None)
+            self._mob_evt(m, 'death', 1000.0)
 
     def _roll_loot(self, p, m):
         """僵尸死了 roll 掉落（方案 §8：每次击杀【逐项独立】roll ✓）
