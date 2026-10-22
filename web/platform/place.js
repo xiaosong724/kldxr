@@ -381,6 +381,46 @@
     return g;
   }
 
+  /* ★ 2026-10-22（用户："放置的建筑没有放置的时候也要加取消按钮，手机端没法取消"）：
+     放置模式给一条操作栏：确认放置 / 取消。不用再靠点地面或按 Esc。 */
+  var PLACEBAR = { el: null };
+  function placeBarRender() {
+    var need = !!P.placing;
+    if (!PLACEBAR.el) {
+      PLACEBAR.el = document.createElement('div');
+      PLACEBAR.el.id = 'placeBar';
+      PLACEBAR.el.style.cssText =
+        'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:56;' +
+        'background:#111417ee;border:1px solid #ffffff22;border-radius:12px;padding:8px 12px;' +
+        'color:#e9e1cf;font:12px system-ui;display:flex;gap:8px;align-items:center;' +
+        'box-shadow:0 12px 40px #000a;max-width:94vw;flex-wrap:wrap';
+      PLACEBAR.el.innerHTML =
+        '<b style="color:#7ee08a">放置中</b>' +
+        '<span style="color:#9aa3a8">方向键移动 · 点地面也行</span>' +
+        '<button data-p="ok" style="background:#2f6b3f;border:1px solid #7ee08a;color:#e6ffe9;' +
+        'border-radius:8px;padding:7px 14px;font:700 13px system-ui;cursor:pointer">确认放置</button>' +
+        '<button data-p="cancel" style="background:#6a2f2f;border:1px solid #ff9a8a;color:#ffd9d2;' +
+        'border-radius:8px;padding:7px 14px;font:700 13px system-ui;cursor:pointer">取消</button>';
+      document.body.appendChild(PLACEBAR.el);
+      PLACEBAR.el.addEventListener('pointerdown', function (e) { e.stopPropagation(); }, { capture: true });
+      PLACEBAR.el.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var b = e.target.closest ? e.target.closest('button[data-p]') : null;
+        if (!b) { return; }
+        var a = b.getAttribute('data-p');
+        if (a === 'cancel') { stopPlace(); return; }
+        if (a === 'ok') {
+          var g = P.ghost;
+          if (!g) { return; }
+          var gx = g.position.x, gz = g.position.z;
+          if (confirmPlace(gx, gz)) { /* confirmPlace 内部会收掉 */ }
+          return;
+        }
+      });
+    }
+    PLACEBAR.el.style.display = need ? 'flex' : 'none';
+  }
+
   function startPlace(item) {
     P.sel = item;
     P.placing = true;
@@ -401,6 +441,7 @@
     P.ghost = makeGhost(spec);
     grp.add(P.ghost);
     try { padRender(); } catch (ePad3) { }
+    try { placeBarRender(); } catch (eBar) { }
     /* ★ 立即放在玩家面前（不用等鼠标动就能看到预览） */
     var gy = 0;
     try { gy = (typeof P !== 'undefined' && P.y) ? 0 : 0; } catch (e) { }
@@ -414,6 +455,7 @@
     if (P.ghost && P.ghost.parent) { P.ghost.parent.remove(P.ghost); }
     P.ghost = null;
     try { padRender(); } catch (ePad4) { }
+    try { placeBarRender(); } catch (eBar2) { }
   }
 
   function updateGhost(x, z) {
@@ -1077,7 +1119,8 @@
       syncSolids();
       syncFloors();
     },
-    isPlacing: function () { return P.placing; }
+    isPlacing: function () { return P.placing; },
+    debugEdit: function () { return { on: EDIT.on, id: EDIT.id, moving: EDIT.moving }; }
   };
 
   /* web.js 收到消息后回调这些 */

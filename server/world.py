@@ -2668,8 +2668,17 @@ class World(object):
         if price > gold:
             self._town_result(p, False, '金币不足')
             return
+        # ★ 2026-10-22（用户："放在建筑范围内的物品，移动建筑时要跟着走"）：
+        #   落点在某栋建筑里 → 认它当父级。这样移动建筑时子家具一起走。
+        #   不改预设清单，纯粹是运行时挂靠。
+        _pid = 0
+        try:
+            _pid = self._building_at(r, x, z) or 0
+        except Exception:
+            _pid = 0
         ok, err, row = objreg.place_object(self.cfg, r, cid, x, z, rot,
                                            owner_id=getattr(p, 'role_id', 0),
+                                           parent_id=_pid,
                                            price_paid=price,
                                            # ★ 2026-10-22：编辑模式允许重叠
                                            check=False)
@@ -6885,6 +6894,39 @@ class World(object):
 
     def _intent_house_wake(self, p, d=None):
         self._house_wake(p)
+
+    def _building_at(self, town_row, x, z):
+        """落点所在的建筑 id（没有就返回 0）。
+        用建筑的占地矩形判断，取面积最小的那个（越小越像是"里面"）。"""
+        best = 0
+        best_area = None
+        try:
+            import town_objects as _o
+            tid = int(town_row['id'])
+            with dbmod.db(self.cfg) as c:
+                rows = c.execute(
+                    "SELECT o.id,o.x,o.z,o.rot,cat.size_w,cat.size_d"
+                    " FROM town_objects o JOIN town_catalog cat ON cat.id=o.catalog_id"
+                    " WHERE o.town_id=? AND o.state='active' AND o.parent_id=0"
+                    " AND cat.category='building'", (tid,)).fetchall()
+            import math as _m
+            for r0 in rows:
+                w = float(r0['size_w'] or 0); d = float(r0['size_d'] or 0)
+                if w <= 0 or d <= 0:
+                    continue
+                rot = float(r0['rot'] or 0.0)
+                ca, sa = abs(_m.cos(rot)), abs(_m.sin(rot))
+                ex = w / 2 * ca + d / 2 * sa
+                ez = w / 2 * sa + d / 2 * ca
+                if abs(float(x) - float(r0['x'])) <= ex and \
+                   abs(float(z) - float(r0['z'])) <= ez:
+                    area = w * d
+                    if best_area is None or area < best_area:
+                        best_area = area
+                        best = int(r0['id'])
+        except Exception as e:
+            print('[place] building_at failed: %r' % (e,))
+        return best
 
     def _intent_skinask(self, p, d):
         """皮肤页数据（★ 2026-10-22：这个 intent 协议里有、服务端一直没实现 →
