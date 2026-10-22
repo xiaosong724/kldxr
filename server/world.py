@@ -1886,6 +1886,7 @@ class World(object):
     SEAT_SLOTS = {
         'sofa_modern_2': (-0.48, 0.48),      # 沙发：一左一右
         'bed_double': (-0.55, 0.55),         # 双人床：一左一右
+        'prop_bench': (-0.42, 0.42),         # 长椅：一左一右（2026-10-22）
     }
 
     def _seat_lookup(self, sid):
@@ -1930,8 +1931,12 @@ class World(object):
                     import math as _m
                     ox += off * _m.cos(rot)
                     oz -= off * _m.sin(rot)
+                # ★ 2026-10-22（用户："长椅也坐两个人"）：多人座位必须给每个槽位
+                #   【不同的 idx】，否则"座位是否被占"的判断会把一左一右当成同一个座位
+                _slot_id = (('obj%d#%d' % (oid, slot)) if len(self.SEAT_SLOTS.get(cat) or ()) > 1
+                            else sid)
                 return {
-                    'id': sid, 'idx': sid,
+                    'id': sid, 'idx': _slot_id,
                     'x': ox, 'z': oz,
                     'y': 0.30,
                     'yaw': rot,
