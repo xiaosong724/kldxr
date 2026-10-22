@@ -43,6 +43,7 @@ import town
 import houses as housemod
 import shops as shopmod
 import tableorders as tblmod
+import warehouse as whmod
 import towns as townreg
 import town_objects as objreg
 import work as workmod
@@ -1324,11 +1325,19 @@ class World(object):
                 oid = int(str(hid)[3:])
                 with dbmod.db(self.cfg) as c:
                     bed = c.execute(
-                        "SELECT x,z FROM town_objects WHERE parent_id=? AND state='active'"
+                        "SELECT x,z,rot,catalog_id FROM town_objects WHERE parent_id=? AND state='active'"
                         " AND catalog_id IN ('bed_single','bed_double','bed_king')"
                         " ORDER BY id LIMIT 1", (oid,)).fetchone()
                 if bed is not None:
                     bx, bz = float(bed['x']), float(bed['z'])
+                    # ★ 2026-10-22：双人床按玩家站的那一侧分左右（一左一右各睡一个）
+                    _cat = str(bed['catalog_id'] or '')
+                    if _cat in ('bed_double', 'bed_king'):
+                        _rot = float(bed['rot'] or 0)
+                        _side = (((p.x - bx) * math.cos(_rot) - (p.z - bz) * math.sin(_rot)))
+                        _off = 0.55 if _side >= 0 else -0.55
+                        bx += _off * math.cos(_rot)
+                        bz -= _off * math.sin(_rot)
             except Exception as _be:
                 print('[sleep] bed lookup failed: %r' % (_be,))
             dx = p.x - float(h['x']); dz = p.z - float(h['z'])
@@ -1837,7 +1846,12 @@ class World(object):
 
     # ---------- 椅子 / 传送 ----------
     SEAT_CATALOG = ('chair_wood', 'hall_chair', 'desk_chair',
-                    'prop_bench', 'sofa_modern_2')
+                    'prop_bench', 'sofa_modern_2', 'prop_stool')
+    # 多人座位：catalog -> 横向偏移表（沿物体的本地 X 轴）
+    SEAT_SLOTS = {
+        'sofa_modern_2': (-0.48, 0.48),      # 沙发：一左一右
+        'bed_double': (-0.55, 0.55),         # 双人床：一左一右
+    }
 
     def _seat_lookup(self, sid):
         """座位解析：静态座位用数字 id；已放置的家具椅子用 'obj<id>'。"""
@@ -1846,9 +1860,16 @@ class World(object):
             return seat
         if not str(sid).startswith('obj'):
             return None
+        base, slot = str(sid), 0
+        if '#' in str(sid):
+            base, _, _sl = str(sid).partition('#')
+            try:
+                slot = int(_sl)
+            except Exception:
+                slot = 0
         try:
             import town_objects as objreg2
-            oid = int(str(sid)[3:])
+            oid = int(base[3:])
         except Exception:
             return None
         for tid in list(self.towns.keys()):
@@ -1862,12 +1883,24 @@ class World(object):
                 cat = str(o.get('catalog_id') or '')
                 if cat not in self.SEAT_CATALOG:
                     return None
+                rot = float(o.get('rot') or 0)
+                ox, oz = float(o['x']), float(o['z'])
+                # ★ 2026-10-22：多人座位（沙发/双人床）一左一右；朝向改成 rot（以前 +π 是反的）
+                offs = self.SEAT_SLOTS.get(cat) or (0.0,)
+                if slot < 0 or slot >= len(offs):
+                    return None          # 越界的座位号直接拒绝（别悄悄回退到 0 号）
+                off = offs[slot]
+                if abs(off) > 1e-6:
+                    # 沿物体本地 X 轴偏移（rot 旋转后）
+                    import math as _m
+                    ox += off * _m.cos(rot)
+                    oz -= off * _m.sin(rot)
                 return {
                     'id': sid, 'idx': sid,
-                    'x': float(o['x']), 'z': float(o['z']),
+                    'x': ox, 'z': oz,
                     'y': 0.30,
-                    'yaw': float(o.get('rot') or 0) + 3.1415926,
-                    'k': cat, 'placed': True,
+                    'yaw': rot,
+                    'k': cat, 'placed': True, 'slot': slot,
                 }
         return None
 
@@ -2952,6 +2985,7 @@ class World(object):
 
     def _handle_intent(self, p, t, d):
         _TP = ('house_info', 'house_buy', 'house_leave', 'house_sleep', 'house_wake',
+               'warehouse_open', 'warehouse_move', 'warehouse_move_many',
                'shop_open', 'shop_buy', 'usefood', 'fridge_open', 'order_open',
                'order_buy', 'cup_take', 'work_start', 'work_stop', 'jobstep', 'jobdone',
                'town_list', 'town_create', 'town_perm_list', 'town_perm_set',
@@ -6804,6 +6838,79 @@ class World(object):
 
     def _intent_fridge_open(self, p, d):
         self._fridge_open(p, d)
+
+    # ---------- 仓库（2026-10-22 接线）----------
+    def _wh_near(self, p):
+        """附近 6m 内有没有仓库建筑（放置的 shop_warehouse_v1）。"""
+        try:
+            with dbmod.db(self.cfg) as c:
+                rows = c.execute(
+                    "SELECT o.x,o.z FROM town_objects o JOIN towns t ON t.id=o.town_id"
+                    " WHERE o.state='active' AND o.parent_id=0 AND t.status='active'"
+                    " AND o.catalog_id='shop_warehouse_v1'").fetchall()
+        except Exception as e:
+            print('[wh] near check failed: %r' % (e,))
+            return False
+        px, pz = float(getattr(p, 'x', 0) or 0), float(getattr(p, 'z', 0) or 0)
+        for r in rows:
+            dx, dz = px - float(r[0]), pz - float(r[1])
+            if dx * dx + dz * dz <= 8.0 * 8.0:
+                return True
+        return False
+
+    def _intent_warehouse_open(self, p, d):
+        if not self._wh_near(p):
+            self._send_cid(p.cid, P.pack('warehouse', ok=0, msg='附近没有仓库'))
+            return
+        try:
+            data = whmod.list_all(self.cfg, int(getattr(p, 'role_id', 0) or 0))
+        except Exception as e:
+            self._send_cid(p.cid, P.pack('warehouse', ok=0, msg='仓库读取失败'))
+            print('[wh] open failed: %r' % (e,))
+            return
+        self._send_cid(p.cid, P.pack('warehouse', ok=1, **data))
+
+    def _intent_warehouse_move(self, p, d):
+        if not self._wh_near(p):
+            self._send_cid(p.cid, P.pack('warehouse', ok=0, msg='附近没有仓库'))
+            return
+        try:
+            iid = int((d or {}).get('id'))
+            to = str((d or {}).get('to') or '')
+        except Exception:
+            self._send_cid(p.cid, P.pack('warehouse', ok=0, msg='参数错误'))
+            return
+        try:
+            ok, msg, data = whmod.move(self.cfg, int(getattr(p, 'role_id', 0) or 0), iid, to)
+        except Exception as e:
+            self._send_cid(p.cid, P.pack('warehouse', ok=0, msg='存取失败'))
+            print('[wh] move failed: %r' % (e,))
+            return
+        if not ok:
+            self._send_cid(p.cid, P.pack('warehouse', ok=0, msg=msg or '存取失败'))
+            return
+        self._send_cid(p.cid, P.pack('warehouse', ok=1, msg='', **(data or {})))
+
+    def _intent_warehouse_move_many(self, p, d):
+        if not self._wh_near(p):
+            self._send_cid(p.cid, P.pack('warehouse', ok=0, msg='附近没有仓库'))
+            return
+        try:
+            ids = [int(x) for x in ((d or {}).get('ids') or [])]
+            to = str((d or {}).get('to') or '')
+        except Exception:
+            self._send_cid(p.cid, P.pack('warehouse', ok=0, msg='参数错误'))
+            return
+        try:
+            ok, msg, data = whmod.move_many(self.cfg, int(getattr(p, 'role_id', 0) or 0), ids, to)
+        except Exception as e:
+            self._send_cid(p.cid, P.pack('warehouse', ok=0, msg='存取失败'))
+            print('[wh] move_many failed: %r' % (e,))
+            return
+        if not ok:
+            self._send_cid(p.cid, P.pack('warehouse', ok=0, msg=msg or '存取失败'))
+            return
+        self._send_cid(p.cid, P.pack('warehouse', ok=1, msg='', **(data or {})))
 
     def _intent_order_open(self, p, d):
         self._order_open(p, d)

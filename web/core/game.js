@@ -179,6 +179,7 @@ var TP_NEAR = null;        /* 离我最近的传送阵 */
 var HOUSE_NEAR = null;     /* 离我最近的住宅 */
 var SLEEP_NEAR = null;     /* 离我最近的床（房主） */
 var MY_SLEEP = '';         /* 正在睡的住宅 id */
+var SLEEP_OFF = 0.55;      /* 躺下时沿朝向的偏移（头不要伸到床外） */
 var SHOP_NEAR = null;      /* 离我最近的商店 */
 var FRIDGE_NEAR = null;    /* 离我最近的自家冰箱 */
 var SIT_K = 0;             /* 坐下动画混合 0→1 */
@@ -9272,7 +9273,10 @@ function frame(ts) {
     if (H.legL.children[0]) { H.legL.children[0].rotation.x = 0.82 * sk2; }
     if (H.legR.children[0]) { H.legR.children[0].rotation.x = 0.82 * sk2; }
   } else if (MY_SLEEP && !dead) {
-    H.g.position.set(P.x, P.y + 0.55, P.z);
+    /* ★ 2026-10-22：躺下时沿朝向往后挪一点（以前是脚在床中心 → 头伸到床外） */
+    var _sy = P.yaw || 0;
+    var _so = (typeof SLEEP_OFF !== 'undefined') ? SLEEP_OFF : 0.55;
+    H.g.position.set(P.x - Math.sin(_sy) * _so, P.y + 0.30, P.z - Math.cos(_sy) * _so);
     H.g.rotation.set(-1.45, P.yaw, 0);
     H.legL.rotation.x = 0; H.legR.rotation.x = 0;
     H.armL.rotation.x = 0.15; H.armR.rotation.x = 0.15;

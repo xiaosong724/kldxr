@@ -108,6 +108,11 @@ var TOWN_SEAT_CATALOG = {
   chair_wood: 1, hall_chair: 1, desk_chair: 1,
   prop_bench: 1, sofa_modern_2: 1, prop_stool: 1
 };
+/* ★ 2026-10-22：多人座位（沿物体本地 X 轴偏移，一左一右） */
+var TOWN_SEAT_SLOTS = {
+  sofa_modern_2: [-0.48, 0.48],
+  bed_double: [-0.55, 0.55]
+};
 
 /* 从已放置的家具里找最近的椅子 */
 /* ★ 2026-10-22：目录 id → 中文名（编辑工具条、座椅提示都用它） */
@@ -127,15 +132,23 @@ function townSeatFromObjects(x, z) {
   for (var i = 0; i < list.length; i++) {
     var o = list[i];
     if (!o || !TOWN_SEAT_CATALOG[o.catalog]) { continue; }
-    var dx = o.x - x, dz = o.z - z;
-    var d2 = dx * dx + dz * dz;
-    if (d2 > bd) { continue; }
-    bd = d2;
-    best = {
-      id: 'obj' + o.id, x: +o.x, z: +o.z,
-      y: 0.30, yaw: +(o.rot || 0) + Math.PI,
-      label: townObjName(o.catalog), placed: true
-    };
+    var rot = +(o.rot || 0);
+    var offs = TOWN_SEAT_SLOTS[o.catalog] || [0];
+    for (var k = 0; k < offs.length; k++) {
+      var off = offs[k];
+      var sx = +o.x + off * Math.cos(rot);
+      var sz = +o.z - off * Math.sin(rot);
+      var dx = sx - x, dz = sz - z;
+      var d2 = dx * dx + dz * dz;
+      if (d2 > bd) { continue; }
+      bd = d2;
+      best = {
+        id: 'obj' + o.id + (offs.length > 1 ? ('#' + k) : ''),
+        x: sx, z: sz,
+        y: 0.30, yaw: rot,
+        label: townObjName(o.catalog), placed: true
+      };
+    }
   }
   return best;
 }

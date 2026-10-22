@@ -81,6 +81,27 @@
       return g0;
     }
     var g = buildTownModel(spec, {});
+    /* ★ 2026-10-22：屋顶单独拆出来放一个子组 —— 合批会按材质合并、名字全丢 ✗
+       拆出来之后进屋才能"只藏屋顶"。其它部件照旧合批。 */
+    var roof = null;
+    try {
+      var roofParts = [];
+      g.traverse(function (o) {
+        if (!o.isMesh) { return; }
+        var nm = String(o.name || '').toLowerCase();
+        if (nm.indexOf('roof') >= 0) { roofParts.push(o); }
+      });
+      if (roofParts.length) {
+        roof = new THREE.Group();
+        roof.name = '__roof';
+        for (var ri = 0; ri < roofParts.length; ri++) {
+          var rp = roofParts[ri];
+          if (rp.parent) { rp.parent.remove(rp); }
+          roof.add(rp);
+        }
+        g.add(roof);
+      }
+    } catch (eRoof) { roof = null; }
     return batchModel(g);
   }
 
@@ -200,7 +221,8 @@
         var f = fl[i];
         if (px >= f.x0 && px <= f.x1 && pz >= f.z0 && pz <= f.z1) { inside = f.id; break; }
       }
-      if (inside === INTERIOR.id) { return; }
+      /* ★ 2026-10-22：不能只靠 id 短路 —— 交互/移动会重建模型，材质被打回不透明，
+         而 id 没变就不会重应用 → 屋里突然变回不透明。所以每次都校验一遍材质。 */
       INTERIOR.id = inside;
       for (var k in P.objs) {
         var e = P.objs[k];
@@ -220,13 +242,20 @@
           });
         }
         var fade = (inside != null && String(e.mesh.userData.objId) === String(inside));
+        /* 进屋：屋顶直接藏起来（比半透明更干净） */
+        if (e.mesh.userData.roof == null) {
+          var _rg = null;
+          e.mesh.traverse(function (mm) { if (mm.name === '__roof') { _rg = mm; } });
+          e.mesh.userData.roof = _rg;
+        }
+        if (e.mesh.userData.roof) { e.mesh.userData.roof.visible = !fade; }
         e.mesh.traverse(function (m) {
           if (!m.isMesh || !m.material) { return; }
           var u = m.material.userData || {};
           if (fade) {
             m.material.transparent = true;
-            /* 2026-10-22：0.35 还是看不清屋内 → 调到 0.18 */
-            m.material.opacity = Math.min(0.18, (u.baseOpacity == null ? 1 : u.baseOpacity));
+            /* 2026-10-22：0.35 → 0.18 → 0.12（屋里越透越好） */
+            m.material.opacity = Math.min(0.12, (u.baseOpacity == null ? 1 : u.baseOpacity));
             m.material.depthWrite = false;
           } else {
             m.material.transparent = !!u.baseTransparent;
@@ -725,6 +754,12 @@
     /* 目录后到（towns 包）时重算一遍碰撞和地板 */
     refreshAux: function () { syncSolids(); syncFloors(); },
     /* 自测用：某栋建筑当前的透明度 / 是否半透明 */
+    roofVisible: function (id) {
+      var e = P.objs[id];
+      if (!e || !e.mesh) { return null; }
+      var r = e.mesh.userData.roof;
+      return r ? !!r.visible : null;
+    },
     buildingFade: function (id) {
       var e = P.objs[id];
       if (!e || !e.mesh) { return null; }

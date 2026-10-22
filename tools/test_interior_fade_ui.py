@@ -141,8 +141,19 @@ async def main_async(token):
             await asyncio.sleep(0.6)
             out1 = await c.ev('return PlaceMode.buildingFade(%d);' % bid)
             print('  inside :', out1)
-            assert out1 and out1['transparent'] and out1['opacity'] <= 0.19, \
+            assert out1 and out1['transparent'] and out1['opacity'] <= 0.13, \
                 'building did not fade: %r' % (out1,)
+
+            # 屋顶应当隐藏
+            roof = await c.ev(
+                "var g=null; var o=(window.MY_OBJECTS||[]).filter(function(x){"
+                " return String(x.id)===String(%d);})[0];"
+                "var m=null;"
+                "if(window.PlaceMode){var e=null;}"
+                "return PlaceMode.roofVisible ? PlaceMode.roofVisible(%d) : 'noapi';" % (bid, bid))
+            print('  roof visible while inside:', roof)
+            if roof != 'noapi':
+                assert roof is False, 'roof still visible inside'
 
             # 走出屋外
             await c.ev("P.x=%f; P.z=%f; P.air=false; return 1;" % (f['x0'] - 3.0, (f['z0'] + f['z1']) / 2))

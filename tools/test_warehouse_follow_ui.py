@@ -157,6 +157,9 @@ async def main_async(token):
             assert gone is False, 'deleted warehouse still interactive'
             assert still == 0, 'deleted warehouse still in cache'
             assert flt == 'none', 'floating label still visible after delete'
+            # ★ 这个测试动的是主城真实仓库 → 结束前必须恢复（否则玩家就少了仓库）
+            await c.ev("wsSend('town_objects',{}); return 1;")
+            await asyncio.sleep(0.5)
             return True
     finally:
         try:
@@ -165,6 +168,20 @@ async def main_async(token):
         except Exception:
             pass
         shutil.rmtree(prof, ignore_errors=True)
+
+
+def restore_warehouse():
+    """删除测试会把主城仓库标记成 removed → 这里改回 active。"""
+    try:
+        with sqlite3.connect(DB, timeout=10) as c:
+            c.execute("UPDATE town_objects SET state='active' "
+                      "WHERE catalog_id='shop_warehouse_v1' AND state<>'active'")
+            c.commit()
+            n = c.execute("SELECT COUNT(*) FROM town_objects WHERE catalog_id='shop_warehouse_v1'"
+                          " AND state='active'").fetchone()[0]
+        print('warehouse restored, active=%d' % n)
+    except Exception as e:
+        print('warehouse restore FAILED:', repr(e))
 
 
 def cleanup(name):
@@ -200,6 +217,7 @@ def main():
                 break
             time.sleep(0.25)
         cleanup(name)
+        restore_warehouse()
         print('cleanup done')
     print('warehouse follow: OK' if ok else 'warehouse follow: FAIL')
     return 0 if ok else 1

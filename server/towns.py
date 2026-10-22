@@ -397,8 +397,8 @@ def seed_catalog(cfg):
         # real furniture pieces (v4.1)
         for (cid, name, cat, w, d, h, price, fn, fj, cj,
              mid, pmode, movable) in FURNITURE_SEED:
-            # ★ 家具/装饰碰撞统一缩到 85%（室内更好走）
-            cj = shrink_boxes(cj, 0.85)
+            # ★ 2026-10-22：家具不再有碰撞（用户要求：家具挡路太难受）
+            cj = '[]' if cat == 'furniture' else shrink_boxes(cj, 0.85)
             c.execute('INSERT OR IGNORE INTO town_catalog'
                       '(id,name,category,size_w,size_d,height,price,function_type,'
                       'function_json,collision_json,enabled,sort,updated_at,'
@@ -418,10 +418,10 @@ def seed_catalog(cfg):
                       (cid, name, cat, w, d, h, int(price), fn, fj, cj,
                        int(price // 1000000), now, mid, 'v1',
                        json.dumps(layout, ensure_ascii=False), 'grid', 0))
-        # ★ 家具碰撞缩放（老库也要生效）
+        # ★ 家具碰撞清空 / 装饰缩放（老库也要生效）
         for (cid, name, cat, w, d, h, price, fn, fj, cj,
              mid, pmode, movable) in FURNITURE_SEED:
-            shr = shrink_boxes(cj, 0.85)
+            shr = '[]' if cat == 'furniture' else shrink_boxes(cj, 0.85)
             c.execute('UPDATE town_catalog SET collision_json=? WHERE id=? AND collision_json<>?',
                       (shr, cid, shr))
         # ★ C3：清掉旧的通用目录 / legacy_*（没有物件引用它们）
