@@ -2814,12 +2814,13 @@ class World(object):
         if not ok:
             self._town_result(p, False, msg)
             return
-        ok, err = objreg.remove_object(self.cfg, oid,
-                                       cascade=bool(d.get('cascade', 1)))
+        ok, err, kids = objreg.remove_object(self.cfg, oid,
+                                             cascade=bool(d.get('cascade', 1)))
         if not ok:
             self._town_result(p, False, err)
             return
-        self._send_cid(p.cid, P.pack('removed', id=oid))
+        # ★ 2026-10-22：把级联删掉的子家具 id 一起发给客户端，它才知道要一起撤掉
+        self._send_cid(p.cid, P.pack('removed', id=oid, kids=kids or []))
         try:
             self._rebuild_dyn_shops()
         except Exception:

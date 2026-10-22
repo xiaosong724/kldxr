@@ -11314,11 +11314,19 @@ function wsOnMessage(raw) {
   }
   if (t === 'removed') {
     try {
+      /* ★ 2026-10-22：d.kids = 被级联删掉的子家具（建筑自带的桌椅/遮阳伞…）——
+         以前只删建筑本身，里面的家具还留在场景里 */
+      var _gone = [String(d.id)].concat((d.kids || []).map(String));
       window.MY_OBJECTS = (window.MY_OBJECTS || []).filter(function (o) {
-        return String(o.id) !== String(d.id);
+        return _gone.indexOf(String(o.id)) < 0;
       });
       try { TOWN_OBJECTS_CACHE = window.MY_OBJECTS; } catch (eC4) { }
-      if (typeof window.onRemoved === 'function') { window.onRemoved(d.id); }
+      if (typeof window.onRemoved === 'function') {
+        window.onRemoved(d.id);
+        (d.kids || []).forEach(function (k) {
+          try { window.onRemoved(k); } catch (eK) { }
+        });
+      }
     } catch (eR) { }
     return;
   }

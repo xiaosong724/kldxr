@@ -234,19 +234,28 @@ def move_object(cfg, town_row, obj_id, x, z, rot=None):
 
 
 def remove_object(cfg, obj_id, cascade=True):
-    """Soft-delete. Children of a building are removed too."""
+    """Soft-delete. Children of a building are removed too.
+
+    ★ 2026-10-22：返回第三项 = 被级联删掉的子对象 id 列表。
+      以前只返回 (True,'')，客户端只删了建筑本身的 mesh，
+      里面的家具（遮阳伞/桌椅…）还留在场景里 → "删了建筑，里面的东西还在"。
+    """
+    kids = []
     with dbmod.db(cfg) as c:
         row = _row(c.execute('SELECT * FROM town_objects WHERE id=?', (int(obj_id),)).fetchone())
         if not row:
-            return False, '物件不存在'
+            return False, '物件不存在', []
         now = now_ms()
         c.execute("UPDATE town_objects SET state='removed',updated_at=? WHERE id=?",
                   (now, int(obj_id)))
         if cascade:
+            for r in c.execute('SELECT id FROM town_objects WHERE parent_id=?',
+                               (int(obj_id),)).fetchall():
+                kids.append(int(r['id']))
             c.execute("UPDATE town_objects SET state='removed',updated_at=? WHERE parent_id=?",
                       (now, int(obj_id)))
         c.commit()
-    return True, ''
+    return True, '', kids
 
 
 def nearby(cfg, town_id, x, z, radius=60.0):
