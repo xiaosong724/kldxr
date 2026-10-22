@@ -1398,14 +1398,10 @@ class World(object):
                 self.last_pose[int(p.role_id)] = {'k': 'sleep', 'id': hid, 't': now_s()}
             except Exception:
                 pass
-            pk = dict(on=1, id=hid, x=bx, z=bz, yaw=p.sleepYaw)
+            # ★ 2026-10-22：只发给本人 —— 以前广播给所有人，
+            #   客户端 sleepApply 不看 id 就把自己挪过去 → "别人一睡觉，你也跟着上床"
+            pk = dict(on=1, id=hid, x=bx, z=bz, yaw=p.sleepYaw, self=1)
             self._send_cid(p.cid, P.pack('sleep_state', **pk))
-            for q in list(self.players.values()):
-                if q is not p:
-                    try:
-                        self._send_cid(q.cid, P.pack('sleep_state', **pk))
-                    except Exception:
-                        pass
             return
         # ---- 静态房屋（原逻辑）----
         lay = next((x for x in town.HOUSES if str(x.get('id')) == hid), None)
@@ -1421,13 +1417,8 @@ class World(object):
         p.x = bx
         p.z = bz
         p.seat = -1
-        self._send_cid(p.cid, P.pack('sleep_state', on=1, id=hid, x=bx, z=bz))
-        for q in list(self.players.values()):
-            if q is not p:
-                try:
-                    self._send_cid(q.cid, P.pack('sleep_state', on=1, id=hid, x=bx, z=bz))
-                except Exception:
-                    pass
+        # ★ 2026-10-22：同上，只发给本人
+        self._send_cid(p.cid, P.pack('sleep_state', on=1, id=hid, x=bx, z=bz, self=1))
 
     def _force_wake(self, p):
         if not getattr(p, 'sleepHouse', ''):

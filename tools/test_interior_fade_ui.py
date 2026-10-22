@@ -131,6 +131,24 @@ async def main_async(token):
             print('  diag:', diag)
             ob = await c.ev("return PlaceMode.buildingFade(%d);" % bid)
             print('  fade state now:', ob)
+            dbg2 = await c.ev(
+                "var e=(window.MY_OBJECTS||[]).filter(function(o){return String(o.id)===String(%d);})[0];"
+                "return {inCache: !!e, cat: e?e.catalog:null, parent: e?e.parent:null,"
+                " objs: Object.keys(PlaceMode.objPos?{}:{}).length};" % bid)
+            print('  obj dbg:', dbg2)
+            errs0 = [e['params']['exceptionDetails'].get('exception', {}).get('description', '')
+                     for e in c.events if e.get('method') == 'Runtime.exceptionThrown']
+            print('  exceptions seen:', errs0[:3])
+            objs = await c.ev(
+                "var r={}; for(var k in PlaceMode.objPos?{}:{}){}"
+                "var l=[]; for(var k in (window.MY_OBJECTS||[])){} return 0;")
+            cnt = await c.ev("return (window.MY_OBJECTS||[]).length;")
+            print('  cached objects:', cnt)
+            pos143 = await c.ev('return PlaceMode.objPos(%d);' % bid)
+            stats = await c.ev('return PlaceMode.stats();')
+            nMesh = await c.ev(
+                "var n=0; for(var k in PlaceMode.objPos?{}:{}){} return 0;")
+            print('  objPos:', pos143, ' stats:', stats)
             out0 = await c.ev('return PlaceMode.buildingFade(%d);' % bid)
             print('  outside:', out0)
             assert out0 and out0['opacity'] > 0.9, 'outside should be opaque: %r' % (out0,)
@@ -141,9 +159,22 @@ async def main_async(token):
             await asyncio.sleep(0.6)
             out1 = await c.ev('return PlaceMode.buildingFade(%d);' % bid)
             print('  inside :', out1)
+            # (diagnostics first, assertions below)
+
+            # ★ 只有墙淡化：屋顶隐藏、屋里其它东西（家具/地板）保持不透明
+            ud = await c.ev('return PlaceMode.debugUserData(%d);' % bid)
+            print('  userData:', ud)
+            parts = await c.ev('return PlaceMode.interiorParts(%d);' % bid)
+            print('  parts inside:', parts)
             assert out1 and out1['transparent'] and out1['opacity'] <= 0.13, \
                 'building did not fade: %r' % (out1,)
-
+            if parts and parts.get('walls'):
+                assert parts['walls']['transparent'], 'walls should be see-through'
+                assert parts['walls']['opacity'] <= 0.13, 'walls too opaque: %r' % (parts['walls'],)
+                assert parts['roofVisible'] is False, 'roof still visible'
+                if parts.get('others'):
+                    assert parts['others']['opacity'] > 0.9, \
+                        'furniture inside got faded too: %r' % (parts['others'],)
             # 屋顶应当隐藏
             roof = await c.ev(
                 "var g=null; var o=(window.MY_OBJECTS||[]).filter(function(x){"

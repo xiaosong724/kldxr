@@ -6825,6 +6825,8 @@ function tryWake() {
 }
 function sleepApply(d) {
   if (!d) { return; }
+  /* ★ 2026-10-22：只有"我自己的"睡觉/起床消息才能动我（以前别人一睡觉你也跟着上床） */
+  if (!d.self) { return; }
   if (d.on) {
     MY_SLEEP = d.id || '';
     try { if (UI.savePose) { UI.savePose('sleep', MY_SLEEP); } } catch (ePose) { }

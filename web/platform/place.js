@@ -39,6 +39,19 @@
     for (var i = 0; i < list.length; i++) { if (list[i].id === cid) { return list[i]; } }
     return null;
   }
+  /* 哪些零件算"墙体"（进屋时要淡化它们，别的都不动） */
+  function objIsWallPart(nm) {
+    if (!nm) { return false; }
+    /* 只要名字里有 wall 就算墙（各建筑的前/侧/后墙命名不完全统一）；
+       但"室内地面"这类不算 */
+    if (nm.indexOf('interior') >= 0) { return false; }
+    if (nm.indexOf('wall') >= 0) { return true; }
+    if (nm.indexOf('parapet') >= 0) { return true; }
+    if (nm.indexOf('door_header') >= 0) { return true; }
+    if (nm.indexOf('belt_band') >= 0) { return true; }
+    return false;
+  }
+
   function isBuildingCat(cid) {
     var c = catOf(cid);
     return !!(c && c.category === 'building');
@@ -83,17 +96,21 @@
     var g = buildTownModel(spec, {});
     /* ★ 2026-10-22：屋顶单独拆出来放一个子组 —— 合批会按材质合并、名字全丢 ✗
        拆出来之后进屋才能"只藏屋顶"。其它部件照旧合批。 */
-    var roof = null;
+    /* ★ 2026-10-22：把【墙】和【屋顶】分别拆成独立子组：
+       进屋时只淡化墙、藏掉屋顶，屋里的地板/家具/柜台/招牌保持正常显示。
+       （以前整栋建筑一起淡化 → 屋里的东西也跟着变透明，看不见了） */
     try {
-      var roofParts = [];
+      var roofParts = [], wallParts = [];
       g.traverse(function (o) {
         if (!o.isMesh) { return; }
         var nm = String(o.name || '').toLowerCase();
-        if (nm.indexOf('roof') >= 0) { roofParts.push(o); }
+        if (nm.indexOf('roof') >= 0 || nm.indexOf('ridge') >= 0) { roofParts.push(o); return; }
+        if (objIsWallPart(nm)) { wallParts.push(o); }
       });
       if (roofParts.length) {
-        roof = new THREE.Group();
+        var roof = new THREE.Group();
         roof.name = '__roof';
+        roof.userData.noBatch = true;      /* 别被合批吃掉，不然组里就空了 */
         for (var ri = 0; ri < roofParts.length; ri++) {
           var rp = roofParts[ri];
           if (rp.parent) { rp.parent.remove(rp); }
@@ -101,7 +118,18 @@
         }
         g.add(roof);
       }
-    } catch (eRoof) { roof = null; }
+      if (wallParts.length) {
+        var walls = new THREE.Group();
+        walls.name = '__walls';
+        walls.userData.noBatch = true;
+        for (var wi = 0; wi < wallParts.length; wi++) {
+          var wp = wallParts[wi];
+          if (wp.parent) { wp.parent.remove(wp); }
+          walls.add(wp);
+        }
+        g.add(walls);
+      }
+    } catch (eRoof) { }
     return batchModel(g);
   }
 
@@ -242,28 +270,35 @@
           });
         }
         var fade = (inside != null && String(e.mesh.userData.objId) === String(inside));
-        /* 进屋：屋顶直接藏起来（比半透明更干净） */
+        /* 进屋：屋顶直接藏起来，墙体淡化；屋里的地板/家具保持原样 */
         if (e.mesh.userData.roof == null) {
           var _rg = null;
           e.mesh.traverse(function (mm) { if (mm.name === '__roof') { _rg = mm; } });
           e.mesh.userData.roof = _rg;
         }
         if (e.mesh.userData.roof) { e.mesh.userData.roof.visible = !fade; }
-        e.mesh.traverse(function (m) {
-          if (!m.isMesh || !m.material) { return; }
-          var u = m.material.userData || {};
-          if (fade) {
-            m.material.transparent = true;
-            /* 2026-10-22：0.35 → 0.18 → 0.12（屋里越透越好） */
-            m.material.opacity = Math.min(0.12, (u.baseOpacity == null ? 1 : u.baseOpacity));
-            m.material.depthWrite = false;
-          } else {
-            m.material.transparent = !!u.baseTransparent;
-            m.material.opacity = (u.baseOpacity == null) ? 1 : u.baseOpacity;
-            m.material.depthWrite = (u.baseDepthWrite == null) ? true : u.baseDepthWrite;
-          }
-          m.material.needsUpdate = true;
-        });
+        if (e.mesh.userData.walls == null) {
+          var _wg = null;
+          e.mesh.traverse(function (mm) { if (mm.name === '__walls') { _wg = mm; } });
+          e.mesh.userData.walls = _wg;
+        }
+        var _wallRoot = e.mesh.userData.walls;
+        if (_wallRoot) {
+          _wallRoot.traverse(function (m) {
+            if (!m.isMesh || !m.material) { return; }
+            var u = m.material.userData || {};
+            if (fade) {
+              m.material.transparent = true;
+              m.material.opacity = Math.min(0.12, (u.baseOpacity == null ? 1 : u.baseOpacity));
+              m.material.depthWrite = false;
+            } else {
+              m.material.transparent = !!u.baseTransparent;
+              m.material.opacity = (u.baseOpacity == null) ? 1 : u.baseOpacity;
+              m.material.depthWrite = (u.baseDepthWrite == null) ? true : u.baseDepthWrite;
+            }
+            m.material.needsUpdate = true;
+          });
+        }
       }
     } catch (e2) { }
   }
@@ -754,6 +789,17 @@
     /* 目录后到（towns 包）时重算一遍碰撞和地板 */
     refreshAux: function () { syncSolids(); syncFloors(); },
     /* 自测用：某栋建筑当前的透明度 / 是否半透明 */
+    debugUserData: function (id) {
+      var e = P.objs[id];
+      if (!e || !e.mesh) { return null; }
+      var ud = e.mesh.userData || {};
+      var n = 0;
+      e.mesh.traverse(function (m) { if (m.isMesh) { n++; } });
+      return { isBuilding: !!ud.isBuilding, hasWalls: !!ud.walls,
+               wallsKids: ud.walls ? ud.walls.children.length : -1,
+               hasRoof: !!ud.roof, meshes: n,
+               childNames: e.mesh.children.map(function (c) { return c.name || '?'; }) };
+    },
     roofVisible: function (id) {
       var e = P.objs[id];
       if (!e || !e.mesh) { return null; }
@@ -764,12 +810,53 @@
       var e = P.objs[id];
       if (!e || !e.mesh) { return null; }
       var out = null;
+      function sample(g) {
+        var v = null;
+        if (g) {
+          g.traverse(function (m) {
+            if (v == null && m.isMesh && m.material) {
+              v = { opacity: m.material.opacity, transparent: !!m.material.transparent };
+            }
+          });
+        }
+        return v;
+      }
+      out = sample(e.mesh.userData.walls);
+      if (!out) { out = sample(e.mesh); }
+      return out;
+    },
+    /* 自测用：墙 / 屋顶 / 其它（家具等）的透明度，验证只淡化墙 */
+    interiorParts: function (id) {
+      var e = P.objs[id];
+      if (!e || !e.mesh) { return null; }
+      function sample(g) {
+        var v = null;
+        if (g) {
+          g.traverse(function (m) {
+            if (v == null && m.isMesh && m.material) {
+              v = { opacity: m.material.opacity, transparent: !!m.material.transparent };
+            }
+          });
+        }
+        return v;
+      }
+      var walls = e.mesh.userData.walls || null;
+      var roof = e.mesh.userData.roof || null;
+      var others = null;
       e.mesh.traverse(function (m) {
-        if (out == null && m.isMesh && m.material) {
-          out = { opacity: m.material.opacity, transparent: !!m.material.transparent };
+        if (others) { return; }
+        var inWall = false, inRoof = false;
+        var q = m;
+        while (q) {
+          if (q === walls) { inWall = true; break; }
+          if (q === roof) { inRoof = true; break; }
+          q = q.parent;
+        }
+        if (!inWall && !inRoof && m.isMesh && m.material) {
+          others = { opacity: m.material.opacity, transparent: !!m.material.transparent };
         }
       });
-      return out;
+      return { walls: sample(walls), roofVisible: roof ? !!roof.visible : null, others: others };
     },
     startEdit: editEnter,
     selectById: function (id) { editSelect(id); return EDIT.id; },
