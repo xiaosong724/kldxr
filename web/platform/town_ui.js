@@ -18,7 +18,8 @@
   /* ★ 2026-10-22：小镇面板改成多个导航页 */
   var NAV = 'overview';
   function navBar() {
-    var tabs = [['overview', '概览'], ['place', '放置'], ['edit', '编辑'], ['perm', '权限']];
+    var tabs = [['overview', '概览'], ['place', '放置'], ['edit', '编辑'],
+                ['perm', '权限'], ['map', '地图']];
     return '<div class="townNav">' + tabs.map(function (t) {
       return '<button class="' + (NAV === t[0] ? 'on' : '') +
         '" onclick="townNav(\'' + t[0] + '\')">' + t[1] + '</button>';
@@ -32,6 +33,7 @@
     if (NAV === 'place') { body.innerHTML = head + placeHTML(t); return; }
     if (NAV === 'edit') { body.innerHTML = head + editHTML(t); return; }
     if (NAV === 'perm') { body.innerHTML = head + permHTML(t); return; }
+    if (NAV === 'map') { body.innerHTML = head + mapHTML(t); return; }
     body.innerHTML = head + overviewHTML(t);
   }
   function overviewHTML(t) {
@@ -100,6 +102,14 @@
       '<div class="townHint">想换朝向：选中后点「旋转 90°」；不要了：点「删除」' +
       '（连同建筑自带家具一起删，不退款）。</div>';
   }
+  function mapHTML(t) {
+    var nm = t ? (t.name || '我的小镇') : '系统主城';
+    return '<div class="townHint"><b>' + nm + '</b> · 实时地图（玩家位置、放置的建筑/家具都会实时更新）</div>' +
+      '<div class="row"><button onclick="townMap()" style="background:#2f5f8a;border-color:#9fe8ff">' +
+      '打开地图</button></div>' +
+      '<div class="townHint">地图上：<b style="color:#ff8a8a">红色三角</b> = 你（尖头是朝向）；' +
+      '深灰块 = 放置的建筑；浅褐块 = 放置的家具。点一下可以看名字和坐标。</div>';
+  }
   function permHTML(t) {
     if (!t) {
       return '<div class="townHint">你还没有小镇。系统主城的权限请在 /admin 里设置。</div>';
@@ -120,6 +130,10 @@
     return h;
   }
   window.townNav = function (n) { NAV = n; townRender(); };
+  window.townMap = function () {
+    close();
+    if (typeof mapOpen === 'function') { mapOpen(); }
+  };
   window.townPlace = function (id) {
     close();
     if (window.PlaceMode && PlaceMode.startPlaceById) { PlaceMode.startPlaceById(id); }

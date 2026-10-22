@@ -125,6 +125,23 @@ body.safe-mode #skBar, body.safe-mode #auto { display:none !important; }
    box-shadow:0 0 0 2px #b7e0a255,inset 0 1px 0 #ffffff22}
  #jmp .jic{width:46%;height:46%;color:#dfe8d4;opacity:.95}
  #jmp.cool{opacity:.45}
+ /* 2026-10-22: run button - same look as jump, sits right above it */
+ #run{position:fixed;right:calc(18px + var(--atk,84px) - 4px);
+    bottom:calc(56px + var(--atk,84px) * 1.72);
+    width:calc(var(--atk,84px) * 0.60);height:calc(var(--atk,84px) * 0.60);
+    box-sizing:border-box;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 36% 30%,
+      #6f7d6955 0%,#54614f4d 38%,#35402f3d 76%,#1f271c30 100%);
+    border:2px solid #86967a88;
+    box-shadow:0 3px 9px #00000055,inset 0 1px 0 #ffffff22,inset 0 -6px 12px #0000002a;
+    user-select:none;cursor:pointer;z-index:30;
+    transition:transform .07s ease,box-shadow .15s ease;touch-action:none}
+ #run:active{transform:scale(.92);border-color:#b7e0a2cc;
+    box-shadow:0 0 0 2px #b7e0a255,inset 0 1px 0 #ffffff22}
+ #run .jic{width:52%;height:52%;color:#dfe8d4;opacity:.95}
+ #run.on{background:radial-gradient(circle at 36% 30%,#c8ffb4 0%,#7fd06a 42%,#3f8a34 80%);
+    border-color:#b7f0a0;box-shadow:0 0 0 2px #9cf07a66,0 0 14px #7ee06a88}
+ #run.on .jic{color:#12300c;opacity:1}
  /* ★★★ round353（用户："自动战斗做一个单独按钮，点击直接进入，并且有状态区分"）★★★
     位置：跳跃键【左边】✗ 三个键排成一排 ✓ 都可拖动（见 JS 的 makeDraggable）*/
  #auto{position:fixed;right:calc(18px + var(--atk,84px) + 74px);
@@ -1363,6 +1380,14 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
 <!-- ★ round409（用户："跳跃向上的按钮图标太简单了"）
      ★ 换成【双层箭头 + 地面线】：读起来就是"离地往上冲"✓
        原来只有一个单箭头 ✗ 和"返回顶部"图标几乎一样 ✓ -->
+<div id="run" title="跑步（每秒 1 点灵气）"><svg class="jic" viewBox="0 0 24 24" fill="none"
+  stroke="currentColor" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="14.5" cy="4.6" r="1.8"/>
+  <path d="M13.2 8.2 9.6 11l1.6 3.1-2.4 3.4"/>
+  <path d="M11.2 14.1l3.2 1.2 1.1 4.3"/>
+  <path d="M9.6 11 6.2 9.6"/>
+  <path d="M13.6 9.4l3.4 1.6"/>
+</svg></div>
 <div id="jmp"><svg class="jic" viewBox="0 0 24 24" fill="none"
   stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
   <path d="M4.5 20.2h15"/>
@@ -1411,7 +1436,7 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
 <div id="whPrompt">按 E / 点击交互按钮 打开仓库</div>
 <div id="sitPrompt">按 E / 点击交互按钮 坐下</div>
 <div id="tpPrompt">按 E / 点击交互按钮 传送</div>
-<button id="mapBtn" title="小镇地图（M）">地图</button>
+<button id="mapBtn" title="小镇地图（M）" style="display:none">地图</button>
 <button id="townBtn" title="小镇：建造 / 移动 / 权限">小镇 · 建造</button>
 <div id="mapPanel"><div id="mapBox"><div id="mapHead"><div id="mapTitle">新手小镇 · 全景地图</div><div id="mapLegend">B 建筑 · H 住宅 · S 商店 · R 道路 · T 传送</div><div id="mapFit"><button class="mapV" onclick="mapFit('town')">小镇</button><button class="mapV" onclick="mapFit('all')">全图</button></div><div id="mapZoom"><button class="mapZ" onclick="mapZoom(-1)">−</button><button class="mapZ" onclick="mapZoom(1)">＋</button></div><div id="mapClose">✕</div></div><div id="mapFilterBar"><button class="mapF on" data-f="all" onclick="mapFilter('all')">全部</button><button class="mapF" data-f="center" onclick="mapFilter('center')">中心</button><button class="mapF" data-f="villa" onclick="mapFilter('villa')">别墅</button><button class="mapF" data-f="yard" onclick="mapFilter('yard')">小院</button><button class="mapF" data-f="flat" onclick="mapFilter('flat')">小楼</button><button class="mapF" data-f="shop" onclick="mapFilter('shop')">商店</button><button class="mapF" data-f="road" onclick="mapFilter('road')">道路</button></div><div id="mapBody"><canvas id="townMapCanvas"></canvas><div id="mapSide"><div class="mapSideTitle">点击地图上的编号</div><div id="mapInfo">点击建筑看名称、编号、坐标。<br><span class="mapHint">手机端默认隐藏密集文字；用筛选和下方编号列表定位。</span></div><button id="mapCopy" onclick="mapCopy()">复制坐标</button><button id="mapListBtn" onclick="mapListToggle()">展开编号列表</button><div class="mapSideTitle">全部编号</div><div id="mapList"></div><div class="mapHint">编号即定位编号；道路带名称。M 键开关地图。</div></div></div></div></div>
 <div id="shopPrompt">按 E / 点击交互按钮 购买</div>

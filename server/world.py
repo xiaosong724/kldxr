@@ -211,6 +211,7 @@ class Player(object):
                  'jy',
                  'seat', 'tpEnd', 'tpAt',
                  'sleepHouse', 'sleepAcc', 'sleepYaw',
+                 'running', 'runAcc',
                  'job', 'jobShop', 'jobT', 'jobAcc', 'qiAcc', 'qiLast', 'qiSync')
 
     def __init__(self, cid, role):
@@ -226,6 +227,8 @@ class Player(object):
         self.tpAt = 0.0
         self.sleepHouse = ''
         self.sleepYaw = 0.0
+        self.running = False
+        self.runAcc = 0.0
         self.sleepAcc = 0.0
         self.job = ''
         self.jobShop = ''
@@ -1103,6 +1106,9 @@ class World(object):
             self._ghost_tick()
             self._admin_tune_check()   # ★ 第 168 轮（用户 #5）：收回超时的幽灵 ✓
             self._tp_tick()      # 第 173 轮（用户 #6）：推进传送读条 ✓
+        # ★ 2026-10-22：跑步扣灵气必须【每帧】跑（放上面那个 15-tick 块里会变成 0.5 秒一次，
+        #   而 runAcc 用 TICK_DT 累加 → 永远凑不满 1 秒 → 一点灵气都不扣）
+        self._run_tick()
 
     def _talent_op(self, p, d):
         """天赋加点 / 洗点（方案 §7.1 · 第 116 轮）
@@ -1447,6 +1453,10 @@ class World(object):
         # passive qi recovery: 1% max/s in town, 0.5/s outside
         for p in list(self.players.values()):
             if getattr(p, 'sleepHouse', ''):
+                continue
+            # ★ 2026-10-22：跑步中不回气（不然"每秒 -1"会被"每秒 +1"抵消，白跑）
+            if getattr(p, 'running', False):
+                p.qiAcc = 0.0
                 continue
             if int(getattr(p, 'hp', 0) or 0) <= 0:
                 continue
@@ -3038,6 +3048,7 @@ class World(object):
 
     def _handle_intent(self, p, t, d):
         _TP = ('house_info', 'house_buy', 'house_leave', 'house_sleep', 'house_wake',
+               'run',
                'warehouse_open', 'warehouse_move', 'warehouse_move_many',
                'shop_open', 'shop_buy', 'usefood', 'fridge_open', 'order_open',
                'order_buy', 'cup_take', 'work_start', 'work_stop', 'jobstep', 'jobdone',
@@ -6896,6 +6907,48 @@ class World(object):
 
     def _intent_fridge_open(self, p, d):
         self._fridge_open(p, d)
+
+    # ---------- 跑步（2026-10-22）----------
+    def _intent_run(self, p, d):
+        """on=1 开始跑 / on=0 停。跑步每秒烧 1 点灵气，灵气为 0 自动停。"""
+        want = 1 if int((d or {}).get('on') or 0) else 0
+        if want:
+            if int(getattr(p, 'qi', 0) or 0) <= 0:
+                self._send_cid(p.cid, P.pack('run', on=0, reason='no_qi'))
+                self._send_cid(p.cid, P.pack('notice', text='灵气不足，跑不动'))
+                return
+            if str(getattr(p, 'seat', '-1')) != '-1' or getattr(p, 'sleepHouse', ''):
+                self._send_cid(p.cid, P.pack('run', on=0, reason='busy'))
+                return
+            p.running = True
+            p.runAcc = 0.0
+        else:
+            p.running = False
+            p.runAcc = 0.0
+        self._send_cid(p.cid, P.pack('run', on=1 if p.running else 0))
+
+    def _run_tick(self):
+        """每秒扣 1 点灵气（跑步的代价）。"""
+        for p in list(self.players.values()):
+            if not getattr(p, 'running', False):
+                continue
+            if str(getattr(p, 'seat', '-1')) != '-1' or getattr(p, 'sleepHouse', ''):
+                p.running = False
+                p.runAcc = 0.0
+                self._send_cid(p.cid, P.pack('run', on=0, reason='busy'))
+                continue
+            p.runAcc = float(getattr(p, 'runAcc', 0) or 0) + TICK_DT
+            if p.runAcc < 1.0:
+                continue
+            p.runAcc -= 1.0
+            q = max(0, int(p.qi or 0) - 1)
+            p.qi = q
+            self._send_cid(p.cid, P.pack('qi', q=q))
+            if q <= 0:
+                p.running = False
+                p.runAcc = 0.0
+                self._send_cid(p.cid, P.pack('run', on=0, reason='no_qi'))
+                self._send_cid(p.cid, P.pack('notice', text='灵气耗尽，已停止奔跑'))
 
     # ---------- 仓库（2026-10-22 接线）----------
     def _wh_near(self, p):

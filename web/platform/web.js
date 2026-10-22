@@ -5899,6 +5899,7 @@ var townHouseSignSet = (typeof townHouseSignSet !== 'undefined') ? townHouseSign
 
 /* ---------- 小镇地图 ---------- */
 var MAP_OPEN = false, MAP_ZOOM = 1, MAP_HITS = [], MAP_SEL = null, MAP_COPY_TXT = '';
+var MAP_LIVE_ID = 0;
 var MAP_FILTER = 'all', MAP_CX = 0, MAP_CZ = 0, MAP_MOBILE = false;
 function mapKindName(b) {
   var k = b.k || '';
@@ -6038,6 +6039,45 @@ function mapDraw() {
     MAP_HITS.push({ x0: X(t.x) - 8, y0: Y(t.z) - 8, x1: X(t.x) + 8, y1: Y(t.z) + 8,
       num: 'T' + (ti + 1), name: t.name || '传送阵', kind: '传送', group: 'tp', wx: t.x, wz: t.z });
   }
+  /* ★ 2026-10-22：把【已放置的物件】也画上来（以前地图只画静态布局 → 放/挪/删都看不出来）
+     每次 mapDraw 都重新读 MY_OBJECTS，所以是实时的。 */
+  try {
+    var _objs = (window.MY_OBJECTS || []);
+    var _cats = {};
+    (window.MY_TOWN_CATALOG || []).forEach(function (cc) { _cats[cc.id] = cc; });
+    var _onum = 0;
+    for (var _oi = 0; _oi < _objs.length; _oi++) {
+      var _o = _objs[_oi];
+      if (!_o || _o.parent) { continue; }
+      var _cd = _cats[_o.catalog];
+      if (!_cd) { continue; }
+      var _hw = (+_cd.size_w || 1) / 2, _hd = (+_cd.size_d || 1) / 2;
+      var _rr = +_o.rot || 0;
+      var _ca = Math.abs(Math.cos(_rr)), _sa = Math.abs(Math.sin(_rr));
+      var _ex = _hw * _ca + _hd * _sa, _ez = _hw * _sa + _hd * _ca;
+      var _x0 = X(+_o.x - _ex), _y0 = Y(+_o.z - _ez);
+      var _w = _ex * 2 * sc, _h = _ez * 2 * sc;
+      var _isB = (_cd.category === 'building');
+      if (_isB) {
+        c.fillStyle = 'rgba(58,64,74,.92)'; c.strokeStyle = 'rgba(200,214,232,.75)';
+        c.lineWidth = 1.2;
+      } else {
+        c.fillStyle = 'rgba(150,140,120,.55)'; c.strokeStyle = 'rgba(210,196,168,.35)';
+        c.lineWidth = 0.8;
+      }
+      c.fillRect(_x0, _y0, _w, _h);
+      c.strokeRect(_x0, _y0, _w, _h);
+      if (_isB && !MAP_MOBILE) {
+        _onum++;
+        c.fillStyle = '#0e1418'; c.font = '800 9px "Microsoft YaHei",system-ui,sans-serif';
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillText('O' + _onum, _x0 + _w / 2, _y0 + _h / 2);
+      }
+      MAP_HITS.push({ x0: _x0, y0: _y0, x1: _x0 + _w, y1: _y0 + _h,
+        num: 'O' + _onum, name: (_cd.name || _o.catalog), kind: (_cd.category === 'building' ? '放置建筑' : '放置家具'),
+        group: 'obj', wx: +_o.x, wz: +_o.z });
+    }
+  } catch (eMapObj) { }
   /* 区域名 */
   c.font = '800 13px "Microsoft YaHei",system-ui,sans-serif'; c.textAlign = 'center'; c.fillStyle = 'rgba(255,240,210,.55)';
   c.fillText('别墅区', X(-196), Y(36));
@@ -6045,11 +6085,18 @@ function mapDraw() {
   c.fillText('小平楼区', X(-64), Y(226));
   c.fillText('中央公园', X(-210), Y(105));
   c.fillText('商业街', X(-105), Y(105));
-  /* 自己 */
+  /* 自己（带朝向的三角，看得出面朝哪边） */
+  var _px = X(P.x), _py = Y(P.z), _pyaw = P.yaw || 0;
+  c.save();
+  c.translate(_px, _py);
+  c.rotate(-_pyaw + Math.PI);
   c.fillStyle = '#ff6a6a'; c.strokeStyle = '#fff'; c.lineWidth = 2;
-  c.beginPath(); c.arc(X(P.x), Y(P.z), 5, 0, Math.PI * 2); c.fill(); c.stroke();
+  c.beginPath();
+  c.moveTo(0, -8); c.lineTo(5.5, 5); c.lineTo(-5.5, 5); c.closePath();
+  c.fill(); c.stroke();
+  c.restore();
   c.fillStyle = '#ffe0e0'; c.font = '700 10px "Microsoft YaHei",system-ui'; c.textAlign = 'center';
-  c.fillText('你', X(P.x), Y(P.z) - 9);
+  c.fillText('你', _px, _py - 13);
   /* 选中高亮 */
   if (MAP_SEL) {
     c.strokeStyle = '#ff6a5a'; c.lineWidth = 3;
@@ -6133,11 +6180,20 @@ function mapOpen() {
   var _mi = document.getElementById('mapInfo');
   if (_mi) { _mi.innerHTML = '点击地图上的编号查看名称、类型、坐标。'; }
   MAP_MOBILE = (window.innerWidth <= 760 || window.innerHeight <= 620);
-  if (MAP_MOBILE) {
-    MAP_FILTER = 'center'; MAP_ZOOM = 2.15; MAP_CX = -125; MAP_CZ = 140;
-  } else {
-    MAP_FILTER = 'all'; MAP_ZOOM = 1.0; MAP_CX = 0; MAP_CZ = 0;
-  }
+  /* 2026-10-22: centre the map on the town the player is actually in */
+  var _tcx = (typeof TOWN_CX === 'number') ? TOWN_CX : -130;
+  var _tcz = (typeof TOWN_CZ === 'number') ? TOWN_CZ : 130;
+  MAP_FILTER = MAP_MOBILE ? 'center' : 'all';
+  MAP_ZOOM = MAP_MOBILE ? 2.15 : 1.0;
+  MAP_CX = _tcx;
+  MAP_CZ = _tcz;
+  try {
+    var _tname = '新手小镇';
+    var _ts = (window.MY_TOWNS || [])[0];
+    if (_ts && _ts.name) { _tname = _ts.name; }
+    var _tt = document.getElementById('mapTitle');
+    if (_tt) { _tt.textContent = _tname + ' · 全景地图' + (_ts ? ('（' + _ts.tier + ' 格）') : ''); }
+  } catch (eTName) { }
   var side = document.getElementById('mapSide');
   if (side) { side.classList.remove('listOn'); }
   var p = document.getElementById('mapPanel');
@@ -6147,9 +6203,15 @@ function mapOpen() {
     mapDraw();
     mapBuildList();
   }, 40);
+  if (MAP_LIVE_ID) { clearInterval(MAP_LIVE_ID); }
+  MAP_LIVE_ID = setInterval(function () {
+    if (!MAP_OPEN) { clearInterval(MAP_LIVE_ID); MAP_LIVE_ID = 0; return; }
+    try { mapDraw(); } catch (eL) { }
+  }, 200);
 }
 function mapClose() {
   MAP_OPEN = false;
+  if (MAP_LIVE_ID) { clearInterval(MAP_LIVE_ID); MAP_LIVE_ID = 0; }
   var p = document.getElementById('mapPanel');
   if (p) { p.style.display = 'none'; }
 }
@@ -7628,6 +7690,7 @@ function uiReloadBind() {
 function uiDragInit() {
   makeDraggable('atk');
   makeDraggable('jmp');
+  makeDraggable('run');
   makeDraggable('auto');
   autoBind();
   /* ★ round497：视角按钮（同一个拖动系统 → 像攻击键一样能移动 ✓）*/
@@ -7736,6 +7799,38 @@ function jumpBind() {
   b.addEventListener('pointerdown', press);
   b.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 }
+/* ★ 2026-10-22：跑步按钮（点一下持续跑，再点停下；每秒 1 点灵气） */
+function runUiState() {
+  var b = document.getElementById('run');
+  if (!b) { return; }
+  if (RUN && RUN.on) { b.classList.add('on'); }
+  else { b.classList.remove('on'); }
+}
+function runToggle() {
+  if (typeof UI_EDIT !== 'undefined' && UI_EDIT) { return; }
+  var want = !(RUN && RUN.want);
+  RUN.want = want;
+  try { wsSend('run', { on: want ? 1 : 0 }); } catch (e) { }
+}
+function runBind() {
+  var b = document.getElementById('run');
+  if (!b || b._runB) { return; }
+  b._runB = true;
+  b.addEventListener('pointerdown', function (e) {
+    if (e && e.preventDefault) { e.preventDefault(); }
+    runToggle();
+  });
+  b.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  runUiState();
+}
+function runApply(d) {
+  if (!d) { return; }
+  RUN.on = !!d.on;
+  if (!RUN.on) { RUN.want = false; }
+  runUiState();
+  if (d.reason === 'no_qi') { try { toast('灵气不足，跑不动'); } catch (e) { } }
+}
+
 function jumpCoolUi(p) {
   var b = document.getElementById('jmp');
   if (!b) { return; }
@@ -11242,6 +11337,7 @@ function wsOnMessage(raw) {
     } catch (eR) { }
     return;
   }
+  if (t === 'run') { runApply(d); return; }
   if (t === 'qi') {
     MY_QI = +((m.d || {}).q || 0);
     try { updQi(); } catch (e4) { }
@@ -11999,7 +12095,7 @@ function bindLogin() {
     window.TP_BOOT_DONE = true;
     try { tpBind(); } catch (e) { }
     TPCAST.at = performance.now() / 1000;
-    setInterval(function () { tpEnsureBtn(); tpBarRender(); autoBindAtk(); jumpBind(); autoUiUpd();
+    setInterval(function () { tpEnsureBtn(); tpBarRender(); autoBindAtk(); jumpBind(); runBind(); autoUiUpd();
       if (typeof uiDragInit === 'function') { uiDragInit(); }
       if (typeof uiEditBind === 'function') { uiEditBind(); } }, 100);   /* 100ms 一次 ✓ 便宜 ✓ 而且顺带保证按钮一定挂上 ✓ */
     tpBarRender();                      /* 先画一次，把按钮恢复成正常样子 ✓ */

@@ -180,6 +180,8 @@ var HOUSE_NEAR = null;     /* 离我最近的住宅 */
 var SLEEP_NEAR = null;     /* 离我最近的床（房主） */
 var MY_SLEEP = '';         /* 正在睡的住宅 id */
 var SLEEP_OFF = 0.55;      /* 躺下时沿床朝向的偏移（脚放床尾，头不要伸出床头） */
+/* 2026-10-22: run toggle - tap to keep running, tap again to stop, 1 qi per second */
+var RUN = { on: false, want: false };
 var SHOP_NEAR = null;      /* 离我最近的商店 */
 var FRIDGE_NEAR = null;    /* 离我最近的自家冰箱 */
 var SIT_K = 0;             /* 坐下动画混合 0→1 */
@@ -9183,7 +9185,9 @@ function frame(ts) {
     : ((typeof inSafeZone === 'function') ? inSafeZone(P.x, P.z) : false);
   var _bio = _inTownMove ? 'wild' : terBiome(_gbx, _gbz);
   var _spdM = _inTownMove ? 1 : (TER_BIO_SPEED[_bio] || 1);
-  var _tspd = G.SPEED * _spdM;
+    /* 2026-10-22: running doubles the walking speed (RUN.on is set by the server) */
+  var _runM = (typeof RUN !== 'undefined' && RUN.on) ? 2.0 : 1.0;
+  var _tspd = G.SPEED * _spdM * _runM;
   /* ★★★ round409（用户问："菜单里天赋那些加点会有效果吗"）★★★
      ★ 查出来：【移速】在服务端的天赋表里标着"生效"✗ 但客户端一次都没读它 ✓
        → 点了移速天赋，走路速度【一点都没变】✓（真 bug ✓ 现在接上 ✓）
