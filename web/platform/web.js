@@ -6737,6 +6737,8 @@ function sleepApply(d) {
   if (d.on) {
     MY_SLEEP = d.id || '';
     if (typeof d.x === 'number') { P.x = +d.x; P.z = +d.z; }
+    /* ★ 2026-10-22：床的朝向（服务端给的），躺姿用它，不要用玩家自己的朝向 */
+    if (typeof d.yaw === 'number') { P.sleepYaw = +d.yaw; P.yaw = +d.yaw; }
     SLEEP_NEAR = null;
     try { if (UI.bedNear) { UI.bedNear(null); } } catch (e1) { }
     try { if (UI.houseNear) { UI.houseNear(null); } } catch (e2) { }

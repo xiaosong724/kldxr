@@ -179,7 +179,7 @@ var TP_NEAR = null;        /* 离我最近的传送阵 */
 var HOUSE_NEAR = null;     /* 离我最近的住宅 */
 var SLEEP_NEAR = null;     /* 离我最近的床（房主） */
 var MY_SLEEP = '';         /* 正在睡的住宅 id */
-var SLEEP_OFF = 0.55;      /* 躺下时沿朝向的偏移（头不要伸到床外） */
+var SLEEP_OFF = 0.55;      /* 躺下时沿床朝向的偏移（脚放床尾，头不要伸出床头） */
 var SHOP_NEAR = null;      /* 离我最近的商店 */
 var FRIDGE_NEAR = null;    /* 离我最近的自家冰箱 */
 var SIT_K = 0;             /* 坐下动画混合 0→1 */
@@ -5796,7 +5796,9 @@ function wsApplyWorld(d) {
          ★ 教训：服务器加字段 → ①打包 dict ②这里映射 ③addOther ④渲染
                  四层都要改 ✗ 少一层就静默失效 ✓ */
       jy: Math.max(0, +w.jy || 0),
-      seat: (typeof w.seat === 'number') ? w.seat : -1,
+      seat: (w.seat != null ? String(w.seat) : '-1'),
+      sleep: !!w.sleep,                                        // ★ 他躺下了没有
+      snapYaw: (typeof w.syaw === 'number') ? w.syaw : 0,
       sz: (typeof w.sz === 'number' && w.sz > 0) ? w.sz : 1,   // ★ round576：体型
       /* ★★★ 第 221 轮修的真 bug（用户："我的血条在别的玩家那边没有按比例扣除，
              只有数字变化"）★★★
@@ -6476,7 +6478,9 @@ function addOther(w, t) {
       galeT: +w.galeT || 0,                    // ★ round589：别人疾风步剩余
       downT: +w.downT || 0,                    // ★ round593：击倒剩余
       _galeAcc: 0, _galeLX: null, _galeLZ: null,
-      seat: (typeof w.seat === 'number') ? w.seat : -1,   // ★ 他坐哪张椅子
+      seat: (w.seat != null ? String(w.seat) : '-1'),   // ★ 他坐哪张椅子
+      sleep: !!w.sleep,                                   // ★ 他躺下了没有
+      snapYaw: (typeof w.syaw === 'number') ? w.syaw : 0,
       dead: !!w.dead,                         // ★ 第 57 轮：他倒下了没有
       tt: String(w.tt || ''),                 // ★ round424：头顶称号文本
       tm: (+w.tm || 0),                       // ★ round424：1/2/3 = 金/银/铜牌
@@ -6527,7 +6531,9 @@ function addOther(w, t) {
      已经存在的小人走的是下面这条更新分支 → dead 永远停在 false ✗
      所以两处都要写 ✓（不然"别人看你死亡还是站着"永远修不好 ✗）*/
   o.dead = !!w.dead;
-  o.seat = (typeof w.seat === 'number') ? w.seat : -1;
+  o.seat = (w.seat != null ? String(w.seat) : '-1');
+  o.sleep = !!w.sleep;
+  o.snapYaw = (typeof w.syaw === 'number') ? w.syaw : (o.snapYaw || 0);
   o.galeT = +w.galeT || 0;
   o.downT = +w.downT || 0;
   o.frz = !!w.frz;
@@ -7447,6 +7453,12 @@ function updateMarks() {
   }
 }
 
+/* 2026-10-22：远端玩家从坐/躺切回站立时，把旋转顺序恢复默认（否则走路看着是歪的） */
+function _gs_reset_order(o) {
+  if (!o || !o.hh || !o.hh.g) { return; }
+  if (o.hh.g.rotation.order !== 'XYZ') { o.hh.g.rotation.order = 'XYZ'; }
+}
+
 function netUpdate(dt) {
   if (!NET.on) { return; }
   var now = performance.now() / 1000;
@@ -7457,6 +7469,35 @@ function netUpdate(dt) {
     // ★ 用【他的钟】换算该渲染哪一刻 → 网络抖动不再变成走路的忽快忽慢 ✓
     if (!netSample(o.buf, netRenderAt(o, now, dt), o.cur)) { continue; }
     var px = o.cur.x, pz = o.cur.z;
+    /* ★★ 2026-10-22：他坐着 / 躺着时【不要再走插值】★★
+       以前这里只管走路 → 坐下那一刻服务端把他瞬移到椅子上，
+       插值一路追、姿态又是站姿 → 别人看着一直在抽动。
+       现在坐/躺直接吸附到服务端坐标，并摆出对应姿势。 */
+    var _seated = (o.seat != null && String(o.seat) !== '-1' && String(o.seat) !== '');
+    if (_seated || o.sleep) {
+      var _gs = o.hh.g;
+      o.walkT = 0;
+      o.hh.legL.rotation.x = 0; o.hh.legR.rotation.x = 0;
+      o.hh.armL.rotation.x = 0.15; o.hh.armR.rotation.x = 0.15;
+      _gs.rotation.z = 0;
+      _gs.rotation.order = 'YXZ';
+      if (o.sleep) {
+        var _sy2 = +((o.snapYaw != null) ? o.snapYaw : (o.cur.yaw || 0));
+        var _so2 = (typeof SLEEP_OFF !== 'undefined') ? SLEEP_OFF : 0.55;
+        var _y2 = (typeof supportYAt === 'function') ? supportYAt(px, pz) : 0;
+        _gs.position.set(px + Math.sin(_sy2) * _so2, _y2 + 0.62, pz + Math.cos(_sy2) * _so2);
+        _gs.rotation.set(-1.45, _sy2, 0);
+      } else {
+        var _y3 = (typeof supportYAt === 'function') ? supportYAt(px, pz) : 0;
+        _gs.position.set(px, _y3 + 0.30, pz);
+        _gs.rotation.set(0, o.cur.yaw || 0, 0);
+        /* 坐姿：大腿抬平、小腿垂下 */
+        o.hh.legL.rotation.x = -1.35; o.hh.legR.rotation.x = -1.35;
+      }
+      o.last.x = px; o.last.z = pz;
+      continue;
+    }
+    _gs_reset_order(o);
     o.hh.g.position.set(px, 0, pz);
     o.hh.g.rotation.y = o.cur.yaw;
     o.hh.g.rotation.z = 0;
@@ -9273,11 +9314,16 @@ function frame(ts) {
     if (H.legL.children[0]) { H.legL.children[0].rotation.x = 0.82 * sk2; }
     if (H.legR.children[0]) { H.legR.children[0].rotation.x = 0.82 * sk2; }
   } else if (MY_SLEEP && !dead) {
-    /* ★ 2026-10-22：躺下时沿朝向往后挪一点（以前是脚在床中心 → 头伸到床外） */
-    var _sy = P.yaw || 0;
-    var _so = (typeof SLEEP_OFF !== 'undefined') ? SLEEP_OFF : 0.55;
-    H.g.position.set(P.x - Math.sin(_sy) * _so, P.y + 0.30, P.z - Math.cos(_sy) * _so);
-    H.g.rotation.set(-1.45, P.yaw, 0);
+    /* ★ 2026-10-22：躺姿按【床的朝向】算（以前用玩家自己的朝向，床一转方向就歪、头穿出去）。
+       模型原点在脚底，绕 X 转 -1.45 后身体朝本地 -Z 伸展 →
+       把脚放到床尾（本地 +Z），身体正好铺到床头。 */
+    var _sy = (typeof P.sleepYaw === 'number') ? P.sleepYaw : (P.yaw || 0);
+    var _so = (typeof SLEEP_OFF !== 'undefined') ? SLEEP_OFF : 0.85;
+    H.g.position.set(P.x + Math.sin(_sy) * _so, P.y + 0.62, P.z + Math.cos(_sy) * _so);
+    /* ★ 欧拉顺序必须是 YXZ：先绕 Y 转向，再绕本地 X 躺下。
+       用默认 XYZ 的话，Y 转 90/180 度后"躺"的方向就跟着歪了 → 头穿出床外。 */
+    H.g.rotation.order = 'YXZ';
+    H.g.rotation.set(-1.45, _sy, 0);
     H.legL.rotation.x = 0; H.legR.rotation.x = 0;
     H.armL.rotation.x = 0.15; H.armR.rotation.x = 0.15;
     H.sw.visible = false;
@@ -9989,9 +10035,12 @@ function frame(ts) {
         var _fsz = heroScaleOf(_foTown ? 1 : (_fo.sz || 1));
         if (Math.abs(_fo.hh.g.scale.x - _fsz) > 0.0005) { _fo.hh.g.scale.set(_fsz, _fsz, _fsz); }
         if (_foTown && _fo.hh.sw) { _fo.hh.sw.visible = false; }
-        else if (!_foTown && _fo.hh.sw && !(_fo.seat >= 0)) { _fo.hh.sw.visible = true; }
+        else if (!_foTown && _fo.hh.sw && !(_fo.seat != null && String(_fo.seat) !== '-1')) {
+          _fo.hh.sw.visible = true;
+        }
       }
-      var _os = (_fo.seat >= 0 && typeof townSeatById === 'function') ? townSeatById(_fo.seat) : null;
+      var _os = ((_fo.seat != null && String(_fo.seat) !== '-1')
+                 && typeof townSeatById === 'function') ? townSeatById(_fo.seat) : null;
       if (_os) {
         _gy = terYAt(_os.x, _os.z);
         _mg.position.set(_os.x, _gy - 0.06, _os.z);

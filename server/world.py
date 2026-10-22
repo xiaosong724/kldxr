@@ -210,7 +210,7 @@ class Player(object):
                  #   jy = 离地高度（跳起来那一段 ✗ 0 = 站在地上 ✓）
                  'jy',
                  'seat', 'tpEnd', 'tpAt',
-                 'sleepHouse', 'sleepAcc',
+                 'sleepHouse', 'sleepAcc', 'sleepYaw',
                  'job', 'jobShop', 'jobT', 'jobAcc', 'qiAcc', 'qiLast', 'qiSync')
 
     def __init__(self, cid, role):
@@ -225,6 +225,7 @@ class Player(object):
         self.tpEnd = 0.0
         self.tpAt = 0.0
         self.sleepHouse = ''
+        self.sleepYaw = 0.0
         self.sleepAcc = 0.0
         self.job = ''
         self.jobShop = ''
@@ -1328,8 +1329,10 @@ class World(object):
                         "SELECT x,z,rot,catalog_id FROM town_objects WHERE parent_id=? AND state='active'"
                         " AND catalog_id IN ('bed_single','bed_double','bed_king')"
                         " ORDER BY id LIMIT 1", (oid,)).fetchone()
+                bed_rot = None
                 if bed is not None:
                     bx, bz = float(bed['x']), float(bed['z'])
+                    bed_rot = float(bed['rot'] or 0)
                     # ★ 2026-10-22：双人床按玩家站的那一侧分左右（一左一右各睡一个）
                     _cat = str(bed['catalog_id'] or '')
                     if _cat in ('bed_double', 'bed_king'):
@@ -1349,11 +1352,14 @@ class World(object):
             p.x = bx
             p.z = bz
             p.seat = -1
-            self._send_cid(p.cid, P.pack('sleep_state', on=1, id=hid, x=bx, z=bz))
+            # ★ 2026-10-22：带上床的朝向（客户端躺姿要用它，不能用玩家自己的朝向）
+            p.sleepYaw = float(bed_rot if bed_rot is not None else (p.yaw or 0))
+            pk = dict(on=1, id=hid, x=bx, z=bz, yaw=p.sleepYaw)
+            self._send_cid(p.cid, P.pack('sleep_state', **pk))
             for q in list(self.players.values()):
                 if q is not p:
                     try:
-                        self._send_cid(q.cid, P.pack('sleep_state', on=1, id=hid, x=bx, z=bz))
+                        self._send_cid(q.cid, P.pack('sleep_state', **pk))
                     except Exception:
                         pass
             return
@@ -7092,6 +7098,8 @@ class World(object):
                 'jy': round(getattr(o, 'jy', 0.0) or 0.0, 3),
                 'seat': str(getattr(o, 'seat', -1)),
                 'sleep': 1 if getattr(o, 'sleepHouse', '') else 0,
+                # ★ 2026-10-22：别人躺下时的朝向（客户端躺姿要用）
+                'syaw': round(float(getattr(o, 'sleepYaw', 0.0) or 0.0), 3),
                 'job': getattr(o, 'job', ''),
                 'sk': str((o.role or {}).get('skin') or ''),
                 'skc': (((o.role or {}).get('skcMap') or {}).get(
