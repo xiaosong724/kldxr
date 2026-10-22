@@ -2713,7 +2713,23 @@ class World(object):
             p.goldDirty = True
         except Exception:
             pass
-        self._send_cid(p.cid, P.pack('placed', object=self._obj_pub(row)))
+        # ★ 2026-10-22：放完立刻重建商店数据，否则新放的商店建筑拿不到 shop_x/shop_z
+        #   （客户端要靠它判断"这是不是可交互商店"并显示飘字）
+        try:
+            self._rebuild_dyn_shops()
+        except Exception:
+            pass
+        _yf = 0.0
+        try:
+            if _pid:
+                with dbmod.db(self.cfg) as _c2:
+                    _pr = _c2.execute('SELECT model_id FROM town_objects WHERE id=?',
+                                      (int(_pid),)).fetchone()
+                if _pr is not None:
+                    _yf = townreg.floor_y_of(_pr['model_id'])
+        except Exception:
+            _yf = 0.0
+        self._send_cid(p.cid, P.pack('placed', object=self._obj_pub(row, _yf)))
 
     def _intent_place_building(self, p, d):
         d = d or {}
@@ -2756,15 +2772,22 @@ class World(object):
             p.goldDirty = True
         except Exception:
             pass
-        self._send_cid(p.cid, P.pack(
-            'placed',
-            object=self._obj_pub(res['building']),
-            furniture=res['furniture_count'],
-            list=[self._obj_pub(o) for o in res.get('furniture', [])]))
+        # ★ 2026-10-22：先重建商店数据，再发回包（否则建筑没有 shop_x/shop_z，不显示飘字）
         try:
             self._rebuild_dyn_shops()
         except Exception:
             pass
+        # ★ 2026-10-22：随建筑一起放的家具也要带「室内地板高度」，否则会陷进地板
+        _bfy = 0.0
+        try:
+            _bfy = townreg.floor_y_of(res['building'].get('model_id'))
+        except Exception:
+            _bfy = 0.0
+        self._send_cid(p.cid, P.pack(
+            'placed',
+            object=self._obj_pub(res['building']),
+            furniture=res['furniture_count'],
+            list=[self._obj_pub(o, _bfy) for o in res.get('furniture', [])]))
 
     def _obj_edit_check(self, p, oid, bit):
         """移动/移除前的统一校验（2026-10-22）：
@@ -2817,6 +2840,12 @@ class World(object):
         if not ok:
             self._town_result(p, False, err)
             return
+        # ★ 2026-10-22：先重建商店数据，再算回包 ——
+        #   否则 pub 里带的 shop_x/shop_z 还是移动前的旧位置（飘字和进店点会错位）
+        try:
+            self._rebuild_dyn_shops()
+        except Exception:
+            pass
         # ★ 2026-10-22：回包要带完整物件（catalog/model），
         #   不然客户端拿 {id,x,z,rot} 重建模型时没有 catalog → 画不出来
         try:
@@ -2829,7 +2858,6 @@ class World(object):
         except Exception:
             pub = self._obj_pub(_row)
         self._send_cid(p.cid, P.pack('moved', object=pub))
-        self._rebuild_dyn_shops()
         # ★ 家具跟着建筑走了 → 直接重发整份 objects，客户端一次性对齐
         try:
             if int(res.get('children') or 0) > 0:

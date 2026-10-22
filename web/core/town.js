@@ -3362,12 +3362,53 @@ function townFloatingLabel(parent, text, sub, x, y, z, accent) {
   return sp;
 }
 
+/* ★★★ 2026-10-22（用户："药铺的漂浮文字没有跟着药铺移动"）★★★
+   原来飘字取自【静态】TOWN_SHOPS（写死的 x/z）：
+     · 建筑被移动 → 飘字留在原地
+     · 玩家新放的建筑 → 根本没有飘字
+     · 建筑被删除 → 飘字还挂着
+   现在改成【按实际放置的物件】实时生成，建筑动它就动。
+   物件列表变化时调用 townShopLabelsRebuild() 重建。 */
+var TOWN_SHOP_LABEL_GROUP = null;
+
 function townShopLabels(g) {
-  (TOWN_SHOPS || []).forEach(function (s) {
-    if (!s || !s.name) { return; }
-    townFloatingLabel(g, s.name, s.served ? '堂食 · 可交易' : '可交易',
-      s.x, 3.75, s.z, s.served ? 'rgba(255,200,140,0.95)' : 'rgba(160,235,255,0.9)');
-  });
+  if (!TOWN_SHOP_LABEL_GROUP) {
+    TOWN_SHOP_LABEL_GROUP = new THREE.Group();
+    TOWN_SHOP_LABEL_GROUP.name = 'shopLabels';
+    g.add(TOWN_SHOP_LABEL_GROUP);
+  }
+  townShopLabelsRebuild();
+}
+
+function townShopLabelsRebuild() {
+  var grp = TOWN_SHOP_LABEL_GROUP;
+  if (!grp) { return; }
+  /* 清掉旧标签（只清商店这一类，别动传送点/其他飘字） */
+  for (var i = grp.children.length - 1; i >= 0; i--) { grp.remove(grp.children[i]); }
+  TOWN_LABELS = TOWN_LABELS.filter(function (L) { return !L.isShopLabel; });
+
+  var list = (typeof TOWN_OBJECTS_CACHE !== 'undefined' && TOWN_OBJECTS_CACHE) || [];
+  var cats = {};
+  var catList = (typeof MY_TOWN_CATALOG !== 'undefined' && MY_TOWN_CATALOG) || [];
+  for (var c = 0; c < catList.length; c++) {
+    if (catList[c]) { cats[catList[c].id] = catList[c]; }
+  }
+  for (var k = 0; k < list.length; k++) {
+    var o = list[k];
+    if (!o || o.parent) { continue; }
+    var cat = cats[o.catalog];
+    if (!cat || cat.category !== 'building') { continue; }
+    /* 只有真正能交互的商店才飘字（服务端 _rebuild_dyn_shops 会给 shop_x/shop_z） */
+    if (o.shop_x == null && o.shop_z == null) { continue; }
+    /* 目录名形如「药铺 v1」——飘字上去掉版本后缀 */
+    var nm = String(cat.name || o.catalog).replace(/\s+v\d+$/, '');
+    var sub = (String(cat.function_type || '').indexOf('eat') >= 0) ? '堂食 · 可交易' : '可交易';
+    /* 2026-10-22 用户要求：飘字高度提升 100%（3.75 → 7.5） */
+    townFloatingLabel(grp, nm, sub, +o.x, 7.50, +o.z,
+      sub.indexOf('堂食') >= 0 ? 'rgba(255,200,140,0.95)' : 'rgba(160,235,255,0.9)');
+    var last = TOWN_LABELS[TOWN_LABELS.length - 1];
+    if (last) { last.isShopLabel = true; last.objId = o.id; }
+  }
 }
 
 function townTeleportLabels(g) {

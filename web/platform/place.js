@@ -252,6 +252,11 @@
     } catch (e2) { return -1; }
   }
 
+  /* ★ 2026-10-22：物件增删改后重建店铺飘字（飘字跟着建筑走） */
+  function rebuildLabels() {
+    try { if (typeof townShopLabelsRebuild === 'function') { townShopLabelsRebuild(); } } catch (e) { }
+  }
+
   function placeAt(o) {
     var grp = ensureGroup();
     if (!grp) { return; }
@@ -1078,6 +1083,7 @@
     onObjects: function (list) {
       clearAll();
       (list || []).forEach(placeAt);
+      rebuildLabels();
     },
     stats: function () {
       var n = 0, legacy = 0;
@@ -1085,10 +1091,11 @@
       (W().MY_OBJECTS || []).forEach(function (o) { if (isLegacy(o)) { legacy++; } });
       return { rendered: n, legacySkipped: legacy };
     },
-    onPlaced: function (o) { if (o) { placeAt(o); } },
+    onPlaced: function (o) { if (o) { placeAt(o); rebuildLabels(); } },
     onMoved: function (o) {
       if (!o) { return; }
       placeAt(o);
+      rebuildLabels();
       if (EDIT.on && EDIT.id != null && String(EDIT.id) === String(o.id)) { editSelect(EDIT.id); }
     },
     /* 目录后到（towns 包）时重算一遍碰撞和地板 */
@@ -1234,6 +1241,7 @@
       } catch (eSweep) { }
       try { syncSolids(); } catch (eS1) { }
       try { syncFloors(); } catch (eS2) { }
+      rebuildLabels();
       if (EDIT.on && String(EDIT.id) === String(id)) { editSelect(null); }
     },
     /* 小镇被冻结/解散：把这块区域里的物件全部撤掉（服务端 towncleared） */
