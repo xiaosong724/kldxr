@@ -113,6 +113,24 @@ var TOWN_SEAT_SLOTS = {
   sofa_modern_2: [-0.48, 0.48],
   bed_double: [-0.55, 0.55]
 };
+/* ★ 2026-10-22（用户："椅子款式不一样，高度有高有低，按坐垫调整"）：
+   各款座椅的【坐垫顶面】高度（模型里的实际数值）——
+   人坐下时模型整体抬到这个高度，而不是统一 0.48。
+   木椅/大厅座椅/书桌椅：坐垫中心 0.535、厚 0.06 → 顶面 0.565
+   双人沙发：坐垫中心 0.54、厚 0.12 → 顶面 0.60 */
+var TOWN_SEAT_PAD = {
+  chair_wood: 0.565,
+  hall_chair: 0.565,
+  desk_chair: 0.565,
+  sofa_modern_2: 0.60,
+  bed_single: 0.53,
+  bed_double: 0.53,
+  bed_king: 0.53
+};
+function townPadOf(catalog, fallback) {
+  var v = TOWN_SEAT_PAD[catalog];
+  return (typeof v === 'number') ? v : (fallback == null ? 0.48 : fallback);
+}
 
 /* 从已放置的家具里找最近的椅子 */
 /* ★ 2026-10-22：目录 id → 中文名（编辑工具条、座椅提示都用它） */
@@ -146,6 +164,7 @@ function townSeatFromObjects(x, z) {
         id: 'obj' + o.id + (offs.length > 1 ? ('#' + k) : ''),
         x: sx, z: sz,
         y: 0.30, yaw: rot,
+        pad: townPadOf(o.catalog),     /* 坐垫顶面高度 */
         label: townObjName(o.catalog), placed: true
       };
     }
@@ -418,6 +437,7 @@ function townSeatById(id) {
         x: +o.x + off * Math.cos(rot),
         z: +o.z - off * Math.sin(rot),
         y: 0.30, yaw: rot,
+        pad: townPadOf(o.catalog),
         label: townObjName(o.catalog), placed: true
       };
     }

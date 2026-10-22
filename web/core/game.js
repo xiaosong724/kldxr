@@ -5804,7 +5804,9 @@ function wsApplyWorld(d) {
       fy: (typeof w.fy === 'number') ? w.fy : null,   // ★ 脚下高度（服务端广播）
       px: (typeof w.x === 'number') ? w.x : null,     // ★ 服务端坐标（坐/躺吸附用）
       pz: (typeof w.z === 'number') ? w.z : null,
-      pose: (typeof w.pose === 'string') ? w.pose : '',   // ★ '' 站 / 'sit' 坐 / 'sleep' 躺
+      pose: (typeof w.pose === 'string') ? w.pose : '',
+      ppad: (typeof w.ppad === 'number') ? w.ppad : 0.48,   // ★ '' 站 / 'sit' 坐 / 'sleep' 躺
+      ppad: (typeof w.ppad === 'number') ? w.ppad : 0.48,  // ★ 坐垫高度
       seat: (w.seat != null ? String(w.seat) : '-1'),
       sleep: !!w.sleep,                                        // ★ 他躺下了没有
       snapYaw: (typeof w.syaw === 'number') ? w.syaw : 0,
@@ -6494,6 +6496,7 @@ function addOther(w, t) {
       px: (typeof w.x === 'number') ? w.x : null,
       pz: (typeof w.z === 'number') ? w.z : null,
       pose: (typeof w.pose === 'string') ? w.pose : '',
+      ppad: (typeof w.ppad === 'number') ? w.ppad : 0.48,
       seat: (w.seat != null ? String(w.seat) : '-1'),   // ★ 他坐哪张椅子
       seated: (typeof w.seated === 'number') ? !!w.seated : (w.seat != null && String(w.seat) !== '-1'),
       sleep: !!w.sleep,                                   // ★ 他躺下了没有
@@ -7534,15 +7537,16 @@ function netUpdate(dt) {
         /* ★ 2026-10-22（用户：躺/坐的高度要和地板一样）：不再额外加高，
            直接站在"脚下地板高度"上（躺姿只沿朝向偏一点，保持躺在床上）。 */
         var _y3b = (typeof o.fy === 'number') ? o.fy : 0;
-        /* 坐/躺统一 0.48（和自己一致） */
-        _gs0.position.set(_pX + Math.sin(_sy3) * _so3, _y3b + 0.48,
+        /* 床垫顶面 0.53 */
+        _gs0.position.set(_pX + Math.sin(_sy3) * _so3, _y3b + 0.53,
                           _pZ + Math.cos(_sy3) * _so3);
         _gs0.rotation.set(-1.45, _sy3, 0);
         o.hh.legL.rotation.x = 0; o.hh.legR.rotation.x = 0;
       } else {
         var _y3c = (typeof o.fy === 'number') ? o.fy : 0;
-        /* 椅面 0.48（和自己坐姿同一份数值） */
-        _gs0.position.set(_pX, _y3c + 0.48, _pZ);
+        /* ★ 按这把他坐的那款椅子的坐垫高度 */
+        var _padR = (typeof o.ppad === 'number') ? o.ppad : 0.48;
+        _gs0.position.set(_pX, _y3c + _padR, _pZ);
         _gs0.rotation.set(0, o.cur.yaw || 0, 0);
         o.hh.legL.rotation.x = -1.35; o.hh.legR.rotation.x = -1.35;
         o.hh.armL.rotation.x = 0.15; o.hh.armR.rotation.x = 0.15;
@@ -9380,8 +9384,10 @@ function frame(ts) {
     P.x = +st.x; P.z = +st.z; P.yaw = +st.yaw;
     /* ★ 2026-10-22（用户：坐下的高度应该和地板一样）：以前这里减了 0.36 让人往下沉，
        现在和别人看到的一致 —— 直接用脚下地板高度。 */
-    /* 坐/躺统一 0.48 */
-    H.g.position.set(st.x, P.y + 0.48, st.z);
+    /* ★ 2026-10-22：按这把他坐的椅子的坐垫高度（木椅 0.565 / 沙发 0.60 …） */
+    var _padMine = (typeof st.pad === 'number') ? st.pad
+      : ((typeof townPadOf === 'function') ? townPadOf(st.k, 0.48) : 0.48);
+    H.g.position.set(st.x, P.y + _padMine, st.z);
     H.g.rotation.set(0, st.yaw, 0);
     H.legL.rotation.x = -1.34 * sk2;
     H.legR.rotation.x = -1.34 * sk2;
@@ -9400,8 +9406,8 @@ function frame(ts) {
     var _so = (typeof SLEEP_OFF !== 'undefined') ? SLEEP_OFF : 0.85;
     /* ★ 2026-10-22（用户：自己睡觉的高度变高了）：和"别人看你"保持一致 ——
        高度就是脚下地板高度（P.y 已经是 supportYAt 的结果），不再额外 +0.62。 */
-    /* 2026-10-22 用户定：坐和躺统一用 0.48 */
-    H.g.position.set(P.x + Math.sin(_sy) * _so, P.y + 0.48, P.z + Math.cos(_sy) * _so);
+    /* 床垫顶面 0.53 */
+    H.g.position.set(P.x + Math.sin(_sy) * _so, P.y + 0.53, P.z + Math.cos(_sy) * _so);
     /* ★ 欧拉顺序必须是 YXZ：先绕 Y 转向，再绕本地 X 躺下。
        用默认 XYZ 的话，Y 转 90/180 度后"躺"的方向就跟着歪了 → 头穿出床外。 */
     H.g.rotation.order = 'YXZ';
@@ -10152,7 +10158,7 @@ function frame(ts) {
         /* ★ 2026-10-22（用户：坐下高度不对）：这里原来写死 _gy - 0.06（沉到地面下），
            改成和服务端一致的"地板高度 + 坐高"。 */
         var _seatY = (typeof _fo.fy === 'number') ? _fo.fy : _gy;
-        _mg.position.set(_os.x, _seatY + 0.48, _os.z);
+        _mg.position.set(_os.x, _seatY + ((typeof _fo.ppad === 'number') ? _fo.ppad : 0.48), _os.z);
         _mg.rotation.set(0, _os.yaw, 0);
         if (_fo.hh) {
           _fo.hh.legL.rotation.x = -1.34;

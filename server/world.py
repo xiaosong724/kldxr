@@ -211,7 +211,7 @@ class Player(object):
                  'jy',
                  'seat', 'tpEnd', 'tpAt',
                  'sleepHouse', 'sleepAcc', 'sleepYaw',
-                 'running', 'runAcc', 'footY',
+                 'running', 'runAcc', 'footY', 'posePad',
                  'job', 'jobShop', 'jobT', 'jobAcc', 'qiAcc', 'qiLast', 'qiSync')
 
     def __init__(self, cid, role):
@@ -230,6 +230,7 @@ class Player(object):
         self.running = False
         self.runAcc = 0.0
         self.footY = float(role.get('y') or 0.0)
+        self.posePad = 0.48
         self.sleepAcc = 0.0
         self.job = ''
         self.jobShop = ''
@@ -1934,6 +1935,7 @@ class World(object):
                     'x': ox, 'z': oz,
                     'y': 0.30,
                     'yaw': rot,
+                    'pad': town.seat_pad_of(cat),
                     'k': cat, 'placed': True, 'slot': slot,
                 }
         return None
@@ -1961,6 +1963,10 @@ class World(object):
             p.footY = float(getattr(p, 'footY', 0.0) or 0.0)
         except Exception:
             p.footY = 0.0
+        try:
+            p.posePad = float(seat.get('pad') or 0.48)
+        except Exception:
+            p.posePad = 0.48
         p.yaw = float(seat.get('yaw') or seat.get('ry') or 0)
         p.jy = 0.0
         self._send_cid(p.cid, P.pack('seated', id=seat['idx'], x=sx, z=sz,
@@ -7286,6 +7292,8 @@ class World(object):
                 #   pose: '' 站 / 'sit' 坐 / 'sleep' 躺
                 'pose': ('sit' if str(getattr(o, 'seat', '-1')) != '-1'
                          else ('sleep' if getattr(o, 'sleepHouse', '') else '')),
+                # ★ 2026-10-22：坐垫高度（不同椅子不一样）
+                'ppad': round(float(getattr(o, 'posePad', 0.48) or 0.48), 3),
 
                 'job': getattr(o, 'job', ''),
                 'sk': str((o.role or {}).get('skin') or ''),

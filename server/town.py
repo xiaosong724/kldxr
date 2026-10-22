@@ -18,7 +18,21 @@ SPAWN = (-130.0, 143.0)
 GATE_HALF = 4.0
 WALL_T = 0.38
 SEAT_R = 1.9              # 靠近椅子多近能坐下
-SEAT_USE_R = 2.3          # 服务端校验坐下的最大距离
+SEAT_USE_R = 1.4
+# ★ 2026-10-22（用户："椅子款式不一样，按坐垫调整坐的高度"）：各款座椅的坐垫顶面
+SEAT_PAD = {
+    'chair_wood': 0.565,
+    'hall_chair': 0.565,
+    'desk_chair': 0.565,
+    'sofa_modern_2': 0.60,
+    'bed_single': 0.53,
+    'bed_double': 0.53,
+    'bed_king': 0.53,
+}
+
+
+def seat_pad_of(catalog, fallback=0.48):
+    return float(SEAT_PAD.get(str(catalog or ''), fallback))          # 服务端校验坐下的最大距离
 WAREHOUSE_COUNTER = (13.1, 17.0)
 WAREHOUSE_R = 2.8
 
