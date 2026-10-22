@@ -3608,6 +3608,11 @@ function townForestRing(g) {
 
 /* 电线：把相邻电线杆连起来（带一点下垂）*/
 function townPolesAndLights(g) {
+  /* ★ 2026-10-22（用户："以前的电线杆也没有移除，移除了，不过加到清单里去吧"）：
+     旧的电线杆是静态硬编码画的，现在全部关掉——
+     电线杆已经做成可放置物件「电线杆 (prop_pole)」，玩家自己摆。
+     回滚：URL 加 ?legacydeco=1 */
+  if (!_legacyDecoOn()) { return; }
   var poles = TOWN_DATA ? TOWN_DATA.poles : [];
   poles.forEach(function (p) { townPole(g, p.x, p.z); });
   for (var i = 0; i < poles.length; i++) {

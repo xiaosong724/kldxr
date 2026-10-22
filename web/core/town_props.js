@@ -459,6 +459,25 @@ function propPlanter(g, add) {
   tmPieceEnd(g, P);
 }
 
+/* ---------- 电线杆（2026-10-22：从旧静态镇搬进放置清单） ---------- */
+function propPole(g, add) {
+  var P = tmPiece(g, 'prop_pole', '电线杆');
+  /* 杆体 */
+  P.add(add(tmCyl(g, 0.15, 0.19, 6.0, 0x5c6067, 0, 3.0, 0, 8), 'pole'));
+  /* 变压器箱 */
+  P.add(add(tmBox(g, 0.30, 0.90, 0.16, 0x8b939b, 0, 1.10, 0), 'transformer'));
+  /* 三层横担 + 绝缘子 */
+  for (var i = 0; i < 3; i++) {
+    var cy = 5.1 - i * 0.42;
+    P.add(add(tmBox(g, 2.0, 0.07, 0.07, 0x3f454c, 0, cy, 0), 'arm_' + (i + 1)));
+    P.add(add(tmCyl(g, 0.07, 0.09, 0.16, 0x9aa0a4, -0.85, cy + 0.08, 0, 6), 'ins_a' + (i + 1)));
+    P.add(add(tmCyl(g, 0.07, 0.09, 0.16, 0x9aa0a4, 0.85, cy + 0.08, 0, 6), 'ins_b' + (i + 1)));
+  }
+  /* 接线盒 */
+  P.add(add(tmBox(g, 0.20, 0.55, 0.20, 0x3f454c, 0, 4.55, 0), 'junction'));
+  tmPieceEnd(g, P);
+}
+
 /* ---------- 红灯笼 ---------- */
 function propLantern(g, add) {
   var P = tmPiece(g, 'prop_lantern', '红灯笼');
@@ -512,7 +531,8 @@ function propBikeRack(g, add) {
     ['prop_coal', '煤堆', 1.0, 1.0, 0.45, '散煤块'],
     ['prop_planter', '花坛', 1.1, 0.65, 0.95, '石框 + 花'],
     ['prop_lantern', '红灯笼', 0.4, 0.4, 3.3, '灯笼杆'],
-    ['prop_bikerack', '自行车架', 1.7, 0.35, 0.6, '环形车架']
+    ['prop_bikerack', '自行车架', 1.7, 0.35, 0.6, '环形车架'],
+    ['prop_pole', '电线杆', 2.2, 0.6, 6.0, '电线杆：横担 + 绝缘子 + 变压器']
   ];
   defs.forEach(function (d) { propSpec(d[0], d[1], d[2], d[3], d[4], d[5]); });
 })();
@@ -556,6 +576,7 @@ function buildPropModel(spec) {
   else if (id === 'prop_planter') { propPlanter(g, add); }
   else if (id === 'prop_lantern') { propLantern(g, add); }
   else if (id === 'prop_bikerack') { propBikeRack(g, add); }
+  else if (id === 'prop_pole') { propPole(g, add); }
   tmCollectFurniture(g);
   return g;
 }
