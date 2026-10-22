@@ -141,7 +141,7 @@ async def main_async(token):
             await asyncio.sleep(0.6)
             out1 = await c.ev('return PlaceMode.buildingFade(%d);' % bid)
             print('  inside :', out1)
-            assert out1 and out1['transparent'] and out1['opacity'] <= 0.36, \
+            assert out1 and out1['transparent'] and out1['opacity'] <= 0.19, \
                 'building did not fade: %r' % (out1,)
 
             # 走出屋外

@@ -6993,7 +6993,9 @@ function trySit() {
   }, 1600);
   var pr = document.getElementById('sitPrompt');
   if (pr) { pr.textContent = '正在坐下…'; }
-  try { wsSend('sit', { id: SEAT_NEAR.idx }); } catch (eS) { toast('坐下失败'); }
+  /* ★ 2026-10-22：放置的家具椅子没有 idx（只有 id=obj<id>）→ 以前这里发出 id=undefined */
+  var _sid = (SEAT_NEAR.idx != null) ? SEAT_NEAR.idx : SEAT_NEAR.id;
+  try { wsSend('sit', { id: _sid }); } catch (eS) { toast('坐下失败'); }
 }
 function tryStand() {
   if (typeof WSC !== 'undefined' && !WSC.ready) { return; }

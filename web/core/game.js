@@ -9366,11 +9366,22 @@ function frame(ts) {
     if (typeof UI !== 'undefined' && UI.interactNear) { UI.interactNear(_cands); }
     if (typeof townRoofTick === 'function') { townRoofTick(P.x, P.z, CAM_VIEW === 'first'); }
     if (typeof townLabelTick === 'function') { townLabelTick(P.x, P.z); }
-    if (typeof UI !== 'undefined' && UI.warehouseFloat && typeof townIn === 'function' && townIn(P.x, P.z)) {
-      var _dc = Math.hypot(P.x - TOWN_COUNTER.x, P.z - TOWN_COUNTER.z);
-      if (_dc < 45) {
+    if (typeof UI !== 'undefined' && UI.warehouseFloat) {
+      /* ★ 2026-10-22：飘字挂在【仓库建筑对象】上（以前钉在旧柜台坐标 → 建筑挪走了它不动，
+         删掉了它还悬在那儿）。找不到仓库对象就不显示。 */
+      var _wa = null;
+      try {
+        var _wl = (typeof TOWN_OBJECTS_CACHE !== 'undefined' && TOWN_OBJECTS_CACHE) || [];
+        for (var _wi = 0; _wi < _wl.length; _wi++) {
+          var _wo = _wl[_wi];
+          if (_wo && !_wo.parent && _wo.catalog === 'shop_warehouse_v1') { _wa = _wo; break; }
+        }
+      } catch (eW0) { _wa = null; }
+      if (!_wa) {
+        UI.warehouseFloat(0, 0, 0, '');
+      } else if (Math.hypot(P.x - _wa.x, P.z - _wa.z) < 45) {
         if (!_townProjectV) { _townProjectV = new THREE.Vector3(); }
-        _townProjectV.set(TOWN_COUNTER.x, 3.9, TOWN_COUNTER.z).project(cam);
+        _townProjectV.set(_wa.x, 3.9, _wa.z).project(cam);
         if (_townProjectV.z < 1) {
           UI.warehouseFloat((_townProjectV.x * 0.5 + 0.5) * innerWidth,
             (-_townProjectV.y * 0.5 + 0.5) * innerHeight, 1,

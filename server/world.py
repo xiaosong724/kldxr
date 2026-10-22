@@ -1318,8 +1318,19 @@ class World(object):
             self._send_cid(p.cid, P.pack('house', ok=0, msg='NOT_YOURS'))
             return
         if h.get('placed'):
-            # 动态房屋：睡觉点 = 建筑中心附近，需在 6m 内
+            # ★ 2026-10-22：睡觉点改成【这张床的真实坐标】（以前写死建筑中心 +1m → 睡在床边地上）
             bx, bz = float(h['x']), float(h['z']) + 1.0
+            try:
+                oid = int(str(hid)[3:])
+                with dbmod.db(self.cfg) as c:
+                    bed = c.execute(
+                        "SELECT x,z FROM town_objects WHERE parent_id=? AND state='active'"
+                        " AND catalog_id IN ('bed_single','bed_double','bed_king')"
+                        " ORDER BY id LIMIT 1", (oid,)).fetchone()
+                if bed is not None:
+                    bx, bz = float(bed['x']), float(bed['z'])
+            except Exception as _be:
+                print('[sleep] bed lookup failed: %r' % (_be,))
             dx = p.x - float(h['x']); dz = p.z - float(h['z'])
             if (dx * dx + dz * dz) > 6.0 * 6.0:
                 self._send_cid(p.cid, P.pack('house', ok=0, msg='NOT_NEAR_BED'))

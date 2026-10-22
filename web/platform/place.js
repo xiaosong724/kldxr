@@ -225,7 +225,8 @@
           var u = m.material.userData || {};
           if (fade) {
             m.material.transparent = true;
-            m.material.opacity = Math.min(0.35, (u.baseOpacity == null ? 1 : u.baseOpacity));
+            /* 2026-10-22：0.35 还是看不清屋内 → 调到 0.18 */
+            m.material.opacity = Math.min(0.18, (u.baseOpacity == null ? 1 : u.baseOpacity));
             m.material.depthWrite = false;
           } else {
             m.material.transparent = !!u.baseTransparent;
@@ -453,6 +454,48 @@
       EDIT.box = null;
     }
   }
+  /* ★ 2026-10-22：删除用我们自己的确认框（不用浏览器 confirm） */
+  function editConfirmOpen() {
+    var e = P.objs[EDIT.id], o = e && e.data;
+    var nm = (o && o.catalog && typeof townObjName === 'function')
+      ? (townObjName(o.catalog) || '这个物件') : '这个物件';
+    var box = document.getElementById('editConfirm');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'editConfirm';
+      document.body.appendChild(box);
+    }
+    box.style.cssText =
+      'position:fixed;inset:0;z-index:70;display:flex;align-items:center;justify-content:center;' +
+      'background:rgba(4,6,9,.55)';
+    box.innerHTML =
+      '<div style="width:min(360px,88vw);border-radius:14px;background:#17110bee;' +
+      'border:1px solid #b98a42;box-shadow:0 16px 48px #000c;color:#f1e3c6;' +
+      'font:14px system-ui,Microsoft YaHei;overflow:hidden">' +
+      '<div style="padding:14px 16px 6px;font-weight:800;color:#ffe9b0">删除「' + nm + '」？</div>' +
+      '<div style="padding:0 16px 14px;font-size:12.5px;color:#b9ad96;line-height:1.7">' +
+      '删除后不能撤销，建筑自带的家具会一起删除，<b style="color:#ffb4a0">不退款</b>。</div>' +
+      '<div style="display:flex;gap:8px;padding:0 16px 16px">' +
+      '<button data-e="delno" style="flex:1;padding:10px;border-radius:9px;border:1px solid #ffffff2e;' +
+      'background:#2a2419;color:#e9e1cf;font:700 14px system-ui;cursor:pointer">取消</button>' +
+      '<button data-e="delok" style="flex:1;padding:10px;border-radius:9px;border:1px solid #ff9a8a;' +
+      'background:#6a2f2f;color:#ffd9d2;font:700 14px system-ui;cursor:pointer">删除</button>' +
+      '</div></div>';
+    box.style.display = 'flex';
+    if (!box._bound) {
+      box._bound = true;
+      box.addEventListener('click', function (e) {
+        var b = e.target.closest ? e.target.closest('button[data-e]') : null;
+        if (!b) { return; }
+        editAct(b.getAttribute('data-e'));
+      });
+    }
+  }
+  function editConfirmClose() {
+    var box = document.getElementById('editConfirm');
+    if (box) { box.style.display = 'none'; }
+  }
+
   function editHintText() {
     if (!EDIT.hint) { return; }
     var txt;
@@ -509,7 +552,9 @@
       return;
     }
     var e = P.objs[EDIT.id], o = e && e.data;
-    var nm = (o && (o.catalog || o.model)) || ('#' + EDIT.id);
+    var nm = (o && o.catalog && typeof townObjName === 'function')
+      ? (townObjName(o.catalog) || ('#' + EDIT.id))
+      : ((o && (o.catalog || o.model)) || ('#' + EDIT.id));
     if (EDIT.moving) {
       EDIT.bar.innerHTML = '<b style="color:#7ee08a">③ 点地面确定新位置</b>' +
         '<span style="color:#9aa3a8">左键/点一下地面 · Esc 取消</span>' +
@@ -548,11 +593,9 @@
       send('move_object', { id: EDIT.id, x: +e.data.x, z: +e.data.z, rot: nr });
       return;
     }
-    if (a === 'del') {
-      if (!confirm('删除这个物件？家具会一起删除，不退款。')) { return; }
-      send('remove_object', { id: EDIT.id });
-      editSelect(null);
-    }
+    if (a === 'del') { editConfirmOpen(); return; }
+    if (a === 'delok') { editConfirmClose(); send('remove_object', { id: EDIT.id }); editSelect(null); return; }
+    if (a === 'delno') { editConfirmClose(); return; }
   }
   /* 移动预览：克隆一份半透明模型，原物件先隐藏 */
   function editMoveGhostStart() {

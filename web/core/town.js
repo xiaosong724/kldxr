@@ -83,8 +83,16 @@ function townIn(x, z) {
   return Math.abs(x) <= TOWN_HALF && Math.abs(z) <= TOWN_HALF;
 }
 function townNearWarehouse(x, z) {
-  if (!townIn(x, z)) { return false; }
-  var dx = x - TOWN_COUNTER.x, dz = z - TOWN_COUNTER.z;
+  /* ★ 2026-10-22：仓库是放置建筑，可能被挪走 → 以对象坐标为锚点 */
+  var ax = TOWN_COUNTER.x, az = TOWN_COUNTER.z;
+  try {
+    var l = (typeof TOWN_OBJECTS_CACHE !== 'undefined' && TOWN_OBJECTS_CACHE) || [];
+    for (var i = 0; i < l.length; i++) {
+      var o = l[i];
+      if (o && !o.parent && o.catalog === 'shop_warehouse_v1') { ax = +o.x; az = +o.z; break; }
+    }
+  } catch (e) { }
+  var dx = x - ax, dz = z - az;
   return dx * dx + dz * dz <= TOWN_NEAR_R * TOWN_NEAR_R;
 }
 /* 离玩家最近的椅子（交互按钮会变成“坐下”）*/
@@ -102,6 +110,17 @@ var TOWN_SEAT_CATALOG = {
 };
 
 /* 从已放置的家具里找最近的椅子 */
+/* ★ 2026-10-22：目录 id → 中文名（编辑工具条、座椅提示都用它） */
+function townObjName(cid) {
+  try {
+    var cats = (typeof MY_TOWN_CATALOG !== 'undefined' && MY_TOWN_CATALOG) || [];
+    for (var i = 0; i < cats.length; i++) {
+      if (cats[i] && cats[i].id === cid) { return cats[i].name || cid; }
+    }
+  } catch (e) { }
+  return cid || '';
+}
+
 function townSeatFromObjects(x, z) {
   var best = null, bd = 1.9 * 1.9;
   var list = (typeof TOWN_OBJECTS_CACHE !== 'undefined' && TOWN_OBJECTS_CACHE) || [];
@@ -115,7 +134,7 @@ function townSeatFromObjects(x, z) {
     best = {
       id: 'obj' + o.id, x: +o.x, z: +o.z,
       y: 0.30, yaw: +(o.rot || 0) + Math.PI,
-      label: o.catalog, placed: true
+      label: townObjName(o.catalog), placed: true
     };
   }
   return best;
