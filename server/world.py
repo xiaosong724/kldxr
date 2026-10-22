@@ -212,7 +212,9 @@ class Player(object):
                  'seat', 'tpEnd', 'tpAt',
                  'sleepHouse', 'sleepAcc', 'sleepYaw',
                  'running', 'runAcc', 'footY', 'posePad',
-                 'job', 'jobShop', 'jobT', 'jobAcc', 'qiAcc', 'qiLast', 'qiSync')
+                 'job', 'jobShop', 'jobT', 'jobAcc', 'qiAcc', 'qiLast', 'qiSync',
+                 # ★ 2026-10-22：主动技能（冷却 / 护盾 / 增益）
+                 'skCd', 'shieldAmt', 'shieldT', 'skBuff')
 
     def __init__(self, cid, role):
         self.cid = cid
@@ -223,6 +225,11 @@ class Player(object):
         self.gold = int(role.get('gold') or 0)
         self.goldDirty = False
         self.seat = -1
+        # ★ 2026-10-22：技能状态（冷却到点时刻 / 护盾量 / 增益到期时刻）
+        self.skCd = {}
+        self.shieldAmt = 0
+        self.shieldT = 0.0
+        self.skBuff = {}
         self.tpEnd = 0.0
         self.tpAt = 0.0
         self.sleepHouse = ''
@@ -1193,6 +1200,230 @@ class World(object):
                        'ON CONFLICT(role_id, stat) DO UPDATE SET points=excluded.points',
                        (p.role_id, stat, cur))
         self._tal_send(p)
+
+    # ---------------- 主动技能释放（2026-10-22） ----------------
+    #   ★ 之前【服务端完全没有这个 intent】：客户端一直在发 skillcast，
+    #     包被白名单挡掉 → 技能看着一个都放不出来。
+    #   这里按 skills.SKILLS 的 dmg/radius/range/dur 逐个实现：
+    #     · 伤害类：范围结算（走和普攻一样的 roll_damage / mhits / 掉落结算）
+    #     · 控制类：冰冻 freezeT / 减速 slowT / 黑洞拉拽
+    #     · 增益类：血怒（攻击 +40%）/ 疾风步（闪避 +30）/ 灵能护盾（吸收伤害）
+    def _sk_ready(self, p, key, now):
+        """检查学会/装配/冷却/灵气。返回 (skill, err)"""
+        import skills as skm
+        # ★ 注意：skills.of(kind) 是「按类型返回列表」✗ 不是按 key 查
+        #   （第一版写成 of(key) → 永远拿到 None → 一直报"没有这个技能"）
+        sk = skm.BY_KEY.get(key)
+        if not sk:
+            return None, '没有这个技能'
+        if str(sk.get('kind')) != 'A':
+            return None, '只有主动技能能释放'
+        role = (getattr(p, 'role', {}) or {})
+        le = role.get('skLe')
+        ld = role.get('skLd')
+        if isinstance(le, list) and key not in le:
+            return None, '还没学会这个技能'
+        if isinstance(ld, list) and ld and key not in ld:
+            return None, '这个技能还没装配'
+        cds = getattr(p, 'skCd', None)
+        if cds is None:
+            cds = {}
+            p.skCd = cds
+        left = float(cds.get(key) or 0.0) - now
+        if left > 0:
+            return None, '冷却中（%.1f 秒）' % left
+        cost = int(sk.get('qi') or 0)
+        if cost > 0 and int(getattr(p, 'qi', 0) or 0) < cost:
+            return None, '灵气不够（要 %d）' % cost
+        return sk, ''
+
+    def _sk_target(self, p, sk, d):
+        """算落点：客户端给了就夹到 range 内；没给就自动找最近的怪"""
+        cast = str(sk.get('cast') or '')
+        if cast == 'self':
+            return float(p.x), float(p.z)
+        rng = float(sk.get('range') or 0.0)
+        tx = tz = None
+        try:
+            if (d or {}).get('x') is not None:
+                tx = float(d.get('x'))
+                tz = float(d.get('z'))
+        except Exception:
+            tx = tz = None
+        if tx is None or tz is None or rng <= 0:
+            best = None
+            bd = (rng if rng > 0 else 15.0) ** 2
+            for m in self.mobs.values():
+                if m.hp <= 0:
+                    continue
+                d2 = (m.x - p.x) ** 2 + (m.z - p.z) ** 2
+                if d2 <= bd:
+                    bd = d2
+                    best = m
+            if best is not None:
+                return best.x, best.z
+            return (p.x + math.sin(p.yaw) * 3.0, p.z + math.cos(p.yaw) * 3.0)
+        if rng > 0:
+            dx, dz = tx - p.x, tz - p.z
+            dist = math.hypot(dx, dz)
+            if dist > rng and dist > 1e-6:
+                tx = p.x + dx / dist * rng
+                tz = p.z + dz / dist * rng
+        return tx, tz
+
+    def _sk_hit_mobs(self, p, sk, tx, tz, mult=1.0, rounds=1):
+        """对落点半径内的怪结算伤害（和普攻同一套飘字/掉落）"""
+        radius = float(sk.get('radius') or 0.0)
+        if radius <= 0:
+            return 0
+        mul = float(sk.get('dmg') or 0.0) * mult
+        if mul <= 0:
+            return 0
+        eff = getattr(p, 'talEff', {}) or {}
+        crit_pt = float(eff.get('crit') or 0.0)
+        crit_dmg = float(eff.get('critdmg') or 0.0)
+        atk = float(self._atk_of(p)) * mul
+        r2 = radius * radius
+        targets = [m for m in list(self.mobs.values())
+                   if m.hp > 0 and ((m.x - tx) ** 2 + (m.z - tz) ** 2) <= r2]
+        if not targets:
+            return 0
+        hit_n = 0
+        for m in targets:
+            for _ in range(max(1, int(rounds))):
+                if m.hp <= 0:
+                    break
+                dv, crit = mobs.roll_damage(atk, crit_pt=crit_pt, crit_dmg=crit_dmg)
+                dv = max(1, int(round(dv)))
+                m.hp -= dv
+                hit_n += 1
+                self._add_pend(p.cid, 'mhits', {'mid': m.mid, 'dmg': dv,
+                                                'crit': bool(crit), 'block': False,
+                                                'back': False, 'heal': 0,
+                                                'x': round(m.x, 2), 'z': round(m.z, 2)})
+                self._fx_broadcast(p, {'kind': 'dmg', 'v': int(dv),
+                                       'crit': 1 if crit else 0,
+                                       'x': round(m.x, 2), 'z': round(m.z, 2),
+                                       '_skip': p.cid})
+                if m.hp <= 0:
+                    m.hp = 0
+                    self._mob_died(p, m)
+        return hit_n
+
+    def _intent_skillcast(self, p, d):
+        now = time.time()
+        key = str((d or {}).get('key') or '')
+        sk, err = self._sk_ready(p, key, now)
+        if not sk:
+            self._send_cid(p.cid, P.pack('skillerr', msg=err))
+            return
+        # 扣灵气 + 起冷却
+        cost = int(sk.get('qi') or 0)
+        if cost > 0:
+            p.qi = max(0, int(p.qi or 0) - cost)
+            self._send_cid(p.cid, P.pack('qi', q=int(p.qi)))
+        cd = float(sk.get('cd') or 0.0)
+        if cd > 0:
+            p.skCd[key] = now + cd
+        cds_now = dict((k, round(max(0.0, v - now), 1))
+                       for k, v in (p.skCd or {}).items() if v > now)
+        self._send_cid(p.cid, P.pack('skillcd', cd=cds_now))
+
+        tx, tz = self._sk_target(p, sk, d)
+        vfx = str(sk.get('vfx') or '')
+        dur = float(sk.get('dur') or 0.0)
+        # 特效广播（自己 + 附近）
+        if vfx:
+            try:
+                fx = P.pack('skillfx', k=vfx, x=round(tx, 2), z=round(tz, 2),
+                            yaw=round(float(p.yaw), 3), by=int(getattr(p, 'role_id', 0) or 0))
+                for q in list(self.players.values()):
+                    if q is p or ((q.x - tx) ** 2 + (q.z - tz) ** 2) <= 70 * 70:
+                        self._send_cid(q.cid, fx)
+            except Exception as _fxe:
+                print('[skill] fx failed: %r' % (_fxe,))
+
+        # ---- 各技能的实际效果 ----
+        hits = 0
+        if key == 'swordrain':
+            hits = self._sk_hit_mobs(p, sk, tx, tz, rounds=3)     # 12 把折算 3 轮
+        elif key == 'thunder':
+            hits = self._sk_hit_mobs(p, sk, tx, tz, rounds=2)     # 5 道折算
+        elif key in ('blackhole',):
+            hits = self._sk_hit_mobs(p, sk, tx, tz)
+            # 吸：把范围内的怪拉向中心
+            try:
+                r2 = float(sk.get('radius') or 0) ** 2
+                for m in self.mobs.values():
+                    if m.hp <= 0:
+                        continue
+                    if ((m.x - tx) ** 2 + (m.z - tz) ** 2) <= r2:
+                        m.x += (tx - m.x) * 0.55
+                        m.z += (tz - m.z) * 0.55
+            except Exception:
+                pass
+        elif key == 'icefield':
+            hits = self._sk_hit_mobs(p, sk, tx, tz)
+            try:
+                r2 = float(sk.get('radius') or 0) ** 2
+                for m in self.mobs.values():
+                    if m.hp <= 0:
+                        continue
+                    if ((m.x - tx) ** 2 + (m.z - tz) ** 2) <= r2 and random.random() < 0.5:
+                        m.freezeT = max(float(getattr(m, 'freezeT', 0) or 0), 5.0)
+            except Exception:
+                pass
+        elif key == 'timestop':
+            hits = self._sk_hit_mobs(p, sk, tx, tz)
+            try:
+                r2 = float(sk.get('radius') or 0) ** 2
+                for m in self.mobs.values():
+                    if m.hp <= 0:
+                        continue
+                    if ((m.x - tx) ** 2 + (m.z - tz) ** 2) <= r2:
+                        m.slowT = max(float(getattr(m, 'slowT', 0) or 0), float(dur or 6.0))
+                        m.slowMul = 0.3
+            except Exception:
+                pass
+        elif key == 'earthsplit':
+            hits = self._sk_hit_mobs(p, sk, tx, tz)
+            try:
+                r2 = float(sk.get('radius') or 0) ** 2
+                for m in self.mobs.values():
+                    if m.hp <= 0:
+                        continue
+                    if ((m.x - tx) ** 2 + (m.z - tz) ** 2) <= r2:
+                        m.bleedT = 5.0
+                        m.bleedDmg = max(1.0, float(getattr(m, 'mhp', 1) or 1) * 0.05)
+                        m.bleedFrom = p
+            except Exception:
+                pass
+        elif key == 'bloodslash':
+            hits = self._sk_hit_mobs(p, sk, tx, tz)
+            try:
+                hpm = self._hp_max(p)
+                heal = max(1, int(round(float(hits) * float(self._atk_of(p)) *
+                                        float(sk.get('dmg') or 0) * 0.5 / max(1, hits))))
+                p.hp = min(hpm, int(p.hp) + heal)
+                self._add_pend(p.cid, 'fx', {'kind': 'pexp', 'n': heal})
+            except Exception:
+                pass
+        else:
+            hits = self._sk_hit_mobs(p, sk, tx, tz)
+
+        # ---- 自身增益 ----
+        try:
+            if key == 'bloodrage':
+                p.skBuff['atk'] = now + float(dur or 15.0)
+            elif key == 'gale':
+                p.skBuff['dodge'] = now + float(dur or 20.0)
+            elif key == 'shield':
+                p.shieldAmt = int(round(float(self._atk_of(p)) * 5.0))
+                p.shieldT = now + float(dur or 30.0)
+        except Exception as _be:
+            print('[skill] buff failed: %r' % (_be,))
+        if hits:
+            self._send_cid(p.cid, P.pack('notice', text='%s 命中 %d 次' % (sk.get('name') or key, hits)))
 
     def _intent_mobcap(self, p, d):
         """玩家自己调「周围刷多少只」（1~100）
@@ -3358,6 +3589,7 @@ class World(object):
                # ★ 2026-10-22：换皮肤 / 保存自定义以前【不在白名单】→ 包直接被丢掉，
                #   表现就是"点了换肤没反应""别人看不到我的自定义"。
                'run', 'skinask', 'setskin', 'customset', 'statask', 'mobcap',
+               'skillcast',
                'warehouse_open', 'warehouse_move', 'warehouse_move_many',
                'shop_open', 'shop_buy', 'usefood', 'fridge_open', 'order_open',
                'order_buy', 'cup_take', 'work_start', 'work_stop', 'jobstep', 'jobdone',
@@ -6337,6 +6569,15 @@ class World(object):
         #   （意图写在武器文案里 ✓ 玩家看得到才不冤 ✓）
         # ★★ 第 67 轮：防具在这里生效（闪避 → 固定减伤 → 受击回灵气 ✓）
         _st = armormod.stats_of(p.armor)
+        # ★ 2026-10-22：疾风步（主动技能）期间闪避 +30%
+        try:
+            _buf2 = getattr(p, 'skBuff', {}) or {}
+            if float(_buf2.get('dodge') or 0) > time.time():
+                if random.random() < 0.30:
+                    self._send_cid(p.cid, P.pack('fx', kind='dodge'))
+                    return
+        except Exception:
+            pass
         if _st['dodge'] > 0 and random.random() < (_st['dodge'] / 100.0):
             # 闪开了：这一口完全没打到 ✓ 但也不回灵气（没被打到 ✓）
             self._send_cid(p.cid, P.pack('fx', kind='dodge'))
@@ -6391,6 +6632,22 @@ class World(object):
         #     不依赖中间任何一步 → 不会再出现"插错位置"✗
         dv = max(dv, max(1, int(round(_dv0 * DMG_FLOOR))))
         self._tp_break(p)      # 第 173 轮（用户 #6）：受伤打断传送读条
+        # ★ 2026-10-22：灵能护盾（主动技能）先吃伤害，吃完碎掉
+        try:
+            if int(getattr(p, 'shieldAmt', 0) or 0) > 0 and \
+               float(getattr(p, 'shieldT', 0) or 0) > time.time():
+                _absorb = min(int(p.shieldAmt), int(dv))
+                p.shieldAmt = int(p.shieldAmt) - _absorb
+                dv = max(0, int(dv) - _absorb)
+                self._send_cid(p.cid, P.pack('fx', kind='shield',
+                                             v=int(p.shieldAmt)))
+                if p.shieldAmt <= 0:
+                    p.shieldT = 0.0
+                    self._send_cid(p.cid, P.pack('fx', kind='shieldbreak'))
+                if dv <= 0:
+                    return
+        except Exception:
+            pass
         _was_alive = int(p.hp) > 0                      # ★ 第 166 轮：记下“刚才还活着”✓
         p.hp = max(0, int(p.hp) - dv)
         self._add_pend(p.cid, 'hurts', {'dmg': dv, 'x': round(m.x, 2), 'z': round(m.z, 2),
@@ -6697,6 +6954,13 @@ class World(object):
                                        flat=(weapons.flat_full(w) +
                                              float((p.talRaw or {}).get('atk') or 0.0)),
                                        aff_w=w)                      # ★ 第 60 轮：词条 ✓
+        # ★ 2026-10-22：血怒（主动技能）15 秒内攻击 +40%
+        try:
+            _buf = getattr(p, 'skBuff', {}) or {}
+            if float(_buf.get('atk') or 0) > time.time():
+                _atk0 *= 1.4
+        except Exception:
+            pass
         # ★ 注意是 p.mq ✗ 不是 self.mq ✓（self 是 World ✓ 玩家是 p ✓ 我第一版写成 self ✗ 已修 ✓）
         return _atk0 * (1.0 + mqmod.dmg_bonus_pct(p.mq) / 100.0)
 

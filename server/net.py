@@ -229,6 +229,13 @@ class Net(object):
                         s2 = int(r['slot'] or 0)
                         if k2 in load and 0 <= s2 < skm.LIMIT_LOAD:
                             load[k2][s2] = r['key']
+                # ★ 2026-10-22：把「已学 A 技能 / 已装配 A 技能」缓存进 role 字典，
+                #   tick 线程释放技能时只读内存（tick 不许碰磁盘）
+                try:
+                    role['skLe'] = list(learn.keys())
+                    role['skLd'] = [k for k in (load.get('A') or []) if k]
+                except Exception:
+                    pass
                 conn.push_text(P.pack('skillok', defs=skm.to_client(), learn=learn,
                                       load=load, err=msg))
 
@@ -915,6 +922,20 @@ class Net(object):
             role['skcMap'] = _cmap
         except Exception as _ce:
             print('[skin] 读自定义失败: %r' % (_ce,))
+        # ★ 2026-10-22：进世界就把「已学 / 已装配」的 A 技能缓存进内存
+        #   （技能释放要在 tick 线程做，而 tick 不许读库）
+        try:
+            import skills as _skm0
+            with dbmod.db(self.cfg) as _c0:
+                _le = [r['key'] for r in _c0.execute(
+                    'SELECT key FROM skill_learn WHERE role_id=?', (int(role.get('id') or 0),))]
+                _ld = [r['key'] for r in _c0.execute(
+                    'SELECT key FROM skill_load WHERE role_id=? AND kind=? ORDER BY slot',
+                    (int(role.get('id') or 0), 'A'))]
+            role['skLe'] = _le
+            role['skLd'] = _ld
+        except Exception as _ske:
+            print('[skill] 读已学技能失败: %r' % (_ske,))
         try:
             import town as _tw
             if abs(float(role.get('x') or 0)) < 1 and abs(float(role.get('z') or 0)) < 1:
