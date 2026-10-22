@@ -93,6 +93,16 @@
 
   /* build one object mesh from the shared model kit */
   function buildMesh(o) {
+    /* ★★★ 2026-10-22（用户："放置清单里很多东西没有模型"）★★★
+       `prop_*`（树/路灯/长椅/售货机/木桶/摊位…）在 town_props.js 里
+       【全都有精细模型】，只是从来没被路由过来 —— 一直被画成方块。
+       这里优先走 PROP_SPECS + buildPropModel()。 */
+    try {
+      if (typeof PROP_SPECS !== 'undefined' && PROP_SPECS[o.catalog] &&
+          typeof buildPropModel === 'function') {
+        return batchModel(buildPropModel(PROP_SPECS[o.catalog]));
+      }
+    } catch (eProp) { }
     var spec = TOWN_MODELS[o.model || o.catalog];
     if (!spec && typeof tmFurnitureModelFor === 'function') {
       spec = tmFurnitureModelFor(o.catalog);
