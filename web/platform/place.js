@@ -425,6 +425,9 @@
     P.sel = item;
     P.placing = true;
     P.rot = 0;
+    /* ★ 2026-10-22：操作栏【最先】建出来 —— 后面任何一步出错或提前 return，
+       用户也一定看得到「确认放置 / 取消」，不会出现"退不出去"的情况。 */
+    try { placeBarRender(); } catch (eBar0) { console.warn('placeBar0', eBar0); }
     var grp = ensureGroup();
     if (!grp) { return; }
     if (P.ghost) { grp.remove(P.ghost); P.ghost = null; }
@@ -441,7 +444,7 @@
     P.ghost = makeGhost(spec);
     grp.add(P.ghost);
     try { padRender(); } catch (ePad3) { }
-    try { placeBarRender(); } catch (eBar) { }
+    try { placeBarRender(); } catch (eBar) { console.warn('placeBar', eBar); }
     /* ★ 立即放在玩家面前（不用等鼠标动就能看到预览） */
     var gy = 0;
     try { gy = (typeof P !== 'undefined' && P.y) ? 0 : 0; } catch (e) { }
@@ -455,7 +458,7 @@
     if (P.ghost && P.ghost.parent) { P.ghost.parent.remove(P.ghost); }
     P.ghost = null;
     try { padRender(); } catch (ePad4) { }
-    try { placeBarRender(); } catch (eBar2) { }
+    try { placeBarRender(); } catch (eBar2) { console.warn('placeBar2', eBar2); }
   }
 
   function updateGhost(x, z) {
@@ -567,15 +570,19 @@
       var p = groundPoint(e.clientX, e.clientY);
       if (p) { updateGhost(p.x, p.z); }
     });
+    /* ★★★ 2026-10-22（用户："点取消还是会放置" + "把点击放置取消掉，只用确认键"）★★★
+       病根：这个监听在【捕获阶段】跑，之前只排除了目录面板和方向键，
+       没排除刚加的 #placeBar → 点「取消」时先执行取消，捕获阶段又拿这一下的
+       坐标去确认放置了（所以"取消"变成了"放在点击的位置"）。
+       现在：① 只认 UI 上的确认按钮；② 点地面只挪预览，不落地。 */
     addEventListener('pointerdown', function (e) {
       if (!P.placing) { return; }
       if (panel && panel.contains(e.target)) { return; }
       if (PAD.el && PAD.el.contains(e.target)) { return; }
+      if (PLACEBAR.el && PLACEBAR.el.contains(e.target)) { return; }
+      /* 只移动预览，不再"点一下就放" —— 避免任意误触 */
       var p = groundPoint(e.clientX, e.clientY);
-      if (p) {
-        updateGhost(p.x, p.z);          /* 先让预览跳到落点，再确认 */
-        if (confirmPlace(p.x, p.z)) { e.stopPropagation(); }
-      }
+      if (p) { updateGhost(p.x, p.z); }
     }, true);
   }
 
@@ -639,10 +646,17 @@
     if (!box._bound) {
       box._bound = true;
       box.addEventListener('click', function (e) {
+        e.stopPropagation();
         var b = e.target.closest ? e.target.closest('button[data-e]') : null;
-        if (!b) { return; }
-        editAct(b.getAttribute('data-e'));
+        if (b) { editAct(b.getAttribute('data-e')); return; }
+        /* ★ 2026-10-22（用户："点删除没反应，而且也不能关闭"）：
+           点按钮以外的空白处 = 取消，任何情况下都关得掉。 */
+        editConfirmClose();
       });
+      /* 捕获阶段也拦住，别让这一下冒到场景（会被当成"取消选中"或"点地面"） */
+      box.addEventListener('pointerdown', function (e) {
+        e.stopPropagation();
+      }, { capture: true });
     }
   }
   function editConfirmClose() {
@@ -925,6 +939,9 @@
   addEventListener('keydown', function (e) {
     if (!EDIT.on) { return; }
     if (e.key === 'Escape') {
+      /* ★ 2026-10-22：确认框开着时，Esc 先关确认框（不然"关不掉"） */
+      var _cb = document.getElementById('editConfirm');
+      if (_cb && _cb.style.display !== 'none') { editConfirmClose(); return; }
       if (EDIT.moving) { EDIT.moving = false; editMoveGhostStop(true); editBarRender(); }
       else { editExit(); }
     }
@@ -1120,6 +1137,8 @@
       syncFloors();
     },
     isPlacing: function () { return P.placing; },
+    startPlace: function (item) { startPlace(item); },
+    stopPlace: function () { stopPlace(); },
     debugEdit: function () { return { on: EDIT.on, id: EDIT.id, moving: EDIT.moving }; }
   };
 
