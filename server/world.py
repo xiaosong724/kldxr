@@ -1722,6 +1722,23 @@ class World(object):
                                      order=oid, msg='ORDER_OK',
                                      table=self._table_public(table)))
         self._send_cid(p.cid, P.pack('notice', text='点好了，传菜员马上送到桌上'))
+        # 传菜员：从出餐口走到桌边（2.5s，和 due_at 对齐）；客户端按这条路径播动画
+        try:
+            path = [[round(float(s['x']), 2), round(float(s['z']), 2)],
+                    [round(float(table['x']), 2), round(float(table['z']), 2)]]
+            wid = tblmod.new_id('wt')
+            self.post_save(
+                'INSERT INTO waiter_tasks(id,shop_id,order_id,table_obj,path_json,state,'
+                'created_at,done_at) VALUES(?,?,?,?,?,?,?,0)',
+                (wid, str(s['id']), oid, int(table['obj']), json.dumps(path),
+                 'walking', now))
+            wmsg = P.pack('waiter', id=wid, shop=str(s['id']), table=table['id'],
+                          path=path, secs=2.5)
+            for q in list(self.players.values()):
+                if (q.x - table['x']) ** 2 + (q.z - table['z']) ** 2 <= 14.0 * 14.0:
+                    self._send_cid(q.cid, wmsg)
+        except Exception as _we:
+            print('[order] waiter task failed: %r' % (_we,))
 
     def _order_bag_legacy(self, p, s, item, key):
         """没有家具桌位的老店：付款后直接进背包（旧行为，保持兼容）"""
@@ -1955,6 +1972,11 @@ class World(object):
                     }
                     for ch in chairs:
                         seat_table[ch['id']] = key
+            # 老主城露台：桌子是旧渲染器画的，没有 town_objects 记录
+            for st in tblmod.static_tables():
+                tables[st['id']] = st
+                for ch in st['chairs']:
+                    seat_table[ch['id']] = st['id']
         except Exception as _e:
             print('[shop] rebuild failed: %r' % (_e,))
         self.dyn_shops = out
@@ -2006,8 +2028,19 @@ class World(object):
                                                 sum(len(v) for v in self.cups.values())))
 
     def _table_of_seat(self, sid):
-        """玩家坐的椅子属于哪张桌子 → table dict / None"""
+        """玩家坐的椅子属于哪张桌子 → table dict / None
+
+        静态椅子坐上去以后 p.seat 存的是数字序号（4），不是 'cafe_w1'，
+        所以这里要再按序号反查一次真 id，不然老主城的露台桌永远认不出来。
+        """
         key = self.seat_table.get(str(sid))
+        if not key:
+            try:
+                st = town.seat_by_id(sid)
+                if st:
+                    key = self.seat_table.get(str(st.get('id') or ''))
+            except Exception:
+                key = None
         if not key:
             return None
         return self.shop_tables.get(key)
@@ -2045,6 +2078,8 @@ class World(object):
             self.post_save("UPDATE table_orders SET state='served', served_at=? WHERE id=?",
                            (now, oid))
             self.post_save("UPDATE table_cups SET state='served' WHERE order_id=?", (oid,))
+            self.post_save("UPDATE waiter_tasks SET state='done', done_at=? WHERE order_id=?",
+                           (now, oid))
             done.append((o, table))
         for o, table in done:
             if not table:

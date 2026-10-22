@@ -3172,10 +3172,37 @@ function townLabelTick(px, pz) {
 }
 
 /* ============================ NPC ============================ */
+/* ★ 2026-10-22（用户："NPC 没有用玩家的模型，参考 AI 分身"）
+   直接复用玩家的 hero() 构建器：和本体/分身同一套身材、同一套皮肤。
+   名字决定用哪套皮肤（同一个 NPC 每次进游戏都一样 ✓）。
+   不挂武器（店员/路人拿剑很奇怪 ✗）。*/
+function townNpcHero(n) {
+  try {
+    if (typeof hero !== 'function') { return null; }
+    var order = (typeof SKIN_ORDER !== 'undefined' && SKIN_ORDER.length) ? SKIN_ORDER : ['f01'];
+    var nm = String(n.name || n.id || '');
+    var hsh = 0;
+    for (var i = 0; i < nm.length; i++) { hsh = (hsh * 31 + nm.charCodeAt(i)) | 0; }
+    var r = hero(order[Math.abs(hsh) % order.length], {});
+    if (!r || !r.g) { return null; }
+    if (r.sw) { r.sw.visible = false; }
+    if (r.swL) { r.swL.visible = false; }
+    var g = r.g;
+    g.position.set(+n.x, 0.1, +n.z);
+    g.rotation.y = +n.ry || 0;
+    if (typeof G !== 'undefined' && G.HERO_SCALE) {
+      g.scale.set(G.HERO_SCALE, G.HERO_SCALE, G.HERO_SCALE);
+    }
+    return g;
+  } catch (e) { return null; }
+}
+
 function townNpc(g, n) {
   var x = +n.x, z = +n.z, ry = +n.ry || 0;
   var kind = n.kind || 'walker';
   if (kind === 'clerk' || kind === 'walker') {
+    var hp = townNpcHero(n);
+    if (hp) { g.add(hp); return; }
     g.add(townNpcModel(n));
     return;
   }

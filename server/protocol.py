@@ -516,6 +516,10 @@ C2S = {
         'req': ['table'], 'opt': [],
         'doc': '一张桌子的当前杯位（上菜后广播给附近的人）',
     },
+    'waiter': {
+        'req': ['id', 'path'], 'opt': ['shop', 'table', 'secs'],
+        'doc': '传菜员出餐：path=[[x,z],...] 世界坐标，secs=走完全程的秒数',
+    },
     'work': {
         'req': [], 'opt': ['ok', 'msg', 'id', 'slot', 'on'],
         'doc': '打工开始/结束',

@@ -18,6 +18,8 @@
    验收闸门：python tools\check_core_dom.py
    ============================================================================ */
 
+/* 已放置对象缓存（core/town.js 读取，避免 core 碰 window） */
+var TOWN_OBJECTS_CACHE = [];
 var UI = {
   /* ---- 画布与窗口 ---- */
   mainCanvas: function () { return document.getElementById('cv'); },
@@ -33,6 +35,12 @@ var UI = {
 
   /* ---- 元素 ---- */
   el: function (id) { return document.getElementById(id); },
+  /* ★ round426：性能面板（core 每 30 帧调一次 ✓ 只有开了才执行 ✓）*/
+  perfBar: function (st) { return perfBar(st); },
+  /* ★ round437：挂机击杀数（临时显示 ✗ 关了就隐藏 ✓）*/
+  autoStat: function (on, kills, secs) { return autoStatShow(on, kills, secs); },
+  /* ★ round437：屏幕白闪（升级特效用 ✓）*/
+  flashWhite: function (secs, color) { return flashWhite(secs, color); },
   text: function (id, s) {
     var e = document.getElementById(id);
     if (e) { e.textContent = s; }
@@ -71,12 +79,190 @@ var UI = {
 /* ---- 名牌（头顶 UI）----
    ★ core 只说"显示/移动/改血条/改名字"，不碰 style 属性名 ——
      小游戏里这套要换成 canvas 自绘，只要改这里 ✓ */
+/* ★★ round425（用户："奖牌怎么变成文字了"）：奖牌改成【自画的 SVG】★★
+   ★ 为什么不用 emoji（🥇🥈🥉）：
+     ① 老安卓 / 部分浏览器的字体里没有 emoji → 显示成豆腐块 ✗
+     ② 这个项目里 emoji 已经被编码坑过两次（写文件都能被截断）✗
+   ★ 为什么不用「金/银/铜」文字：
+     用户要的是【奖牌】✗ 文字牌不像奖牌 ✓
+   ★ 这个画法：红绶带（两条斜的）+ 圆牌 + 内圈 + 描边
+     金/银/铜只换填充色 ✓ 一份代码三种牌 ✓ 不依赖任何字体/素材 ✓ */
+function medalSvg(rank, size) {
+  var r = rank | 0;
+  var col = r === 1 ? '#ffd83d' : (r === 2 ? '#d7e0ea' : (r === 3 ? '#e3a06a' : ''));
+  if (!col) { return ''; }
+  var dark = r === 1 ? '#8a6a12' : (r === 2 ? '#6d7784' : '#8a5230');
+  var s = size || 13;
+  /* 绶带：两条从左上/右上斜下来，在圆牌上方交叉 */
+  return '<svg viewBox="0 0 16 19" width="' + s + '" height="' + Math.round(s * 19 / 16) + '"'
+    + ' style="vertical-align:-3px;margin-right:2px;flex:0 0 auto" aria-hidden="true">'
+    + '<polygon points="3.0,0 5.6,0 9.0,8.0 6.4,8.0" fill="#cf5b5b"/>'
+    + '<polygon points="10.4,0 13.0,0 7.0,8.0 4.4,8.0" fill="#9d3f3f"/>'
+    + '<circle cx="8" cy="12.6" r="5.6" fill="' + col + '" stroke="' + dark + '" stroke-width="1.1"/>'
+    + '<circle cx="8" cy="12.6" r="3.4" fill="none" stroke="' + dark + '" stroke-width="0.9" opacity="0.75"/>'
+    + '<circle cx="6.3" cy="10.9" r="1.1" fill="#ffffff" opacity="0.55"/>'
+    + '</svg>';
+}
+
+/* ★★★ round437（用户："自动挂机时做一个显示击杀了多少数量的显示，挂机结束时关闭显示"）★★★
+   ★ 临时显示 ✗ 不存盘、不发给服务器 ✓ 关掉挂机就消失 ✓
+   ★ 放在屏幕上方中间（不挡名牌、不挡技能键 ✓） */
+var _autoStatEl = null;
+function autoStatMake() {
+  if (_autoStatEl) { return _autoStatEl; }
+  var d = document.createElement('div');
+  d.id = 'autoStat';
+  d.style.cssText = 'position:fixed;top:120px;left:50%;transform:translateX(-50%);z-index:55;'
+    + 'display:none;padding:5px 12px;border-radius:14px;'
+    + 'background:rgba(12,16,12,.72);border:1px solid #8ee0a855;'
+    + 'font:12.5px/1.5 ui-monospace,Consolas,monospace;color:#dfe8d4;white-space:nowrap;'
+    + 'pointer-events:none;text-shadow:0 1px 2px #000';
+  document.body.appendChild(d);
+  _autoStatEl = d;
+  return d;
+}
+/* on=false → 隐藏；kills/secs 只在 on 时用 ✓ */
+function autoStatShow(on, kills, secs) {
+  var d = autoStatMake();
+  if (!on) {
+    d.style.display = 'none';
+    d.textContent = '';
+    return;
+  }
+  d.style.display = 'block';
+  /* ★★ round439（用户："挂机击杀数显示的位置再往下面些，不然会和系统提示详细遮挡在一起"）★★
+     → 不写死 top ✗ 而是按【弹幕/系统提示底边 + 44px】动态让开 ✓
+     （弹幕开两行时它也会自动再往下 ✓）*/
+  var _top = 120;
+  try { if (typeof tkToastTop === 'function') { _top = tkToastTop() + 44; } } catch (e1) { }
+  if (_top > innerHeight * 0.45) { _top = Math.round(innerHeight * 0.45); }
+  d.style.top = _top + 'px';
+  var t = Math.max(0, Math.round(+secs || 0));
+  var mm = Math.floor(t / 60), ss = t % 60;
+  try { autoStatSave(); } catch (e3) { }
+  d.innerHTML = '挂机中 · 击杀 <b style="color:#ffd83d">' + (kills | 0)
+    + '</b> · ' + mm + ':' + (ss < 10 ? '0' + ss : ss);
+}
+
+/* ★ round437：屏幕白闪（升级/突破那一下用 ✗ 纯表现 ✓）*/
+var _flashEl = null;
+function flashWhite(secs, color) {   /* ★ round438：可以传颜色（升级用冷白 ✓）*/
+  if (!_flashEl) {
+    var d = document.createElement('div');
+    d.id = 'whiteFlash';
+    d.style.cssText = 'position:fixed;inset:0;z-index:70;pointer-events:none;'
+      + 'background:#eaf6ff;opacity:0;transition:none';
+    document.body.appendChild(d);
+    _flashEl = d;
+  }
+  if (color) { _flashEl.style.background = color; }
+  _flashEl.style.transition = 'none';
+  _flashEl.style.opacity = '0.55';
+  /* 下一帧开始淡出（不然浏览器把两次设置合并 → 不动 ✗）*/
+  requestAnimationFrame(function () {
+    if (!_flashEl) { return; }
+    _flashEl.style.transition = 'opacity ' + Math.max(0.08, +secs || 0.14) + 's ease-out';
+    _flashEl.style.opacity = '0';
+  });
+}
+
+/* ★ round440：挂机击杀数的临时存档（刷新不丢 ✗ 服务器重启就清 ✓）
+   存的是 { boot, kills, t0ms }：boot = 服务器启动号 ✗ 不一样就当作旧数据丢掉 ✓ */
+var AUTOSTAT_KEY = 'xx3d_autostat';
+function autoStatSave() {
+  try {
+    if (typeof AUTO === 'undefined' || !AUTO.on) { return; }
+    /* 存"已经挂了多少秒"比存时间戳更稳（不受页面/系统时钟调整影响 ✓）*/
+    var el = AUTO.t0 ? Math.max(0, (performance.now() - AUTO.t0) / 1000) : 0;
+    localStorage.setItem(AUTOSTAT_KEY, JSON.stringify({
+      boot: (typeof WSC !== 'undefined' && WSC.boot) ? WSC.boot : 0,
+      kills: AUTO.kills | 0,
+      el: Math.round(el)
+    }));
+  } catch (e) { }
+}
+function autoStatReset() {
+  try { localStorage.removeItem(AUTOSTAT_KEY); } catch (e) { }
+  if (typeof AUTO !== 'undefined') { AUTO.kills = 0; AUTO.t0 = performance.now(); AUTO.statT = 0; }
+}
+function autoStatRestore() {
+  if (typeof AUTO === 'undefined') { return; }
+  var d = null;
+  try { var raw = localStorage.getItem(AUTOSTAT_KEY); d = raw ? JSON.parse(raw) : null; } catch (e) { d = null; }
+  if (d && typeof d.kills === 'number' && typeof d.el === 'number') {
+    /* ★ 有存档就接着算 ✗ 不管是不是刚刷新/刚重启服务器 ✓
+       （用户：只有关掉自动战斗才清零 ✓）*/
+    AUTO.kills = d.kills | 0;
+    AUTO.t0 = performance.now() - Math.max(0, d.el) * 1000;
+  } else {
+    AUTO.kills = 0;
+    AUTO.t0 = performance.now();
+  }
+  AUTO.statT = 0;
+  try { autoStatShow(AUTO.on, AUTO.kills, AUTO.t0 ? (performance.now() - AUTO.t0) / 1000 : 0); } catch (e4) { }
+}
+
+/* ★ round582（A8）：左上角护盾条 */
+var _shieldHud = null;
+function skShieldHud(v) {
+  var n = Math.max(0, Math.round(+v || 0));
+  if (!_shieldHud) {
+    var d = document.createElement('div');
+    d.id = 'skShieldHud';
+    d.style.cssText = 'margin-top:3px;font-size:10px;font-weight:700;color:#7fd4ff;'
+      + 'text-shadow:0 1px 2px #000;display:none';
+    var top = document.getElementById('top');
+    if (top) { top.appendChild(d); } else { return; }
+    _shieldHud = d;
+  }
+  if (n <= 0) { _shieldHud.style.display = 'none'; _shieldHud.textContent = ''; return; }
+  _shieldHud.style.display = 'block';
+  _shieldHud.textContent = '护盾 ' + n;
+}
+
+/* ★ round577（用户："坦克引擎击杀后显示叠了多少层 + 图标"）*/
+var _tankEl = null, _tankTimer = 0;
+function skTankNotice(n, bonus) {
+  if (!_tankEl) {
+    var d = document.createElement('div');
+    d.id = 'tankNotice';
+    /* ★ round579（用户要求）：往上、小一点、半透明 */
+    d.style.cssText = 'position:fixed;left:50%;top:32%;transform:translate(-50%,-50%);'
+      + 'z-index:60;display:flex;align-items:center;gap:6px;padding:4px 9px;'
+      + 'border-radius:8px;background:rgba(26,18,8,.55);border:1px solid rgba(255,179,71,.6);'
+      + 'box-shadow:0 0 12px rgba(255,154,60,.35);pointer-events:none;'
+      + 'opacity:0;transition:opacity .2s;white-space:nowrap';
+    document.body.appendChild(d);
+    _tankEl = d;
+  }
+  var ic = '';
+  try { if (window.SKI) { ic = SKI.icon('tank', 'B', 24); } } catch (e) { }
+  _tankEl.innerHTML =
+    (ic ? ('<img src="' + ic + '" style="width:24px;height:24px;display:block;opacity:.95">') : '')
+    + '<div style="line-height:1.2">'
+    + '<div style="color:#ffd83d;font-size:12px;font-weight:800">坦克引擎 ×' + (n | 0) + '</div>'
+    + (bonus > 0 ? ('<div style="color:#ffc98a;font-size:10px">生命 +' + (bonus | 0) + '</div>') : '')
+    + '</div>';
+  _tankEl.style.opacity = '0.92';
+  try { clearTimeout(_tankTimer); } catch (e2) { }
+  _tankTimer = setTimeout(function () {
+    if (_tankEl) { _tankEl.style.opacity = '0'; }
+  }, 1600);
+}
+
 UI.plate = {
-  show: function (ui, on) { if (ui && ui.wrap) { ui.wrap.style.display = on ? 'block' : 'none'; } },
+  show: function (ui, on) { if (ui && ui.wrap) {
+    on = !!on;
+    if (ui._shown === on) { return; }
+    ui._shown = on;
+    ui.wrap.style.display = on ? 'block' : 'none';
+  } },
   move: function (ui, sx, sy) {
     if (ui && ui.wrap) {
-      ui.wrap.style.transform =
-        'translate(-50%,-100%) translate(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px)';
+      var _tr = 'translate(-50%,-100%) translate(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px)';
+      if (ui._tr === _tr) { return; }
+      ui._tr = _tr;
+      ui.wrap.style.transform = _tr;
     }
   },
   /* ★★ 第 155 轮（用户要求）：魔气【单独一行】，在名字那行上面 ★★
@@ -87,6 +273,54 @@ UI.plate = {
          ② 拼进名字会撞上"两处都在写名字"那个老坑 ✓（我踩过 4 次 ✗）
            独立元素只有一处写 ✓ 谁都不会覆盖谁 ✓
      · ★ 只建一次，之后只改文字和颜色 ✗（每帧都会调 ✓ 不能每次建元素 ✓）*/
+  /* ★★★ round424（用户："可以设置其中一个排行榜排名显示在玩家头上…不要和名字以及魔气冲突了，
+                  把这个显示在最顶上"）★★★
+     ★ 做法：在名牌上方建一个【竖排容器】（绝对定位 + 居中 ✗ 不占布局 ✓）
+       里面从上到下：称号 → 魔气（原来那个 ✓）→（名牌本身：名字+血条）
+     ★ 为什么要容器：两个绝对定位元素都写 bottom:100% 会重叠 ✗
+       放进 flex 竖排就自动堆叠 ✗ 以后再加第三行也不用改坐标 ✓
+     ★ 旧坑回归点：魔气那个「居中」修过 3 次 ✗ 改完必须看它还居中 ✓ */
+  _top: function (ui) {
+    if (ui.topEl && ui.topEl.parentNode) { return ui.topEl; }
+    var box = document.createElement('div');
+    box.style.cssText = 'position:absolute;left:50%;transform:translateX(-50%);bottom:100%;'
+      + 'display:flex;flex-direction:column;align-items:center;gap:1px;'
+      + 'white-space:nowrap;pointer-events:none';
+    ui.wrap.appendChild(box);
+    ui.topEl = box;
+    return box;
+  },
+  /* 称号：国服在线top1（前三名前面加金/银/铜牌 ✓）
+     text 空 = 隐藏 ✗ medal = 1/2/3 ✓ */
+  title: function (ui, text, medal) {
+    if (!ui || !ui.wrap) { return; }
+    var t = String(text || '');
+    if (!t) {
+      if (ui.ttlEl) { ui.ttlEl.style.display = 'none'; }
+      return;
+    }
+    if (!ui.ttlEl) {
+      var el = document.createElement('div');
+      el.style.cssText = 'font-size:10px;font-weight:700;line-height:1.25;'
+        + 'text-shadow:0 1px 2px #000,0 0 4px #000;letter-spacing:.3px';
+      var box = this._top(ui);
+      /* ★ round491（用户："魔气和称号换个位置，魔气在最上边"）
+         → 称号不再插到第一个 ✗ 改成追加 ✓（魔气才是第一行 ✓）*/
+      box.appendChild(el);
+      ui.ttlEl = el;
+    }
+    var m = medal | 0;
+    var col = m === 1 ? '#ffd83d' : (m === 2 ? '#d7e0ea' : (m === 3 ? '#e3a06a' : '#c9d3ba'));
+    /* ★ round425：奖牌 = 自画 SVG（金牌/银牌/铜牌 ✓ 不依赖字体 ✓）*/
+    var badge = medalSvg(m, 12);
+    var html = badge + '<span>' + rankEsc(t) + '</span>';
+    if (ui._ttlHtml !== html) {
+      ui._ttlHtml = html;
+      ui.ttlEl.innerHTML = html;
+    }
+    if (ui._ttlCol !== col) { ui._ttlCol = col; ui.ttlEl.style.color = col; }
+    ui.ttlEl.style.display = 'block';
+  },
   mq: function (ui, v) {
     if (!ui || !ui.wrap) { return; }
     v = Math.round(+v || 0);
@@ -110,10 +344,14 @@ UI.plate = {
              left:50% + translateX(-50%) → 中心永远在名牌正中央 ✓
              bottom:100% → 正好贴在名牌上方（不挤压名字/血条 ✓）
          ★ 兼得：它不占布局了 → 名牌不会被恶魔头顶得往上跑 ✗（之前会 ✗）*/
-      el.style.cssText = 'position:absolute;left:50%;transform:translateX(-50%);bottom:100%;'
-        + 'font-size:11px;font-weight:700;line-height:1.15;white-space:nowrap;'
+      /* ★ round424：改成放进【顶部竖排容器】✗ 和称号一起堆 ✓
+         （原来是自己绝对定位：一旦上面再多一行称号就会重叠 ✗）*/
+      el.style.cssText = 'font-size:11px;font-weight:700;line-height:1.15;white-space:nowrap;'
         + 'text-shadow:0 1px 2px #000,0 0 3px #000';
-      ui.wrap.insertBefore(el, ui.wrap.firstChild);   // ★ 插到最前面 = 名字上面那行 ✓
+      /* ★ round491：魔气插到【第一个】→ 名牌最上面那一行 ✓
+         （称号改成追加 → 排在魔气下面 ✓）*/
+      var _tb = this._top(ui);
+      _tb.insertBefore(el, _tb.firstChild);
       ui.mqEl = el;
     }
     /* ★ 第 157 轮：改成【自画的恶魔头】✗ 数字在头里面 ✓（用户要求 ✓）
@@ -124,8 +362,12 @@ UI.plate = {
     }
     ui.mqEl.style.display = 'block';
   },
-  hpWidth: function (ui, pct) { if (ui && ui.bar) { ui.bar.style.width = pct; } },
-  hpColor: function (ui, color) { if (ui && ui.bar) { ui.bar.style.background = color; } },
+  hpWidth: function (ui, pct) {
+    if (ui && ui.bar && ui._hpw !== pct) { ui._hpw = pct; ui.bar.style.width = pct; }
+  },
+  hpColor: function (ui, color) {
+    if (ui && ui.bar && ui._hpc !== color) { ui._hpc = color; ui.bar.style.background = color; }
+  },
   /* ★ 第 87 轮：加颜色参数 ✓
      ★ 踩过的坑：第 86 轮我插"带颜色的 name"时锚点是 remove: function (m) ✗
        结果插进了【UI.mark】✗ 而 plate 这个两参数的没动 ✗
@@ -134,6 +376,66 @@ UI.plate = {
     if (!ui || !ui.name) { return; }
     if (ui.name.textContent !== s) { ui.name.textContent = s; }
     if (color && ui.name.style.color !== color) { ui.name.style.color = color; }
+  },
+  /* ★ round584：头顶状态标签（冰冻等）*/
+  tag: function (ui, s, color) {
+    if (!ui || !ui.wrap) { return; }
+    if (!ui.tagEl) {
+      var el = document.createElement('div');
+      el.style.cssText = 'font-size:11px;font-weight:800;line-height:1.1;white-space:nowrap;'
+        + 'text-shadow:0 1px 2px #000,0 0 5px #0a2a44;display:none';
+      var _tb = this._top(ui);
+      _tb.insertBefore(el, _tb.firstChild);
+      ui.tagEl = el;
+    }
+    if (!s) { ui.tagEl.style.display = 'none'; ui.tagEl.textContent = ''; return; }
+    ui.tagEl.style.display = 'block';
+    if (ui.tagEl.style.color !== (color || '#9fe8ff')) {
+      ui.tagEl.style.color = color || '#9fe8ff';
+    }
+    if (ui.tagEl.textContent !== s) { ui.tagEl.textContent = s; }
+  },
+  /* ★ 持续技能/被动触发：头顶小进度条 */
+  buffs: function (ui, list) {
+    if (!ui || !ui.wrap) { return; }
+    if (!ui.buffEl) {
+      var box = document.createElement('div');
+      box.style.cssText = 'display:flex;flex-direction:column;gap:1px;margin-bottom:2px;'
+        + 'pointer-events:none;white-space:nowrap';
+      this._top(ui).appendChild(box);
+      ui.buffEl = box;
+      ui._buffRows = {};
+    }
+    var rows = ui._buffRows || (ui._buffRows = {});
+    var seen = {};
+    list = list || [];
+    for (var i = 0; i < list.length; i++) {
+      var b = list[i];
+      if (!b || !b.n) { continue; }
+      seen[b.n] = 1;
+      var r = rows[b.n];
+      if (!r) {
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:3px;font-size:8px;'
+          + 'font-weight:700;color:#dff3ff;text-shadow:0 1px 2px #000';
+        var nm = document.createElement('span');
+        nm.style.cssText = 'min-width:30px;text-align:right;opacity:.9';
+        var bw = document.createElement('div');
+        bw.style.cssText = 'width:44px;height:3px;background:#00000099;border-radius:2px;overflow:hidden';
+        var bar = document.createElement('div');
+        bar.style.cssText = 'height:100%;width:100%;background:' + (b.c || '#8ee0a8') + ';border-radius:2px';
+        bw.appendChild(bar); row.appendChild(nm); row.appendChild(bw); ui.buffEl.appendChild(row);
+        r = rows[b.n] = { row: row, nm: nm, bar: bar };
+      }
+      var pct = Math.max(0, Math.min(100, (b.t / Math.max(0.01, b.m)) * 100));
+      var txt = b.n + ' ' + Math.ceil(b.t) + 's';
+      if (r.nm.textContent !== txt) { r.nm.textContent = txt; }
+      r.bar.style.width = pct.toFixed(0) + '%';
+      r.row.style.display = 'flex';
+    }
+    for (var k2 in rows) {
+      if (!seen[k2] && rows[k2]) { rows[k2].row.style.display = 'none'; }
+    }
   },
   /* ★ 第 88 轮（用户要求）：把数字放到【血条里面】✗ 不是条上面 ✓
      · 把血条那层加高到 13px（原来的 6px 放不下 9px 的字 ✗）
@@ -238,15 +540,56 @@ function audioCtx() {
 }
 
 /* ---------- loadSfx ---------- */
+var SFX_LAZY = {};        /* ★ 还没加载的音效（key → 文件名数组）*/
+var _sfxCoreLoaded = false;
+
+/* ★ 单独加载一个键（""用到了才拉"" 和"后台补齐"都走这里 ✓）*/
+/* ★ round445：按键选格式（优先 ogg；只有 wav 的就直接 wav ✓）*/
+function _sfxUrl(k, wavName) {
+  /* ★ round447：三种优先级 —— mp3优先 / 只有 wav / 默认 ogg ✓ */
+  var mp3Only = (typeof SFX_MP3_ONLY !== 'undefined' && SFX_MP3_ONLY) ? SFX_MP3_ONLY.indexOf(k) >= 0 : false;
+  if (mp3Only) { return { url: wavName.replace(/\.wav$/, '.mp3'), attempt: 0 }; }
+  var wavOnly = (typeof SFX_WAV_ONLY !== 'undefined' && SFX_WAV_ONLY) ? SFX_WAV_ONLY.indexOf(k) >= 0 : false;
+  if (wavOnly) { return { url: wavName, attempt: 2 }; }
+  return { url: wavName.replace(/\.wav$/, '.ogg'), attempt: 1 };
+}
+function loadSfxKey(k) {
+  var list = SFX_LAZY[k];
+  if (!list) { return; }
+  delete SFX_LAZY[k];
+  if (!SFX_BANK[k]) { SFX_BANK[k] = []; }
+  for (var i = 0; i < list.length; i++) {
+    SFX_TOTAL++;
+    var u = _sfxUrl(k, list[i]);
+    tryOne(k, '/assets/sfx/' + u.url, u.attempt);
+  }
+}
+
+/* ★ 进世界之后在后台把剩下的慢慢补齐（一个一个来，不抢带宽 ✓）*/
+function warmSfxRest() {
+  var keys = [];
+  for (var k in SFX_LAZY) { keys.push(k); }
+  var i = 0;
+  (function next() {
+    if (i >= keys.length) { return; }
+    loadSfxKey(keys[i++]);
+    setTimeout(next, 260);
+  })();
+}
+
 function loadSfx() {
-  /* ★ 优先 WAV（PCM 解码瞬时 ✓ 比 MP3 快得多 ✓）
-     失败回退 MP3 → OGG ✓ 三级保障 ✓ 加载完自动补播排队音效 ✓ */
+  /* ★★ round443/445：首屏只拉【核心 3 个】音效 ✗ 其余的进世界后在后台补齐 ✓
+     实测：全部 wav = 1935KB ✗ 全部 ogg 仅约 250KB ✗ 核心 3 个的 ogg 约 30KB ✓ */
+  var core = (typeof SFX_CORE !== 'undefined' && SFX_CORE) ? SFX_CORE : null;
   for (var k in SFX_FILES_WAV) {
+    var isCore = !core || core.indexOf(k) >= 0;
+    if (!isCore) { SFX_LAZY[k] = SFX_FILES_WAV[k]; continue; }
     SFX_BANK[k] = [];
     var list = SFX_FILES_WAV[k];
     for (var i = 0; i < list.length; i++) {
       SFX_TOTAL++;
-      tryOne(k, '/assets/sfx/' + list[i], 2);   // 2 = wav
+      var u = _sfxUrl(k, list[i]);
+      tryOne(k, '/assets/sfx/' + u.url, u.attempt);   // ★ round445：ogg 优先
     }
   }
   // 每秒检查一次：全部加载完 → 补播排队 ✓
@@ -345,6 +688,11 @@ function sfx(name, volScale, ch) {
   if (typeof WSC !== 'undefined' && !WSC.role) { return; }
   if (!_audioUnlocked) { unlockAudio(); }
   var bank = SFX_BANK[name];
+  /* ★ round443：这个音效还在"待加载"里 → 当场拉它（不进排队 ✗ 避免开了一半才响 ✓）*/
+  if ((!bank || !bank.length) && SFX_LAZY[name]) {
+    loadSfxKey(name);
+    return;
+  }
   if (!bank || !bank.length) {
     // ★ 还没加载好 → 排队（最多 8 条 ✓ 加载完补播 ✓）
     if (SFX_QUEUE.length < 8) { SFX_QUEUE.push({ n: name, v: volScale, t: performance.now() }); }
@@ -478,13 +826,13 @@ function _numSlot() {
   var w = _numPool[_numNext]; _numNext = (_numNext + 1) % _numPool.length;
   return w;
 }
-function _numFlyAt(txt, color, sx, sy, big, life) {
+function _numFlyAt(txt, color, sx, sy, big, life, px) {
   var o = _numSlot();
   o.busy = true; o.life = life; o.x0 = sx; o.y0 = sy;
   o.el.textContent = txt;
   o.el.style.display = 'block';
   o.el.style.color = color;
-  o.el.style.fontSize = (big ? 22 : 16) + 'px';
+  o.el.style.fontSize = (px || (big ? 22 : 16)) + 'px';
   o.el.style.transform = 'translate3d(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px,0)';
   o.el.style.opacity = '1';
   o.t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -516,17 +864,24 @@ function _numFlyAt(txt, color, sx, sy, big, life) {
   }
 }
 /* 老接口保留 ✓ 内部全部走池 */
-function _numProject(x, y, z, txt, color, big, life) {
+function _numProject(x, y, z, txt, color, big, life, px) {
   if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
   var v = REUSE_V3.v.set(x, y, z).project(cam);
   if (v.z < -1 || v.z > 2) { return; }
   _numFlyAt(txt, color, (v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight,
-            big, life);
+            big, life, px);
 }
 
 function dmg(txt, x, y, z, big) {
   // ★ 第 77 轮：全部走复用池 ✓ 不再 new div ✗
-  _numProject(x, y, z, txt, big ? '#ffd83d' : '#fff6e8', big, 700);
+  _numProject(x, y, z, txt, big ? '#ffd83d' : '#fff6e8', big, 1150);
+}
+
+/* ★ round585：技能伤害数字（比普攻大 100%；技能暴击大 150%）
+   普攻：16px 白 / 22px 金黄；技能：32px 淡红 / 40px 深红（已加粗 ✓）*/
+function dmgSkill(txt, x, y, z, crit) {
+  _numProject(x, y, z, txt, crit ? '#e01818' : '#ffb3b3',
+              true, crit ? 1600 : 1450, crit ? 40 : 32);
 }
 
 /* ---------- healNum（治疗数字：绿色 + 号 ✓ 第 46 轮）----------
@@ -535,12 +890,12 @@ function dmg(txt, x, y, z, big) {
 /* ★ 第 62 轮：指定颜色的飘字（dmg 的颜色写死了 ✗ 效果文字要区分颜色 ✓）*/
 function fxNum(txt, color, x, y, z) {
   // ★ 第 77 轮：走池 ✓
-  _numProject(x, y, z, txt, color, false, 660);
+  _numProject(x, y, z, txt, color, false, 1100);
 }
 
 function healNum(txt, x, y, z) {
   // ★ 第 77 轮：走池 ✓
-  _numProject(x, y, z, txt, '#7ee08a', false, 660);
+  _numProject(x, y, z, txt, '#7ee08a', false, 1100);
 }
 /* ---------- 方位标记（屏幕边缘的队友箭头）----------
    ★ 和名牌一样：core 只说"在哪个像素、朝哪个角度、写什么字"，不碰 style 属性名 ✓
@@ -561,6 +916,176 @@ function mkMark() {
   if (host) { host.appendChild(wrap); }
   return { wrap: wrap, ar: ar, tx: tx };
 }
+UI.fxGhost = function (x, z, yaw) {
+  try {
+    if (window.VFX && typeof scene !== 'undefined') {
+      VFX.spawn('ghost', { x: x, z: z, yaw: yaw || 0, dur: 0.5,
+                           seed: (Date.now() & 0xffff) }, scene);
+    }
+  } catch (e) { }
+};
+UI.fxIce = function (attach) {
+  try { return (window.VFX && attach) ? VFX.spawn('iceblock', { attach: attach, dur: 5 }, null) : null; }
+  catch (e) { return null; }
+};
+UI.fxIceStop = function (h) {
+  try { if (h && window.VFX) { VFX.kill(h); } } catch (e) { }
+};
+/* ★ 自动战斗：自动用已装配的主动技能（服务器仍做全部校验）*/
+var _autoSkAt = 0;
+var SK_ACT = { n: '', m: 0, until: 0 };   /* 最近一次主动技能的持续时间 */
+UI.skCastStart = function (key) {
+  try {
+    var d = SK.byKey[key];
+    if (!d || d.tg2 || d.cast === 'self') { return; }
+    var m = (+d.dur || 0) * (MY_SKDUR_MUL || 1);
+    if (m < 1) { return; }
+    SK_ACT.n = d.n || key;
+    SK_ACT.m = m;
+    SK_ACT.until = performance.now() + m * 1000;
+  } catch (e) { }
+};
+
+/* ★ round600：精英/Boss 方向 HUD（服务端 mobmarks，1Hz 数据 + 本地 8Hz 投影）*/
+var BOSS_SKILL_FX = {
+  rift_dash: { m: 'beam', c: 0xff8a4a }, rift_maw: { m: 'wave', c: 0xff6a4a },
+  guard_bash: { m: 'wave', c: 0xffd36a }, guard_quake: { m: 'burst', c: 0xffb347 },
+  ember_breath: { m: 'beam', c: 0xff7a2a }, ember_burst: { m: 'burst', c: 0xff4a1a },
+  toad_spit: { m: 'pool', c: 0x9be85a }, toad_tongue: { m: 'wave', c: 0xb6e85a },
+  beetle_charge: { m: 'beam', c: 0xffc45a }, beetle_saw: { m: 'wave', c: 0xffb347 },
+  wolf_pounce: { m: 'beam', c: 0x8fe8ff }, wolf_howl: { m: 'wave', c: 0x9fe8ff },
+  butcher_slam: { m: 'burst', c: 0xff5a3a }, butcher_hook: { m: 'beam', c: 0xff9a5c },
+  butcher_whirl: { m: 'wave', c: 0xff4a2a },
+  mage_rune: { m: 'rune', c: 0xb58cff }, mage_barrage: { m: 'burst', c: 0x9b7cff },
+  mage_summon: { m: 'summon', c: 0x8f6cff },
+  mech_cannon: { m: 'burst', c: 0xffb066 }, mech_charge: { m: 'beam', c: 0xff8a4a },
+  mech_overload: { m: 'wave', c: 0xff4a20 },
+  dragon_breath: { m: 'beam', c: 0x8fe8ff }, dragon_wings: { m: 'wave', c: 0xbfe9ff },
+  dragon_summon: { m: 'summon', c: 0x7fe8ff },
+  serpent_eruption: { m: 'burst', c: 0xff6a1f }, serpent_coil: { m: 'wave', c: 0xff8a4a },
+  serpent_pools: { m: 'pool', c: 0xff5a1f },
+  eye_gaze: { m: 'beam', c: 0xb58cff }, eye_tentacles: { m: 'wave', c: 0x8f6cff },
+  eye_collapse: { m: 'pool', c: 0x5bd8ff }
+};
+function bossCastStyle(key) {
+  key = String(key || '');
+  if (/breath|gaze|hook|cannon/.test(key)) { return 'aim'; }
+  if (/summon/.test(key)) { return 'summon'; }
+  if (/charge/.test(key)) { return 'charge'; }
+  if (/whirl|wings|coil|tentacles/.test(key)) { return 'wave'; }
+  if (/collapse|overload|quake|slam|eruption/.test(key)) { return 'slam'; }
+  return 'cast';
+}
+
+function bossSkillFx(key) {
+  return BOSS_SKILL_FX[String(key || '')] || { m: 'burst', c: 0xff5a3a };
+}
+var MOBMARKS = [], _mmBox = null, _mmEls = {}, _mmTimer = null;
+function _mmTick() {
+  try {
+    if (!_mmBox) {
+      _mmBox = document.createElement('div');
+      _mmBox.id = 'mobMarks';
+      _mmBox.style.cssText = 'position:fixed;inset:0;z-index:45;pointer-events:none;overflow:hidden';
+      document.body.appendChild(_mmBox);
+    }
+    _mmBox.style.display = MOBMARKS.length ? 'block' : 'none';
+    var now = MOBMARKS;
+    var live = {};
+    for (var i = 0; i < now.length; i++) {
+      var m = now[i];
+      var id = String(m.mid);
+      live[id] = 1;
+      var el = _mmEls[id];
+      if (!el) {
+        el = document.createElement('div');
+        el.style.cssText = 'position:absolute;transform:translate(-50%,-50%);'
+          + 'display:flex;align-items:center;gap:3px;font:800 11px "Microsoft YaHei";'
+          + 'text-shadow:0 1px 3px #000;white-space:nowrap';
+        el.innerHTML = '<span class="arr" style="font-size:15px">▲</span>'
+          + '<span class="txt"></span>';
+        _mmBox.appendChild(el);
+        _mmEls[id] = el;
+      }
+      var boss = (+m.rank || 0) >= 2;
+      var _rmm = NET.rmobs[id];
+      if (_rmm && m.name && _rmm.name !== m.name) {
+        _rmm.name = m.name;
+        if (_rmm.ui) { UI.plate.name(_rmm.ui, m.name); }
+      }
+      var col = boss ? '#ff6a5c' : '#ffb35a';
+      el.querySelector('.arr').style.color = col;
+      el.querySelector('.txt').style.color = col;
+      var txt = (boss ? 'BOSS ' : '') + (m.name || '') +
+        ' ' + Math.round(Math.hypot(m.x - P.x, m.z - P.z)) + 'm';
+      var tx = el.querySelector('.txt');
+      if (tx.textContent !== txt) { tx.textContent = txt; }
+      var v = new THREE.Vector3(m.x, 1.5, m.z).project(cam);
+      var sx = 0, sy = 0;
+      var _view = new THREE.Vector3(m.x, 1.5, m.z).applyMatrix4(cam.matrixWorldInverse);
+      var _behind = _view.z > 0;
+      var _onScreen = !_behind && v.z > -1 && v.z < 1 &&
+        Math.abs(v.x) < 0.92 && Math.abs(v.y) < 0.88;
+      var arr = el.querySelector('.arr');
+      if (_onScreen) {
+        /* 和组队箭头同一套规则：人已经在画面里 → 整个标记收掉，不挡视线 */
+        el.style.display = 'none';
+        continue;
+      }
+      var cx = innerWidth / 2, cy = innerHeight / 2;
+      var _nx = v.x, _ny = -v.y;
+      if (_behind) { _nx = -_nx; _ny = -_ny; }
+      var a = Math.atan2(_ny, _nx);
+      var padX = 30, padTop = 78, padBot = 44;
+      var hw = innerWidth / 2 - padX;
+      var hh = (_ny < 0) ? Math.max(10, innerHeight / 2 - padTop)
+                         : Math.max(10, innerHeight / 2 - padBot);
+      var t = Math.min(hw / Math.max(0.001, Math.abs(Math.cos(a))),
+                       hh / Math.max(0.001, Math.abs(Math.sin(a))));
+      sx = cx + Math.cos(a) * t;
+      sy = cy + Math.sin(a) * t;
+      arr.style.display = 'inline-block';
+      arr.style.transform = 'rotate(' + (a + Math.PI / 2) + 'rad)';
+      el.style.left = sx.toFixed(1) + 'px';
+      el.style.top = sy.toFixed(1) + 'px';
+      el.style.display = 'flex';
+    }
+    for (var k in _mmEls) {
+      if (!live[k]) { _mmEls[k].style.display = 'none'; }
+    }
+  } catch (e) { }
+}
+UI.mobMarks = function (list) {
+  MOBMARKS = Array.isArray(list) ? list : [];
+  if (_mmTimer === null) { _mmTimer = setInterval(_mmTick, 120); }
+  _mmTick();
+};
+UI.autoSkill = function (tgt, now) {
+  try {
+    if (typeof SK === 'undefined' || !SK.load || !SK.byKey) { return; }
+    if (typeof MY_FROZEN !== 'undefined' && MY_FROZEN) { return; }
+    if (typeof MY_DOWN !== 'undefined' && MY_DOWN > 0) { return; }
+    if (now - _autoSkAt < 350) { return; }
+    var list = SK.load.A || [];
+    for (var i = 0; i < list.length; i++) {
+      var k = list[i];
+      if (!k) { continue; }
+      var d = SK.byKey[k];
+      if (!d || d.tg2) { continue; }
+      if ((SKCD[k] || 0) > 0) { continue; }
+      if ((MY_QI || 0) < (d.qi || 0)) { continue; }
+      var dist = tgt ? Math.hypot(tgt.x - P.x, tgt.z - P.z) : 0;
+      if (d.rg > 0 && (!tgt || dist > d.rg)) { continue; }
+      _autoSkAt = now;
+      if (d.cast === 'self') {
+        wsSend('skillcast', { key: k });
+      } else if (tgt) {
+        wsSend('skillcast', { key: k, x: tgt.x, z: tgt.z });
+      }
+      return;
+    }
+  } catch (e) { }
+};
 UI.mark = {
   make: function () { return mkMark(); },
   show: function (m, on) { if (m && m.wrap) { m.wrap.style.display = on ? 'block' : 'none'; } },
@@ -619,13 +1144,36 @@ function bindInput() {
   }
   document.addEventListener('touchstart', firstTouch, { passive: true });
   document.addEventListener('mousedown', firstTouch);
-  function atkDown(e) { if (e) { e.preventDefault(); } if (UI_EDIT) { return; } atkHeld = true; }
+  function atkDown(e) { if (e) { e.preventDefault(); } if (UI_EDIT) { return; }
+  if (typeof MY_SLEEP !== 'undefined' && MY_SLEEP) { tryWake(); return; }
+  if (typeof SLEEP_NEAR !== 'undefined' && SLEEP_NEAR) { trySleep(); return; }
+  if (typeof FRIDGE_NEAR !== 'undefined' && FRIDGE_NEAR) { fridgeOpen(FRIDGE_NEAR.id); return; }
+  if (typeof SHOP_NEAR !== 'undefined' && SHOP_NEAR) { shopOpen(); return; }
+  if (typeof MY_SEAT !== 'undefined' && MY_SEAT) {
+    if (orderShopNear()) { orderOpen(); return; }
+    tryStand(); return;
+  }
+  if (typeof SEAT_NEAR !== 'undefined' && SEAT_NEAR) { trySit(); return; }
+  if (typeof TP_NEAR !== 'undefined' && TP_NEAR) { tpOpen(); return; }
+  if (typeof HOUSE_NEAR !== 'undefined' && HOUSE_NEAR) { houseOpen(); return; }
+  if (typeof WH_OPEN !== 'undefined' && WH_OPEN) { return; }
+  if (typeof WH_NEAR !== 'undefined' && WH_NEAR) { try { whOpen(); } catch (eW) { } return; }
+    if ((typeof MY_FROZEN !== 'undefined' && MY_FROZEN) ||
+        (typeof MY_DOWN !== 'undefined' && MY_DOWN > 0)) { return; }
+    atkHeld = true; }
   function atkUp(e) { if (e) { e.preventDefault(); } atkHeld = false; }
   if (atk) {
     atk.addEventListener('touchstart', atkDown, { passive: false });
     atk.addEventListener('touchend', atkUp, { passive: false });
     atk.addEventListener('touchcancel', atkUp, { passive: false });
     atk.addEventListener('mousedown', atkDown);
+    /* ★ 宣传片录制：?rec=1 时把 J 键映射为攻击（挥剑/挖矿），方便脚本按键录制 */
+    try {
+      if (new window.URLSearchParams(location.search).get('rec') === '1') {
+        addEventListener('keydown', function (e) { if (e.code === 'KeyJ') { atkDown(); } });
+        addEventListener('keyup', function (e) { if (e.code === 'KeyJ') { atkUp(); } });
+      }
+    } catch (eR2) { }
     addEventListener('mouseup', atkUp);
   }
   cv.addEventListener('touchstart', function (e) {
@@ -734,6 +1282,16 @@ function updExp(r) {
   if (t) { t.textContent = '经验 ' + cur + ' / ' + need; }
 }
 
+/* ★ round583：灵气条（蓝色 + 条内数字）*/
+function updQi() {
+  var mx = Math.max(1, Math.round(MY_QIMAX || 100));
+  var q = Math.max(0, Math.min(mx, Math.round(MY_QI || 0)));
+  var e = document.getElementById('qi');
+  if (e) { e.style.width = (q / mx * 100) + '%'; }
+  var t = document.getElementById('qiTxt');
+  if (t) { t.textContent = q + ' / ' + mx; }
+}
+
 /* ---------- updHP ---------- */
 function updHP() {
   var e = document.getElementById('hp');
@@ -745,8 +1303,7 @@ function updHP() {
      not the stSelf/stTotal divs - those belong to the menu's stat page and stay
      empty until that page is opened, which is why the first attempt looked
      "missing". Refreshed together with the hp bar, so it updates every frame. */
-  var gt = document.getElementById('goldTxt');
-  if (gt) {
+  var gt = document.getElementById('goldTxt');  if (gt) {
     var g = (WSC.role && WSC.role.gold) || 0;
     gt.textContent = '金币 ' + fmtGold(g);
   }
@@ -774,7 +1331,80 @@ function applyShadow() {
     }
   }
   rd.shadowMap.needsUpdate = true;
+  /* ★ round426：阴影范围跟着可见范围收（纯画质提升 ✓ 见 core 里 applyShadowExtent）*/
+  if (typeof applyShadowExtent === 'function') { applyShadowExtent(); }
 }
+
+/* ★★★ round426：性能诊断面板（用户："从性能角度优化"）★★★
+   为什么要这个：之前所有优化都是靠"读代码猜" ✗ 这次要量 ✗
+   显示什么（一行，底部）：
+     帧时间 / 绘制调用 / 三角形 / 材质数 / 几何体 / 怪数 / 显存贴图
+   ★ 为什么默认关：它自己也要遍历场景数材质（约 0.1ms / 次），
+     不需要的时候不能白花 ✓ 设置 → 显示 → 「性能面板」打开 ✓
+   ★ 3D 里能直接拿到的：rd.info（calls/triangles/geometries/textures）
+     材质数要遍历场景 → 每 2 秒数一次，不每帧数 ✓ */
+var PERF = { on: false, el: null, t: 0, mats: 0, matsAt: 0, worst: 0 };
+
+function perfBarInit() {
+  if (PERF.el) { return PERF.el; }
+  var d = document.createElement('div');
+  d.id = 'perfBar';
+  d.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:60;display:none;'
+    + 'font:11px/1.45 ui-monospace,Consolas,monospace;color:#d9e6d4;'
+    + 'background:rgba(10,14,10,.62);border:1px solid #ffffff22;border-radius:7px;'
+    + 'padding:5px 8px;pointer-events:none;white-space:pre;text-shadow:0 1px 2px #000';
+  document.body.appendChild(d);
+  PERF.el = d;
+  return d;
+}
+
+function perfBarShow(on) {
+  PERF.on = !!on;
+  var d = perfBarInit();
+  d.style.display = PERF.on ? 'block' : 'none';
+  if (PERF.on) { PERF.worst = 0; }
+}
+
+/* core 每 30 帧调一次（只在开着时才会被调 ✓）*/
+function perfBar(st) {
+  if (!PERF.on) { return; }
+  var d = perfBarInit();
+  var now = (typeof performance !== 'undefined') ? performance.now() : 0;
+  if (now - PERF.matsAt > 2000) {
+    PERF.matsAt = now;
+    var seen = {}, n = 0;
+    try {
+      scene.traverse(function (o) {
+        var m = o.material;
+        if (!m) { return; }
+        var arr = Array.isArray(m) ? m : [m];
+        for (var i = 0; i < arr.length; i++) {
+          if (arr[i] && !seen[arr[i].uuid]) { seen[arr[i].uuid] = 1; n++; }
+        }
+      });
+    } catch (e) { }
+    PERF.mats = n;
+  }
+  var ms = (st && st.ms) ? st.ms : 0;
+  if (ms > PERF.worst) { PERF.worst = ms; }
+  var info = (rd && rd.info) ? rd.info : null;
+  var r = info ? info.render : {};
+  var mem = info ? info.memory : {};
+  d.textContent =
+    '帧 ' + ms.toFixed(1) + 'ms / 最差 ' + PERF.worst.toFixed(1) + 'ms'
+    + '  (' + Math.round(1000 / Math.max(1, ms)) + 'fps)\n'
+    + '绘制 ' + (r.calls || 0) + ' · 三角 ' + Math.round((r.triangles || 0) / 1000) + 'k'
+    + ' · 材质 ' + PERF.mats + ' · 几何 ' + (mem.geometries || 0)
+    + ' · 贴图 ' + (mem.textures || 0)
+    + ' · 程序 ' + ((info && info.programs) ? info.programs.length : 0) + '\n'
+    + '怪 ' + Object.keys((typeof NET !== 'undefined' && NET.rmobs) ? NET.rmobs : {}).length
+    + ' · 玩家 ' + Object.keys((typeof NET !== 'undefined' && NET.others) ? NET.others : {}).length
+    + ' · 掉落 ' + Object.keys((typeof NET !== 'undefined' && NET.rloot) ? NET.rloot : {}).length
+    + ' · 像素比 ' + (rd ? rd.getPixelRatio() : 1).toFixed(2)
+    + ' · 阴影 ' + ((typeof setShadow === 'function') ? setShadow() : '?');
+}
+
+var DETAIL_RANGE = { low: 16, mid: 28, high: 40 };
 
 function applySet() {
   applyShadow();          // ★ 第 79 轮：阴影质量 ✓
@@ -788,11 +1418,16 @@ function applySet() {
     var show = (SETCFG && SETCFG.showFps !== false);
     var tr = document.getElementById('topright');
     if (tr) { tr.style.display = show ? 'block' : 'none'; }
+    /* ★ round426：性能面板（设置里单独开关 ✓）*/
+    if (typeof perfBarShow === 'function') { perfBarShow(!!SETCFG.perf); }
     /* ★ 攻击键大小（第 31 轮）：写进 CSS 变量 --atk，#atk 的宽高/字号都跟着它走 ✓
        （用变量而不是直接改 style，是为了让"按下缩放"那类 CSS 动画还能正常工作 ✓）*/
     try {
       document.documentElement.style.setProperty('--atk', setAtkSize() + 'px');
+      if (typeof uiApplyAtkScale === 'function') { uiApplyAtkScale(); }
     } catch (e2) { }
+    /* ★ round422：画面放大（只动 3D 画面 ✗ UI 一个字都不动 ✓）*/
+    if (typeof applyWorldZoom === 'function') { applyWorldZoom(); }
     refreshProps();
   } catch (e) { }
 }
@@ -848,6 +1483,11 @@ function stRow(k, v, note) {
      （数值规则仍然只有服务器一份 ✓ 这里只管显示 ✓ 不参与计算 ✓）*/
 var HP_FULL_PENDING = false;   /* 第 192 轮：等有效上限到了就把血填满 ✓ */
 var MY_MQ = 0;      // ★ 第 152 轮：我自己的魔气（登录从 role 读 ✓ 变了服务器推 ✓）
+var MY_TT = '';     // ★ round424：我的头顶称号文本（'' = 不显示）
+/* ★ round488：皮肤页状态 */
+var SKIN = { sel: '', items: [], start: 20000, step: 5000, gold: 0,
+             r: null, scene: null, cam: null, hero: null, rot: 0, ready: false };
+var MY_TM = 0;      // ★ round424：奖牌名次 1/2/3（0 = 没牌）
 /* ★ 第 160 轮：构建号（服务器在 ws-config.js 里给的）
    ★ 为什么在 platform 里读 window、不在 core 里读：
      core 不许碰浏览器对象（分层铁律，check_core_dom 盯着）
@@ -858,10 +1498,12 @@ var TAL = { free: 0, pts: {}, raw: {}, eff: {}, live: [], perLevel: 3, ready: fa
 var TAL_META = [
   ['hp', '血量', '点'], ['atk', '攻击力', '点'],
   ['dr', '减伤', '%'], ['speed', '移速', '%'],
-  ['qi', '灵气', '点'], ['mana', '法力', '点'],
+  ['qi', '灵气', '点'],
   ['crit', '暴击', '%'], ['anticrit', '免爆', '%'],
   ['dodge', '闪避', '%'], ['hit', '命中', '%'],
-  ['critdmg', '爆伤', '%'], ['pen', '穿透', '%']
+  ['critdmg', '爆伤', '%'],
+  /* ★ round473：抗爆 —— 降低受到的暴击伤害（爆伤的克制属性 ✓）*/
+  ['anticritdmg', '抗爆', '%'], ['pen', '穿透', '%']
 ];
 function talRow(k, nm, unit) {
   var pts = TAL.pts[k] || 0;
@@ -943,12 +1585,32 @@ function talBind() {
      ② 内容写死在前端 ✓（这是说明文字 ✗ 不是权威数据 ✓）
         ★ 改了游戏规则要记得同步改这里 ✗（见文件末尾的提示 ✓）
      ③ 加新条目 = 在 WIKI 数组里加一条 ✓ 不用改任何结构 ✓ */
+/* ★★ round409：冷却秒数 → 人话（★ 服务端 world.cd_human 是同一套规则 ✓
+   两边都显示"10 分钟"这种话 ✗ 不许一边写 600 一边写 10 分钟 ✓）*/
+function cdHuman(sec) {
+  var s = +sec;
+  if (!isFinite(s) || s <= 0) { return '不冷却'; }
+  if (s < 60) { return Math.round(s) + ' 秒'; }
+  var m = s / 60;
+  if (Math.abs(m - Math.round(m)) < 0.05) { return Math.round(m) + ' 分钟'; }
+  return m.toFixed(1) + ' 分钟';
+}
+/* 夺取 / 魔气两条冷却的说明行 —— 值来自 welcome 的 cfg（服务器现读配置发的 ✓）
+   ★ 没收到 cfg 时给个"以游戏内提示为准"✗ 绝不编一个数字 ✓ */
+function mqCdLine() {
+  var c = (typeof WSC !== 'undefined' && WSC.cfg) ? WSC.cfg : null;
+  if (!c || (!c.stealCd && !c.pairCd)) {
+    return '同一个人：夺取和魔气各有一条冷却（具体时长以游戏内提示为准）';
+  }
+  return '同一个人：夺取（经验/背包）最多 ' + cdHuman(c.stealCd) +
+         '一次，魔气最多 ' + cdHuman(c.pairCd) + '一次';
+}
 var WIKI = [
   { k: 'auto', t: '自动战斗', h: [
     ['怎么开关', [
       '★ <b>按住右下角攻击键 3 秒</b> → 自动战斗开启（按钮变绿 + 弹提示）',
       '★ 再按住 3 秒 → 关闭',
-      '也可以走 菜单 → 操作 → 勾选"自动战斗"（和长按是同一个开关）'
+      '也可以走 菜单 → 操作 → 勾选"自动战斗"（和右下角那个按钮是同一个开关）'
     ]],
     ['它怎么打', [
       '自己找怪（优先打<b>正在打你的</b>，其次打最近的）→ 走过去 → 砍一刀',
@@ -1006,9 +1668,12 @@ var WIKI = [
     ]],
     ['夺取会拿走什么', [
       '经验：按上面的比例表',
-      '背包物品：随机 1 件<b>没装备的</b>，必夺',
+      '背包物品：随机 1 件<b>没装备的</b>，必夺（弹幕里会写出名字）',
       '★ 穿戴中的装备也可能被扒走，但只有 <b>1%</b> 概率（耐久原样保留）',
-      '同一个人：夺取（经验/背包）最多 10 秒一次，魔气最多 15 秒一次',
+      mqCdLine,                          /* ★ round409：动态读服务器配置 ✗ 不写死 ✓
+                                            ★ 这里放【函数】不是字符串 ✗ 因为 WIKI 数组是
+                                              页面加载时就建好的 ✓ 那会儿 welcome 还没到 ✓
+                                              （写字符串 = 永远是加载那一刻的默认值 ✓）*/
       '对方没经验了 → 改扣 <b>100 金币</b>；金币也没有 → 什么都不扣'
     ]],
     ['头顶怎么显示', [
@@ -1137,7 +1802,12 @@ function wikiRender(k) {
       out.push('<div style="opacity:.9">' + sec[1] + '</div>');
     } else {
       out.push('<div style="opacity:.9">');
-      for (var l = 0; l < sec[1].length; l++) { out.push('· ' + sec[1][l] + '<br>'); }
+      for (var l = 0; l < sec[1].length; l++) {
+        /* ★ round409：数组里可以放【函数】✗ 渲染时才求值 ✓
+           （冷却这种"管理里改了要跟着变"的文字必须这样 ✓ 写死就永远是旧值 ✓）*/
+        var _ln = sec[1][l];
+        out.push('· ' + (typeof _ln === 'function' ? _ln() : _ln) + '<br>');
+      }
       out.push('</div>');
     }
   }
@@ -1219,117 +1889,104 @@ function fmtGold(n) {
   return (n / 100000000).toFixed(2) + '亿';
 }
 function statRender() {
+  /* \u2605\u2605\u2605 round465\uff08\u7528\u6237\uff1a"\u4e0d\u8981\u624b\u4e0a\u6b66\u5668\u548c\u8eab\u4e0a\u9632\u5177\u8fd9\u4e9b\uff0c\u5c31\u53ea\u8981\u5c5e\u6027\u603b\u63c0"\uff09\u2605\u2605\u2605
+     \u5c5e\u6027\u9875 = \u53ea\u6709\u3010\u5c5e\u6027\u603b\u89c8\u3011\u2717
+     \u6b66\u5668 / \u9632\u5177 / \u4eba\u7269\u4e09\u5757\u5168\u90e8\u4e0d\u518d\u6e32\u67d3\uff08\u90a3\u4e9b\u5728\u80cc\u5305\u91cc\u770b \u2713\uff09*/
   var r = WSC.role || {};
   var lv = r.level || 1;
-  var el1 = document.getElementById('stSelf');
-  var el2 = document.getElementById('stWeapon');
-  var el3 = document.getElementById('stArmor');
+  /* ★ round465b：人物/武器/防具三块已从 index.html 删掉 ✗
+     所以不能再用 "el1 存在吗" 当开关 ✗ 否则整页不渲染 ✓ */
   var el4 = document.getElementById('stTotal');
-  if (!el1) { return; }
+  if (!el4) { return; }
 
-  /* ---- 人物 ---- */
-  /* ★★★ 第 223 轮修的真 bug（用户问"needExp 是什么问题"时查出来的）★★★
-     这里原来自己写了一套公式： 60 + 24L + 2.4L²
-     而服务器（和客户端上面那个 expNeed）用的是：
-         (6 + 1.3L) × (10 + 4L + 0.12L²)
-     两套差多少（实测）：
-         等级 13 → 真实需要 1884 ✗ 这里显示 778（少了 59%）
-         等级 62 → 真实需要 62290 ✗ 这里显示 10774（少了 83%）
-     → 玩家在角色信息页看到"经验 1780 / 778"
-     → 看起来早就该升级了 ✓✓
-     → ★ 这就是用户之前那个"怎么杀一只就够升级了"的印象来源 ✓
-     ★ 而且注释里写着"和服务器同一个公式"✗ 其实根本不是 ✗
-       （写注释的时候是这么打算的 ✓ 实现的时候写错了 ✓）
-     修：直接用上面那个 expNeed()（已经是正确公式 ✓）
-         服务器的 need 优先 ✗ 没有才本地兜 ✓（和 updExp 的写法保持一致 ✓）*/
   var need = Math.round((WSC.role && WSC.role.need) || expNeed(lv));
   if (WSC.role && typeof WSC.role.needExp === 'number' && WSC.role.needExp > 0) {
     need = WSC.role.needExp;
   }
-  el1.innerHTML =
-    stRow('名字', (r.name || '?'), '') +
-    stRow('境界', '炼气 ' + lv + ' 层', '') +
-    stRow('经验', (r.exp || 0) + (need ? (' / ' + need) : ''), need ? '满了就升级' : '') +
-    stRow('固有攻击', Math.round((typeof wInherent === 'function') ? wInherent() : 0),
-          '只跟等级有关，和装备无关') +
-    /* ★★ 第 118 轾（方案第 5 步）：属性页里标出【天赋贡献】★★
-       不标的话，玩家只知道自己变强了，不知道是天赋带来的 ✗ */
-    (((typeof TAL !== 'undefined') && TAL.raw && TAL.raw.atk)
-      ? stRow('其中天赋', '+' + Math.round(TAL.raw.atk), '天赋里点的攻击') : '') +
-    stRow('生命', Math.round(HP) + ' / ' + Math.round(HPMAX), '') +
-    (((typeof TAL !== 'undefined') && TAL.raw && TAL.raw.hp)
-      ? stRow('其中天赋', '+' + Math.round(TAL.raw.hp), '天赋里点的血量') : '') +
-    stRow('灵气', '等技能系统做了一起展示', '现在灵气还没有用处');
-    /* ★ 第 152 轮：自己的魔气（属性页 ✓）*/
-    + stRow('魔气值', (MY_MQ > 0 ? (MQ_ICON + MY_MQ) : '0'),
-        (MY_MQ > 0
-          ? ('伤害 +' + Math.min(50, MY_MQ) + '% · 夺取概率 ' + mqStealPct(MY_MQ).toFixed(1) +
-             '% · 夺取经验 ' + mqExpPct(MY_MQ) + '（详见 菜单→百科→魔气值）')
-    /* round294: gold. Read from the `me` payload (WSC.role.gold) - the
-       server sends it every tick, so this never goes stale. */
-    + stRow('金币', fmtGold((WSC.role && WSC.role.gold) || 0), GOLD_COL)
-          : '没有魔气（杀人才会涨，详见百科）'))
-
-  /* ---- 武器 ---- */
-  var w = MY_WEAPON;
-  if (w && w.slot === 'weapon') {
-    var s = wStatsOf(w);
-    var m = wMastery(w);
-    el2.innerHTML =
-      stRow('武器', (w.name || '?') + '（' + ((w.tier || 0) + 1) + ' 阶）', '') +
-      stRow('发挥度', Math.round(m * 100) + '%',
-            m < 1 ? ('建议 ' + (w.reqLevel || 1) + ' 级，你现在 ' + lv + ' 级') : '已满') +
-      stRow('实际每击', Math.round(wRealHit(w)), '含发挥度和封顶') +
-      stRow('每秒伤害', Math.round(wRealDps(w)), '含暴击期望') +
-      stRow('攻速', '×' + s.spd.toFixed(2) + '（' + wInterval(w).toFixed(2) + ' 秒一刀）', '') +
-      stRow('范围', s.reach.toFixed(1) + ' 米 · ' + rangeWord(s.reach), arcWord(s.arc)) +
-      ((w.affixes && w.affixes.length) ? stRow('词条', w.affixes.length + ' 条',
-        w.affixes.map(function (a) { return a.text; }).join(' · ')) : '') +
-      ((+w.durMax > 0) ? stRow('耐久', ((typeof w.dur === 'number') ? w.dur : w.durMax) +
-        ' / ' + w.durMax, '还能挥这么多次') : '');
-  } else {
-    el2.innerHTML = '<div class="bagTip">空手（捡到武器后在背包里点【使用】）</div>';
-  }
-
-  /* ---- 防具 ---- */
-  var ar = BAG.armor;
-  if (ar && ar.base) {
-    var b = ar.base || {};
-    el3.innerHTML =
-      stRow('防具', (ar.name || '?') + '（' + ((ar.tier || 0) + 1) + ' 阶）', '') +
-      stRow('减伤', (Math.round((+b.dr || 0) * 10) / 10) + ' 点',
-            '挨打时先扣这么多（最多扣到只剩 30%）') +   // ★ 第 118 轮：地板 30% ✓
-      stRow('生命上限', '+' + Math.round(+b.hp || 0), '') +
-      ((ar.affixes && ar.affixes.length) ? stRow('词条', ar.affixes.length + ' 条',
-        ar.affixes.map(function (a) { return a.text; }).join(' · ')) : '') +
-      ((+ar.durMax > 0) ? stRow('耐久', ((typeof ar.dur === 'number') ? ar.dur : ar.durMax) +
-        ' / ' + ar.durMax, '还能挨这么多次') : '');
-  } else {
-    el3.innerHTML = '<div class="bagTip">没穿防具（背包里点防具 → 使用 → 会穿到武器槽右边）</div>';
-  }
-
-  /* ---- 合计 ---- */
-  var mates = (typeof PARTY !== 'undefined' && PARTY.roster) ? PARTY.roster.length : 0;
-  el4.innerHTML =
-    stRow('生命上限', Math.round(HPMAX), '基础 + 防具 + 词条') +
-    stRow('减伤（固定）', (BAG.armor && BAG.armor.base)
-      ? (Math.round((+BAG.armor.base.dr || 0) * 10) / 10) + ' 点' : '0 点', '防具给的，先扣') +
-    stRow('减伤（百分比）',
-      ((typeof TAL !== 'undefined') && TAL.eff && TAL.eff.dr)
-        ? (TAL.eff.dr.toFixed(1) + '%') : '0.0%',
-      '天赋给的，后算（最多减到只剩 30%）') +
-    stRow('队伍', mates ? (mates + ' 人（' + mates * 0 + '队友击杀你拿 10% 经验）') : '没组队',
-          mates ? '' : '菜单 → 组队 里可以组队') +
-    '<div class="bagTip" style="margin-top:6px">★ 敌人打你的伤害 = 它的攻击力 − 你的减伤，' +
-    '最后至少留 30% ✓</div>';
-  /* ★★ round304e（用户要求）：【金币】页签删掉了 ✗ 这段同步代码跟着删 ✓
-     round294b 当时为什么把它放这儿：它必须写在【语句位置】✗
-       塞进上面那串 stRow() 拼接里会把语法弄坏（真发生过 ✓）
-     ★ 现在删掉是安全的 ✗ 因为金币在别处都看得到：
-       左上角常驻那一行 / 背包顶部 / 交易所页面顶部 ✓
-     ★ 顺手确认：没有任何地方还引用 goldBig / goldDetail ✓（自测会扫一遍 ✓）*/
+  var head =
+    '<div class="bagTip" style="margin-bottom:6px">' +
+      '<b style="color:#ffd83d;font-size:14px">' + (r.name || '?') + '</b>' +
+      ' \u00b7 \u70bc\u6c14 ' + lv + ' \u5c42' +
+      ' \u00b7 \u7ecf\u9a8c ' + (r.exp || 0) + (need ? (' / ' + need) : '') +
+      ' \u00b7 \u91d1\u5e01 ' + fmtGold((WSC.role && WSC.role.gold) || 0) +
+    '</div>';
+  var mqTxt = (typeof MY_MQ !== 'undefined' && MY_MQ > 0)
+    ? ('<div class="bagTip" style="margin-bottom:6px">\u9b54\u6c14 ' + MY_MQ +
+       ' \u00b7 \u4f24\u5bb3 +' + Math.min(50, MY_MQ) + '% \u00b7 \u593a\u53d6\u6982\u7387 ' +
+       mqStealPct(MY_MQ).toFixed(1) + '%</div>')
+    : '';
+  el4.innerHTML = head + mqTxt + statSheetHTML() +
+    '<div class="bagTip" style="margin-top:8px">\u2605 \u6539\u4e86\u88c5\u5907 / \u5347\u4e86\u7ea7 / \u52a0\u4e86\u5929\u8d4b \u2192 \u8fd9\u4e00\u9875\u4f1a\u81ea\u52a8\u5237\u65b0</div>';
 }
 
+function statSheetHTML() {
+  /* \u2605 round465\uff1a\u56db\u7ec4\uff08\u751f\u5b58 / \u8f93\u51fa / \u624b\u611f / \u9644\u52a0\uff09\u2717 \u6bcf\u7ec4\u4e00\u4e2a\u5c0f\u6807\u9898 \u2713
+     \u6bcf\u884c\uff1a\u540d\u5b57 \u00b7 \u5f53\u524d\u503c \u00b7 \u4e0a\u9650 \u00b7 \u6765\u6e90\uff08\u4eba\u7269/\u88c5\u5907/\u5929\u8d4b\uff09\u2713 */
+  var rows = (typeof TAL !== 'undefined' && TAL.stats) ? TAL.stats : null;
+  if (!rows || !rows.length) {
+    return '<div class="bagTip" style="margin-top:8px">\u5c5e\u6027\u603b\u89c8\uff1a\u6b63\u5728\u5411\u670d\u52a1\u5668\u8981\u2026</div>';
+  }
+  var ORDER = ['\u751f\u5b58', '\u8f93\u51fa', '\u624b\u611f', '\u9644\u52a0'];
+  var byGrp = {};
+  for (var i = 0; i < rows.length; i++) {
+    var g = rows[i].grp || '\u5176\u5b83';
+    (byGrp[g] = byGrp[g] || []).push(rows[i]);
+  }
+  function fmtVal(r) {
+    var u = (r.unit === '%') ? '%' : '';
+    /* round470: new unit "\u00d7" (attack speed shown as x1.32) */
+    if (r.unit === '\u00d7') {
+      return '\u00d7' + (Math.round(+r.v * 100) / 100);
+    }
+    /* round471: "刀/秒" (attacks per second) */
+    if (r.unit === '\u5200/\u79d2') {
+      return (Math.round(+r.v * 100) / 100) + ' 刀/秒';
+    }
+    if (r.unit === '\u79d2' || r.unit === '\u7c73/\u79d2') {
+      return (Math.round(+r.v * 100) / 100) + ' ' + r.unit;
+    }
+    if (r.unit === '%') { return (Math.round(+r.v * 10) / 10) + '%'; }
+    return Math.round(+r.v) + ' \u70b9';
+  }
+  var h = '';
+  for (var oi = 0; oi < ORDER.length; oi++) {
+    var gname = ORDER[oi];
+    var list = byGrp[gname];
+    if (!list || !list.length) { continue; }
+    h += '<div style="color:#ffd83d;font-weight:700;margin:10px 0 4px;font-size:13px">' +
+      '\u25b8 ' + gname + '</div>';
+    for (var j = 0; j < list.length; j++) {
+      var r = list[j];
+      var parts = [];
+      /* round470: attack speed base comes from the WEAPON; server sends r.bn */
+      if (Math.abs(+r.base) > 0.001) {
+        parts.push((r.bn || '\u4eba\u7269') + ' ' + fmtVal({ v: r.base, unit: r.unit }));
+      }
+      if (Math.abs(+r.gear) > 0.001) {
+        var sign = (+r.gear > 0 ? '+' : '');
+        parts.push('\u88c5\u5907 ' + sign + fmtVal({ v: r.gear, unit: r.unit }));
+      }
+      if (Math.abs(+r.tal) > 0.001) {
+        parts.push('\u5929\u8d4b +' + fmtVal({ v: r.tal, unit: r.unit }));
+      }
+      var src = parts.length ? parts.join(' \u00b7 ') : '';
+      var capTxt = (+r.cap > 0) ? ('\u4e0a\u9650 ' + fmtVal({ v: r.cap, unit: r.unit })) : '';
+      /* ★ round465b：0 值的行调暗（看得出存在、但还没加成 ✓）*/
+      var zero = Math.abs(+r.v) < 0.001;
+      h += '<div style="display:flex;align-items:baseline;justify-content:space-between;' +
+        'padding:5px 10px 5px 0;border-bottom:1px solid #ffffff10' + (zero ? ';opacity:.5' : '') + '">' +
+        '<span style="color:#cfd8e4">' + r.n + '</span>' +
+        '<span><b style="color:#8ee0ff">' + fmtVal(r) + '</b>' +
+        (capTxt ? '<span class="bagTip" style="margin-left:6px">' + capTxt + '</span>' : '') +
+        '</span></div>' +
+        (src ? ('<div class="bagTip" style="margin:-3px 0 4px">' + src + '</div>') : '');
+    }
+  }
+  h += '<div class="bagTip" style="margin-top:8px">' +
+    '\u2605 \u5bf9\u6297\u7c7b\u6210\u5bf9\u76f8\u51cf\uff1a\u547d\u4e2d\u62b5\u95ea\u907f \u00b7 \u514d\u7206\u62b5\u66b4\u51fb \u00b7 \u7a7f\u900f\u62b5\u56fa\u5b9a\u51cf\u4f24<br>' +
+    '\u2605 \u4e0a\u9650\u53ea\u538b\u5728\u3010\u5929\u8d4b\u90a3\u4e00\u90e8\u5206\u3011\uff0c\u57fa\u7840\u503c\u548c\u88c5\u5907\u8bcd\u6761\u4e0d\u53d7\u9650</div>';
+  return h;
+}
 function ptEsc(s) {
   return String(s === undefined || s === null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -1674,7 +2331,1136 @@ function tabScrollInit() {
   }, { passive: false });
   box.style.cursor = 'grab';
 }
+/* ★★★ round424：排行榜页（用户要求放在设置里 ✗ 不占主菜单 ✓）
+   · 数据走 HTTP /api/rank（只读 ✓ 离线也能看 ✓）
+   · 前 100 名 · 每页 10 个 · 底部「我的名次」永远显示（用户定 ✓）
+   · 15 秒刷一次（只在排行页开着时 ✓）*/
+var RANK = { board: 'level', page: 1, data: null, ts: 0, timer: 0, busy: false };
+var RANK_NAME = { level: '境界', gold: '财富', kills: '屠戮', mq: '魔气', time: '在线', charm: '魅力' };
+var RANK_KEYS = ['level', 'gold', 'kills', 'mq', 'time', 'charm'];
+
+function rankEsc(t) {
+  return String(t == null ? '' : t).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+
+function rankApi(qs) {
+  var tk = (typeof WSC !== 'undefined' && WSC.token) ? WSC.token : '';
+  var h = tk ? { 'X-Token': tk } : {};
+  return fetch('/api/rank' + (qs || ''), { headers: h, cache: 'no-store' })
+    .then(function (r) { return r.json(); });
+}
+
+function rankChipsRender() {
+  var box = document.getElementById('rankChips');
+  if (!box) { return; }
+  box.innerHTML = '';
+  for (var i = 0; i < RANK_KEYS.length; i++) {
+    (function (k) {
+      var d = document.createElement('div');
+      d.className = 'rchip' + (RANK.board === k ? ' on' : '');
+      d.textContent = RANK_NAME[k];
+      d.onclick = function () {
+        RANK.board = k; RANK.page = 1; rankChipsRender(); rankFetch(true);
+      };
+      box.appendChild(d);
+    })(RANK_KEYS[i]);
+  }
+}
+
+function rankRowsRender() {
+  var list = document.getElementById('rankList');
+  if (!list) { return; }
+  var d = RANK.data || {};
+  var rows = d.rows || [];
+  var me = d.me || null;
+  list.innerHTML = '';
+  if (!rows.length) {
+    list.innerHTML = '<div style="padding:14px;color:#7b8794;font-size:12.5px">' +
+      '还没有人上榜（打几只怪、玩一会儿就有了 ✓）</div>';
+  }
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var isMe = !!(me && me.r === r.r);
+    var row = document.createElement('div');
+    row.className = 'rrow' + (isMe ? ' me' : '');
+    var medal = r.medal || 0;
+    /* ★ round425：奖牌用自画的 SVG（金/银/铜 ✓ 不依赖字体/emoji ✓）*/
+    var rk = (medal ? medalSvg(medal, 14) : '') + r.r;
+    row.innerHTML =
+      '<div class="rk' + (medal ? ' m' + medal : '') + '">' + rk + '</div>' +
+      '<div class="rn">' + rankEsc(r.name || '?') +
+      (r.on ? ' <span class="on">在线</span>' : '') + '</div>' +
+      '<div class="rv">' + rankEsc(r.sub || '') + '</div>';
+    list.appendChild(row);
+  }
+  var meEl = document.getElementById('rankMe');
+  if (meEl) {
+    if (me && me.r > 0) {
+      meEl.innerHTML = '我的名次：<b>#' + me.r + '</b> / ' + (d.total || '?') +
+        (me.in100 ? '' : '（没进前 100 → 头顶不显示称号）');
+    } else {
+      meEl.innerHTML = '我的名次：未上榜（先进游戏吧 ✓）';
+    }
+  }
+  var pages = d.pages || 10;
+  var txt = document.getElementById('rankPageTxt');
+  if (txt) { txt.textContent = '第 ' + (RANK.page || 1) + '/' + pages + ' 页'; }
+  var prev = document.getElementById('rankPrev'), next = document.getElementById('rankNext');
+  if (prev) { prev.disabled = (RANK.page <= 1); }
+  if (next) { next.disabled = (RANK.page >= pages); }
+  var tag = document.getElementById('rankTag');
+  if (tag) { tag.textContent = '服务器缓存 ' + (d.cacheAge || 0) + ' 秒前'; }
+  /* ★★ round425（用户："显示什么称号可以选择，现在只能选择境界排行"）★★
+     原来是个勾选框 ✗ 只会挂【当前正在看的那一页】✗ 想换榜要先取消再勾 ✓ 反人类 ✓
+     → 现在是一排按钮：【不显示】+ 五个榜，点哪个就挂哪个 ✓ */
+  var cur = (typeof WSC !== 'undefined' && WSC.role && WSC.role.titleBoard) ? WSC.role.titleBoard : '';
+  rankTitleChipsRender(me, cur);
+  var tip = document.getElementById('rankTitleTip');
+  if (tip) {
+    if (!me || me.r <= 0) { tip.textContent = ''; }
+    else if (!me.in100) { tip.textContent = '没进前 100，不能挂称号'; }
+    else if (cur && cur.indexOf('skin:') === 0) { tip.textContent = '当前：皮肤称号（独占期间有效）'; }
+    else if (cur) { tip.textContent = '当前：国服' + (RANK_NAME[cur] || '') + 'top' + me.r; }
+    else { tip.textContent = '当前：不显示'; }
+  }
+}
+
+/* 头顶称号的那排按钮（★ 每个榜都能选 ✓ 第一个是"不显示" ✓）*/
+function rankTitleChipsRender(me, cur) {
+  var box = document.getElementById('rankTitleChips');
+  if (!box) { return; }
+  var can = !!(me && me.in100);
+  var opts = [['', '不显示']].concat(RANK_KEYS.map(function (k) { return [k, RANK_NAME[k]]; }));
+  /* ★ round489：我独占的皮肤 → 也能挂"独·XXX"称号 ✓ 没独占就没有这一档 ✓ */
+  var _solo = [];
+  for (var _si = 0; _si < (SKIN.items || []).length; _si++) {
+    var _it = SKIN.items[_si];
+    if (_it && _it.solo) { _solo.push(['skin:' + _it.k, '独·' + (_it.n || _it.k)]); }
+  }
+  opts = opts.concat(_solo);
+  box.innerHTML = '';
+  for (var i = 0; i < opts.length; i++) {
+    (function (k, label) {
+      var el = document.createElement('div');
+      var on = (cur || '') === k;
+      el.className = 'tchip' + (on ? ' on' : '') + ((k && !can) ? ' off' : '');
+      el.textContent = label;
+      el.onclick = function () {
+        if (k && !can && k.indexOf('skin:') !== 0) { toast('没进前 100，不能挂称号'); return; }
+        try { wsSend('ranktitle', { board: k }); } catch (e) { }
+        el.classList.add('off');
+      };
+      box.appendChild(el);
+    })(opts[i][0], opts[i][1]);
+  }
+}
+
+function rankFetch(force) {
+  if (!force && RANK.busy) { return; }
+  RANK.busy = true;
+  rankApi('?board=' + encodeURIComponent(RANK.board) + '&page=' + RANK.page + '&size=10')
+    .then(function (d) {
+      RANK.busy = false;
+      if (!d || !d.ok) {
+        var list = document.getElementById('rankList');
+        if (list) {
+          list.innerHTML = '<div style="padding:12px;color:#ff9a5c">拉榜单失败：' +
+            rankEsc((d && d.error) || '?') + '</div>';
+        }
+        return;
+      }
+      RANK.data = d;
+      rankRowsRender();
+    })
+    .catch(function () {
+      RANK.busy = false;
+      var list = document.getElementById('rankList');
+      if (list) { list.innerHTML = '<div style="padding:12px;color:#ff9a5c">连不上服务器</div>'; }
+    });
+}
+
+function rankBindOnce() {
+  if (rankBindOnce._ok) { return; }
+  rankBindOnce._ok = true;
+  var b = document.getElementById('rankRefresh');
+  if (b) { b.onclick = function () { rankFetch(true); }; }
+  var p = document.getElementById('rankPrev');
+  if (p) { p.onclick = function () { if (RANK.page > 1) { RANK.page--; rankFetch(true); } }; }
+  var n = document.getElementById('rankNext');
+  if (n) {
+    n.onclick = function () {
+      var pages = (RANK.data && RANK.data.pages) || 10;
+      if (RANK.page < pages) { RANK.page++; rankFetch(true); }
+    };
+  }
+  /* ★ round425：称号那排按钮在自己的渲染函数里绑事件 ✗ 这里不用再绑 ✓ */
+  if (!RANK.timer) {
+    RANK.timer = setInterval(function () {
+      if ((SETCFG.setTab || '') === 'rank') { rankFetch(false); }
+    }, 15000);
+  }
+}
+
+/* ★ round424/425：头顶称号设置的回执 */
+function rankOnTitleOk(d) {
+  d = d || {};
+  try { if (WSC.role) { WSC.role.titleBoard = d.board || ''; } } catch (e) { }
+  /* ★ 重新画那排按钮（高亮当前那个 ✓）*/
+  var me = null;
+  try { me = (RANK.data && RANK.data.me) || null; } catch (e) { }
+  if (typeof rankTitleChipsRender === 'function') {
+    rankTitleChipsRender(me, d.board || '');
+  }
+  var tip = document.getElementById('rankTitleTip');
+  if (tip) {
+    tip.textContent = d.text ? ('当前：' + d.text) : '当前：不显示';
+  }
+  toast(d.text ? ('头顶称号：' + d.text) : '已关闭头顶称号');
+}
+
+/* ★★ round531：设置的二级导航（画面 / 操作 / 音效）
+   ★ 点一下切到对应的 tabpane ✗ 顶部那排大 tab 仍然同步 ✓ */
+function setSubBind() {
+  var boxs = document.querySelectorAll('#setPanel .setSub');
+  for (var i = 0; i < boxs.length; i++) {
+    (function (box) {
+      if (box._b) { return; }
+      box._b = true;
+      box.addEventListener('click', function (e) {
+        var t = e.target, hit = null;
+        while (t && t !== box) {
+          if (t.getAttribute && t.getAttribute('data-sub')) { hit = t; break; }
+          t = t.parentNode;
+        }
+        if (!hit) { return; }
+        var k = hit.getAttribute('data-sub');
+        /* 二级导航真正切页：只显示 画面 / 操作 / 音效 中的一页 */
+        try { setTab(k); } catch (e2) { }
+        try { setSubPaint(); } catch (e3) { }
+        try {
+          var sc = document.getElementById('setBody');
+          if (sc) { sc.scrollTop = 0; }
+        } catch (e4) { }
+      });
+    })(boxs[i]);
+  }
+  setSubPaint();
+}
+function setSubPaint() {
+  var cur = (SETCFG && SETCFG.setTab) || 'view';
+  var boxs = document.querySelectorAll('#setPanel .setSub');
+  for (var i = 0; i < boxs.length; i++) {
+    var subs = boxs[i].querySelectorAll('.sub');
+    for (var j = 0; j < subs.length; j++) {
+      var on = (subs[j].getAttribute('data-sub') === cur);
+      subs[j].className = 'sub' + (on ? ' on' : '');
+    }
+  }
+}
+
+
+/* ===================================================================
+   技能面板（round538）
+   ★ 只负责【看 / 学 / 装配 / 遗忘】，技能效果在 P2 才接
+   =================================================================== */
+var MY_QI = 0, MY_QIMAX = 100;
+var MY_SHIELD = 0;      // ★ round588：护盾量（技能图标上显示 1k）
+var MY_GALE_T = 0;      // ★ round588：疾风步剩余秒（动态残影）
+var MY_BERSERK_T = 0;   // ★ round592：暴走剩余秒（红色残影）
+var MY_BLOODRAGE_T = 0; // ★ round593：血怒剩余秒（持续光环）
+var MY_PLAGUE = 0;      // ★ round594：病毒扩散开关（绿色齿轮）
+var MY_SHIELD_T = 0, MY_BLOODTHIRST_T = 0;   // ★ 持续 buff 进度条
+var MY_SKDUR_MUL = 1.0;                       // ★ 技能持续被动倍率
+var SKCD = {};          /* {技能key: 剩余秒} */
+var SKBAR_BAD = false;
+var SK = { defs: [], byKey: {}, learn: {}, load: { A: [], B: [], C: [] },
+           kind: 'A', forget: false, msg: '' };
+
+
+/* ===================================================================
+   技能栏（round550）：主动第一排 5 格
+   ★ 点一下 = 自动打最近的怪（服务端选目标）
+   ★ 收到 skillfx → 用 vfx.js 播动画（别人也看到同一套 ✓）
+   =================================================================== */
+
+/* ===================================================================
+   技能落点指示圈（round551）
+   ★ 画面上的圈只是"给你看"✗ 真正的落点以服务端夹紧后的为准 ✓
+   =================================================================== */
+var _skInd = { g: null, ring: null, max: null, def: null };
+function skGround(x, y) {
+  try {
+    if (typeof cam === 'undefined' || !cam) { return null; }
+    var nx = (x / innerWidth) * 2 - 1, ny = -(y / innerHeight) * 2 + 1;
+    var rc = new THREE.Raycaster();
+    rc.setFromCamera(new THREE.Vector2(nx, ny), cam);
+    var pl = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    var pt = new THREE.Vector3();
+    var hit = rc.ray.intersectPlane(pl, pt);
+    return hit ? { x: pt.x, z: pt.z } : null;
+  } catch (e) { return null; }
+}
+function skIndicatorShow(key) {
+  var sc = (typeof scene !== 'undefined') ? scene : null;
+  var d = (SK.byKey || {})[key] || {};
+  if (!sc) { return; }
+  skIndicatorHide();
+  var g = new THREE.Group();
+  var r = Math.max(1, d.r || 3);
+  var rg = Math.max(r + 1, d.rg || r + 3);
+  var m1 = new THREE.Mesh(new THREE.RingGeometry(r - 0.12, r, 48),
+    new THREE.MeshBasicMaterial({ color: 0xffd83d, transparent: true, opacity: 0.85,
+      side: THREE.DoubleSide, depthWrite: false }));
+  m1.rotation.x = -Math.PI / 2; m1.position.y = 0.06; g.add(m1);
+  var fill = new THREE.Mesh(new THREE.CircleGeometry(r, 48),
+    new THREE.MeshBasicMaterial({ color: 0xffd83d, transparent: true, opacity: 0.12,
+      side: THREE.DoubleSide, depthWrite: false }));
+  fill.rotation.x = -Math.PI / 2; fill.position.y = 0.05; g.add(fill);
+  var m2 = new THREE.Mesh(new THREE.RingGeometry(rg - 0.06, rg, 64),
+    new THREE.MeshBasicMaterial({ color: 0x8ecbff, transparent: true, opacity: 0.55,
+      side: THREE.DoubleSide, depthWrite: false }));
+  m2.rotation.x = -Math.PI / 2; m2.position.y = 0.04; g.add(m2);
+  sc.add(g);
+  _skInd = { g: g, ring: m1, max: m2, def: d, fill: fill };
+}
+function skIndicatorMove(x, y) {
+  var pt = skGround(x, y);
+  if (!pt || !_skInd.g) { return pt; }
+  var d = _skInd.def || {};
+  var px = 0, pz = 0;
+  try { px = P.x; pz = P.z; } catch (e) { }
+  var rg = Math.max(1, d.rg || 0);
+  var dx = pt.x - px, dz = pt.z - pz;
+  var dist = Math.hypot(dx, dz);
+  if (rg > 0 && dist > rg) {                 /* 超出射程 → 贴在边界 */
+    pt.x = px + dx / dist * rg;
+    pt.z = pz + dz / dist * rg;
+  }
+  _skInd.g.position.set(pt.x, 0, pt.z);
+  return pt;
+}
+function skIndicatorHide() {
+  if (_skInd.g) {
+    try { _skInd.g.parent && _skInd.g.parent.remove(_skInd.g); } catch (e) { }
+  }
+  _skInd = { g: null };
+}
+
+function skBarRender() {
+  var box = document.getElementById('skBar');
+  if (!box) { return; }
+  if (typeof SK === 'undefined' || !SK.load) { return; }
+
+  var layout = 'row', hideA = false;
+  try {
+    layout = localStorage.getItem('skBarLayout') || 'row';
+    hideA = (localStorage.getItem('skHideA') === '1');
+  } catch (e) { }
+  box.style.flexDirection = (layout === 'row') ? 'column' : 'row';
+
+  /* ★ round555（用户要求）：
+     ① 主动：只显示【装了的】✗ 空格子不再占位 ✓ 可整体隐藏
+     ② 被动 / 被动加成：平时不显示 ✗ 触发时才冒出来 ✓
+     ③ 格子更透（半透明底）✓ */
+  var SLOT = 'width:34px;height:34px;border-radius:8px;overflow:hidden;position:relative;' +
+    'background:#0d141c66;backdrop-filter:blur(2px);';
+
+  function skShort(v) {
+    v = Math.max(0, Math.round(+v || 0));
+    if (v < 1000) { return String(v); }
+    var n = v / 1000;
+    return (n >= 10 ? Math.round(n) : (Math.round(n * 10) / 10)) + 'k';
+  }
+  function icon(k, kind, glow, cd, poor, dim) {
+    var ic = (window.SKI ? SKI.icon(k, kind, 34) : '');
+    return '<div data-skcast="' + k + '" data-skkind="' + kind + '" style="' + SLOT +
+      'cursor:' + (kind === 'A' ? 'pointer' : 'default') + ';touch-action:none;' +
+      'border:1.5px solid ' + (glow ? '#8ee0a8' : (poor ? '#ff5a4a99' : '#ffffff1f')) + ';' +
+      (glow ? 'box-shadow:0 0 10px #8ee0a8aa;' : '') +
+      /* ★ round575（用户："技能图标改成不透明的"）
+         → 图标和格子都 100% 不透明 ✓
+         ★ "灵气不够"不再靠整体变淡提示 ✗ 靠红色边框 + 冷却数字 ✓ */
+      'opacity:1">' +
+      '<img src="' + ic + '" style="width:100%;height:100%;display:block;opacity:1">' +
+      /* ★ round588：灵能护盾剩余护盾量直接显示在图标底部（1000 → 1k）*/
+      (k === 'shield' && MY_SHIELD > 0 ? ('<div style="position:absolute;left:0;right:0;bottom:0;' +
+        'text-align:center;font-size:9px;line-height:11px;font-weight:900;color:#bdefff;' +
+        'background:#001a2acc;text-shadow:0 1px 2px #000;z-index:2">' +
+        skShort(MY_SHIELD) + '</div>') : '') +
+      (cd > 0 ? ('<div style="position:absolute;inset:0;background:#00000088;display:flex;' +
+        'align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:800">' +
+        Math.ceil(cd) + '</div>') : '') +
+      '</div>';
+  }
+
+  var h = '';
+  /* 小工具条（透明，只有图标）*/
+  /* ★★ round560（用户："就用把手当隐藏按钮，不要多余按钮"）
+     → 把手「⠿⠿」点一下 = 收起/展开；按住拖 = 移动 ✓
+       （用位移判断：< 4px 算点击 ✓ 否则算拖动 ✓）*/
+  /* ★ round561（用户："点 ⠿⠿ 隐藏时把横排按钮一起隐藏，横排按钮放到 ⠿⠿ 下方"）
+     → 竖着排：上面把手 ✗ 下面布局键 ✓；收起时【连布局键一起收】✓ */
+  h += '<div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start;' +
+    'margin-bottom:4px;opacity:0.7">' +
+    '<div id="skGrip" title="点一下收起 / 按住拖动" style="cursor:pointer;padding:2px 7px;' +
+    'border-radius:6px;background:#0d141c99;color:' + (hideA ? '#8ee0a8' : '#c9d6e4') + ';' +
+    'font-size:11px;line-height:1;letter-spacing:1px;user-select:none;touch-action:none">' +
+    (hideA ? '⠿ 展开' : '⠿⠿') + '</div>' +
+    (hideA ? '' : ('<div id="skLayoutBtn" style="font-size:10px;color:#c9d6e4;cursor:pointer;' +
+      'padding:1px 6px;border-radius:5px;background:#0d141c88">' +
+      (layout === 'row' ? '竖排' : '横排') + '</div>')) +
+    '</div>';
+
+  /* ① 主动排（可隐藏 · 只显示装了的）*/
+  if (!hideA) {
+    var sa = (SK.load.A || []);
+    var rowA = '';
+    for (var i = 0; i < sa.length; i++) {
+      var k = sa[i];
+      if (!k) { continue; }
+      var d = (SK.byKey || {})[k] || {};
+      rowA += icon(k, 'A', false, SKCD[k] || 0, MY_QI < (d.qi || 0), false);
+    }
+    if (rowA) {
+      h += '<div class="skRow" data-skrow="A" style="display:flex;gap:6px;' +
+        'flex-direction:' + (layout === 'row' ? 'row' : 'column') + '">' + rowA + '</div>';
+    }
+  }
+
+  /* ② 被动释放 + 被动加成：只有【正在触发】的才显示 */
+  function trigRow(kind) {
+    var sl = (SK.load[kind] || []), out = '';
+    for (var j = 0; j < sl.length; j++) {
+      var kk = sl[j];
+      if (!kk || !(SK_TRIG[kk] > 0)) { continue; }
+      out += icon(kk, kind, true, 0, false, false);
+    }
+    if (!out) { return ''; }
+    return '<div class="skRow" data-skrow="' + kind + '" style="display:flex;gap:6px;' +
+      'flex-direction:' + (layout === 'row' ? 'row' : 'column') + '">' + out + '</div>';
+  }
+  h += trigRow('B');
+  h += trigRow('C');
+
+  if (box._lastHtml === h) { return; }
+  box._lastHtml = h;
+  box.innerHTML = h;
+
+  var lb = document.getElementById('skLayoutBtn');
+  if (lb) {
+    lb.onclick = function (e) {
+      e.stopPropagation();
+      var _ly = 'row';
+      try { _ly = localStorage.getItem('skBarLayout') || 'row'; } catch (e9) { }
+      try { localStorage.setItem('skBarLayout', _ly === 'row' ? 'col' : 'row'); } catch (e3) { }
+      skBarRender();
+    };
+  }
+
+  if (!box._b) {
+    box._b = true;
+    var mv = null;
+    box.addEventListener('pointerdown', function (e) {
+      /* ★ round562（用户："技能框要点击键位后才能移动"）
+         → 只有 UI 编辑模式才允许拖整排 ✓（平时按到空白处就当没事）*/
+      if (typeof UI_EDIT !== 'undefined' && !UI_EDIT) {
+        if (e.target && e.target.id === 'skGrip') { /* 把手仍然可以点（收起）*/ }
+        else { return; }
+      }
+      if (e.target && e.target.getAttribute && e.target.getAttribute('data-skcast')) { return; }
+      if (e.target && e.target.id === 'skLayoutBtn') { return; }
+      var r = box.getBoundingClientRect();
+      mv = { x: e.clientX, y: e.clientY, l: r.left, t: r.top, id: e.pointerId, moved: 0,
+             onGrip: !!(e.target && e.target.id === 'skGrip'),
+             allowMove: (typeof UI_EDIT !== 'undefined' && !!UI_EDIT) }
+      try { box.setPointerCapture(e.pointerId); } catch (e0) { }
+    });
+    document.addEventListener('pointermove', function (e) {
+      if (!mv) { return; }
+      var dx = e.clientX - mv.x, dy = e.clientY - mv.y;
+      mv.moved = Math.max(mv.moved, Math.hypot(dx, dy));
+      if (!mv.allowMove || mv.moved < 3) { return; }
+      box.style.left = Math.max(0, Math.min(innerWidth - 60, mv.l + dx)) + 'px';
+      box.style.top = Math.max(0, Math.min(innerHeight - 60, mv.t + dy)) + 'px';
+      box.style.bottom = 'auto';
+    });
+    document.addEventListener('pointerup', function () {
+      if (!mv) { return; }
+      if (mv.moved >= 3) {
+        if (mv.allowMove) {
+          try { localStorage.setItem('skBarPos', JSON.stringify({ l: box.style.left, t: box.style.top })); } catch (e1) { }
+        }
+      } else if (mv.onGrip) {
+        /* ★ 点把手（没拖动）= 收起 / 展开 ✓
+           ★ 必须读【当前】localStorage ✗ 不能用闭包里的 hideA（那是首帧的值 ✓）*/
+        var _h = false;
+        try { _h = (localStorage.getItem('skHideA') === '1'); } catch (e3) { }
+        try { localStorage.setItem('skHideA', _h ? '0' : '1'); } catch (e4) { }
+        skBarRender();
+      }
+      mv = null;
+    });
+
+    var drag = null;
+    function slotOf(el) {
+      var t = el;
+      while (t && t !== box) {
+        if (t.getAttribute && t.getAttribute('data-skcast')) { return t; }
+        t = t.parentNode;
+      }
+      return null;
+    }
+    box.addEventListener('pointerdown', function (e) {
+      var el = slotOf(e.target);
+      if (!el) { return; }
+      if ((el.getAttribute('data-skkind') || 'A') !== 'A') { return; }
+      var k = el.getAttribute('data-skcast');
+      if ((SKCD[k] || 0) > 0) { return; }
+      /* ★ round587：直接释放类（灵能护盾/燃血斩）不进入拖动 */
+      try {
+        var _sd = (typeof SK !== 'undefined' && SK.byKey) ? SK.byKey[k] : null;
+        if (_sd && _sd.cast === 'self') {
+          wsSend('skillcast', { key: k });
+          return;
+        }
+      } catch (eSd) { }
+      drag = { key: k, x: e.clientX, y: e.clientY, t: performance.now(), moved: 0,
+               el: el, id: e.pointerId };
+      window._skDrag = drag;
+      try { el.setPointerCapture(e.pointerId); } catch (e2) { }
+      skIndicatorShow(k);
+      skIndicatorMove(e.clientX, e.clientY);
+    });
+    document.addEventListener('pointermove', function (e) {
+      if (!drag) { return; }
+      drag.moved = Math.max(drag.moved, Math.hypot(e.clientX - drag.x, e.clientY - drag.y));
+      skIndicatorMove(e.clientX, e.clientY);
+    });
+    function endDrag(e) {
+      if (!drag) { return; }
+      var d = drag; drag = null; window._skDrag = null;
+      var dt = performance.now() - d.t;
+      var isTap = (d.moved < 12 && dt < 350);
+      var pt = isTap ? null : skIndicatorMove(e.clientX, e.clientY);
+      skIndicatorHide();
+      try {
+        if (isTap) { wsSend('skillcast', { key: d.key }); }
+        else if (pt) { wsSend('skillcast', { key: d.key, x: pt.x, z: pt.z }); }
+        else { wsSend('skillcast', { key: d.key }); }
+      } catch (e3) { }
+    }
+    document.addEventListener('pointerup', endDrag);
+    document.addEventListener('pointercancel', function () {
+      drag = null; window._skDrag = null; skIndicatorHide();
+    });
+  }
+}
+
+/* skillfx：服务端广播的特效（含自己 ✓）→ 调 vfx.js 播 */
+var _fxPend = [];
+var _myGaleFx = null, _myShieldFx = null;   // ★ round587：跟随自己的持续特效
+var _myBerserkFx = null;                    // ★ round592：暴走自身特效
+var _myBloodrageFx = null;                  // ★ round593：血怒持续光环
+var _myIceFx = null;                        // ★ round593：自身冰封冰块
+var _myTankFx = null;                       // ★ round593：坦克体型光环
+var _myPlagueFx = null;                     // ★ round594：病毒扩散绿色齿轮
+var _galeAcc = 0, _galeLX = null, _galeLZ = null;   // ★ round588：动态残影
+/* ★★★ round572（用户："分身头顶的名字和血条要和玩家那套一模一样"）★★★
+   ★ 旧做法（已删）：自己用 THREE.Sprite + PlaneGeometry 画 3D 名牌/血条
+     → 字号、条宽、绿色渐变、血量数字全和玩家不一样 ✗
+   ★ 新做法：**整条复用玩家那一套** ✗ 一行样式都不自己写 ✓
+     · 模型：hero()（和本体同一个构建器 ✓ 体型天然一致 ✓）
+     · 名牌：mkMobUI()（其他玩家用的就是它 ✓ 同名/同条/同数字 ✓）
+     · 位置：每帧 project(cam) + UI.plate.move（和 netUpdate 里那段一字不差 ✓）
+     · 血量：直接读"主人本人"的 HP/HPMAX → 和本体那块牌完全相同 ✓
+   ★ 铁律：这里只准调用 core 已有的构建器 / 动画函数 ✗ 不准再手搓 Sprite ✓ */
+var CLONES = {};
+var _skcV3 = null;
+
+/* 分身的"主人"血量（显示和本人一致 ✓）
+   ★ 自己的分身：读本地 HP/HPMAX ✓
+   ★ 别人的分身：读 NET.others[role_id]（服务器快照里的权威血量 ✓）*/
+function skCloneOwnerHp(owner) {
+  if (owner == null) { return null; }
+  try {
+    if (typeof WSC !== 'undefined' && WSC && WSC.myId != null &&
+        String(WSC.myId) === String(owner)) {
+      return {
+        hp: (typeof HP === 'number') ? HP : 100,
+        mx: (typeof HPMAX === 'number' && HPMAX > 0) ? HPMAX : 100
+      };
+    }
+    var o = (typeof NET !== 'undefined' && NET.others) ? NET.others[owner] : null;
+    if (o) {
+      return {
+        hp: (typeof o.hp === 'number') ? o.hp : 100,
+        mx: (typeof o.hpMax === 'number' && o.hpMax > 0) ? o.hpMax : 100
+      };
+    }
+  } catch (e) { }
+  return null;
+}
+
+/* 真正移除（淡出结束后 / 没有模型时）*/
+function skCloneRemove(cid) {
+  var g = CLONES[cid];
+  if (!g) { return; }
+  try { if (g._ui && typeof UI !== 'undefined' && UI.plate) { UI.plate.remove(g._ui); } } catch (e1) { }
+  try { if (typeof scene !== 'undefined' && scene) { scene.remove(g); } } catch (e2) { }
+  delete CLONES[cid];
+}
+
+/* ★★★ round573（用户："补一个 AI 分身消失的淡出动画"）★★★
+   · 模型：材质 opacity 从原值（0.78 / 兜底 0.55）线性降到 0 ✓ 0.5 秒
+   · 名牌：同一个时长淡出（用 opacity ✗ 不用 display
+     —— display 会被 skClonePlate / UI.plate.show 每帧覆盖，opacity 不会 ✓）
+   · 淡出期间【不再走、不再挥刀、不再更新名牌】✓ 只做一件事：变淡 ✓
+   · 到 0 才真正 scene.remove + 移除名牌 div ✓（不留孤儿 ✓）*/
+var SK_CLONE_FADE = 0.5;
+function skCloneDrop(cid) {
+  var g = CLONES[cid];
+  if (!g) { return; }
+  if (g._dying != null) { return; }         // 已经在淡出了 ✗ 不重来 ✓
+  g._dying = 0;
+  g._fadeMats = [];
+  try {
+    g.traverse(function (o) {
+      if (!o.isMesh || !o.material) { return; }
+      var m = o.material;
+      for (var i = 0; i < g._fadeMats.length; i++) {
+        if (g._fadeMats[i].m === m) { return; }   // 同一份材质只记一次 ✓
+      }
+      m.transparent = true;
+      g._fadeMats.push({ m: m, o: (typeof m.opacity === 'number') ? m.opacity : 0.78 });
+    });
+  } catch (e0) { }
+  try {
+    if (g._ui && g._ui.wrap) {
+      g._ui.wrap.style.transition = 'opacity ' + SK_CLONE_FADE + 's linear';
+      g._ui.wrap.style.opacity = '0';
+    }
+  } catch (e1) { }
+}
+function skCloneFadeTick(g, dt, cid) {
+  g._dying += dt;
+  var k = Math.min(1, g._dying / SK_CLONE_FADE);
+  var a = 1 - k;
+  try {
+    for (var i = 0; i < g._fadeMats.length; i++) {
+      g._fadeMats[i].m.opacity = g._fadeMats[i].o * a;
+    }
+  } catch (e) { }
+  if (k >= 1) { skCloneRemove(cid); }
+}
+
+/* 头顶名牌：照抄其他玩家那条路（mkMobUI + 每帧投影到屏幕 ✓）*/
+function skClonePlate(g) {
+  var ui = g._ui;
+  if (!ui) { return; }
+  if (typeof cam === 'undefined' || !cam || typeof THREE === 'undefined') { return; }
+  if (!_skcV3) { _skcV3 = new THREE.Vector3(); }
+  var py = (typeof heroPlateY === 'function')
+    ? heroPlateY({ h: g._h }) : ((g._h || 2.97) * 0.42 + 0.61);
+  _skcV3.set(g.position.x, py, g.position.z).project(cam);
+  var vis = (_skcV3.z > -1 && _skcV3.z < 1 &&
+             Math.abs(_skcV3.x) < 1.35 && Math.abs(_skcV3.y) < 1.5);
+  UI.plate.show(ui, vis);
+  if (!vis) { return; }
+  var sx = (_skcV3.x * 0.5 + 0.5) * innerWidth;
+  var sy = (-_skcV3.y * 0.5 + 0.5) * innerHeight;
+  var _ox = sx | 0, _oy = sy | 0;
+  if (g._mvx !== _ox || g._mvy !== _oy) {
+    g._mvx = _ox; g._mvy = _oy;
+    UI.plate.move(ui, sx, sy);
+  }
+  /* ★ round575：优先用【分身自己的血】✓ 服务器没带才退回显示主人的血 */
+  var hp, mx;
+  if (typeof g._hp === 'number' && typeof g._hpm === 'number' && g._hpm > 0) {
+    hp = g._hp; mx = g._hpm;
+  } else {
+    var inf = skCloneOwnerHp(g._owner);
+    hp = inf ? inf.hp : 100; mx = inf ? inf.mx : 100;
+  }
+  var pct = Math.max(0, Math.min(100, hp / Math.max(1, mx) * 100));
+  var pi = Math.round(pct);
+  if (g._hpi !== pi) { g._hpi = pi; UI.plate.hpWidth(ui, pi + '%'); }
+  if (g._hpc !== 1) {
+    g._hpc = 1;
+    UI.plate.hpColor(ui, (typeof BAR_PLR === 'string')
+      ? BAR_PLR : 'linear-gradient(180deg,#7ee08a,#3aa04a)');
+  }
+  var bt = String(Math.max(0, Math.round(hp)));
+  if (g._bts !== bt) { g._bts = bt; UI.plate.barText(ui, bt, '#fff', 10); }
+}
+
+/* 每帧：位置插值 + 走路 + 挥刀 + 名牌
+   ★ 原来的 40ms setInterval 已删 ✗ 改成跟主循环同一帧率 ✓
+     （不然走路是一顿一顿的 ✗ 而且和动画不同步 ✓）*/
+function skCloneTick(dt) {
+  var now = performance.now();
+  for (var k in CLONES) {
+    var g = CLONES[k];
+    if (!g) { continue; }
+    /* ★ round573：正在淡出 → 只推进透明度，其它一律不动 ✓ */
+    if (g._dying != null) { skCloneFadeTick(g, dt, k); continue; }
+    if (g._lastSync && (now - g._lastSync) > 35000) { skCloneDrop(k); continue; }
+    var hh = g._hh;
+    /* --- ① 逻辑位置插值（追服务器目标点 ✓）--- */
+    var tx = g.userData.tx, tz = g.userData.tz;
+    var lx = (typeof g._lx === 'number') ? g._lx : g.position.x;
+    var lz = (typeof g._lz === 'number') ? g._lz : g.position.z;
+    var moved = 0;
+    if (tx != null && tz != null) {
+      var dx = tx - lx, dz = tz - lz;
+      if (Math.abs(dx) + Math.abs(dz) > 0.01) {
+        var f = 1 - Math.pow(0.8, Math.max(0.001, dt) / 0.04);   // 和原来 0.2/40ms 等效 ✓
+        lx += dx * f; lz += dz * f;
+        g._yaw = Math.atan2(dx, dz);
+        moved = Math.abs(dx * f) + Math.abs(dz * f);
+      }
+    }
+    g._lx = lx; g._lz = lz;
+    /* --- ② 走路（和玩家 walkT 同一套角度 ✓）--- */
+    if (hh && g._atkT < 0) {
+      g.position.x = lx; g.position.z = lz;
+      g.rotation.y = g._yaw || 0;
+      if (moved > 0.002) {
+        g._walkT = (g._walkT || 0) + dt * 7.5;
+        var sw = Math.sin(g._walkT) * 0.72;
+        hh.legL.rotation.x = sw; hh.legR.rotation.x = -sw;
+        hh.armL.rotation.x = -sw * 0.75; hh.armR.rotation.x = sw * 0.45;
+        g.position.y = 0.1 + Math.abs(Math.sin(g._walkT)) * 0.05;
+      } else {
+        hh.legL.rotation.x *= 0.9; hh.legR.rotation.x *= 0.9;
+        hh.armL.rotation.x *= 0.9; hh.armR.rotation.x *= 0.9;
+        g.position.y += (0.1 - g.position.y) * Math.min(1, dt * 10);
+      }
+    }
+    /* --- ③ 挥刀（自动战斗/其他玩家同一套 heroAtkPose ✓）--- */
+    if (hh && g._atkT >= 0) {
+      g._atkT += dt * ((typeof ATK_ANIM_SPD === 'number') ? ATK_ANIM_SPD : 1.2);
+      var alive = false;
+      try {
+        if (typeof heroAtkPose === 'function') {
+          alive = heroAtkPose(hh, g._atkT, lx, lz, g._yaw || 0,
+                              g._wlook || 'sword', 0.1, 0);
+        }
+      } catch (e1) { alive = false; }
+      if (!alive) {
+        g._atkT = -1;
+        try {
+          if (typeof heroAtkReset === 'function') {
+            heroAtkReset(hh, lx, lz, g._yaw || 0);
+          }
+        } catch (e2) { }
+        g.position.set(lx, 0.1, lz);   // heroAtkReset 会写 y=0 ✗ 分身基线是 0.1 ✓
+        g.rotation.y = g._yaw || 0;
+      }
+    }
+    /* --- ④ 名牌（和玩家完全是同一个 DOM 组件 ✓）--- */
+    skClonePlate(g);
+  }
+}
+function skCloneHandle(d) {
+  var sc = (typeof scene !== 'undefined') ? scene : null;
+  if (!sc || !window.THREE) { return; }
+  var cid = d.cid || 'c';
+  /* 消散（模型 + 名牌一起收 ✓）*/
+  if (d.gone) { skCloneDrop(cid); return; }
+  /* 挥刀信号：服务器每 0.9 秒发一次 ✗ 这里只记"该起手了" ✓
+     ★ 动画由 skCloneTick 每帧推进（和自动战斗的 atkT 那条路一模一样 ✓）
+     ★ 旧版是"摆个姿势 + 260ms 后复位" ✗ 只会闪一下、也没有摆腿/收招 ✓ */
+  if (d.atk) {
+    var ga = CLONES[cid];
+    if (ga && ga._hh) {
+      ga._atkT = 0;
+      ga._lastSync = performance.now();
+    }
+    return;
+  }
+  /* 位置同步：只记目标点 ✗ 实际位移交给每帧插值（60fps 才顺 ✓）*/
+  if (d.move) {
+    var gm = CLONES[cid];
+    if (gm) {
+      gm.userData.tx = d.x; gm.userData.tz = d.z;
+      /* ★ round575：分身血条跟着服务器走（它现在会被打 ✓）*/
+      if (typeof d.hp === 'number') { gm._hp = d.hp; }
+      if (typeof d.hpm === 'number' && d.hpm > 0) { gm._hpm = d.hpm; }
+      gm._lastSync = performance.now();
+    }
+    return;
+  }
+  if (CLONES[cid]) { return; }
+  /* 生成：先播一个短暂的"出现"烟雾 ✓ 和分身本身没关系 ✓ */
+  try {
+    VFX.spawn('puff', { x: d.x, z: d.z, size: 0.62, dur: 0.6, seed: 7 }, sc);
+  } catch (e1) { }
+  var g = null, hh = null;
+  /* ★ round569（用户："直接用玩家的模型"）→ 用 core 里那个 hero() ✓
+     ★ 它和【本体】是同一个构建器 ✗ 体型天然一致 ✓（不用再猜缩放）*/
+  try {
+    if (typeof hero === 'function') {
+      var _h = hero(d.sk || 'f01', d.skc || {});
+      if (_h && _h.g) { g = _h.g; hh = _h; }
+    }
+  } catch (e0) { g = null; hh = null; }
+  if (!g) {
+    try {
+      if (typeof skBuildHero === 'function') {
+        var _h2 = skBuildHero(d.sk || 'f01', d.skc || {});
+        if (_h2 && _h2.g) { g = _h2.g; hh = _h2; }
+      }
+    } catch (e1) { }
+  }
+  if (!g) {
+    g = new THREE.Group();
+    var mat = new THREE.MeshBasicMaterial({ color: 0x8fd0ff, transparent: true, opacity: 0.55 });
+    var body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.6, 0.55), mat);
+    body.position.y = 1.0; g.add(body);
+    var head = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.62, 0.62), mat);
+    head.position.y = 2.1; g.add(head);
+  } else {
+    g.traverse(function (o) {
+      if (o.isMesh && o.material) {
+        o.material = o.material.clone();
+        o.material.transparent = true;
+        o.material.opacity = 0.78;
+        if (o.material.color) { o.material.color.lerp(new THREE.Color(0x66aaff), 0.3); }
+      }
+    });
+  }
+  /* ★★ round571：玩家模型都乘 G.HERO_SCALE（0.42）✗ 之前没乘 → 大了 2.4 倍 ✓ */
+  try {
+    if (typeof G !== 'undefined' && G.HERO_SCALE) {
+      g.scale.set(G.HERO_SCALE, G.HERO_SCALE, G.HERO_SCALE);
+    }
+  } catch (e8) { }
+  /* ★★★ round572：头顶名牌【整条复用玩家的】★★★
+     mkMobUI = 其他玩家头顶那块牌（名字 + 绿条 + 条内数字 ✓）
+     ★ 不再用 CanvasTexture/Sprite/PlaneGeometry 自己画 ✗（旧代码已删 ✓）
+     ★ 每帧在 skClonePlate 里 project(cam) + UI.plate.move ✓ 和 netUpdate 一样 */
+  var ui = null;
+  try {
+    if (typeof mkMobUI === 'function') {
+      ui = mkMobUI(d.nm || '道友', 100);
+      if (ui) { UI.plate.name(ui, d.nm || '道友'); }
+    }
+  } catch (e7) { ui = null; }
+  g.position.set(d.x, 0.1, d.z);
+  g._hh = hh;
+  g._h = (hh && hh.h) ? hh.h : 2.97;
+  g._ui = ui;
+  g._owner = (d.owner != null) ? d.owner : null;
+  /* ★ round575：分身自己的血（可被攻击了 ✓ 没带就退回显示主人的血）*/
+  g._hp = (typeof d.hp === 'number') ? d.hp : null;
+  g._hpm = (typeof d.hpm === 'number' && d.hpm > 0) ? d.hpm : null;
+  g._walkT = 0;
+  g._walk = 0;
+  g._atkT = -1;
+  g._yaw = 0;
+  g._lx = d.x; g._lz = d.z;
+  g._wlook = (typeof MY_WEAPON !== 'undefined' && MY_WEAPON && MY_WEAPON.look)
+    ? MY_WEAPON.look : 'sword';
+  g.userData = g.userData || {};
+  g.userData.tx = d.x; g.userData.tz = d.z;
+  g._lastSync = performance.now();
+  sc.add(g);
+  CLONES[cid] = g;
+  skClonePlate(g);        /* 第一帧就摆好名牌 ✗ 不然要等一帧才出现 ✓ */
+}
+function skFxPlay(d) {
+  if (!d || !d.k) { return; }
+  /* ★ round564：分身（生成 / 消散）单独处理 ✗ 不走通用特效 ✓ */
+  /* ★★ round571：凡是 clone 相关的消息【一律】不走通用特效
+     （不然会再播一遍网页里那套云雾 → 就是看到的一堆大白球 ✓）*/
+  if (d.k === 'clone') {
+    if (d.spawn || d.gone || d.move || d.atk) { try { skCloneHandle(d); } catch (e) { } }
+    return;
+  }
+  _fxPend.push(d);
+}
+function skFxTick(dt) {
+  if (window.VFX && _fxPend.length) {
+    var sc = (typeof scene !== 'undefined') ? scene : null;
+    for (var i = 0; i < _fxPend.length; i++) {
+      var d = _fxPend[i];
+      try {
+        /* ★ round587：疾风步/灵能护盾贴在自己身上（跟随移动，持续到结束/破碎）*/
+        var _mineFx = (d.by === undefined || d.by === null ||
+                       (typeof WSC !== 'undefined' && d.by === WSC.myId));
+        if (d.k === 'gale' || d.k === 'shield' || d.k === 'berserk' || d.k === 'bloodrage') {
+          if (!_mineFx || typeof H === 'undefined' || !H || !H.g) { continue; }
+          if (d.k === 'gale') {
+            if (_myGaleFx) { VFX.kill(_myGaleFx); _myGaleFx = null; }
+            _myGaleFx = VFX.spawn('gale', { attach: H.g, dur: d.dur, n: 0,
+                                           drift: 3, seed: d.seed }, null);
+          } else if (d.k === 'berserk') {
+            if (_myBerserkFx) { VFX.kill(_myBerserkFx); _myBerserkFx = null; }
+            _myBerserkFx = VFX.spawn('berserk', { attach: H.g, dur: d.dur, n: 0,
+                                                 seed: d.seed }, null);
+          } else if (d.k === 'bloodrage') {
+            if (_myBloodrageFx) { VFX.kill(_myBloodrageFx); _myBloodrageFx = null; }
+            _myBloodrageFx = VFX.spawn('bloodrage', { attach: H.g, dur: d.dur, n: 0,
+                                                     seed: d.seed }, null);
+          } else {
+            if (_myShieldFx) { VFX.kill(_myShieldFx); _myShieldFx = null; }
+            _myShieldFx = VFX.spawn('shield', { attach: H.g, dur: d.dur,
+                                                seed: d.seed }, null);
+          }
+          continue;
+        }
+        VFX.spawn(d.k, { x: d.x, z: d.z, r: d.r, dur: d.dur, seed: d.seed,
+                         yaw: d.yaw, n: d.n, lh: d.lh, w: d.w, spread: d.spread }, sc);
+      } catch (e) { }
+    }
+    _fxPend.length = 0;
+  }
+  if (window.VFX) { try { VFX.tick(dt); } catch (e2) { } }
+  /* ★ round588/592：疾风步（蓝）/暴走（红）期间按移动轨迹连续生成残影 */
+  var _trailT = Math.max(MY_GALE_T, MY_BERSERK_T);
+  if (_trailT > 0 && window.VFX && typeof P !== 'undefined' && typeof scene !== 'undefined') {
+    _galeAcc += dt;
+    var _gmv = (_galeLX === null) ? 0 : Math.hypot(P.x - _galeLX, P.z - _galeLZ);
+    if (_galeAcc >= 0.08 && _gmv > 0.035) {
+      _galeAcc = 0;
+      _galeLX = P.x; _galeLZ = P.z;
+      try { VFX.spawn('ghost', { x: P.x, z: P.z, yaw: P.yaw || 0,
+                                color: (MY_BERSERK_T > 0 ? 0xff5a3a : 0x9fe8ff),
+                                dur: 0.5, seed: (Date.now() & 0xffff) }, scene); } catch (eG) { }
+    }
+    if (_galeLX === null) { _galeLX = P.x; _galeLZ = P.z; }
+  } else if (_trailT <= 0) {
+    _galeLX = null; _galeLZ = null;
+  }
+  /* ★ round572：分身每帧更新（走路/挥刀/名牌位置 ✓ 和主循环同帧率）*/
+  try { skCloneTick(dt); } catch (e3) { }
+  /* 冷却倒计时 + 每 0.2 秒刷一次图标 */
+  var dirty = false;
+  for (var k in SKCD) {
+    if (SKCD[k] > 0) {
+      SKCD[k] = Math.max(0, SKCD[k] - dt);
+      if (SKCD[k] === 0) { delete SKCD[k]; dirty = true; }
+    }
+  }
+  for (var tk in SK_TRIG) {
+    SK_TRIG[tk] -= dt;
+    if (SK_TRIG[tk] <= 0) { delete SK_TRIG[tk]; dirty = true; }
+  }
+  skBarAcc += dt;
+  if (dirty || skBarAcc > 0.25) { skBarAcc = 0; skBarRender(); }
+}
+var skBarAcc = 0;
+var SK_TRIG = {};        /* {技能key: 剩余秒} 被动触发后的状态光 */
+function skTrigLight(key, sec) {
+  SK_TRIG[key] = sec || 3;
+  try { skBarRender(); } catch (e) { }
+}
+/* 恢复上次拖到的位置 */
+try {
+  var _pos = JSON.parse(localStorage.getItem('skBarPos') || 'null');
+  if (_pos && _pos.l) {
+    var _bx = document.getElementById('skBar');
+    if (_bx) { _bx.style.left = _pos.l; _bx.style.top = _pos.t; _bx.style.bottom = 'auto'; }
+  }
+} catch (e) { }
+(function skBarLoop() {
+  var last = performance.now();
+  function step(now) {
+    var dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+    try { skFxTick(dt); } catch (e) { }
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+})();
+
+function skAsk() { try { wsSend('skillask', {}); } catch (e) { } }
+
+
+/* ★★ round560：技能说明浮窗（复用背包那个 bagTipBox ✓ 不用新写一套）*/
+function skSkillTip(x, y, key) {
+  var d = (SK.byKey || {})[key] || {};
+  if (!d.k) { return; }
+  var kindName = d.kind === 'A' ? '主动' : (d.kind === 'B' ? '被动释放' : '被动加成');
+  var owned = !!(SK.learn || {})[key];
+  var h = '<b style="color:#ffd83d;font-size:13px">' + (d.n || key) + '</b>' +
+    '<i style="color:#8fa3b8"> · ' + kindName + (owned ? ' · 已学' : ' · 未学') + '</i><br>' +
+    '<i style="color:#9fb0c2">灵气 ' + (d.qi || 0) + ' · ' +
+    (d.cd ? ('CD ' + d.cd + ' 秒') : '无冷却') +
+    (d.r ? (' · 半径 ' + d.r + ' 米') : '') +
+    (d.rg ? (' · 射程 ' + d.rg + ' 米') : '') + '</i><br>' +
+    '<span style="color:#dfe8f2;line-height:1.6">' + (d.d || '（暂无说明）') + '</span>';
+  if (window.bagTipShowAt) { bagTipShowAt(x, y, h); }
+  if (window.bagTipStickyOn) { bagTipStickyOn(); }
+}
+
+function skRender() {
+  var box = document.getElementById('skList');
+  if (!box) { return; }
+  var info = document.getElementById('skInfo');
+  var slots = document.getElementById('skSlots');
+  var tabs = document.querySelectorAll('#skKindTabs .bagB');
+  for (var i = 0; i < tabs.length; i++) {
+    tabs[i].className = 'bagB' + (tabs[i].getAttribute('data-sk') === SK.kind ? ' on' : '');
+  }
+  var learnt = [], list = SK.defs.filter(function (d) { return d.kind === SK.kind; });
+  for (var k in SK.learn) { if (SK.learn[k] && SK.learn[k].kind === SK.kind) { learnt.push(k); } }
+  if (info) {
+    info.innerHTML = '已学 <b style="color:#ffd83d">' + learnt.length + '/20</b>' +
+      ' · 装配 <b style="color:#8ee0a8">' + (SK.load[SK.kind] || []).filter(Boolean).length + '/5</b>' +
+      (SK.forget ? ' · <b style="color:#ff9a8a">遗忘模式：点技能 = 遗忘（不返还）</b>' : '');
+  }
+  /* 5 个装配槽 */
+  if (slots) {
+    var sh = '';
+    for (var s = 0; s < 5; s++) {
+      var kk = (SK.load[SK.kind] || [])[s];
+      var nm = kk ? (SK.byKey[kk] || {}).n || kk : '+';
+      sh += '<div data-slotslot="' + s + '" style="flex:1 1 18%;min-width:64px;padding:6px 4px;' +
+        'border-radius:9px;text-align:center;font-size:11px;cursor:pointer;' +
+        'border:1px solid ' + (kk ? '#ffd83d88' : '#ffffff18') + ';' +
+        'background:' + (kk ? '#ffd83d1a' : '#ffffff08') + ';color:' + (kk ? '#ffd83d' : '#7f8fa0') + '">' +
+        (kk ? '<img src="' + (window.SKI ? SKI.icon(kk, SK.kind, 34) : '') + '" ' +
+          'style="width:30px;height:30px;border-radius:7px;display:block;margin:0 auto 3px">' : '') +
+        nm + '</div>';
+    }
+    slots.innerHTML = sh;
+  }
+  /* 技能列表 */
+  var h = '';
+  for (var j = 0; j < list.length; j++) {
+    var d = list[j];
+    var owned = !!SK.learn[d.k];
+    var on = (SK.load[SK.kind] || []).indexOf(d.k) >= 0;
+    var _lt = SK.learn[d.k] ? (+SK.learn[d.k].tier || 1) : 0;
+    h += '<div data-skk="' + d.k + '" style="padding:8px 6px;border-radius:9px;cursor:pointer;' +
+      'border:1px solid ' + (on ? '#ffd83d' : (owned ? '#8ee0a855' : '#ffffff14')) + ';' +
+      'background:' + (on ? '#ffd83d1a' : '#ffffff06') + '">' +
+      '<div style="display:flex;align-items:center;gap:6px">' +
+      '<img src="' + (window.SKI ? SKI.icon(d.k, d.kind, 34) : '') + '" ' +
+      'style="width:28px;height:28px;border-radius:7px;flex:0 0 28px;pointer-events:none">' +
+      '<div style="font-size:12.5px;color:' + (owned ? '#eaf2fb' : '#8b97a6') + ';font-weight:700">' +
+      d.n + ((owned && d.tmax > 1) ? '<span style="font-size:9.5px;color:#8ee0a8"> ·' + _lt + '品</span>'
+        : ((!owned && d.tmax > 1) ? '<span style="font-size:9.5px;color:#7f8fa0"> ·最高' + d.tmax + '品</span>' : '')) +
+      '</div></div>' +
+      '<div style="font-size:10px;color:#7f8fa0;margin-top:3px;line-height:1.5">' +
+      (d.qi ? ('灵气 ' + d.qi + ' · ') : '') + (d.cd ? ('CD ' + d.cd + 's') : '无CD') +
+      '</div>' +
+      (owned ? ('<div data-skequip="' + d.k + '" style="margin-top:4px;font-size:10px;' +
+        'text-align:center;padding:2px 0;border-radius:5px;' +
+        'background:' + (on ? '#ffd83d33' : '#8ee0a822') + ';color:' + (on ? '#ffd83d' : '#8ee0a8') +
+        '">' + (on ? '卸下' : '装配') + '</div>') : '') +
+      '</div>';
+  }
+  box.innerHTML = h;
+  /* ★ round562（用户："点击会显示透明的蓝色框"）→ 关掉系统高亮 + 自定义按下效果 */
+  try {
+    if (!window.__skListCss) {
+      window.__skListCss = true;
+      var st = document.createElement('style');
+      st.textContent = '#skList,#skList *{-webkit-tap-highlight-color:transparent;' +
+        'outline:none!important;-webkit-user-select:none;user-select:none}' +
+        '#skList [data-skk]{transition:transform .08s,border-color .12s,box-shadow .12s}' +
+        '#skList [data-skk]:active{transform:scale(0.96);border-color:#ffd83d!important;' +
+        'box-shadow:0 0 0 2px #ffd83d55}';
+      document.head.appendChild(st);
+    }
+  } catch (e0) { }
+  var msg = document.getElementById('skMsg');
+  if (msg) { msg.textContent = SK.msg || ''; }
+}
+
+function skBind() {
+  var tabs = document.getElementById('skKindTabs');
+  if (tabs && !tabs._b) {
+    tabs._b = true;
+    tabs.addEventListener('click', function (e) {
+      var t = e.target;
+      while (t && t !== tabs && !(t.getAttribute && t.getAttribute('data-sk'))) { t = t.parentNode; }
+      if (!t || t === tabs) { return; }
+      SK.kind = t.getAttribute('data-sk');
+      skRender();
+    });
+  }
+  var list = document.getElementById('skList');
+  if (list && !list._b) {
+    list._b = true;
+    list.addEventListener('click', function (e) {
+      var t = e.target;
+      while (t && t !== list && !(t.getAttribute && t.getAttribute('data-skk'))) { t = t.parentNode; }
+      if (!t || t === list) { return; }
+      /* ★ 先看是不是点了"装配/卸下"小按钮 */
+      var eqBtn = e.target;
+      while (eqBtn && eqBtn !== list && !(eqBtn.getAttribute && eqBtn.getAttribute('data-skequip'))) {
+        eqBtn = eqBtn.parentNode;
+      }
+      if (eqBtn && eqBtn !== list) {
+        var _ek = eqBtn.getAttribute('data-skequip');
+        var _sl = SK.load[SK.kind] || [];
+        var _at = _sl.indexOf(_ek);
+        try {
+          if (_at >= 0) { wsSend('skillload', { kind: SK.kind, slot: _at }); }
+          else {
+            var _e2 = _sl.indexOf(null);
+            if (_e2 < 0) { SK.msg = '5 个槽都满了，先卸下一个'; skRender(); return; }
+            wsSend('skillload', { kind: SK.kind, slot: _e2, key: _ek });
+          }
+        } catch (e4) { }
+        SK.msg = '';
+        skRender();
+        return;
+      }
+      var k = t.getAttribute('data-skk');
+      if (SK.forget) {
+        try { wsSend('skillforget', { key: k }); } catch (e1) { }
+        SK.msg = '正在遗忘…';
+        skRender();
+        return;
+      }
+      /* ★ round558（用户："点击技能可以查看说明"）
+         → 点卡片正文 = 看说明（装配用上面的小按钮 ✓）*/
+      var _d2 = (SK.byKey || {})[k] || {};
+      var _owned = !!SK.learn[k];
+      SK.msg = (_d2.n || k) +
+        (_owned ? '（已学）' : '（未学）') +
+        ' · ' + (_d2.qi ? ('灵气 ' + _d2.qi + ' ') : '') +
+        (_d2.cd ? ('CD ' + _d2.cd + 's ') : '无CD ') +
+        '· ' + (_d2.d || '暂无说明');
+      /* ★ 同时弹一个浮窗（手机上也看得见 ✓）*/
+      try { skSkillTip(e.clientX || 120, e.clientY || 260, k); } catch (e6) { }
+      skRender();
+    });
+  }
+  var slotsEl = document.getElementById('skSlots');
+  if (slotsEl && !slotsEl._b) {
+    slotsEl._b = true;
+    slotsEl.addEventListener('click', function (e) {
+      var t = e.target;
+      while (t && t !== slotsEl && !(t.getAttribute && t.getAttribute('data-slotslot'))) { t = t.parentNode; }
+      if (!t || t === slotsEl) { return; }
+      var idx = +t.getAttribute('data-slotslot');
+      if ((SK.load[SK.kind] || [])[idx]) {
+        try { wsSend('skillload', { kind: SK.kind, slot: idx }); } catch (e4) { }
+        skRender();
+      }
+    });
+  }
+  var fb = document.getElementById('skForget');
+  if (fb && !fb._b) {
+    fb._b = true;
+    fb.onclick = function () {
+      SK.forget = !SK.forget;
+      fb.className = 'bagB' + (SK.forget ? ' on' : '');
+      skRender();
+    };
+  }
+}
+
 function setTab(name) {
+  /* ★ round534（用户："悬浮窗离开背包界面应该自动关闭"）*/
+  try { if (name !== 'bag') { bagTipHide(); } } catch (e0) { }
   if (!name) { name = SET_DEF.setTab || 'view'; }
   /* ★★★ 第 263 轮（用户："别的导航按钮又是正常的，你出现做按钮不行吗"）★★★
      用户点破了关键：别的导航按钮都正常 ✗ 只有我做的"更多"有偏移 ✓
@@ -1691,27 +3477,27 @@ function setTab(name) {
     if (window.tkToastTop) { try { tkSyncToastTop(); } catch (e) { } }
     return;
   }
+  /* 画面/操作/音效共用主导航【设置】；二级导航只显示当前一页 */
+  var _subNames = { view: 1, ctrl: 1, audio: 1, ui: 1 };
+  var _mainName = _subNames[name] ? 'view' : name;
   var tabs = document.querySelectorAll('#setTabs .tab');
   for (var i = 0; i < tabs.length; i++) {
-    var on = (tabs[i].getAttribute('data-tab') === name);
+    var on = (tabs[i].getAttribute('data-tab') === _mainName);
     tabs[i].className = 'tab' + (on ? ' on' : '');
   }
   /* 第 272 轮（用户：把画面/操作/音效合成"设置"）
      最低风险做法：不动 HTML 结构 ✗ 三个面板还在原地 ✓
      只在这里"选设置时把它们一起显示"✓（搬 HTML 容易把别的钩子搬坏 ✗） */
-  var _mergePanes = { view: ['view', 'ctrl', 'audio'] };
-  /* ★★★ 第 273 轮（用户："为什么变成三个滑动条，我需要他们是在一个页面里"）★★★
-     病根：三个面板各自带 overflow-y:auto ✗
-       → 于是变成三条独立滚动条 ✓（用户看到的 ✓）
-     ★ 修：给外层 #setPanel 加一个 merge 类 ✗
-       CSS 里在这个类下把三个面板的【滚动关掉 + 高度放开】✓
-       → 它们就拼成一个连续页面 ✗ 只有一条滚动条 ✓✓ */
   var _sp = document.getElementById('setPanel');
-  if (_sp) {
-    if (_mergePanes[name]) { _sp.classList.add('merge'); }
-    else { _sp.classList.remove('merge'); }
+  if (_sp) { _sp.classList.remove('merge'); }
+  /* ★ round538：切到技能页 → 绑事件 + 拉一次状态 */
+  if (name === 'bag' && !(SK.defs && SK.defs.length)) {
+    try { skAsk(); } catch (e0) { }     /* ★ 背包也要技能说明 ✗ 先拉一次定义 ✓ */
   }
-  var _want = _mergePanes[name] || [name];
+  if (name === 'skill') {
+    try { skBind(); skAsk(); skRender(); } catch (e5) { }
+  }
+  var _want = [name];
   var panes = document.querySelectorAll('#setPanel .tabpane');
   var hit = false;
   for (var j = 0; j < panes.length; j++) {
@@ -1721,6 +3507,7 @@ function setTab(name) {
   }
   if (!hit) { return setTab('view'); }   // 存了个不存在的分类 → 退回第一页 ✓
   SETCFG.setTab = name;
+  try { setSubPaint(); } catch (eSP) { }
   /* ★★★ 第 119 轮修的真 bug（用户："属性和天赋点开不会第一时间显示，
      需要关闭重新点击后才会显示"）★★★
      病根：这里【只有背包页】挂了"切过来就刷新"的钩子 ✗
@@ -1738,12 +3525,885 @@ function setTab(name) {
   MKT.open = (name === 'mkt');
   if (name === 'mkt') { mktBindOnce(); mktAsk(true); }
   if (name === 'bag') { bagFetch(bagRender); }   // ★ 切到背包页就拉一次（只读接口 ✓ 很便宜）
-  if (name === 'stat') { statRender(); }         // ★ 第 119 轮：属性页
+  /* ★★ round467（用户："把装备栏和背包分开，装备栏单独设为导航栏"）★★
+     装备页要渲染两个装备槽（bagRender 里那段）+ 属性详情（equipRender）✓ */
+  if (name === 'equip') { bagRender(); equipRender(); }
+  if (name === 'stat') {
+    statRender();                                // ★ 第 119 轮：属性页
+    /* ★ round465：打开属性页就向服务器要一份最新的属性表 ✓
+       （不然看到的可能是进游戏时那份旧数值 ✗）*/
+    try { if (typeof wsSend === 'function' && WSC.ready) { wsSend('statask', {}); } } catch (e) { }
+  }
   if (name === 'talent') { talBind(); talRender(); }   // ★ 第 119 轮：天赋页
   if (name === 'wiki') { wikiBind(); wikiRender(); }   // ★ 第 148 轮：百科页
   setTimeout(setTabsHintUpd, 0);   // ★ 第 169 轮：切页后重算滚动提示 ✓
   if (name === 'party') { ptRender(); }          // ★ 第 119 轮：组队页（一个毛病 ✓ 一起修）
+  if (name === 'rank') { rankBindOnce(); rankChipsRender(); rankFetch(true); }   // ★ round424：排行榜页
+  if (name === 'skin') { skinOpen(); }            // ★ round488：皮肤页
   return name;
+}
+
+/* ============================================================ 皮肤页（round488）
+   ★ 40 个都在 SKIN_DEFS / skinpage 里 ✓ 没获得的也能点开看模型 ✓（用户要求）
+   ★ 预览用的是游戏里【同一个构建器】skBuildHero ✓ 所以看到的就是游戏里的样子 ✓ */
+
+/* ============================================================ 皮肤自定义 UI（round511）
+   ★ 5 个部位：眼型 / 嘴型 / 瞳色 / 头发色 / 衣服色
+   ★ 点一下 = 只改预览（不扣卡）✗ 点「确认更换」才发 skincustom ✓
+   ★ 服务端是权威：扣卡/校验都在那边 ✓ 这里只负责"看起来对不对" */
+var EYE_NF = ['标准', '圆眼', '细长', '猫眼', '下垂', '半眯', '星眼', '竖瞳', '清冷', '小豆'];
+var EYE_NM = ['窄长', '方眼', '凶眼', '小圆', '眯眼', '竖瞳', '三角', '肿眼', '单眼皮', '疤眼'];
+var MOUTH_N = ['平静', '微笑', '抿嘴', '张嘴', '咧嘴', '撇嘴', '八字', '嘟嘴', '大笑', '缝合'];
+/* ★ 和服务端 server/skin_custom.py 的 key 表【必须一致】✗ 发的是 key 不是下标 ✓ */
+var EYE_KEY_F = ['big', 'round', 'thin', 'cat', 'droop', 'half', 'star', 'slit', 'cold', 'dot'];
+var EYE_KEY_M = ['narrow', 'square', 'fierce', 'small', 'squint', 'slit', 'tri', 'puffy', 'mono', 'scar'];
+var MOUTH_KEY = ['calm', 'smile', 'tight', 'open', 'grin', 'smirk', 'sad', 'pout', 'laugh', 'stitch'];
+var PALETTE = [0xf5f5f5, 0xe8dcc8, 0xffd83d, 0xffb03a, 0xff7a5c, 0xe2506a,
+               0xc9308e, 0x9a5ce0, 0x5c7cff, 0x3ec6ff, 0x2ee0b0, 0x7ee08a,
+               0xc8e05c, 0x8a6a4a, 0x5a5a66, 0x2b2b33, 0x101018, 0x8a2b2b];
+var SKC = { open: false, tab: 'ey', sel: null, pending: {} };
+
+function skcGender(k) {
+  try {
+    var key = k || SKIN.sel;
+    return (SKIN_DEFS[key] && SKIN_DEFS[key].g === 'm') ? 'm' : 'f';
+  } catch (e) { return 'f'; }
+}
+function skcCustomOf(skinKey) {
+  var m = (typeof MY_CUSTOM_MAP !== 'undefined' && MY_CUSTOM_MAP) ? MY_CUSTOM_MAP[skinKey] : null;
+  return m ? JSON.parse(JSON.stringify(m)) : {};
+}
+function skcPending() {
+  /* 已保存的 + 这次预览改的 = 预览用的那份 ✓ */
+  var base = skcCustomOf(SKIN.sel);
+  for (var k in SKC.pending) { base[k] = SKC.pending[k]; }
+  return base;
+}
+function skcPreview() {
+  /* ★★ round518（用户："眼睛、嘴巴没办法预览"）
+     ★ 上一版是"新建一个 hero 塞进场景"✗ 实际没换掉（画布一帧都没变 ✓ 测出来的）
+     ★ 现在：直接【按新自定义重建】，替换 SKIN.hero，并立刻渲染一帧 ✓
+       渲染失败也不会静默：出问题会在控制台留一行 ✓ */
+  try {
+    if (!SKIN.ready || !SKIN.scene) { return false; }
+    var nc = skcPending();
+    var nh = skBuildHero(SKIN.sel, nc);
+    if (!nh) { return false; }
+    var oldH = SKIN.hero;
+    var px = 0, py = 0, pz = 0, ry = 0;
+    if (oldH && oldH.g) {
+      px = oldH.g.position.x; py = oldH.g.position.y; pz = oldH.g.position.z;
+      ry = oldH.g.rotation.y;
+      SKIN.scene.remove(oldH.g);
+      try {
+        oldH.g.traverse(function (o) { if (o.isMesh && o.geometry) { o.geometry.dispose(); } });
+      } catch (e0) { }
+    }
+    nh.g.position.set(px, py, pz);
+    nh.g.rotation.y = ry;
+    SKIN.scene.add(nh.g);
+    SKIN.hero = nh;
+    SKIN.rot = ry;
+    SKIN.r.render(SKIN.scene, SKIN.cam);      /* 立刻出一帧 ✗ 不等下一次 tick ✓ */
+    return true;
+  } catch (e) {
+    console.log('[skin] 预览重建失败：' + e);
+    return false;
+  }
+}
+
+/* ---- 自定义面板的小头像（真实构建器渲染 ✓）----
+   ★ 只建一个 WebGL 上下文 ✗ 换着渲染多次抓图 ✓（开 10 个上下文手机扛不住）*/
+var SKC_TH = {};
+function skcThumbCtx() {
+  if (SKC._tc) { return SKC._tc; }
+  var cv = document.createElement('canvas');
+  cv.width = 108; cv.height = 84;
+  var r = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
+  r.setPixelRatio(2);
+  r.setSize(108, 84, false);
+  r.shadowMap.enabled = false;
+  var sc = new THREE.Scene();
+  sc.add(new THREE.HemisphereLight(0xd8e4f4, 0x3a3020, 1.05));
+  var d1 = new THREE.DirectionalLight(0xfff3d8, 0.95); d1.position.set(2.2, 3.4, 3.6); sc.add(d1);
+  var d2 = new THREE.DirectionalLight(0x8fb0ff, 0.38); d2.position.set(-2.6, 1.2, -1.6); sc.add(d2);
+  SKC._tc = { r: r, sc: sc, cv: cv };
+  return SKC._tc;
+}
+function skcThumb(skinKey, custom, field) {
+  var g = skcGender(skinKey);
+  var k = skinKey + '|' + g + '|' + field + '|' + JSON.stringify(custom || {});
+  if (SKC_TH[k]) { return SKC_TH[k]; }
+  try {
+    var c = skcThumbCtx();
+    var hero = skBuildHero(skinKey, custom);
+    if (!hero) { return ''; }
+    c.sc.add(hero.g);
+    hero.g.rotation.y = 0.16;
+    var hy = hero.headY, hh = hero.headH;
+    var fov = 30;
+    var wantH = (field === 'mo') ? hh * 0.80 : hh * 1.55;
+    var midY = (field === 'mo') ? (hy - hh * 0.26) : (hy + hh * 0.02);
+    var z = wantH / (2 * Math.tan(fov * Math.PI / 360));
+    var cam = new THREE.PerspectiveCamera(fov, 108 / 84, 0.1, 60);
+    cam.position.set(0, midY, z);
+    cam.lookAt(0, midY, 0);
+    c.r.render(c.sc, cam);
+    /* ★★ round521（用户："眼睛和嘴巴的预览还是看不到"）
+       ★ 根因：WebGL 画布默认 preserveDrawingBuffer:false ✗
+         render 之后浏览器随时可以清缓冲 ✗ 这时 toDataURL 出来的可能是一张【全透明】图 ✓
+         在无头/部分手机上必现 → 玩家看到的就是"一片黑/空白" ✓
+       ★ 修：用 gl.readPixels 把像素【当场读出来】✗ 不依赖缓冲还在不在 ✓
+         再翻一下 Y 画到 2D 画布上出 PNG ✓ 这条最稳 ✓ */
+    var url = '';
+    try {
+      var gl = c.r.getContext();
+      var pw = 108 * 2, ph = 84 * 2;
+      c.r.setSize(108, 84, false);
+      var buf = new Uint8Array(pw * ph * 4);
+      gl.readPixels(0, 0, pw, ph, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+      var cv2 = document.createElement('canvas');
+      cv2.width = pw; cv2.height = ph;
+      var ctx2 = cv2.getContext('2d');
+      var img2 = ctx2.createImageData(pw, ph);
+      for (var yy = 0; yy < ph; yy++) {
+        var src = (ph - 1 - yy) * pw * 4, dst = yy * pw * 4;
+        img2.data.set(buf.subarray(src, src + pw * 4), dst);
+      }
+      /* 背景填成面板色 ✗ WebGL 的透明区域在网络里会变成纯黑 ✓ */
+      ctx2.putImageData(img2, 0, 0);
+      url = cv2.toDataURL('image/png');
+    } catch (e2) {
+      url = '';
+    }
+    c.sc.remove(hero.g);
+    hero.g.traverse(function (o) { if (o.isMesh && o.geometry) { o.geometry.dispose(); } });
+    SKC_TH[k] = url;
+    return url;
+  } catch (e) {
+    return '';
+  }
+}
+
+/* ---- 调色盘小工具（round520）---- */
+function skcRgb2Hsl(n) {
+  var r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  var mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  var h = 0, s2 = 0, l = (mx + mn) / 2;
+  if (d > 1e-6) {
+    s2 = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+    if (mx === r) { h = ((g - b) / d) % 6; }
+    else if (mx === g) { h = (b - r) / d + 2; }
+    else { h = (r - g) / d + 4; }
+    h *= 60;
+    if (h < 0) { h += 360; }
+  }
+  return [h, s2, l];
+}
+function skcHsl2Rgb(h, s2, l) {
+  h = ((h % 360) + 360) % 360;
+  var c = (1 - Math.abs(2 * l - 1)) * s2;
+  var x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  var m = l - c / 2;
+  var r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; }
+  else if (h < 180) { g = c; b = x; } else if (h < 240) { g = x; b = c; }
+  else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+  return ((Math.round((r + m) * 255) << 16) |
+          (Math.round((g + m) * 255) << 8) |
+          Math.round((b + m) * 255)) >>> 0;
+}
+function skcSlider(k, label, val, min, max, bg) {
+  return '<div style="display:flex;align-items:center;gap:6px;margin:4px 0">' +
+    '<span style="width:30px;font-size:10.5px;color:#8fa3b8">' + label + '</span>' +
+    '<input data-skc-sl="' + k + '" type="range" min="' + min + '" max="' + max + '" value="' + val + '"' +
+    ' style="flex:1 1 auto;height:14px;accent-color:#ffd83d;background:' + bg + '">' +
+    '<span style="width:26px;text-align:right;font-size:10.5px;color:#b8c6d6">' + val + '</span></div>';
+}
+
+function skcRender() {
+  var tabs = document.getElementById('skCTabs');
+  var opts = document.getElementById('skCOpts');
+  var cost = document.getElementById('skCCost');
+  var okB = document.getElementById('skCOk');
+  if (!tabs || !opts) { return; }
+  var T = [['ey', '👁 眼睛'], ['mo', '👄 嘴巴'], ['iris', '👀 瞳色'],
+           ['hair', '🎨 头发'], ['shirt', '👕 衣服'], ['skirt', '👗 裙子'], ['pants', '👖 裤子']];
+  var th = '';
+  for (var i = 0; i < T.length; i++) {
+    var on = (SKC.tab === T[i][0]);
+    th += '<div class="bagB' + (on ? ' on' : '') + '" data-skc-tab="' + T[i][0] + '"' +
+      ' style="padding:3px 8px;font-size:11px">' + T[i][1] + '</div>';
+  }
+  tabs.innerHTML = th;
+
+  var cur = skcPending();
+  var oh = '';
+  if (SKC.tab === 'ey' || SKC.tab === 'mo') {
+    var isEye = (SKC.tab === 'ey');
+    var names = isEye ? ((skcGender() === 'm') ? EYE_NM : EYE_NF) : MOUTH_N;
+    var curV = isEye ? cur.ey : cur.mo;
+    for (var e = 0; e < 10; e++) {
+      var cc2 = JSON.parse(JSON.stringify(cur));
+      if (isEye) { cc2.ey = e; } else { cc2.mo = e; }
+      var url = skcThumb(SKIN.sel, cc2, SKC.tab);
+      var on2 = (curV === e);
+      /* ★ round523（用户："选择那些应该加一个选中框"）
+         → 选中的格子：3px 金框 + 金光 + 右上角 ✓ 角标 ✓ 一眼看出来选的是哪个 */
+      oh += '<div data-skc-val="' + e + '" style="position:relative;width:74px;border-radius:8px;' +
+        'overflow:hidden;border:3px solid ' + (on2 ? '#ffd83d' : '#ffffff18') + ';' +
+        'background:#0f141b;cursor:pointer;' +
+        (on2 ? 'box-shadow:0 0 0 2px #ffd83d55,0 0 12px #ffd83d66;' : '') + '">' +
+        (on2 ? '<span style="position:absolute;right:2px;top:2px;z-index:2;width:15px;height:15px;' +
+          'border-radius:50%;background:#ffd83d;color:#1a1408;font-size:11px;font-weight:900;' +
+          'line-height:15px;text-align:center">✓</span>' : '') +
+        (url ? '<img src="' + url + '" style="display:block;width:100%;height:56px;object-fit:cover">'
+             : '<div style="height:56px;display:flex;align-items:center;justify-content:center;' +
+               'font-size:11px;color:#8fa3b8">' + names[e] + '</div>') +
+        '<div style="font-size:10px;text-align:center;padding:1px 0 2px;color:' +
+        (on2 ? '#ffd83d' : '#9fb0c2') + '">' + (e + 1) + ' ' + names[e] + '</div></div>';
+    }
+  } else {
+    /* ★★ round520（用户："调色盘选了颜色没有效果；有没有更适合游戏的调色盘"）
+       ★ 上一版用了系统 <input type="color"> ✗ 两个问题：
+         ① 事件只绑在第一次渲染的那个元素上 ✗ 一旦重画就丢了 ✓
+         ② 系统取色器在手机上是个弹层 ✗ 和游戏 UI 完全不搭 ✓
+       ★ 现在：色板 + 三条滑条（色相 / 饱和 / 明度）✗ 全在游戏里 ✓ 实时预览 ✓ */
+    var curCol = (typeof cur[SKC.tab] === 'number') ? cur[SKC.tab] : 0xffffff;
+    var hsl = skcRgb2Hsl(curCol);
+    var curHex = '#' + ('000000' + (curCol | 0).toString(16)).slice(-6);
+    for (var c = 0; c < PALETTE.length; c++) {
+      var col = PALETTE[c];
+      var hed2 = '#' + ('000000' + col.toString(16)).slice(-6);
+      var sel2 = (cur[SKC.tab] === col);
+      oh += '<div data-skc-val="' + col + '" style="width:26px;height:26px;border-radius:7px;' +
+        'background:' + hed2 + ';border:2px solid ' + (sel2 ? '#ffd83d' : '#ffffff22') +
+        ';cursor:pointer;' + (sel2 ? 'box-shadow:0 0 0 2px #ffd83d55;' : '') + '"></div>';
+    }
+    oh += '</div>';   /* 关掉色板那一行 */
+    oh += '<div style="margin-top:8px;padding:6px 8px;border-radius:9px;background:#111823;' +
+      'border:1px solid #ffffff14">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">' +
+        '<div data-skc-preview style="width:34px;height:34px;border-radius:9px;background:' + curHex +
+        ';border:2px solid #ffffff22"></div>' +
+        '<div style="font-size:11px;color:#b8c6d6;line-height:1.5">调色盘' +
+        '<br><b style="color:' + curHex + '">' + curHex.toUpperCase() + '</b>' +
+        '<span style="color:#7f8fa0"> · 拖动下面的滑条</span></div></div>' +
+      skcSlider('h', '色相', hsl[0], 0, 360, 'linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)') +
+      skcSlider('s', '饱和', Math.round(hsl[1] * 100), 0, 100, 'linear-gradient(90deg,#888,' + curHex + ')') +
+      skcSlider('l', '明度', Math.round(hsl[2] * 100), 0, 100, 'linear-gradient(90deg,#000,' + curHex + ',#fff)') +
+      '</div>';
+  }
+  opts.innerHTML = oh;
+
+  var skName = (SKIN.items || []).filter ? '' : '';
+  for (var q2 = 0; q2 < (SKIN.items || []).length; q2++) {
+    if (SKIN.items[q2].k === SKIN.sel) { skName = SKIN.items[q2].n || SKIN.sel; }
+  }
+  var spent = Object.keys(SKC.pending).length;
+  if (cost) {
+    cost.innerHTML = spent
+      ? ('本次消耗：<b style="color:#ffd83d">' + skName + ' · 皮肤卡 ×' + spent + '</b>' +
+         '（改了 ' + spent + ' 个部位 · 一个部位一张卡 · 只会用这套皮肤的重复卡）')
+      : '点上面的眼型/嘴型/颜色看效果 ✗ 不会扣卡 ✓';
+  }
+  /* ★★ round530（用户："实时显示当前所选角色剩余卡，以及本次会消耗的卡的数量"）
+     ★ 剩余卡 = 服务端告诉我们的【该皮肤的重复卡】数量（skincustomok 里带回来 ✓）
+     ★ 本次消耗 = 改了几个部位 */
+  var worn = false;
+  try {
+    var _it3 = (typeof skinItemOf === 'function') ? skinItemOf(SKIN.sel) : null;
+    worn = !!(_it3 && _it3.use);
+  } catch (e3) { }
+  var have = (typeof MY_CARD_MAP !== 'undefined' && MY_CARD_MAP && MY_CARD_MAP[SKIN.sel]) | 0;
+  if (cost) {
+    var _line = '剩余卡：<b style="color:' + (have >= spent ? '#8ee0a8' : '#ff9a8a') + '">' +
+      have + '</b> 张 · 本次消耗：<b style="color:#ffd83d">' + spent + '</b> 张';
+    if (!worn) { _line += ' · <b style="color:#ff9a8a">先用这套皮肤才能改</b>'; }
+    else if (spent > have) { _line += ' · <b style="color:#ff9a8a">卡不够</b>'; }
+    cost.innerHTML = _line;
+  }
+  if (okB) {
+    if (!worn) { okB.disabled = true; okB.textContent = '先用这套皮肤'; }
+    else if (spent === 0) { okB.disabled = true; okB.textContent = '确认更换'; }
+    else if (spent > have) { okB.disabled = true; okB.textContent = '缺 ' + (spent - have) + ' 张卡'; }
+    else { okB.disabled = false; okB.textContent = '确认更换（' + spent + ' 张）'; }
+  }
+}
+/* ★★ round525：二级导航（皮肤 / 自定义）✗ 自定义从"浮块"变成"第二页" ✓ */
+function skNavTo(which) {
+  var main = document.getElementById('skMain');
+  var panel = document.getElementById('skCPanel');
+  var navs = document.querySelectorAll('#skNav [data-sknav]');
+  for (var i = 0; i < navs.length; i++) {
+    var on = (navs[i].getAttribute('data-sknav') === which);
+    navs[i].className = 'bagB' + (on ? ' on' : '');
+  }
+  if (main) { main.style.display = (which === 'main') ? '' : 'none'; }
+  if (panel) { panel.style.display = (which === 'custom') ? 'block' : 'none'; }
+  if (which === 'custom') {
+    if (!SKIN.sel && SKIN.items && SKIN.items.length) { skinPick(SKIN.items[0].k); }
+    skcOpen();
+    /* ★ 面板现在就在导航正下方 ✗ 只要把滚动条拉回顶部 ✓ 就能看到 ✓ */
+    try {
+      var pane3 = document.querySelector('.tabpane[data-pane="skin"]');
+      if (pane3) { pane3.scrollTop = 0; }
+    } catch (e0) { }
+  } else { skcClose(); }
+}
+function skNavBind() {
+  var box = document.getElementById('skNav');
+  if (!box || box._b) { return; }
+  box._b = true;
+  box.addEventListener('click', function (e) {
+    var t = e.target, hit = null;
+    while (t && t !== box) {
+      if (t.getAttribute && t.getAttribute('data-sknav')) { hit = t; break; }
+      t = t.parentNode;
+    }
+    if (!hit) { return; }
+    /* ★ 允许进来看（只读预览）✗ 只有"使用中"的皮肤能确认更换 ✓ */
+
+    skNavTo(hit.getAttribute('data-sknav'));
+  });
+}
+function skcOpen() {
+  if (!SKIN.sel) { return; }
+  SKC.open = true; SKC.pending = {}; SKC.tab = 'ey';
+  /* ★★ round529（用户："已经改过的皮肤，点自定义应该加载已改的样子；
+     再次修改要分清哪是这次改的、不要重复扣卡"）
+     ★ SKC.base = 上次保存的样子（用来显示 + 判断"这一项到底改没改"）
+       SKC.pending 只放【这一趟真正动过的】✗ 没动的不会收钱 ✓ */
+  SKC.base = skcCustomOf(SKIN.sel);
+  var p = document.getElementById('skCPanel');
+  if (p) { p.style.display = 'block'; }
+  skcRender();
+  /* ★★ round522（用户："点击后上面模型的预览看不到"）
+     ★ 全身体积里眼睛只占几个像素 ✗ 改了也看不出 ✓
+     → 打开自定义就【把镜头推到脸上】✗ 关掉再恢复全身 ✓ */
+  try {
+    if (SKIN.hero && SKIN.hero.headY) {
+      SKIN.camY = SKIN.hero.headY + (SKIN.hero.headH || 1) * 0.02;
+      SKIN.zoom = 0.85;
+      if (typeof skinApplyCam === 'function') { skinApplyCam(); }
+      SKIN.r.render(SKIN.scene, SKIN.cam);
+    }
+  } catch (eZ) { }
+  /* ★ round515（用户："点开自定义后模型头看不到了，表格变长把它挤上去"）
+     → 面板展开后把【预览画布】滚回视野里 ✓ 而不是让内容顶上去 ✓ */
+  try {
+    var pane2 = document.querySelector('.tabpane[data-pane="skin"]');
+    var cv2 = document.getElementById('skCv');
+    var pn2 = document.getElementById('skCPanel');
+    if (pane2 && cv2) { pane2.scrollTop = Math.max(0, cv2.offsetTop - 8); }
+
+  } catch (e) { }
+}
+function skcClose() {
+  SKC.open = false; SKC.pending = {};
+  /* ★ 关掉面板 → 镜头回到全身 ✓ */
+  try {
+    SKIN.zoom = 1.30; SKIN.camY = 0.98;
+    if (typeof skinApplyCam === 'function') { skinApplyCam(); }
+    skcPreview();
+  } catch (eZ2) { }
+  var p = document.getElementById('skCPanel');
+  if (p) { p.style.display = 'none'; }
+  skcPreview();      /* 回到已保存的样子 ✓ */
+}
+function skcBind() {
+  var b = document.getElementById('skCustom');
+  if (b && !b._cb) {
+    b._cb = 1;
+    b.addEventListener('click', function () {
+      skNavTo('custom');           /* ★ 现在点它是切到【自定义】那一页 ✓ */
+    });
+  }
+  var box = document.getElementById('skCPanel');
+  if (!box || box._cb) { return; }
+  box._cb = 1;
+  box.addEventListener('click', function (e) {
+    /* ★★ round524（用户："怎么点了一个就不能换了"）
+       ★ 根因：e.target 是【格子里的 <img>/<span>】✗ 它们身上没有 data-skc-val ✓
+         → 直接读 target 的话，点到图片/角标就"当没点"✗
+         （第一次能点中是因为那次点在格子空白处 ✓）
+       ★ 修：从 target 往上一层层找到带 data 的那个元素 ✓ */
+    var t = e.target;
+    var hit = null;
+    while (t && t !== box) {
+      if (t.getAttribute && (t.getAttribute('data-skc-val') !== null ||
+                             t.getAttribute('data-skc-tab') !== null)) {
+        hit = t; break;
+      }
+      t = t.parentNode;
+    }
+    if (!hit) { return; }
+    var tab = hit.getAttribute('data-skc-tab');
+    if (tab) { SKC.tab = tab; skcRender(); return; }
+    var v = hit.getAttribute('data-skc-val');
+    if (v !== null && v !== undefined) {
+      var nv = parseInt(v, 10) || 0;
+      var baseV = (SKC.base && typeof SKC.base[SKC.tab] === 'number') ? SKC.base[SKC.tab] : null;
+      if (baseV !== null && nv === baseV) {
+        delete SKC.pending[SKC.tab];       /* ★ 选回原样 = 不算改动 ✗ 不收钱 ✓ */
+      } else {
+        SKC.pending[SKC.tab] = nv;
+      }
+      skcRender(); skcPreview();
+    }
+  });
+  /* ★ 滑条：事件委托在 #skCOpts 上 ✗ 内容一重画不会丢 ✓（上一版就丢在这儿）*/
+  var optsBox = document.getElementById('skCOpts');
+  if (optsBox && !optsBox._slb) {
+    optsBox._slb = true;
+    optsBox.addEventListener('input', function (e) {
+      var t2 = e.target;
+      if (!t2 || !t2.getAttribute) { return; }
+      var k2 = t2.getAttribute('data-skc-sl');
+      if (!k2) { return; }
+      var box2 = document.getElementById('skCOpts');
+      var hh2 = box2.querySelector('[data-skc-sl="h"]');
+      var ss2 = box2.querySelector('[data-skc-sl="s"]');
+      var ll2 = box2.querySelector('[data-skc-sl="l"]');
+      /* ★ 拖色相时如果饱和度是 0（灰/白）✗ 颜色不会变 ✗ 玩家会以为坏了 ✓
+         → 自动把饱和拉到 65%、明度至少 45% ✓ */
+      if (k2 === 'h' && ss2 && +ss2.value < 8) {
+        ss2.value = '65';
+        if (ll2 && (+ll2.value > 88 || +ll2.value < 18)) { ll2.value = '52'; }
+      }
+      var col2 = skcHsl2Rgb(
+        hh2 ? +hh2.value : 0,
+        (ss2 ? +ss2.value : 100) / 100,
+        (ll2 ? +ll2.value : 50) / 100);
+      SKC.pending[SKC.tab] = col2;
+      skcPreview();
+      var hex2 = '#' + ('000000' + col2.toString(16)).slice(-6);
+      var cost = document.getElementById('skCCost');
+      if (cost) {
+        cost.innerHTML = '已选 <b style="color:' + hex2 + '">' + hex2.toUpperCase() +
+          '</b>（点「确认更换」才会消耗 1 张卡）';
+      }
+      var okB = document.getElementById('skCOk');
+      if (okB) { okB.disabled = false; }
+      /* 色块和数字跟着变（不整排重画 ✗ 不然滑条会抖 ✓）*/
+      var sw2 = box2.querySelector('[data-skc-preview]');
+      if (sw2) { sw2.style.background = hex2; }
+    });
+  }
+  var cc = document.getElementById('skCCancel');
+  if (cc) { cc.addEventListener('click', function () { skNavTo('main'); }); }
+  var ck2 = document.getElementById('skCOk');
+  if (ck2) {
+    ck2.addEventListener('click', function () {
+      var fields = Object.keys(SKC.pending);
+      if (!fields.length) { return; }
+      /* ★ 一次只提交一个部位（一个部位一张卡 ✓）—— 点第一个没确认的 ✓ */
+      var f = fields[0];
+      var v = SKC.pending[f];
+      /* ★ 眼型/嘴型要转成 key ✗ 颜色直接发整数 ✓ */
+      if (f === 'ey') { v = (skcGender() === 'm' ? EYE_KEY_M : EYE_KEY_F)[v] || ''; }
+      else if (f === 'mo') { v = MOUTH_KEY[v] || ''; }
+      /* ★ round529：这一趟改了几个部位就提交几个 ✗ 每个扣 1 张 ✓
+         一次只发一条（服务端是串行扣卡的）✗ 按顺序发 ✓ */
+      /* ★★ round529：先把这一趟的改动【抄一份】✗ 再逐条发 ✓
+         踩过的坑：发第一条之后回执会把 SKC.pending 清空 ✗
+                   第二条读 pending 就是 undefined ✗ 发出去被拒 ✓ */
+      var _snap = [];
+      for (var _k2 = 0; _k2 < fields.length; _k2++) {
+        var _f3 = fields[_k2];
+        var _v3 = SKC.pending[_f3];
+        if (_f3 === 'ey') { _v3 = (skcGender() === 'm' ? EYE_KEY_M : EYE_KEY_F)[_v3] || ''; }
+        else if (_f3 === 'mo') { _v3 = MOUTH_KEY[_v3] || ''; }
+        _snap.push({ f: _f3, v: _v3 });
+      }
+      skcSay('正在保存 ' + _snap.length + ' 处…');
+      var _i2 = 0;
+      function _next() {
+        if (_i2 >= _snap.length) { skcSay('已提交，等回执…'); return; }
+        var one = _snap[_i2++];
+        try { wsSend('skincustom', { skin: SKIN.sel, field: one.f, value: one.v }); } catch (e) { }
+        setTimeout(_next, 320);        /* 给服务端一点时间扣卡 ✓ */
+      }
+      _next();
+      ck2.disabled = true;
+    });
+  }
+}
+function skcSay(t) {
+  var m = document.getElementById('skMsg');
+  if (m) { m.textContent = t || ''; }
+}
+
+function skinOpen() {
+  skinBind();
+  skinCardUseBind();
+  skcBind();
+  skNavBind();
+  try { if (WSC.ready) { wsSend('skinask', {}); } } catch (e) { }
+  skinPreviewBoot();
+  skinBindDrag();
+  skinApplyCam();
+  if (SKIN.items.length) { skinPageRender(); }
+}
+
+function skinBind() {
+  if (SKIN._b) { return; }
+  SKIN._b = 1;
+  var u = document.getElementById('skUse');
+  if (u) {
+    u.addEventListener('click', function () {
+      if (!SKIN.sel) { return; }
+      try { wsSend('setskin', { key: SKIN.sel }); } catch (e) { }
+    });
+  }
+  var b = document.getElementById('skBid');
+  if (b) {
+    b.addEventListener('click', function () {
+      if (!SKIN.sel) { return; }
+      var amt = parseInt((document.getElementById('skBidAmt') || {}).value, 10) || 0;
+      var it = skinItemOf(SKIN.sel);
+      var cur = 0;
+      if (it && it.mine) { cur = +it.mine || 0; }
+      var need = (cur === 0) ? SKIN.start : SKIN.step;
+      if (amt < need) { skinSay('至少要出 ' + need + ' 金币'); return; }
+      /* ★ 用户定：钱不退 ✗ 所以必须二次确认 ✓ */
+      /* ★ 用户定：钱不退 ✗ 所以必须二次确认 ✓
+         ★★ round493（用户："出价的提示弹窗，要做游戏里的，系统弹窗不合理"）
+            → 换成游戏自己的 askConfirm（和批量出售/洗点同一个弹窗 ✓）✓ */
+      var _it2 = skinItemOf(SKIN.sel);
+      var _cur2 = (_it2 && _it2.mine) ? (+_it2.mine) : 0;
+      var _tot2 = _cur2 + amt;
+      var _nm2 = (_it2 && (_it2.n || _it2.k)) || SKIN.sel;
+      askConfirm({
+        title: '给「' + _nm2 + '」加价',
+        lines: [
+          '这次加价：<b style="color:#ffd83d">' + amt + '</b> 金币',
+          '加完累计：<b style="color:#8ee0ff">' + _tot2 + '</b> 金币',
+          '你现有：' + (SKIN.gold | 0) + ' 金币',
+          '排名规则：累计前三名能用；第一名高出第二 30% 就只有他一个能用'
+        ],
+        warn: '★ 金币一扣就不退（被挤出前三也不退）',
+        ok: '确认出价'
+      }, function (yes) {
+        if (!yes) { return; }
+        try { wsSend('skinbid', { key: SKIN.sel, amount: amt }); } catch (e2) { }
+        skinSay('正在出价…');
+      });
+      try { wsSend('skinbid', { key: SKIN.sel, amount: amt }); } catch (e2) { }
+      skinSay('正在出价…');
+    });
+  }
+  var grid = document.getElementById('skGrid');
+  if (grid) {
+    grid.addEventListener('click', function (ev) {
+      var el = ev.target;
+      while (el && el !== grid && !el.getAttribute('data-sk')) { el = el.parentNode; }
+      if (el && el !== grid) { skinPick(el.getAttribute('data-sk')); }
+    });
+  }
+}
+
+function skinItemOf(k) {
+  for (var i = 0; i < SKIN.items.length; i++) {
+    if (SKIN.items[i].k === k) { return SKIN.items[i]; }
+  }
+  return null;
+}
+
+function skinSay(msg) {
+  var el = document.getElementById('skMsg');
+  if (el) { el.textContent = msg || ''; }
+}
+
+/* ---------- 40 宫格 ---------- */
+function skinPageRender() {
+  var grid = document.getElementById('skGrid');
+  if (!grid) { return; }
+  var html = '';
+  for (var i = 0; i < SKIN.items.length; i++) {
+    var it = SKIN.items[i];
+    /* ★★ round494（用户："已拥有和没有区别不明显一眼看不出来"）
+       → 四种状态【各有各的底色 + 边框 + 左边色条 + 图标】✓
+          未获得：暗底 + 虚框 + 锁 + 灰字（一眼"没有"）
+          已拥有：蓝底 + 实框 + ✓（亮）
+          非前三/被独占：暗红底 + 红框（"有但不能用"）
+          使用中：金底 + 粗金框 + ★（最亮）*/
+    var nm2 = it.n || it.k;
+    var bg, bd, fc, bar, icon, badgeTxt, badgeCol, op = '1';
+    if (it.use) {
+      bg = 'linear-gradient(180deg,#3a300f,#241d08)'; bd = '2px solid #ffd83d';
+      fc = '#ffe9a0'; bar = '#ffd83d'; icon = '★'; badgeTxt = '使用中'; badgeCol = '#ffd83d';
+    } else if (it.own && it.can) {
+      bg = 'linear-gradient(180deg,#17324a,#111f2e)'; bd = '1px solid #3f86c8';
+      fc = '#eaf2fb'; bar = '#4aa8e8'; icon = '✓'; badgeTxt = '已拥有'; badgeCol = '#7ee08a';
+    } else if (it.own && !it.can) {
+      bg = 'linear-gradient(180deg,#2b1a1a,#1c1111)'; bd = '1px solid #8a4a4a';
+      fc = '#e8b8b0'; bar = '#c05050'; icon = '⊘';
+      badgeTxt = (it.mode === 'solo' ? '被独占' : '非前三'); badgeCol = '#ff9a8a';
+    } else {
+      bg = '#0e131a'; bd = '1px dashed #ffffff1f';
+      fc = '#6f7f90'; bar = '#2a3441'; icon = '🔒'; badgeTxt = '未获得'; badgeCol = '#6f7f90';
+      op = '0.85';
+    }
+    var sel2 = (it.k === SKIN.sel) ? 'outline:2px solid #ffd83d;' : '';
+    /* ★ round504：可用的皮肤 → 卡片右下角给一个「使用」小按钮
+       ★ 不能用绝对定位（390 宽的手机上会盖住名字 / 跑出面板 ✗ 踩过两次）
+       → 第二行用 flex 左右排：左边"已拥有 · f06"，右边"使用" ✓ 谁都不挤谁 ✓ */
+    var canUse = (it.own && it.can && !it.use);
+    html += '<div data-sk="' + it.k + '" style="cursor:pointer;position:relative;min-width:0;' +
+      'padding:7px 8px 7px 13px;border-radius:9px;border:' + bd + ';background:' + bg + ';' +
+      'opacity:' + op + ';' + sel2 + '">' +
+      '<span style="position:absolute;left:0;top:0;bottom:0;width:4px;border-radius:9px 0 0 9px;' +
+      'background:' + bar + '"></span>' +
+      '<div style="font-size:13px;color:' + fc + ';white-space:nowrap;overflow:hidden;' +
+      'text-overflow:ellipsis">' + icon + ' ' + nm2 + '</div>' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:1px">' +
+        '<span style="font-size:10px;color:' + badgeCol + ';white-space:nowrap;overflow:hidden;' +
+        'text-overflow:ellipsis;min-width:0">' + badgeTxt +
+        '<span style="color:#5a6a7a"> · ' + it.k + '</span></span>' +
+        (canUse ? '<span class="sku" data-sk="' + it.k + '" style="flex:0 0 auto;padding:1px 6px;' +
+          'border-radius:7px;background:#4aa8e8;color:#06121c;font-size:9.5px;font-weight:800;' +
+          'letter-spacing:.5px">使用</span>' : '') +
+      '</div>' +
+      '</div>';
+  }
+  grid.innerHTML = html;
+  if (!SKIN.sel && SKIN.items.length) { skinPick(SKIN.items[0].k); }
+  else { skinDetail(); }
+}
+
+/* ---------- 右侧详情（榜单 / 按钮）---------- */
+function skinDetail() {
+  var it = skinItemOf(SKIN.sel);
+  var nm = document.getElementById('skName');
+  var st = document.getElementById('skState');
+  var rk = document.getElementById('skRank');
+  var useB = document.getElementById('skUse');
+  var bidB = document.getElementById('skBid');
+  var amt = document.getElementById('skBidAmt');
+  if (!it) { return; }
+  if (nm) { nm.textContent = (it.n || it.k) + '（' + it.k + '）'; }
+
+  var state = '';
+  if (!it.own) { state = '还没获得 —— 打怪有 1% 掉「皮肤卡」，也可以去交易所买别人的'; }
+  else if (!it.can) {
+    state = (it.mode === 'solo') ? '被第一名独占了（他比第二名高出 30%）' : '只有出价前三名能用';
+  } else if (it.use) { state = '正在使用'; }
+  else { state = '已获得 · 可以用'; }
+  if (st) { st.textContent = state; }
+
+  var top = it.top || [];
+  var html = '';
+  if (!top.length) {
+    html = '<div style="color:#7ee08a">现在没人出价 → 所有获得的人都能用</div>';
+  } else {
+    for (var i = 0; i < top.length; i++) {
+      var mark = ['①', '②', '③'][i] || (i + 1);
+      html += '<div>' + mark + ' ' + top[i].name + ' · <b style="color:#ffd83d">' +
+        (top[i].total | 0) + '</b> 金币</div>';
+    }
+    if (it.mode === 'solo') {
+      html += '<div style="color:#ff9a9a">★ 第一名高出 30% → 只有他能用</div>';
+    }
+  }
+  if (it.mine) { html += '<div style="color:#8ee0ff">我的累计出价：' + (it.mine | 0) + '</div>'; }
+  html += '<div class="bagTip">起拍 ' + SKIN.start + ' · 每次至少加 ' + SKIN.step + '</div>';
+  if (rk) { rk.innerHTML = html; }
+
+  /* ★ round511：「自定义」只有【拥有的皮肤】能点（能不能出场另说 ✓ 染色跟竞价无关）*/
+  var cusB = document.getElementById('skCustom');
+  if (cusB) {
+    /* ★ round528（用户："自定义皮肤，要选择使用后才能改"）
+       → 只有【正在使用】的皮肤能自定义 ✓ 没穿上的点了也没意义 ✓ */
+    cusB.disabled = !it.use;
+    cusB.textContent = it.use ? '自定义' : '先使用';
+  }
+  if (useB) {
+    useB.disabled = !(it.own && it.can && !it.use);
+    /* ★ round504：不能用时按钮上直接写原因 ✗ 免得玩家以为是没做 ✓ */
+    if (it.use) { useB.textContent = '使用中'; }
+    else if (!it.own) { useB.textContent = '未获得'; }
+    else if (!it.can) { useB.textContent = (it.mode === 'solo') ? '被独占' : '限前三'; }
+    else { useB.textContent = '使 用'; }
+  }
+  if (bidB) { bidB.disabled = !it.own; }
+  if (amt) { amt.value = String((it.mine ? SKIN.step : SKIN.start)); }
+  skinPreviewShow(it.k);
+}
+
+/* ★ round504：卡片上那个「使用」按钮（委托在 #skGrid 上 ✓ 卡片是 innerHTML 重建的 ✓）*/
+function skinCardUseBind() {
+  var grid = document.getElementById('skGrid');
+  if (!grid || grid._uBound) { return; }
+  grid._uBound = true;
+  grid.addEventListener('click', function (e) {
+    var t = e.target;
+    while (t && t !== grid && !(t.className && String(t.className).indexOf('sku') >= 0)) {
+      t = t.parentNode;
+    }
+    if (!t || t === grid) { return; }
+    e.stopPropagation();
+    var k = t.getAttribute('data-sk');
+    if (!k) { return; }
+    SKIN.sel = k;
+    try { wsSend('setskin', { key: k }); } catch (e2) { }
+    skinSay('正在换…');
+  }, true);
+}
+
+function skinPick(k) {
+  SKIN.sel = k;
+  var cards = document.querySelectorAll('#skGrid [data-sk]');
+  for (var i = 0; i < cards.length; i++) {
+    cards[i].style.outline = (cards[i].getAttribute('data-sk') === k)
+      ? '2px solid #ffd83d' : 'none';
+  }
+  skinDetail();
+}
+
+/* ---------- 3D 预览（和游戏里同一个构建器）---------- */
+function skinPreviewBoot() {
+  if (SKIN.ready) { return; }
+  var cv = document.getElementById('skCv');
+  if (!cv || typeof THREE === 'undefined') { return; }
+  try {
+    SKIN.r = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
+    SKIN.r.setPixelRatio(1);
+    SKIN.r.setSize(420, 170, false);
+    SKIN.scene = new THREE.Scene();
+    SKIN.cam = new THREE.OrthographicCamera(-1.75, 1.75, 1.12, -1.12, 0.1, 100);
+    SKIN.cam.position.set(0, 0.98, 40);
+    SKIN.cam.lookAt(0, 0.98, 0);
+    /* ★ round515（用户："预览的模型可以滑动调整角度、以及放大缩小"）
+       正交相机：改 left/right/top/bottom 就是缩放 ✓ 改 position.y 就是上下看 ✓ */
+    SKIN.zoom = 1.30; SKIN.camY = 0.98; SKIN.camPitch = 0;   /* ★ round526：默认拉远一点（模型别占满）*/
+    /* ★ round516（用户："放大、拖动后就取消自转"）
+       ★ 手动动过视角就别再自己转 ✗ 不然刚摆好的角度马上被转走 ✓
+       ★ 换皮肤 / 重新打开面板时恢复自转 ✓ */
+    SKIN.autoRot = true;
+    SKIN.scene.add(new THREE.HemisphereLight(0xffffff, 0x2a3242, 0.65));
+    var d1 = new THREE.DirectionalLight(0xffffff, 0.6); d1.position.set(5, 9, 12);
+    SKIN.scene.add(d1);
+    var d2 = new THREE.DirectionalLight(0x9ac0ff, 0.25); d2.position.set(-8, 4, -6);
+    SKIN.scene.add(d2);
+    SKIN.ready = true;
+  } catch (e) { SKIN.ready = false; }
+}
+
+function skinPreviewShow(key) {
+  SKIN.autoRot = true;                 /* ★ 换皮肤 → 恢复自转 ✓ */
+  /* ★ 换皮肤 → 这一趟的"待提交"作废（不同皮肤的改动不能混）✓ */
+  try { if (typeof SKC !== 'undefined') { SKC.pending = {}; SKC.base = (typeof skcCustomOf === 'function') ? skcCustomOf(key) : {}; } } catch (e1) { }
+  if (!SKIN.ready) { skinPreviewBoot(); }
+  if (!SKIN.ready) { return; }
+  try {
+    if (SKIN.hero) {
+      SKIN.scene.remove(SKIN.hero.g);
+      SKIN.hero.g.traverse(function (o) {
+        if (o.isMesh && o.geometry) { o.geometry.dispose(); }
+      });
+      SKIN.hero = null;
+    }
+    /* ★★ round531（用户："选中这个皮肤就应该显示我改过的样子"）
+       → 预览直接用【这套皮肤的自定义】建 ✗ 不用等点任何东西 ✓ */
+    var _cs = {};
+    try {
+      if (typeof skcCustomOf === 'function') { _cs = skcCustomOf(key); }
+    } catch (e0) { _cs = {}; }
+    var h = skBuildHero(key, _cs);
+    if (!h) { return; }
+    h.g.scale.set(0.66, 0.66, 0.66);
+    h.g.position.set(0, 0.05, 0);
+    SKIN.scene.add(h.g);
+    SKIN.hero = h;
+    skinPreviewTick();
+  } catch (e) { }
+}
+
+/* ★ 正交相机：按 zoom 重算视口 + 按 camY/camPitch 摆位置 ✓ */
+function skinApplyCam() {
+  if (!SKIN.cam) { return; }
+  var z = Math.max(0.45, Math.min(2.6, SKIN.zoom || 1));
+  SKIN.zoom = z;
+  var w = 1.75 * z, h = 1.12 * z;
+  SKIN.cam.left = -w; SKIN.cam.right = w;
+  SKIN.cam.top = h; SKIN.cam.bottom = -h;
+  var y = (SKIN.camY || 0.98);
+  var p = SKIN.camPitch || 0;          /* 0 = 平视 ✗ >0 往下看 ✓ */
+  SKIN.cam.position.set(0, y + 40 * Math.sin(p), 40 * Math.cos(p));
+  SKIN.cam.lookAt(0, y, 0);
+  SKIN.cam.updateProjectionMatrix();
+}
+
+function skinBindDrag() {
+  var cv = document.getElementById('skCv');
+  if (!cv || cv._dragBound) { return; }
+  cv._dragBound = true;
+  cv.style.cursor = 'grab';
+  /* ★ 手机上也别让浏览器抢走手势（否则就是"拖不动 / 一卡一卡"）✓ */
+  try { cv.style.touchAction = 'none'; } catch (e0) { }
+  var st = null;
+  cv.addEventListener('pointerdown', function (e) {
+    /* ★ 注意别把"鼠标坐标"和"相机高度"存成同一个字段 ✗ 会算飞（踩过）✓ */
+    st = { px: e.clientX, py: e.clientY, rot: SKIN.rot, cy: (SKIN.camY || 0.98) };
+    SKIN.autoRot = false;               /* ★ 手动拖了 → 停自转 */
+    try { cv.setPointerCapture(e.pointerId); } catch (e0) { }
+    cv.style.cursor = 'grabbing';
+    if (e.preventDefault) { e.preventDefault(); }
+  });
+  cv.addEventListener('pointermove', function (e) {
+    if (!st) { return; }
+    SKIN.rot = st.rot + (e.clientX - st.px) * 0.012;     /* 左右拖 = 转 */
+    /* ★ 上下拖动灵敏度 0.004 → 0.006，范围也放宽一点 ✓ */
+    SKIN.camY = Math.max(0.25, Math.min(2.10, st.cy - (e.clientY - st.py) * 0.006));
+    if (SKIN.hero) { SKIN.hero.g.rotation.y = SKIN.rot; }
+    skinApplyCam();
+  });
+  function up() { st = null; cv.style.cursor = 'grab'; }
+  cv.addEventListener('pointerup', up);
+  cv.addEventListener('pointercancel', up);
+  /* 滚轮缩放（电脑）*/
+  cv.addEventListener('wheel', function (e) {
+    SKIN.autoRot = false;               /* ★ 手动缩放 → 停自转 */
+    SKIN.zoom *= (e.deltaY > 0 ? 1.08 : 0.92);
+    skinApplyCam();
+    if (e.preventDefault) { e.preventDefault(); }
+  }, { passive: false });
+  /* 双指缩放（手机）*/
+  var pd0 = 0;
+  cv.addEventListener('touchmove', function (e) {
+    if (!e.touches || e.touches.length !== 2) { return; }
+    var dx = e.touches[0].clientX - e.touches[1].clientX;
+    var dy = e.touches[0].clientY - e.touches[1].clientY;
+    var d = Math.hypot(dx, dy);
+    if (pd0) {
+      SKIN.autoRot = false;             /* ★ 双指缩放 → 停自转 */
+      SKIN.zoom *= (pd0 / d);
+      skinApplyCam();
+    }
+    pd0 = d;
+    if (e.preventDefault) { e.preventDefault(); }
+  }, { passive: false });
+  cv.addEventListener('touchend', function () { pd0 = 0; });
+}
+
+function skinPreviewTick(ts) {
+  if (!SKIN.ready || !SKIN.hero) { return; }
+  /* ★★ round505（用户："皮肤页面展示的预览效果自转太快了"）
+     ★ 病根：原来是【每帧固定 +0.012 弧度】✗
+       60Hz 屏 ≈ 41°/秒，120Hz 屏直接 ×2 ≈ 82°/秒 ✓（高刷手机看着就是"飞转"）
+     ★ 修：按【真实时间】转 ✗ 0.30 弧度/秒 ≈ 17°/秒（转一圈约 21 秒 ✓ 慢慢转）*/
+  var _now = (typeof ts === 'number') ? ts : (performance.now ? performance.now() : 0);
+  var _dt = SKIN._t ? (_now - SKIN._t) / 1000 : 0.016;
+  SKIN._t = _now;
+  if (!(_dt > 0) || _dt > 0.2) { _dt = 0.016; }
+  if (SKIN.autoRot !== false) { SKIN.rot += _dt * 0.30; }
+  SKIN.hero.g.rotation.y = SKIN.rot;
+  try { SKIN.r.render(SKIN.scene, SKIN.cam); } catch (e) { }
+  var pane = document.querySelector('.tabpane[data-pane="skin"]');
+  if (pane && pane.className.indexOf('on') >= 0) {
+    requestAnimationFrame(skinPreviewTick);
+  }
 }
 
 /* ---------- closeSet / doLogout（第 32 轮）---------- */
@@ -1776,13 +4436,52 @@ function doLogout() {
 }
 
 /* ---------- openSet ---------- */
+var UI_THEME_STORE = 'uiTheme_v1';
+var UI_THEMES = ['dark', 'black', 'light', 'pink', 'gray', 'blue', 'glass'];
+function uiThemeApply(name) {
+  if (UI_THEMES.indexOf(name) < 0) { name = 'gray'; }
+  try { document.body.setAttribute('data-theme', name); } catch (e) { }
+  try { localStorage.setItem(UI_THEME_STORE, name); } catch (e2) { }
+  try {
+    var bs = document.querySelectorAll('#themeBtns [data-theme]');
+    for (var i = 0; i < bs.length; i++) {
+      var on = (bs[i].getAttribute('data-theme') === name);
+      bs[i].className = 'bagB' + (on ? ' on' : '');
+    }
+  } catch (e3) { }
+}
+function uiThemeBind() {
+  var box = document.getElementById('themeBtns');
+  if (!box) { return; }
+  if (!box._b) {
+    box._b = true;
+    box.addEventListener('click', function (e) {
+      var t = e.target;
+      while (t && t !== box && !(t.getAttribute && t.getAttribute('data-theme'))) { t = t.parentNode; }
+      if (t && t !== box) { uiThemeApply(t.getAttribute('data-theme')); }
+    });
+  }
+  var cur = 'gray';
+  try { cur = localStorage.getItem(UI_THEME_STORE) || document.body.getAttribute('data-theme') || 'gray'; } catch (e) { }
+  uiThemeApply(cur);
+}
+try { uiThemeApply(localStorage.getItem(UI_THEME_STORE) || 'gray'); } catch (eTh0) { }
+
 function openSet(wantTab) {
   var p = document.getElementById('setPanel');
   if (!p) { return; }
+  try { if (typeof whClose === 'function') { whClose(); } } catch (eWhC) { }
+  /* 打开菜单时收起视角工具面板，避免盖住菜单 */
+  try {
+    if (typeof CAMROT !== 'undefined') { CAMROT.on = false; }
+    if (typeof camApplyVisual === 'function') { camApplyVisual(); }
+  } catch (eCamClose) { }
   p.style.display = 'block';
   // ★ 第 48 轮：openSet('bag') 可以直接停在背包页（快捷键 B 用 ✓）
   if (wantTab) { setTab(wantTab); }
   ptBind();                                   // ★ 第 83 轮：组队页绑定 ✓
+  try { camSettingsBind(); } catch (eCS) { }   // round606：设置里的视角/横竖屏
+  try { uiThemeBind(); } catch (eTh) { }       // round607：界面主题
   if ((SETCFG.setTab || '') === 'party') { lobbyFetch(ptRender); }
   /* ★ 第 119 轮：这两处钩子已经收进 setTab() 里了 ✗（不留两份 ✗）*/
    // ★ 第 113 轮：属性页 ✓
@@ -1797,6 +4496,10 @@ function openSet(wantTab) {
                    { v: 'msaa', t: 'MSAA', s: '最干净' }], 'aa', setAA());
   mkOpts('rowDet', [{ v: 'low', t: '低', s: '±16 格' }, { v: 'mid', t: '中', s: '±28 格' },
                     { v: 'high', t: '高', s: '±40 格' }], 'detail', setDetail());
+  /* ★★ round508：这两个开关【已经从界面删掉】✗（用户要求）
+     DOM 没了 → _ao/_al 是 null → 下面的分支自然跳过 ✓ 留着不删：
+     万一以后又想把"自动捡东西"放回来，逻辑还在 ✓
+     ★ 自动战斗本身还有右下角那个「挂机」按钮 ✓ 功能没丢 ✓ */
   /* ★★ 第 210 轮：自动战斗的设置项（放在"操作"分类最前面 ✓）★★ */
   var _ao = document.getElementById('setAutoOn');
   if (_ao) {
@@ -1804,6 +4507,24 @@ function openSet(wantTab) {
     _ao.onchange = function () {
       if (typeof AUTO === 'undefined') { return; }
       if (!!AUTO.on !== _ao.checked) { autoToggle(); }
+    };
+  }
+  /* ★ round466：自动出售下拉（服务器为准 ✗ 存在 role.autosell 里）*/
+  var _asel = document.getElementById('setAutoSell');
+  if (_asel) {
+    var _cur = +(((WSC.role || {}).autosell) || 0);
+    _asel.value = String(_cur);
+    _asel.onchange = function () {
+      var v = Math.max(0, Math.min(12, +_asel.value || 0));
+      try { wsSend('autosell', { tier: v }); } catch (e) { }
+      try { SETCFG.autoSell = v; saveSet(); } catch (e2) { }
+      try { WSC.role.autosell = v; } catch (e3) { }   /* 本地先跟上（服务器下次登录也会告诉我们）*/
+      var h = document.getElementById('setAutoSellHint');
+      if (h) {
+        h.textContent = v > 0
+          ? ('★ 当前：低于 ' + v + ' 阶的装备拾取就卖（不进背包）')
+          : '★ 当前：不自动卖';
+      }
     };
   }
   var _al = document.getElementById('setAutoLoot');
@@ -1820,6 +4541,26 @@ function openSet(wantTab) {
   mkOpts('rowAtk', [{ v: 64, t: '小', s: '64' }, { v: 84, t: '中', s: '84 · 默认' },
                     { v: 108, t: '大', s: '108' }, { v: 132, t: '特大', s: '132' }],
          'atkSize', setAtkSize());
+  /* ★ round422：画面放大的档位（100 = 现在 ✗ 只能往大走 ✓）*/
+  /* ★★ round531（用户："游戏相机画面改成大小滑动，最小 60%，最大 300%"）
+     → 五档按钮换成滑条 ✗ 拖动实时生效 ✓ */
+  var zr = document.getElementById('zoomRange');
+  var zv = document.getElementById('zoomVal');
+  if (zr) {
+    var _zv0 = (typeof setWorldZoom === 'function') ? setWorldZoom() : 100;
+    zr.value = String(_zv0);
+    if (zv) { zv.textContent = _zv0 + '%'; }
+    if (!zr._b) {
+      zr._b = true;
+      zr.addEventListener('input', function () {
+        var v = Math.max(60, Math.min(300, parseInt(zr.value, 10) || 100));
+        SETCFG.zoom = v;
+        saveSet();
+        if (zv) { zv.textContent = v + '%'; }
+        try { applyWorldZoom(); } catch (e0) { }
+      });
+    }
+  }
   // ★ 音效开关 + 音量 ✓
   var srow = document.getElementById('rowSfx');
   if (srow) {
@@ -1909,6 +4650,17 @@ function openSet(wantTab) {
     d2.addEventListener('touchstart', tg, { passive: false });
     d2.addEventListener('click', tg);
     disp.appendChild(d2);
+    /* ★ round426：性能面板开关（同一排 ✓ 默认关 ✓）*/
+    var d3 = document.createElement('div');
+    d3.className = 'opt' + (SETCFG.perf ? ' on' : '');
+    d3.innerHTML = '性能面板';
+    var tg3 = function (e) {
+      if (e) { e.preventDefault(); }
+      SETCFG.perf = !SETCFG.perf; saveSet(); applySet(); openSet();
+    };
+    d3.addEventListener('touchstart', tg3, { passive: false });
+    d3.addEventListener('click', tg3);
+    disp.appendChild(d3);
   }
 
   /* ★ 账号（第 32 轮）：登录 / 登出 / 切换账号都挪到这儿了 ✓ */
@@ -1938,7 +4690,10 @@ function openSet(wantTab) {
   /* ★ 信息分类：版本 + 实时信息 ✓ */
   var av = document.getElementById('aboutVer');
   if (av) {
-    av.innerHTML = '末日丧尸 × 组队修仙 · 独立版<br>' +
+    /* ★ round457：把构建号也显示出来 ✗ 方便确认"刷新后到底是不是新版本" ✓ */
+    var _bmeta = document.querySelector('meta[name="build"]');
+    var _bver = _bmeta ? _bmeta.getAttribute('content') : '?';
+    av.innerHTML = '块来修仙 · 末日丧尸 × 组队修仙<br>' +
       '协议 v' + PROTO_VER +
       (WSC && WSC.on ? ' · 已联机' : ' · 单机/未联机') +
       (WSC && WSC.role ? ' · 角色 ' + (WSC.role.name || '') : '') + '<br>' +
@@ -2019,8 +4774,50 @@ var ARMOR_ICON = '<svg viewBox="0 0 24 24" width="100%" height="100%">' +
     ' stroke="#000" stroke-opacity=".4" stroke-width="1.05" fill="none"/>' +
     '<path d="M10 3.2 c0.6 1.2 3.4 1.2 4 0" stroke="#000" stroke-opacity=".3" stroke-width="1" fill="none"/>';
 
+/* ★ round487：皮肤卡的图标（一张卡 + 一颗星 ✓ 一眼和材料/装备分开）*/
+/* ★ round557：技能书图标（一本立着的书 ✓ 书脊 + 书页 + 一条书签）*/
+var SKILL_BOOK_ICON = '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" ' +
+  'stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">' +
+  '<path d="M4 4.6h9.4c1.4 0 2.6 1.1 2.6 2.5v12.3H6.6C5.2 19.4 4 18.3 4 16.9z" ' +
+  'fill="currentColor" fill-opacity=".18"/>' +
+  '<path d="M16 5.2h2.2c1 0 1.8.8 1.8 1.8v11.6c0 .6-.5 1.1-1.1 1.1H16"/>' +
+  '<path d="M7 8.4h6M7 11.4h6M7 14.4h4"/>' +
+  '<path d="M19.4 4.4v6.2l-1.6-1.1-1.6 1.1V4.4" stroke-width="1.3"/>' +
+  '</svg>';
+
+var SKIN_CARD_ICON = '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" ' +
+  'stroke="currentColor" stroke-width="1.6" stroke-linecap="round">' +
+  '<rect x="3.5" y="5" width="17" height="14" rx="2.2"/>' +
+  '<path d="M12 8.6l1.3 2.6 2.9.4-2.1 2 .5 2.9-2.6-1.4-2.6 1.4.5-2.9-2.1-2 2.9-.4z" ' +
+  'fill="currentColor" fill-opacity=".25"/></svg>';
+
+var SKIN_UNIFIED_ICON = '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" ' +
+  'stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
+  '<rect x="3.2" y="3.2" width="17.6" height="17.6" rx="3" fill="currentColor" fill-opacity=".10"/>' +
+  '<path d="M9 7.2l3 1.9 3-1.9 2.8 2.7-1.8 2.6v5.3H8V12.5L6.2 9.9z" ' +
+  'fill="currentColor" fill-opacity=".30"/>' +
+  '<path d="M12 9.1v8.7M10 21l2-3.2L14 21"/></svg>';
+
 function iconOfItem(it) {
   if (!it) { return ITEM_ICON.box; }
+  if (it.kind === 'skin') {
+    /* ★ round590：皮肤卡统一用“衣服/皮肤”图标，不再显示一张脸 */
+    return SKIN_UNIFIED_ICON;
+  }
+  if (it.kind === 'skillbook') {
+    /* ★ round583：技能书直接用【那个技能的图标】*/
+    try {
+      if (it.key && window.SKI) {
+        var _kd = 'A';
+        try {
+          if (window.SK && SK.byKey && SK.byKey[it.key]) { _kd = SK.byKey[it.key].kind; }
+        } catch (e1) { }
+        return '<img src="' + SKI.icon(it.key, _kd, 34) + '" style="width:34px;height:34px;'
+          + 'display:block;border-radius:4px">';
+      }
+    } catch (e2) { }
+    return SKILL_BOOK_ICON;
+  }
   // ★ 第 104 轮：必须【有 base】才算防具 ✓（假防具按材料显示 ✓ 兜底 ✓）
   if (it.slot === 'armor' && it.base) { return ARMOR_ICON; }
   /* ★★ 武器图标 = 那把武器的【平面微缩版】★★（用户要求）
@@ -2044,6 +4841,25 @@ function tierHex(tier) {
   var s = v.toString(16);
   while (s.length < 6) { s = '0' + s; }
   return '#' + s;
+}
+
+/* ★ round507：穿/脱装备"就地更新"标记 —— 服务器推了 weapon/armor 就不重拉整包 ✓
+   万一 2.5 秒内没收到推送（掉包/断线）→ 才退回老的 bagFetch ✓ 有兜底不会白屏 ✓ */
+/* ★ round511：我的皮肤自定义（服务端回执填充 ✓ {皮肤key: {ey,mo,iris,hair,shirt}}）*/
+var MY_CUSTOM_MAP = {};
+/* ★ round530：{皮肤key: 该皮肤【重复卡】张数}（服务端算好发回来 ✓）*/
+var MY_CARD_MAP = {};
+var _bagLocalApplied = false;
+var _bagFallbackT = null;
+function bagAfterEquip() {
+  _bagLocalApplied = false;
+  if (_bagFallbackT) { clearTimeout(_bagFallbackT); }
+  _bagFallbackT = setTimeout(function () {
+    _bagFallbackT = null;
+    if (_bagLocalApplied) { return; }          /* 服务器推过了 → 什么都不做 ✓ */
+    BAG.busy = false;
+    if ((SETCFG.setTab || '') === 'bag') { bagFetch(bagRender); }
+  }, 2500);
 }
 
 var BAG = { items: [], weapon: null, weaponItemId: null,
@@ -2117,13 +4933,31 @@ var W_TIER_FLAT = [3, 6, 10, 16, 24, 36, 52, 74, 104, 146, 205, 290];
 var W_REF = 100;                 // 系数折算基准（纯比较用 ✓）
 
 function wBase(it) { return (it && it.base) || null; }
+/* ★★ round472：【有效装备等级】= min(装备等级, 你的等级) ✗
+   超过你等级的部分不算数 ✓（和 server/weapons.py eff_level 一致 ✗）*/
+function effGearLv(it) {
+  var il = +((it && it.itemLv) || 1);
+  var lv = (WSC.role && WSC.role.level) || 1;
+  return Math.max(1, Math.min(il, lv));
+}
 function wFlat(it) {
   var b = wBase(it);
   if (!b) { return 0; }
   if (it && it.flat0) { return 0; }        // ★ 空手没有平伤（第 58 轮 ✓）
   var ti = Math.max(0, Math.min(11, it.tier || 0));
-  var lv = Math.max(1, it.itemLv || 1);
+  var lv = effGearLv(it);
   return W_TIER_FLAT[ti] * (1 + 0.06 * (lv - 1));
+}
+/* ★ round472：防具的【打折后】属性（和 server/armor.py stats_of 同一口径 ✓）*/
+function aStatsOf(ar) {
+  var b = (ar && ar.base) || {};
+  var il = +((ar && ar.itemLv) || 1);
+  var lvv = (WSC.role && WSC.role.level) || 1;
+  var el = Math.max(1, Math.min(il, lvv));
+  var sc = (il > 1) ? ((1 + 0.06 * (el - 1)) / (1 + 0.06 * (il - 1))) : 1;
+  var m = aMastery(ar);
+  return { dr: (+b.dr || 0) * sc * m, hp: (+b.hp || 0) * sc * m,
+           drFull: (+b.dr || 0), hpFull: (+b.hp || 0), mastery: m, scale: sc };
 }
 function wDamage(it) {          // 武器伤害 = 平伤 + 系数 × 100
   var b = wBase(it);
@@ -2131,10 +4965,32 @@ function wDamage(it) {          // 武器伤害 = 平伤 + 系数 × 100
   return wFlat(it) + (+b.coeff || 1) * W_REF;
 }
 function wCrit(it) { return wDamage(it) * 1.5; }
-function wInterval(it) {
+/* ★★★ round470：攻速上下限是【全局常量】✗ 既不是按武器、也不是按人物 ✓
+   来源：server/weapons.py  S_MIN=0.6  S_MAX=2.2  BASE_INTERVAL=0.62
+      间隔 = 0.62 / S（秒） → 最快 ×2.2 = 0.282 秒 · 最慢 ×0.6 = 1.033 秒
+   ★ 每把武器自己的【基础 S】是固定的（匕首 1.45 · 锤 0.66…）✗
+     词条【攻速 %】乘在基础 S 上 → 再夹回 [0.6, 2.2] ✓
+   ★ 以前这里没算词条 ✗ 而服务器算了 ✗✗（两边不一致）*/
+var W_SPD_MIN = 0.6, W_SPD_MAX = 2.2, W_BASE_INTERVAL = 0.62;
+
+function wSpdPct(it) {
+  var af = (it && it.affixes) || [];
+  var pct = 0;
+  for (var i = 0; i < af.length; i++) {
+    if (af[i] && af[i].key === 'spd_pct') { pct += (+af[i].val || 0); }
+  }
+  return pct;
+}
+function wSpdBase(it) {
   var b = wBase(it);
-  var spd = b ? (+b.atkSpeed || 1.15) : 1.15;
-  return 0.62 / Math.max(0.6, Math.min(2.2, spd));
+  return b ? (+b.atkSpeed || 1.15) : 1.15;
+}
+function wSpdTotal(it) {
+  var v = wSpdBase(it) * (1.0 + wSpdPct(it) / 100.0);
+  return Math.max(W_SPD_MIN, Math.min(W_SPD_MAX, v));
+}
+function wInterval(it) {
+  return W_BASE_INTERVAL / wSpdTotal(it);
 }
 function wDps(it) {             // 每秒伤害（含 20% 暴击期望 ×1.1 ✓）
   return wDamage(it) * 1.1 / Math.max(0.05, wInterval(it));
@@ -2156,10 +5012,11 @@ function arcWord(arc) {
 }
 function wStatsOf(it) {
   var b = wBase(it);
-  var spd = b ? (+b.atkSpeed || 1.15) : 1.15;
   var reach = b ? (+b.reach || 2.4) : 2.4;
   var arc = b ? (+b.arc || 1.05) : 1.05;
-  return { reach: reach, arc: arc, spd: spd };
+  /* ★ round470：spd = 当前攻速（含词条、已夹限）✗ spdBase = 基础 ✗ spdPct = 词条 % ✓ */
+  return { reach: reach, arc: arc,
+           spd: wSpdTotal(it), spdBase: wSpdBase(it), spdPct: wSpdPct(it) };
 }
 /* ★ 空手时按【默认单手剑】算（服务器就是这么兜底的 ✓ 见 world.py 的 Player）
    踩过：不兜底的话面板显示"武器伤害 0"✗ —— 玩家会以为坏了 ✗ */
@@ -2184,15 +5041,23 @@ function wInherent() {
 /* ★★ 第 53/54 轮：等级不够【不是不能穿】，而是"发挥度打折" ★★
    （方案 §7.8 原来写"不能装"✗ → 用户改成"能装、只是发挥不出最大伤害" ✓）
    算法和 server/weapons.py 的 mastery_of 逐位一致 ✓（不一致就是显示和实际不符 ✗）*/
+/* ★★★ round472：发挥度 = 1 / (1 + 等级差 / 10)，下限 0.02 ✗
+   必须和 server/weapons.py 的 mastery_for_gap 一字不差 ✗
+   （不一致就是"面板显示 90% 实际只有 2%"这种事 ✗）*/
+var MASTERY_FLOOR = 0.02, MASTERY_K = 10.0;
+function masteryGap(req, lv) {
+  req = +req || 1; lv = +lv || 1;
+  if (req <= 1 || lv >= req) { return 1; }
+  var gap = req - lv;
+  return Math.max(MASTERY_FLOOR, Math.min(1, 1 / (1 + gap / MASTERY_K)));
+}
 function wMastery(it) {
   var req = +((it && it.reqLevel) || 1);
   var lv = (WSC.role && WSC.role.level) || 1;
-  if (req <= 1 || lv >= req) { return 1; }
-  // ★ 第 60 轮：下限 0.40 → 0.90（和 server/weapons.py 的 MASTERY_FLOOR 一致 ✓）
-  var F = 0.90;
-  var v = F + (1 - F) * (lv / req);
-  return Math.max(F, Math.min(1, v));
+  return masteryGap(req, lv);
 }
+/* ★ round472：防具也吃发挥度（和武器一个口径 ✓）*/
+function aMastery(ar) { return wMastery(ar); }
 /* 满发挥（不打折、不封顶）—— 用来告诉玩家"你只发挥了它的多少" ✓ */
 function wFull(it) {
   var b = wBase(it);
@@ -2292,11 +5157,13 @@ function wStatHtml(it, dim) {
        （用户："这些效果也要写到文案里，不然玩家不知道" ✓）
        ★ 文案来自服务器（物品数据里的 affixes ✓）—— 不在 JS 里再抄一份表 ✗ */
     ((it.affixes && it.affixes.length) ? (function () {
-      var out = '<span style="color:#ffd83d">词条 ' + it.affixes.length + ' 条：</span>';
+      /* ★ round468：一条一行（用户要求换行 ✓）*/
+      var out = '<span style="color:#ffd83d">词条 ' + it.affixes.length + ' 条：</span>' +
+        '<span style="display:block;margin-top:2px"></span>';
       for (var ai = 0; ai < it.affixes.length; ai++) {
         var af = it.affixes[ai];
-        out += '<span style="color:#8ee0ff">· ' + (af.text || af.name || '') +
-          '</span>';
+        out += '<span style="color:#8ee0ff;display:block;padding-left:6px">• ' +
+          (af.text || af.name || '') + '</span>';
       }
       return out;
     })() : '') +
@@ -2320,17 +5187,45 @@ function wStatHtml(it, dim) {
        · 点格子 = 选中；面板显示【选中那件】的数值；下面出现【使用】/【脱下】
    ============================================================ */
 /* ★★ 第 171 轮（用户 #4）：背包分页 ★★
-   每页 35 格 = 5 行 × 7 列 ✓（宽 7 ✓）
+   每页 30 格 = 5 行 × 6 列 ✓（宽 6 ✓）
    ★ 为什么在客户端分页而不是服务器分批取：
      背包本来就只有几十件 ✗ 客户端一次拿全 ✓ 翻页只是"少画一些格子"✓
      服务器那边一个字都不用改 ✓（也不用改协议 ✓）
-   ★ 空位也要画满 35 个 ✓ 不然最后一页会"越画越小"✗ 看着不像格子 ✓ */
-var BAG_PAGE_SIZE = 35;
+   ★ 空位也要画满 30 个 ✓ 不然最后一页会"越画越小"✗ 看着不像格子 ✓ */
+var BAG_PAGE_SIZE = 30;
 var BAG_PAGE = 0;
 
 function bagPageCount() {
   var n = (BAG.items || []).length;
   return Math.max(1, Math.ceil(n / BAG_PAGE_SIZE));
+}
+/* ★ round409（用户："整页勾选"）：当前这一页（30 格）里【可以卖】的物品 id
+   ★ 装备在身上 / 上架锁定中 / 默认那把 → 不给勾 ✓（勾了也卖不掉 ✓）
+   ★ 现算 ✗ 不缓存 ✓（翻页、卖东西、整理之后马上就是对的 ✓）*/
+function bagPageIds() {
+  var out = [];
+  var ps = (typeof BAG_PAGE_SIZE === 'number') ? BAG_PAGE_SIZE : 30;
+  var from = (typeof BAG_PAGE === 'number' ? BAG_PAGE : 0) * ps;
+  var list = BAG.items || [];
+  var to = Math.min(list.length, from + ps);
+  for (var i = from; i < to; i++) {
+    var e = list[i];
+    if (!e || e.id === undefined || e.id === null) { continue; }
+    var it = e.item || {};
+    if (String(e.id) === String(BAG.weaponItemId) ||
+        String(e.id) === String(BAG.armorItemId)) { continue; }
+    if (it.locked_by || it.locked) { continue; }
+    out.push(String(e.id));
+  }
+  return out;
+}
+/* 勾选列表里找一下（返回下标 ✗ -1 = 没勾 ✓）—— 统一按字符串比 ✓ */
+function _pickHas(id) {
+  var p = BAG.pick || [];
+  for (var i = 0; i < p.length; i++) {
+    if (String(p[i]) === String(id)) { return i; }
+  }
+  return -1;
 }
 function bagPagerUpd() {
   var box = document.getElementById('bagPager');
@@ -2427,21 +5322,65 @@ function autoUiUpd() {
      → 位置存 localStorage ✗ 刷新后还在 ✓
    ★ 为什么不用 HTML5 拖放：手机上不认 ✗ pointer 事件两端通用 ✓
    ★ 拖动阈值 8px：手指微抖不会误判成拖动 ✓ */
+function uiOrientTag() {
+  return document.body.classList.contains('landscape') ? 'L' : 'P';
+}
+function uiPosKey(id) { return 'uiPos_' + id + '_' + uiOrientTag(); }
+function uiApplySavedPos(el, id) {
+  try {
+    var raw = localStorage.getItem(uiPosKey(id)) || localStorage.getItem('uiPos_' + id);
+    if (!raw) { return false; }
+    var o = JSON.parse(raw);
+    if (!o) { return false; }
+    var W = Math.max(1, window.innerWidth), H = Math.max(1, window.innerHeight);
+    var l, t;
+    if (typeof o.rx === 'number' && typeof o.ry === 'number') {
+      l = o.rx * W; t = o.ry * H;
+    } else if (typeof o.l === 'number') {
+      l = o.l; t = o.t || 0;
+    } else { return false; }
+    var w = el.offsetWidth || 70, h = el.offsetHeight || 70;
+    l = Math.max(4, Math.min(Math.max(4, W - w - 4), l));
+    t = Math.max(4, Math.min(Math.max(4, H - h - 4), t));
+    el.style.left = l.toFixed(1) + 'px';
+    el.style.top = t.toFixed(1) + 'px';
+    el.style.right = 'auto';
+    el.style.bottom = 'auto';
+    return true;
+  } catch (e) { return false; }
+}
+function uiSavePos(id, l, t) {
+  try {
+    var W = Math.max(1, window.innerWidth), H = Math.max(1, window.innerHeight);
+    var o = { l: Math.round(l), t: Math.round(t),
+      rx: +(l / W).toFixed(5), ry: +(t / H).toFixed(5) };
+    localStorage.setItem('uiPos_' + id, JSON.stringify(o));
+    localStorage.setItem(uiPosKey(id), JSON.stringify(o));
+  } catch (e) { }
+}
+function uiApplyAllSaved() {
+  if (_dragSt) { return; }
+  var ids = ['atk', 'jmp', 'auto', 'cam'];
+  for (var i = 0; i < ids.length; i++) {
+    var el = document.getElementById(ids[i]);
+    if (!el) { continue; }
+    var raw = null;
+    try { raw = localStorage.getItem(uiPosKey(ids[i])) || localStorage.getItem('uiPos_' + ids[i]); } catch (e) { }
+    if (raw) {
+      uiApplySavedPos(el, ids[i]);
+    } else {
+      el.style.left = ''; el.style.top = '';
+      el.style.right = ''; el.style.bottom = '';
+    }
+  }
+}
+
 function makeDraggable(id) {
   var el = document.getElementById(id);
   if (!el || el._dragInit) { return; }
   el._dragInit = true;
-  var KEY = 'uiPos_' + id;
-  // ★ 先恢复上次的位置
-  try {
-    var saved = JSON.parse(localStorage.getItem(KEY) || 'null');
-    if (saved && typeof saved.l === 'number') {
-      el.style.left = saved.l + 'px';
-      el.style.top = saved.t + 'px';
-      el.style.right = 'auto';
-      el.style.bottom = 'auto';
-    }
-  } catch (e) { }
+  // ★ 先恢复上次的位置（按当前横屏/竖屏 + 屏幕比例）
+  uiApplySavedPos(el, id);
   /* ★★★ round357 修的真 bug（用户："点了键位按钮后无法拖动"）★★★
      ★ 根因：原来 pointermove / pointerup 绑在【元素自己】身上 ✗
        而 pointerdown 里调了 setPointerCapture ✗
@@ -2457,7 +5396,7 @@ function makeDraggable(id) {
     if (!UI_EDIT) { return; }
     if (e && e.preventDefault) { e.preventDefault(); }
     var r = el.getBoundingClientRect();
-    _dragSt = { el: el, key: KEY, x: e.clientX, y: e.clientY,
+    _dragSt = { el: el, id: id, x: e.clientX, y: e.clientY,
                 l: r.left, t: r.top, moved: false, nl: r.left, nt: r.top };
   });
 }
@@ -2480,12 +5419,29 @@ var _dragSt = null;
       if (Math.abs(dx) < 8 && Math.abs(dy) < 8) { return; }
       st.moved = true;
       st.el.classList.add('uiDrag');
+      /* ★★ round531（用户："拖动时应该流畅地看见移动，而不是松手后才跳到新位置"）
+         → 拖的时候【关掉过渡】+ 关掉动画 ✗ 否则每次 transform 都会被 0.07s 的
+           transition 拖一下 ✗ 连起来就是"一顿一顿" ✓ */
+      st.el.style.transition = 'none';
+      st.el.style.animation = 'none';
+      /* ★★ round533（用户："还是看不到移动的过程"）
+         → 干脆不用 transform ✗ 直接把 left/top 改掉 ✓
+           有些 WebView / 省电模式下 transform 那一层不重绘 ✗
+           改 left/top 是【布局属性】✗ 一定会重绘 ✓（按钮只有几个，开销可忽略） */
+      st.el.style.right = 'auto';
+      st.el.style.bottom = 'auto';
+      st.el.style.left = st.l + 'px';
+      st.el.style.top = st.t + 'px';
+      try { st.el.style.touchAction = 'none'; } catch (e4) { }
     }
     var w = st.el.offsetWidth, h = st.el.offsetHeight;
     var nl = Math.max(0, Math.min(window.innerWidth - w, st.l + dx));
     var nt = Math.max(0, Math.min(window.innerHeight - h, st.t + dy));
     st.nl = nl; st.nt = nt;
-    st.el.style.transform = 'translate(' + (nl - st.l) + 'px,' + (nt - st.t) + 'px)';
+    /* ★ 一帧只写一次（pointermove 一秒可能来 120 次 ✗ 每帧写一次最顺 ✓）*/
+    /* ★ round533：直接改 left/top（布局属性 ✗ 一定重绘 ✓）*/
+    st.el.style.left = nl + 'px';
+    st.el.style.top = nt + 'px';
   }, { passive: false });
   document.addEventListener('pointerup', function () {
     var st = _dragSt;
@@ -2496,14 +5452,14 @@ var _dragSt = null;
     st.el._dragged = true;
     setTimeout(function () { st.el._dragged = false; }, 250);
     var nl = st.nl, nt = st.nt;
+    st.el.style.transition = '';
+    st.el.style.animation = '';
     st.el.style.transform = '';
     st.el.style.left = nl + 'px';
     st.el.style.top = nt + 'px';
     st.el.style.right = 'auto';
     st.el.style.bottom = 'auto';
-    try {
-      localStorage.setItem(st.key, JSON.stringify({ l: Math.round(nl), t: Math.round(nt) }));
-    } catch (e3) { }
+    uiSavePos(st.id, nl, nt);
   });
   document.addEventListener('pointercancel', function () {
     if (!_dragSt) { return; }
@@ -2541,11 +5497,1890 @@ function uiEditBind() {
   });
 }
 
+/* ============================================================ 仓库 UI（round609）
+   ★ 服务端权威：只有靠近柜台才允许 open/move
+   ★ 背包和仓库各 30 格/页；仓库 90 格；主题跟随 #setPanel 的 CSS 变量
+   ============================================================ */
+var WH = { open: false, bag: [], store: [], cap: 90, used: 0,
+  pageB: 0, pageS: 0, selB: null, selS: null, busy: false, reqT: 0,
+  pickB: {}, pickS: {} };
+var WH_PAGE = 30;
+
+function whMsg(s) {
+  var el = document.getElementById('whMsg');
+  if (el) { el.textContent = s || ''; }
+}
+function whSetOpen(on) {
+  WH.open = !!on;
+  WH_OPEN = !!on;
+  var p = document.getElementById('whPanel');
+  if (p) { p.style.display = on ? 'block' : 'none'; }
+  var pr = document.getElementById('whPrompt');
+  if (pr) { pr.style.display = (!on && WH_NEAR) ? 'block' : 'none'; }
+  if (!on) {
+    WH.selB = null; WH.selS = null;
+    try { if (window.bagTipHide) { bagTipHide(); } } catch (eBT) { }
+    try { wsSend('warehouse_close', {}); } catch (e) { }
+  }
+}
+function whOpen() {
+  if (WH.open) { return; }
+  if (typeof WSC !== 'undefined' && !WSC.ready) { toast('连接中，请稍后再试'); return; }
+  whSetOpen(true);
+  whMsg('正在打开仓库…');
+  WH.reqT = Date.now();
+  try { wsSend('warehouse_open', {}); } catch (e) { whMsg('连接失败'); }
+  setTimeout(function () {
+    if (WH.open && !WH.bag.length && !WH.store.length && Date.now() - WH.reqT > 1800) {
+      whMsg('没有反应：请确认你在仓库柜台旁');
+    }
+  }, 1900);
+}
+function whClose() { whSetOpen(false); }
+function whApply(d) {
+  if (!d) { return; }
+  WH.bag = d.bag || [];
+  WH.store = d.store || [];
+  WH.cap = +d.capacity || 90;
+  WH.used = +d.used || WH.store.length;
+  WH.busy = false;
+  WH.pickB = {}; WH.pickS = {};
+  whSetOpen(true);
+  whRender();
+  whMsg('已连接仓库');
+}
+function whSlotHtml(it, kind) {
+  if (!it) { return '<div class="whSlot empty"></div>'; }
+  var o = it.item || {};
+  var tier = +o.tier || 0;
+  var col = tierHex(tier);
+  var ic = iconOfItem(o);
+  var sel = (kind === 'bag' ? WH.selB : WH.selS);
+  var on = (String(sel) === String(it.id));
+  var picked = !!(kind === 'bag' ? WH.pickB[it.id] : WH.pickS[it.id]);
+  return '<div class="whSlot' + (on ? ' sel' : '') + (picked ? ' picked' : '') + '" data-whkind="' + kind + '" data-whid="' + it.id +
+    '" style="background:' + tierRgba(tier, 0.26) + '">' + '<span class="chk">✓</span>' + ic +
+    '<span class="t" style="color:' + col + '">' + (tier + 1) + '</span>' +
+    ((+it.stack || 1) > 1 ? '<span class="n">' + it.stack + '</span>' : '') + '</div>';
+}
+function whGrid(kind) {
+  var list = kind === 'bag' ? WH.bag : WH.store;
+  var page = kind === 'bag' ? WH.pageB : WH.pageS;
+  var n = Math.max(1, Math.ceil((list.length || 0) / WH_PAGE));
+  if (page >= n) { page = n - 1; if (page < 0) { page = 0; } }
+  if (kind === 'bag') { WH.pageB = page; } else { WH.pageS = page; }
+  var from = page * WH_PAGE;
+  var h = '';
+  for (var i = 0; i < WH_PAGE; i++) { h += whSlotHtml(list[from + i], kind); }
+  var g = document.getElementById(kind === 'bag' ? 'whBag' : 'whStore');
+  if (g) { g.innerHTML = h; }
+  var lab = document.getElementById(kind === 'bag' ? 'whBagPage' : 'whStorePage');
+  if (lab) { lab.textContent = (page + 1) + ' / ' + n; }
+}
+function whRender() {
+  WH.used = WH.store.length;
+  var c = document.getElementById('whCount');
+  if (c) { c.textContent = WH.used + ' / ' + WH.cap; }
+  whGrid('bag'); whGrid('store');
+  var sb = document.getElementById('whStoreBtn'), tb = document.getElementById('whTakeBtn');
+  if (sb) { sb.disabled = !WH.selB || WH.busy; }
+  if (tb) { tb.disabled = !WH.selS || WH.busy; }
+  var bsel = Object.keys(WH.pickB).length, ssel = Object.keys(WH.pickS).length;
+  var ss = document.getElementById('whStoreSel'), tt = document.getElementById('whTakeSel');
+  if (ss) { ss.disabled = !bsel || WH.busy; ss.textContent = '批量存入(' + bsel + ')'; }
+  if (tt) { tt.disabled = !ssel || WH.busy; tt.textContent = '批量取出(' + ssel + ')'; }
+}
+function whSelect(kind, id) {
+  if (kind === 'bag') {
+    WH.selB = id;
+    if (WH.pickB[id]) { delete WH.pickB[id]; } else { WH.pickB[id] = 1; }
+  } else {
+    WH.selS = id;
+    if (WH.pickS[id]) { delete WH.pickS[id]; } else { WH.pickS[id] = 1; }
+  }
+  whRender();
+  var list = kind === 'bag' ? WH.bag : WH.store;
+  var hit = null;
+  for (var i = 0; i < list.length; i++) { if (String(list[i].id) === String(id)) { hit = list[i]; break; } }
+  if (hit && typeof bagTipHTML === 'function' && window.bagTipShowAt) {
+    try {
+      var h = bagTipHTML(hit.item || {}, hit.id, 'none');
+      bagTipShowAt((window.innerWidth / 2), (window.innerHeight / 2), h);
+      if (window.bagTipStickyOn) { bagTipStickyOn(); }
+    } catch (eT) { }
+  }
+}
+function whMove(to) {
+  var id = to === 'store' ? WH.selB : WH.selS;
+  if (!id || WH.busy) { return; }
+  if (typeof WSC !== 'undefined' && !WSC.ready) { whMsg('连接已断开'); return; }
+  WH.busy = true; whRender(); whMsg('处理中…');
+  try { wsSend('warehouse_move', { id: id, to: to }); }
+  catch (e) { WH.busy = false; whMsg('发送失败'); whRender(); }
+}
+function whPickPage(kind) {
+  var list = kind === 'bag' ? WH.bag : WH.store;
+  var page = kind === 'bag' ? WH.pageB : WH.pageS;
+  var from = page * WH_PAGE, to = Math.min(list.length, from + WH_PAGE);
+  var map = kind === 'bag' ? WH.pickB : WH.pickS;
+  var all = true;
+  for (var i = from; i < to; i++) { if (!map[list[i].id]) { all = false; break; } }
+  for (var j = from; j < to; j++) {
+    if (all) { delete map[list[j].id]; } else { map[list[j].id] = 1; }
+  }
+  whRender();
+}
+function whMoveMany(to) {
+  var map = to === 'store' ? WH.pickB : WH.pickS;
+  var ids = Object.keys(map).map(function (x) { return +x; });
+  if (!ids.length || WH.busy) { return; }
+  if (typeof WSC !== 'undefined' && !WSC.ready) { whMsg('连接已断开'); return; }
+  WH.busy = true; whRender(); whMsg('批量处理中…');
+  try { wsSend('warehouse_move_many', { ids: ids, to: to }); }
+  catch (e) { WH.busy = false; whMsg('发送失败'); whRender(); }
+}
+(function whBind() {
+  if (window._whBound) { return; }
+  window._whBound = true;
+  var close = document.getElementById('whClose');
+  if (close) { close.addEventListener('click', whClose); }
+  ['whBag', 'whStore'].forEach(function (id) {
+    var g = document.getElementById(id);
+    if (!g) { return; }
+    g.addEventListener('click', function (e) {
+      var t = e.target;
+      while (t && t !== g && !(t.getAttribute && t.getAttribute('data-whid'))) { t = t.parentNode; }
+      if (t && t !== g) { whSelect(t.getAttribute('data-whkind'), +t.getAttribute('data-whid')); }
+    });
+  });
+  var sb = document.getElementById('whStoreBtn'), tb = document.getElementById('whTakeBtn');
+  if (sb) { sb.addEventListener('click', function () { whMove('store'); }); }
+  if (tb) { tb.addEventListener('click', function () { whMove('bag'); }); }
+  var p1 = document.getElementById('whPickPageB'), p2 = document.getElementById('whPickPageS');
+  if (p1) { p1.addEventListener('click', function () { whPickPage('bag'); }); }
+  if (p2) { p2.addEventListener('click', function () { whPickPage('store'); }); }
+  var s1 = document.getElementById('whStoreSel'), t1 = document.getElementById('whTakeSel');
+  if (s1) { s1.addEventListener('click', function () { whMoveMany('store'); }); }
+  if (t1) { t1.addEventListener('click', function () { whMoveMany('bag'); }); }
+  var bp = document.getElementById('whBagPrev'), bn = document.getElementById('whBagNext');
+  var sp = document.getElementById('whStorePrev'), sn = document.getElementById('whStoreNext');
+  if (bp) { bp.addEventListener('click', function () { WH.pageB = Math.max(0, WH.pageB - 1); whRender(); }); }
+  if (bn) { bn.addEventListener('click', function () { WH.pageB++; whRender(); }); }
+  if (sp) { sp.addEventListener('click', function () { WH.pageS = Math.max(0, WH.pageS - 1); whRender(); }); }
+  if (sn) { sn.addEventListener('click', function () { WH.pageS++; whRender(); }); }
+  document.addEventListener('keydown', function (e) {
+    var k = e.key || '';
+    if (k === 'Escape' && WH.open) { whClose(); e.preventDefault(); return; }
+    if (k === 'e' || k === 'E') {
+      if (typeof MY_SLEEP !== 'undefined' && MY_SLEEP) { tryWake(); e.preventDefault(); return; }
+      if (typeof SLEEP_NEAR !== 'undefined' && SLEEP_NEAR) { trySleep(); e.preventDefault(); return; }
+      if (typeof FRIDGE_NEAR !== 'undefined' && FRIDGE_NEAR) { fridgeOpen(FRIDGE_NEAR.id); e.preventDefault(); return; }
+      if (typeof SHOP_NEAR !== 'undefined' && SHOP_NEAR) { shopOpen(); e.preventDefault(); return; }
+      if (typeof MY_SEAT !== 'undefined' && MY_SEAT) {
+        if (orderShopNear()) { orderOpen(); e.preventDefault(); return; }
+        tryStand(); e.preventDefault(); return;
+      }
+      if (typeof SEAT_NEAR !== 'undefined' && SEAT_NEAR) { trySit(); e.preventDefault(); return; }
+      if (typeof TP_NEAR !== 'undefined' && TP_NEAR) { tpOpen(); e.preventDefault(); return; }
+      if (typeof HOUSE_NEAR !== 'undefined' && HOUSE_NEAR) { houseOpen(); e.preventDefault(); return; }
+      if (!WH.open && typeof WH_NEAR !== 'undefined' && WH_NEAR) { whOpen(); e.preventDefault(); }
+    }
+  });
+})();
+UI.warehouseFloat = function (sx, sy, on, text) {
+  var el = document.getElementById('interactFloat');
+  if (!el) { return; }
+  if (!on) { el.style.display = 'none'; return; }
+  el.textContent = text || '仓库';
+  el.style.display = 'block';
+  el.style.left = Math.round(sx) + 'px';
+  el.style.top = Math.round(sy) + 'px';
+};
+/* core 层不能碰 DOM：文字招牌/光晕贴图需要的 canvas 从这里拿 */
+UI.setSafeMode = function (on) {
+  try { document.body.classList.toggle('safe-mode', !!on); } catch (e) { }
+};
+
+UI.townCanvas = function (w, h) {
+  var c = document.createElement('canvas');
+  c.width = w || 256; c.height = h || 128;
+  return c;
+};
+
+var TOWN_TELEPORTS = (typeof TOWN_TELEPORTS !== 'undefined') ? TOWN_TELEPORTS : [];
+var TOWN_HOUSE_INFO = (typeof TOWN_HOUSE_INFO !== 'undefined') ? TOWN_HOUSE_INFO : {};
+var townHouseFridge = (typeof townHouseFridge !== 'undefined') ? townHouseFridge : null;
+var townShopById = (typeof townShopById !== 'undefined') ? townShopById : null;
+var TOWN_BUILDINGS = (typeof TOWN_BUILDINGS !== 'undefined') ? TOWN_BUILDINGS : [];
+var TOWN_HOUSES = (typeof TOWN_HOUSES !== 'undefined') ? TOWN_HOUSES : [];
+var TOWN_SHOPS = (typeof TOWN_SHOPS !== 'undefined') ? TOWN_SHOPS : [];
+var TOWN_DATA = (typeof TOWN_DATA !== 'undefined') ? TOWN_DATA : null;
+var townHouseSignSet = (typeof townHouseSignSet !== 'undefined') ? townHouseSignSet : null;
+
+/* ---------- 小镇地图 ---------- */
+var MAP_OPEN = false, MAP_ZOOM = 1, MAP_HITS = [], MAP_SEL = null, MAP_COPY_TXT = '';
+var MAP_FILTER = 'all', MAP_CX = 0, MAP_CZ = 0, MAP_MOBILE = false;
+function mapKindName(b) {
+  var k = b.k || '';
+  if (b.tier === 'villa') { return '别墅'; }
+  if (b.tier === 'yard') { return '小院'; }
+  if (b.tier === 'flat') { return '小平楼'; }
+  var m = { mart: '超市', dessert: '奶茶店', cafe: '咖啡店', ramen: '饭店', izakaya: '居酒屋',
+    bakery: '面包店', clinic: '药铺', tea: '茶馆', flower: '花店', general: '杂货铺',
+    bookstore: '书店', post: '邮局', inn: '旅店', bathhouse: '澡堂', smith: '铁匠铺',
+    warehouse: '仓库', hall: '新手大厅', shrine: '神社', koban: '派出所', apartment: '公寓' };
+  return m[k] || '建筑';
+}
+function mapShopOf(k) {
+  for (var i = 0; i < TOWN_SHOPS.length; i++) { if (TOWN_SHOPS[i].id === k) { return i + 1; } }
+  return 0;
+}
+function mapDraw() {
+  MAP_HITS = [];
+  var cv = document.getElementById('townMapCanvas');
+  if (!cv) { return; }
+  var box = cv.parentNode;
+  var W = Math.max(320, cv.clientWidth || box.clientWidth || 800);
+  var H = Math.max(320, cv.clientHeight || box.clientHeight || 700);
+  var dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  var c = cv.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, W, H);
+  var span = 520 / MAP_ZOOM;
+  var sc = Math.min(W, H) / span;
+  var cx = W / 2 - MAP_CX * sc, cy = H / 2 - MAP_CZ * sc;
+  function X(wx) { return cx + wx * sc; }
+  function Y(wz) { return cy + wz * sc; }
+  function mapPass(group, wx, wz) {
+    if (MAP_FILTER === 'all') { return true; }
+    if (MAP_FILTER === 'center') { return wx >= -180 && wx <= -80 && wz >= 85 && wz <= 175; }
+    if (MAP_FILTER === 'villa' || MAP_FILTER === 'yard' || MAP_FILTER === 'flat') { return group === MAP_FILTER; }
+    if (MAP_FILTER === 'shop') { return group === 'shop'; }
+    if (MAP_FILTER === 'road') { return group === 'road'; }
+    return true;
+  }
+  c.fillStyle = '#5b7048'; c.fillRect(0, 0, W, H);
+  /* 区域底色 */
+  function rect(x0, z0, x1, z1, col) { c.fillStyle = col; c.fillRect(X(x0), Y(z0), (x1 - x0) * sc, (z1 - z0) * sc); }
+  rect(-250, -250, 250, 250, '#667b51');
+  rect(-210, -210, -110, -70, '#5e7350');
+  rect(-210, 120, -100, 210, '#5e7350');
+  rect(100, 120, 210, 210, '#5e7350');
+  rect(-210, -80, -100, 80, '#5b7048');
+  rect(-45, -45, 45, 45, '#7d7a68');
+  c.strokeStyle = '#c8b88a'; c.lineWidth = 3; c.strokeRect(X(-250), Y(-250), 500 * sc, 500 * sc);
+  /* 道路 */
+  var roads = (TOWN_DATA && TOWN_DATA.roads) ? TOWN_DATA.roads : [];
+  for (var ri = 0; ri < roads.length; ri++) {
+    var r = roads[ri];
+    var rmx = (r.x0 + r.x1) / 2, rmz = (r.z0 + r.z1) / 2;
+    if (!mapPass('road', rmx, rmz)) { continue; }
+    c.fillStyle = '#454842';
+    c.fillRect(X(r.x0), Y(r.z0), Math.max(1.5, (r.x1 - r.x0) * sc), Math.max(1.5, (r.z1 - r.z0) * sc));
+    c.strokeStyle = '#5f625a'; c.lineWidth = 1;
+    c.strokeRect(X(r.x0), Y(r.z0), Math.max(1.5, (r.x1 - r.x0) * sc), Math.max(1.5, (r.z1 - r.z0) * sc));
+    var mx = rmx, mz = rmz;
+    var vertical = (r.z1 - r.z0) > (r.x1 - r.x0);
+    var nm = r.name || ('道路 ' + (ri + 1));
+    c.save(); c.translate(X(mx), Y(mz)); if (vertical) { c.rotate(-Math.PI / 2); }
+    c.font = '600 10px "Microsoft YaHei",system-ui,sans-serif';
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillStyle = 'rgba(235,228,200,.88)';
+    if (!MAP_MOBILE && MAP_ZOOM >= 1.45) { c.fillText(nm, 0, 0); }
+    c.restore();
+    MAP_HITS.push({ x0: X(r.x0), y0: Y(r.z0), x1: X(r.x1), y1: Y(r.z1),
+      num: 'R' + (ri < 9 ? '0' : '') + (ri + 1), name: nm, kind: '道路', group: 'road', wx: mx, wz: mz });
+  }
+  /* 住宅 */
+  var hIdx = 1;
+  for (var hi = 0; hi < TOWN_HOUSES.length; hi++) {
+    var h = TOWN_HOUSES[hi];
+    var hcx = (h.x0 + h.x1) / 2, hcz = (h.z0 + h.z1) / 2;
+    if (!mapPass(h.tier, hcx, hcz)) { continue; }
+    var num = 'H' + (hIdx < 10 ? '0' : '') + hIdx++;
+    var col = h.tier === 'villa' ? '#9b7a55' : (h.tier === 'yard' ? '#6f8a5a' : '#7b6a86');
+    c.fillStyle = col; c.strokeStyle = 'rgba(255,240,210,.75)'; c.lineWidth = 1;
+    c.fillRect(X(h.x0), Y(h.z0), (h.x1 - h.x0) * sc, (h.z1 - h.z0) * sc);
+    c.strokeRect(X(h.x0), Y(h.z0), (h.x1 - h.x0) * sc, (h.z1 - h.z0) * sc);
+    if (!MAP_MOBILE) {
+      c.fillStyle = '#fff4d6'; c.font = '700 11px "Microsoft YaHei",system-ui,sans-serif';
+      c.textAlign = 'left'; c.textBaseline = 'top';
+      c.fillText(num, X(h.x0) + 3, Y(h.z0) + 2);
+    }
+    if (!MAP_MOBILE && MAP_ZOOM >= 1.45) {
+      c.font = '600 9px "Microsoft YaHei",system-ui,sans-serif';
+      c.fillStyle = 'rgba(36,26,16,.85)';
+      c.fillText(h.name || '', X(h.x0) + 3, Y(h.z0) + 15);
+    }
+    MAP_HITS.push({ x0: X(h.x0), y0: Y(h.z0), x1: X(h.x1), y1: Y(h.z1),
+      num: num, name: h.name || '住宅', kind: '住宅', group: h.tier, wx: hcx, wz: hcz });
+  }
+  /* 建筑 */
+  var bIdx = 1;
+  for (var bi = 0; bi < TOWN_BUILDINGS.length; bi++) {
+    var b = TOWN_BUILDINGS[bi];
+    var bcx = (b.x0 + b.x1) / 2, bcz = (b.z0 + b.z1) / 2;
+    var isShop = mapShopOf(b.k) > 0;
+    if (!mapPass(isShop ? 'shop' : 'building', bcx, bcz)) { continue; }
+    var num2 = isShop ? ('S' + (mapShopOf(b.k) < 10 ? '0' : '') + mapShopOf(b.k)) : ('B' + (bIdx < 10 ? '0' : '') + bIdx);
+    if (!isShop) { bIdx++; }
+    var fill = isShop ? '#c08a52' : (b.k === 'hall' ? '#c8a85a' : '#6f7f86');
+    if (b.k === 'shrine') { fill = '#9a6a5a'; }
+    c.fillStyle = fill; c.strokeStyle = 'rgba(255,240,210,.85)'; c.lineWidth = 1.2;
+    c.fillRect(X(b.x0), Y(b.z0), (b.x1 - b.x0) * sc, (b.z1 - b.z0) * sc);
+    c.strokeRect(X(b.x0), Y(b.z0), (b.x1 - b.x0) * sc, (b.z1 - b.z0) * sc);
+    if (!MAP_MOBILE) {
+      c.fillStyle = '#fff4d6'; c.font = '700 11px "Microsoft YaHei",system-ui,sans-serif';
+      c.textAlign = 'left'; c.textBaseline = 'top';
+      c.fillText(num2, X(b.x0) + 3, Y(b.z0) + 2);
+    }
+    if (!MAP_MOBILE && MAP_ZOOM >= 1.45) {
+      c.font = '700 9px "Microsoft YaHei",system-ui,sans-serif';
+      c.fillStyle = 'rgba(33,24,14,.9)';
+      c.fillText(b.name || mapKindName(b), X(b.x0) + 3, Y(b.z0) + 15);
+    }
+    MAP_HITS.push({ x0: X(b.x0), y0: Y(b.z0), x1: X(b.x1), y1: Y(b.z1),
+      num: num2, name: b.name || mapKindName(b), kind: isShop ? '商店' : '建筑',
+      group: isShop ? 'shop' : 'building', wx: bcx, wz: bcz });
+  }
+  /* 传送点 */
+  for (var ti = 0; ti < TOWN_TELEPORTS.length; ti++) {
+    var t = TOWN_TELEPORTS[ti];
+    if (!mapPass('tp', t.x, t.z)) { continue; }
+    c.fillStyle = '#6fd6ff'; c.strokeStyle = '#d8f8ff'; c.lineWidth = 1.5;
+    c.beginPath(); c.arc(X(t.x), Y(t.z), Math.max(3, 4.2 * sc / 2), 0, Math.PI * 2); c.fill(); c.stroke();
+    if (!MAP_MOBILE) {
+      c.fillStyle = '#0e2733'; c.font = '800 9px "Microsoft YaHei",system-ui,sans-serif';
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.fillText('T' + (ti + 1), X(t.x), Y(t.z));
+    }
+    MAP_HITS.push({ x0: X(t.x) - 8, y0: Y(t.z) - 8, x1: X(t.x) + 8, y1: Y(t.z) + 8,
+      num: 'T' + (ti + 1), name: t.name || '传送阵', kind: '传送', group: 'tp', wx: t.x, wz: t.z });
+  }
+  /* 区域名 */
+  c.font = '800 13px "Microsoft YaHei",system-ui,sans-serif'; c.textAlign = 'center'; c.fillStyle = 'rgba(255,240,210,.55)';
+  c.fillText('别墅区', X(-196), Y(36));
+  c.fillText('小院区', X(-196), Y(226));
+  c.fillText('小平楼区', X(-64), Y(226));
+  c.fillText('中央公园', X(-210), Y(105));
+  c.fillText('商业街', X(-105), Y(105));
+  /* 自己 */
+  c.fillStyle = '#ff6a6a'; c.strokeStyle = '#fff'; c.lineWidth = 2;
+  c.beginPath(); c.arc(X(P.x), Y(P.z), 5, 0, Math.PI * 2); c.fill(); c.stroke();
+  c.fillStyle = '#ffe0e0'; c.font = '700 10px "Microsoft YaHei",system-ui'; c.textAlign = 'center';
+  c.fillText('你', X(P.x), Y(P.z) - 9);
+  /* 选中高亮 */
+  if (MAP_SEL) {
+    c.strokeStyle = '#ff6a5a'; c.lineWidth = 3;
+    c.strokeRect(MAP_SEL.x0 - 2, MAP_SEL.y0 - 2, MAP_SEL.x1 - MAP_SEL.x0 + 4, MAP_SEL.y1 - MAP_SEL.y0 + 4);
+  }
+}
+function mapShowHit(hit) {
+  MAP_SEL = hit;
+  var info = document.getElementById('mapInfo');
+  var cp = document.getElementById('mapCopy');
+  if (hit) {
+    MAP_COPY_TXT = Math.round(hit.wx) + ', ' + Math.round(hit.wz);
+    if (info) {
+      info.innerHTML = '<b>' + hit.num + '</b> · ' + hit.name + '<br>' +
+        '<span style="color:#9fe8ff">' + hit.kind + '</span><br>' +
+        '坐标：' + MAP_COPY_TXT;
+    }
+    if (cp) { cp.style.display = 'block'; cp.textContent = '复制坐标'; }
+  } else {
+    MAP_COPY_TXT = '';
+    if (info) { info.innerHTML = '这里没有建筑。<br><span class="mapHint">点击编号查看详情；地图可缩放。</span>'; }
+    if (cp) { cp.style.display = 'none'; }
+  }
+  mapDraw();
+}
+function mapSelect(num) {
+  for (var i = 0; i < MAP_HITS.length; i++) {
+    if (MAP_HITS[i].num === num) { mapShowHit(MAP_HITS[i]); return; }
+  }
+}
+function mapBuildList() {
+  var box = document.getElementById('mapList');
+  if (!box) { return; }
+  var groups = [['建筑', 'B'], ['住宅', 'H'], ['商店', 'S'], ['传送', 'T'], ['道路', 'R']];
+  var h = '';
+  for (var gi = 0; gi < groups.length; gi++) {
+    var pfx = groups[gi][1];
+    h += '<div class="mapCat">' + groups[gi][0] + '</div>';
+    var n = 0;
+    for (var i = 0; i < MAP_HITS.length; i++) {
+      var it = MAP_HITS[i];
+      if (it.num.charAt(0) !== pfx) { continue; }
+      h += '<div class="mapItem' + (pfx === 'R' ? ' road' : '') + '" onclick="mapSelect(\'' + it.num + '\')">' +
+        '<b>' + it.num + '</b><span>' + it.name + '</span></div>';
+      n++;
+    }
+    if (!n) { h += '<div class="mapHint">暂无</div>'; }
+  }
+  box.innerHTML = h;
+}
+function mapFilter(f) {
+  MAP_FILTER = f || 'all';
+  var bs = document.querySelectorAll('.mapF');
+  for (var i = 0; i < bs.length; i++) {
+    var on = bs[i].getAttribute('data-f') === MAP_FILTER;
+    if (on) { bs[i].classList.add('on'); } else { bs[i].classList.remove('on'); }
+  }
+  mapDraw();
+  mapBuildList();
+}
+function mapFit(which) {
+  if (which === 'town') {
+    MAP_ZOOM = 2.15; MAP_CX = -125; MAP_CZ = 140;
+    if (MAP_FILTER !== 'villa' && MAP_FILTER !== 'yard' && MAP_FILTER !== 'flat' && MAP_FILTER !== 'shop') { MAP_FILTER = 'center'; mapFilter('center'); return; }
+  } else {
+    MAP_ZOOM = 0.95; MAP_CX = 0; MAP_CZ = 0;
+  }
+  mapDraw();
+}
+function mapListToggle() {
+  var side = document.getElementById('mapSide');
+  var b = document.getElementById('mapListBtn');
+  if (!side) { return; }
+  var on = !side.classList.contains('listOn');
+  if (on) { side.classList.add('listOn'); if (b) { b.textContent = '收起编号列表'; } }
+  else { side.classList.remove('listOn'); if (b) { b.textContent = '展开编号列表'; } }
+}
+function mapOpen() {
+  MAP_OPEN = true;
+  MAP_SEL = null; MAP_COPY_TXT = '';
+  var _mi = document.getElementById('mapInfo');
+  if (_mi) { _mi.innerHTML = '点击地图上的编号查看名称、类型、坐标。'; }
+  MAP_MOBILE = (window.innerWidth <= 760 || window.innerHeight <= 620);
+  if (MAP_MOBILE) {
+    MAP_FILTER = 'center'; MAP_ZOOM = 2.15; MAP_CX = -125; MAP_CZ = 140;
+  } else {
+    MAP_FILTER = 'all'; MAP_ZOOM = 1.0; MAP_CX = 0; MAP_CZ = 0;
+  }
+  var side = document.getElementById('mapSide');
+  if (side) { side.classList.remove('listOn'); }
+  var p = document.getElementById('mapPanel');
+  if (p) { p.style.display = 'block'; }
+  setTimeout(function () {
+    mapFilter(MAP_FILTER);
+    mapDraw();
+    mapBuildList();
+  }, 40);
+}
+function mapClose() {
+  MAP_OPEN = false;
+  var p = document.getElementById('mapPanel');
+  if (p) { p.style.display = 'none'; }
+}
+function mapZoom(d) {
+  MAP_ZOOM = Math.max(0.7, Math.min(2.8, MAP_ZOOM + d * 0.25));
+  mapDraw();
+}
+function mapPick(e) {
+  var cv = document.getElementById('townMapCanvas');
+  if (!cv) { return; }
+  var r = cv.getBoundingClientRect();
+  var mx = e.clientX - r.left, my = e.clientY - r.top;
+  var hit = null;
+  for (var i = MAP_HITS.length - 1; i >= 0; i--) {
+    var h = MAP_HITS[i];
+    if (mx >= h.x0 && mx <= h.x1 && my >= h.y0 && my <= h.y1) { hit = h; break; }
+  }
+  mapShowHit(hit);
+}
+function mapCopy() {
+  if (!MAP_COPY_TXT) { return; }
+  try { navigator.clipboard.writeText(MAP_COPY_TXT); } catch (e) { }
+  var cp = document.getElementById('mapCopy');
+  if (cp) { cp.textContent = '已复制 ' + MAP_COPY_TXT; setTimeout(function () { cp.textContent = '复制坐标'; }, 1200); }
+}
+(function mapBind() {
+  var b = document.getElementById('mapBtn');
+  if (b && !b._bound) { b._bound = true; b.addEventListener('click', function () { if (MAP_OPEN) { mapClose(); } else { mapOpen(); } }); }
+  var c = document.getElementById('mapClose');
+  if (c && !c._bound) { c._bound = true; c.addEventListener('click', mapClose); }
+  var cv = document.getElementById('townMapCanvas');
+  if (cv && !cv._bound) { cv._bound = true; cv.addEventListener('click', mapPick); }
+  if (!window._mapKeyBound) {
+    window._mapKeyBound = true;
+    document.addEventListener('keydown', function (e) {
+      var tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') { return; }
+      if (e.key === 'm' || e.key === 'M') { if (MAP_OPEN) { mapClose(); } else { mapOpen(); } e.preventDefault(); }
+      if (e.key === 'Escape' && MAP_OPEN) { mapClose(); e.preventDefault(); }
+    });
+  }
+  window.addEventListener('resize', function () { if (MAP_OPEN) { mapDraw(); } });
+})();
+
+UI.fridgeNear = function (h) {
+  FRIDGE_NEAR = h || null;
+  var atk = document.getElementById('atk');
+  var pr = document.getElementById('shopPrompt');
+  if (h) {
+    if (atk) { atk.classList.remove('seat', 'sleep', 'house', 'teleport', 'interact', 'shop'); atk.classList.add('fridge'); atk.title = '冰箱'; }
+    if (pr) { pr.textContent = '按 E / 点击交互按钮 打开冰箱'; pr.style.display = 'block'; }
+  } else {
+    if (atk) { atk.classList.remove('fridge'); }
+    if (pr) { pr.style.display = 'none'; }
+  }
+};
+var FRIDGE_NEAR = (typeof FRIDGE_NEAR !== 'undefined') ? FRIDGE_NEAR : null;
+
+/* ---------- 点单 / 传菜 ---------- */
+var ORDER_OPEN = false, ORDER_ID = '', ORDER_ITEMS = [], ORDER_MSG = '', ORDER_TITLE = '';
+function orderShopNear() {
+  if (typeof TOWN_SHOPS === 'undefined' || !TOWN_SHOPS) { return null; }
+  for (var i = 0; i < TOWN_SHOPS.length; i++) {
+    var s = TOWN_SHOPS[i];
+    if (!s.served) { continue; }
+    var dx = s.x - P.x, dz = s.z - P.z;
+    if (dx * dx + dz * dz <= 4.6 * 4.6) { return s; }
+  }
+  return null;
+}
+function orderOpen() {
+  var s = orderShopNear();
+  if (!s) { toast('请先走到店里点单'); return; }
+  if (typeof MY_SEAT === 'undefined' || !MY_SEAT) { toast('请先坐下再点单'); return; }
+  ORDER_ID = s.id;
+  ORDER_ITEMS = s.items || [];
+  ORDER_MSG = '';
+  ORDER_TITLE = s.name || '点单';
+  ORDER_OPEN = true;
+  var p = document.getElementById('orderPanel');
+  if (p) { p.style.display = 'block'; }
+  try { wsSend('order_open', {}); } catch (e) { }
+  orderRender();
+}
+function orderClose() {
+  ORDER_OPEN = false;
+  var p = document.getElementById('orderPanel');
+  if (p) { p.style.display = 'none'; }
+  try { wsSend('order_close', {}); } catch (e) { }
+}
+function orderRender() {
+  var body = document.getElementById('orderBody');
+  var t = document.getElementById('orderTitle');
+  if (t) { t.textContent = ORDER_TITLE; }
+  if (!body || !ORDER_OPEN) { return; }
+  var h = cupRowsHtml();
+  if (!h) { h = '<div id="orderMsg">' + (ORDER_MSG || '选好的菜会由传菜员送到你桌上。') + '</div>'; }
+  for (var i = 0; i < ORDER_ITEMS.length; i++) {
+    var it = ORDER_ITEMS[i];
+    h += '<div class="shopRow"><div class="shopIco">' + (it.icon || '🍽') + '</div>' +
+      '<div class="shopMain"><div class="shopName">' + (it.name || '') + '</div>' +
+      '<div class="shopDesc">' + (it.desc || '') + '</div></div>' +
+      '<div><span class="shopPrice">' + (it.price || 0) + '</span>' +
+      '<button class="shopBuy" onclick="orderBuy(\'' + it.key + '\')">点单</button></div></div>';
+  }
+  body.innerHTML = h;
+}
+function orderApply(d) {
+  if (!d) { return; }
+  if (d.items) { ORDER_ITEMS = d.items; }
+  if (d.name) { ORDER_TITLE = d.name; }
+  if (d.msg) { ORDER_MSG = d.msg; }
+  if (d.table && d.table.id) {
+    TABLE_CUPS[d.table.id] = d.table;
+    MY_TABLE = d.table.id;
+    renderCups();
+  }
+  if (ORDER_OPEN) { orderRender(); }
+  if (d.ok && d.msg && typeof toast === 'function') { toast(d.msg); }
+}
+function orderBuy(key) {
+  try { wsSend('order_buy', { item: key }); ORDER_MSG = '点单中…'; orderRender(); } catch (e) { }
+}
+(function orderBind() {
+  var c = document.getElementById('orderClose');
+  if (c && !c._bound) { c._bound = true; c.addEventListener('click', orderClose); }
+})();
+
+/* ================= 桌上杯子 / 传菜员（A2） =================
+ * 服务端 tablecups 给出每杯的世界坐标；这里只负责画出来。
+ * 传菜员是一条 2.5s 的路径动画，起点=出餐口，终点=桌边。
+ */
+var TABLE_CUPS = {};        // tableId -> {id,x,z,max,cups[]}
+var MY_TABLE = '';          // 当前坐的桌子（点单面板用）
+var CUP_GROUP = null;
+var WAITERS = [];
+var WAITER_TIMER = null;
+
+function cupScene() {
+  if (typeof scene !== 'undefined' && scene) { return scene; }
+  return window.scene || null;
+}
+function ensureCupGroup() {
+  var S = cupScene();
+  if (!S) { return null; }
+  if (CUP_GROUP && CUP_GROUP.parent) { return CUP_GROUP; }
+  CUP_GROUP = new THREE.Group();
+  CUP_GROUP.name = 'tableCups';
+  S.add(CUP_GROUP);
+  return CUP_GROUP;
+}
+function cupMesh(model) {
+  var g = new THREE.Group();
+  var col = 0xf0e6d6, r = 0.07, h = 0.11, handle = true;
+  if (model === 'bottle') { col = 0x8fb8c8; r = 0.05; h = 0.26; handle = false; }
+  else if (model === 'plate') { col = 0xe8e0d0; r = 0.17; h = 0.03; handle = false; }
+  else if (model === 'bowl') { col = 0xcf6a4a; r = 0.14, h = 0.09; handle = false; }
+  else if (model === 'cake') { col = 0xf2d9a0; r = 0.10; h = 0.12; handle = false; }
+  else if (model === 'crystal') { col = 0x9ad0e8; r = 0.06; h = 0.16; handle = false; }
+  var body = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.85, h, 10),
+    new THREE.MeshLambertMaterial({ color: col }));
+  body.position.y = h / 2;
+  g.add(body);
+  if (handle) {
+    var hd = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.012, 6, 10),
+      new THREE.MeshLambertMaterial({ color: col }));
+    hd.position.set(r + 0.03, h * 0.55, 0);
+    hd.rotation.y = Math.PI / 2;
+    g.add(hd);
+  }
+  return g;
+}
+function renderCups() {
+  var grp = ensureCupGroup();
+  if (!grp) { return; }
+  while (grp.children.length) {
+    var old = grp.children[0];
+    grp.remove(old);
+    if (old.traverse) { old.traverse(function (o) { if (o.geometry) { o.geometry.dispose(); } }); }
+  }
+  for (var tid in TABLE_CUPS) {
+    var t = TABLE_CUPS[tid];
+    if (!t || !t.cups) { continue; }
+    for (var i = 0; i < t.cups.length; i++) {
+      var c = t.cups[i];
+      if (c.state === 'drunk' || c.state === 'gone') { continue; }
+      var m = cupMesh(c.model || 'cup');
+      /* 还在传菜路上的杯子做小一点/半透明，桌面只显示已到的 */
+      if (c.state === 'cooking') {
+        m.scale.set(0.6, 0.6, 0.6);
+        m.traverse(function (o) { if (o.material) { o.material.transparent = true; o.material.opacity = 0.45; } });
+      }
+      m.position.set(+c.x || +t.x, 0.78, +c.z || +t.z);
+      grp.add(m);
+    }
+  }
+}
+function cupsApply(d) {
+  if (!d || !d.table || !d.table.id) { return; }
+  TABLE_CUPS[d.table.id] = d.table;
+  if (MY_TABLE === d.table.id && ORDER_OPEN) { orderRender(); }
+  renderCups();
+}
+function cupTake(slot, drink) {
+  try {
+    wsSend('cup_take', { table: MY_TABLE, slot: slot, drink: drink ? 1 : 0 });
+    ORDER_MSG = drink ? '喝一口…' : '收走…';
+    orderRender();
+  } catch (e) { }
+}
+window.cupTake = cupTake;
+
+function waiterModel() {
+  /* ★ 2026-10-22（用户："NPC 用玩家的模型，参考 AI 分身"）
+     传菜员直接用 hero()，和本体同一个身材/皮肤，只是不拿武器、端个托盘 */
+  try {
+    if (typeof hero === 'function') {
+      var r = hero('f02', {});
+      if (r && r.g) {
+        if (r.sw) { r.sw.visible = false; }
+        if (r.swL) { r.swL.visible = false; }
+        var gg = r.g;
+        if (typeof G !== 'undefined' && G.HERO_SCALE) {
+          gg.scale.set(G.HERO_SCALE, G.HERO_SCALE, G.HERO_SCALE);
+        }
+        var tray = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.04, 0.30),
+          new THREE.MeshLambertMaterial({ color: 0xc8c0b0 }));
+        tray.position.set(0, 2.05, 0.52);
+        gg.add(tray);
+        gg.userData.hh = r;
+        return gg;
+      }
+    }
+  } catch (e) { }
+  var g = new THREE.Group();
+  var b = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.8, 0.3),
+    new THREE.MeshLambertMaterial({ color: 0x8a5a4a }));
+  b.position.y = 0.9; g.add(b);
+  return g;
+}
+function pathLength(path) {
+  var n = 0;
+  for (var i = 1; i < path.length; i++) {
+    n += Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]);
+  }
+  return n;
+}
+function pathAt(path, k) {
+  var total = pathLength(path), want = total * k, run = 0;
+  for (var i = 1; i < path.length; i++) {
+    var ax = path[i - 1][0], az = path[i - 1][1];
+    var bx = path[i][0], bz = path[i][1];
+    var seg = Math.hypot(bx - ax, bz - az);
+    if (run + seg >= want || i === path.length - 1) {
+      var t = seg > 0 ? (want - run) / seg : 0;
+      if (t > 1) { t = 1; }
+      return { x: ax + (bx - ax) * t, z: az + (bz - az) * t, yaw: Math.atan2(bx - ax, bz - az) };
+    }
+    run += seg;
+  }
+  return { x: path[0][0], z: path[0][1], yaw: 0 };
+}
+function spawnWaiter(d) {
+  var path = d && d.path;
+  if (!path || path.length < 2) { return; }
+  var S = cupScene();
+  if (!S) { return; }
+  var m = waiterModel();
+  m.position.set(+path[0][0], 0, +path[0][1]);
+  S.add(m);
+  WAITERS.push({ mesh: m, hh: m.userData.hh || null, path: path,
+                 t0: Date.now(), secs: +(d.secs || 2.5) });
+  if (!WAITER_TIMER) { WAITER_TIMER = setInterval(waiterTick, 50); }
+}
+function waiterTick() {
+  var now = Date.now();
+  for (var i = WAITERS.length - 1; i >= 0; i--) {
+    var w = WAITERS[i];
+    var k = (now - w.t0) / (w.secs * 1000);
+    if (k >= 1) {
+      if (w.mesh.parent) { w.mesh.parent.remove(w.mesh); }
+      WAITERS.splice(i, 1);
+      continue;
+    }
+    var pt = pathAt(w.path, k);
+    w.mesh.position.set(pt.x, 0.1, pt.z);
+    w.mesh.rotation.y = pt.yaw;
+    /* 走路：和玩家/分身同一套肢体角度 */
+    if (w.hh) {
+      var sw = Math.sin((now - w.t0) * 0.008) * 0.7;
+      w.hh.legL.rotation.x = sw;
+      w.hh.legR.rotation.x = -sw;
+      w.hh.armL.rotation.x = -sw * 0.6;
+      w.hh.armR.rotation.x = sw * 0.35;
+    }
+  }
+  if (!WAITERS.length && WAITER_TIMER) {
+    clearInterval(WAITER_TIMER);
+    WAITER_TIMER = null;
+  }
+}
+function cupRowsHtml() {
+  var t = TABLE_CUPS[MY_TABLE];
+  if (!t || !t.cups || !t.cups.length) { return ''; }
+  var h = '<div id="orderMsg">桌上：' + t.cups.length + ' / ' + (t.max || 0) + ' 杯</div>';
+  for (var i = 0; i < t.cups.length; i++) {
+    var c = t.cups[i];
+    if (c.state === 'cooking') {
+      h += '<div class="shopRow"><div class="shopIco">⏳</div><div class="shopMain">' +
+        '<div class="shopName">' + (c.name || '') + '</div>' +
+        '<div class="shopDesc">传菜员正在送…</div></div></div>';
+      continue;
+    }
+    h += '<div class="shopRow"><div class="shopIco">☕</div><div class="shopMain">' +
+      '<div class="shopName">' + (c.name || '') + '（桌上）</div>' +
+      '<div class="shopDesc">喝掉会生效，收走只释放杯位</div></div>' +
+      '<div><button class="shopBuy" onclick="cupTake(' + c.slot + ',1)">喝掉</button>' +
+      '<button class="shopBuy" onclick="cupTake(' + c.slot + ',0)">收走</button></div></div>';
+  }
+  return h;
+}
+
+UI.seatedUpdate = function (s) {
+  var atk = document.getElementById('atk');
+  var pr = document.getElementById('orderPrompt');
+  var s2 = orderShopNear();
+  if (s && s2) {
+    if (atk) { atk.classList.remove('seat', 'sleep', 'house', 'shop', 'fridge', 'interact', 'teleport'); atk.classList.add('order'); atk.title = '点单'; }
+    if (pr) { pr.textContent = '按 E / 点击交互按钮 点单 · ' + (s2.name || ''); pr.style.display = 'block'; }
+  } else {
+    if (atk) { atk.classList.remove('order'); }
+    if (pr) { pr.style.display = 'none'; }
+  }
+};
+
+/* ---------- 打工 ---------- */
+var MY_JOB = '', JOB_T = 0, JOB_LOOP = -1, JOB_DONE_N = 0;
+function jobShopNear() { return (typeof SHOP_NEAR !== 'undefined' && SHOP_NEAR) ? SHOP_NEAR : null; }
+function jobStart() {
+  var s = jobShopNear();
+  if (!s) { toast('请靠近店员'); return; }
+  try { wsSend('work_start', { id: s.id, slot: 'serve' }); } catch (e) { }
+}
+function jobStop() {
+  try { wsSend('work_stop', {}); } catch (e) { }
+}
+function workApply(d) {
+  if (!d) { return; }
+  if (d.ok && d.on) {
+    MY_JOB = d.slot || 'serve';
+    JOB_T = 0; JOB_DONE_N = 0;
+    toast(d.msg || '开始打工');
+    if (JOB_LOOP < 0 && typeof setInterval === 'function') {
+      JOB_LOOP = setInterval(function () {
+        if (!MY_JOB) { clearInterval(JOB_LOOP); JOB_LOOP = -1; return; }
+        JOB_T += 0.25;
+        try { wsSend('jobstep', { t: JOB_T }); } catch (e) { }
+        /* 每 12 秒一轮：回柜台 -> 出餐口 -> 巡视 -> 回柜台 */
+        if (JOB_T >= 12) {
+          JOB_T = 0; JOB_DONE_N++;
+          try { wsSend('jobdone', { exp: 30, pay: 20 }); } catch (e) { }
+        }
+      }, 250);
+    }
+  } else if (d.ok && d.on === 0) {
+    MY_JOB = '';
+    toast(d.msg || '已结束打工');
+  } else if (d.msg) { toast(d.msg); }
+}
+function jobRemote(d) {
+  if (!d || !NET.others) { return; }
+  var o = NET.others[d.cid] || NET.others[String(d.cid)];
+  if (!o) { return; }
+  o.job = d.job; o.jobT = d.t;
+}
+
+/* ---------- 冰箱 ---------- */
+var FRIDGE_OPEN = false, FRIDGE_ID = '', FRIDGE_ITEMS = [], FRIDGE_MSG = '', FRIDGE_CAP = 12;
+function fridgeSlots() {
+  var out = [], i, it;
+  for (i = 0; i < FRIDGE_CAP; i++) { out.push(null); }
+  for (i = 0; i < FRIDGE_ITEMS.length; i++) {
+    it = FRIDGE_ITEMS[i];
+    if (it && it.slot >= 0 && it.slot < FRIDGE_CAP) { out[it.slot] = it; }
+  }
+  return out;
+}
+function fridgeOpen(id) {
+  FRIDGE_ID = id;
+  FRIDGE_OPEN = true;
+  FRIDGE_MSG = '';
+  var p = document.getElementById('fridgePanel');
+  if (p) { p.style.display = 'block'; }
+  try { wsSend('fridge_open', { id: id }); } catch (e) { }
+  fridgeRender();
+}
+function fridgeClose() {
+  FRIDGE_OPEN = false;
+  var p = document.getElementById('fridgePanel');
+  if (p) { p.style.display = 'none'; }
+  try { wsSend('fridge_close', {}); } catch (e) { }
+}
+function fridgeRender() {
+  var body = document.getElementById('fridgeBody');
+  if (!body || !FRIDGE_OPEN) { return; }
+  var slots = fridgeSlots();
+  var h = '<div id="fridgeMsg">' + (FRIDGE_MSG || '') + '</div>';
+  h += '<div id="fridgeGrid">';
+  for (var i = 0; i < FRIDGE_CAP; i++) {
+    var st = slots[i];
+    if (st) {
+      var nm = (st.item && st.item.name) || '饮料';
+      h += '<div class="frSlot" data-slot="' + i + '" onclick="fridgeTake(' + i + ')">' +
+        '<span class="ico">' + ((st.item && st.item.icon) || '🥤') + '</span>' + nm + '</div>';
+    } else {
+      h += '<div class="frSlot" style="opacity:.4">空</div>';
+    }
+  }
+  h += '</div>';
+  h += '<div id="fridgeBag"><div style="font-weight:800;margin-bottom:4px;color:#9fe8ff">背包里的饮料/食品（点一下放进冰箱）</div>';
+  var n = 0;
+  var items = (typeof BAG !== 'undefined' && BAG.items) ? BAG.items : [];
+  for (var k = 0; k < items.length; k++) {
+    var rec = items[k];
+    if (!rec || !rec.item || rec.item.kind !== 'food') { continue; }
+    n++;
+    h += '<div class="frItem"><span>' + (rec.item.icon || '🥤') + '</span><span style="flex:1">' +
+      (rec.item.name || 'drink') + ((rec.stack || 1) > 1 ? ' ×' + rec.stack : '') + '</span>' +
+      '<button class="shopBuy" onclick="fridgePut(\'' + rec.id + '\')">放入</button></div>';
+  }
+  if (!n) { h += '<div style="opacity:.6;font-size:12px;padding:6px 0">背包里没有饮料/食品。去商店买点吧。</div>'; }
+  h += '</div>';
+  body.innerHTML = h;
+}
+function fridgeApply(d) {
+  if (!d) { return; }
+  if (typeof d.cap === 'number') { FRIDGE_CAP = d.cap; }
+  if (d.items) { FRIDGE_ITEMS = d.items; }
+  if (d.msg) { FRIDGE_MSG = d.msg; }
+  if (FRIDGE_OPEN) { fridgeRender(); }
+  if (d.ok && d.items) {
+    setTimeout(function () { try { if (typeof bagFetch === 'function') { bagFetch(); } } catch (e) { } }, 400);
+  }
+}
+function fridgePut(iid) {
+  if (!FRIDGE_ID) { return; }
+  try { wsSend('fridge_put', { id: FRIDGE_ID, iid: iid }); FRIDGE_MSG = '放入中…'; fridgeRender(); } catch (e) { }
+}
+function fridgeTake(slot) {
+  if (!FRIDGE_ID) { return; }
+  try { wsSend('fridge_take', { id: FRIDGE_ID, slot: slot }); FRIDGE_MSG = '取出中…'; fridgeRender(); } catch (e) { }
+}
+(function fridgeBind() {
+  var c = document.getElementById('fridgeClose');
+  if (c && !c._bound) { c._bound = true; c.addEventListener('click', fridgeClose); }
+})();
+
+/* ---------- 商店 ---------- */
+var SHOP_OPEN = false, SHOP_ID = '', SHOP_ITEMS = [], SHOP_GOLD = 0, SHOP_MSG = '', SHOP_NEAR = null;
+function shopNearApply(s) {
+  SHOP_NEAR = s || null;
+  var atk = document.getElementById('atk');
+  var pr = document.getElementById('shopPrompt');
+  if (s) {
+    if (atk) { atk.classList.remove('seat', 'sleep', 'house', 'teleport', 'interact'); atk.classList.add('shop'); atk.title = '购买'; }
+    if (pr) { pr.textContent = '按 E / 点击交互按钮 购买 · ' + (s.name || ''); pr.style.display = 'block'; }
+  } else {
+    if (atk) { atk.classList.remove('shop'); }
+    if (pr) { pr.style.display = 'none'; }
+  }
+}
+UI.shopNear = function (s) { shopNearApply(s); };
+function shopClose() {
+  SHOP_OPEN = false;
+  var p = document.getElementById('shopPanel');
+  if (p) { p.style.display = 'none'; }
+  try { wsSend('shop_close', {}); } catch (e) { }
+}
+function shopOpen() {
+  if (!SHOP_NEAR) { return; }
+  SHOP_OPEN = true;
+  SHOP_ID = SHOP_NEAR.id;
+  SHOP_ITEMS = SHOP_NEAR.items || [];
+  SHOP_GOLD = +(WSC.role && WSC.role.gold) || 0;
+  SHOP_MSG = '';
+  var p = document.getElementById('shopPanel');
+  if (p) { p.style.display = 'block'; }
+  try { wsSend('shop_open', { id: SHOP_ID }); } catch (e) { }
+  shopRender();
+}
+function shopRender() {
+  var body = document.getElementById('shopBody');
+  var title = document.getElementById('shopTitle');
+  var gold = document.getElementById('shopGold');
+  if (!body || !SHOP_OPEN) { return; }
+  var s = (typeof townShopById === 'function') ? townShopById(SHOP_ID) : null;
+  if (title) { title.textContent = (s ? s.name : '商店') + (s && s.keeper ? ' · ' + s.keeper : ''); }
+  if (gold) { gold.textContent = '金币 ' + Math.round(SHOP_GOLD); }
+  var h = '<div id="shopMsg">' + (SHOP_MSG || '') + '</div>';
+  for (var i = 0; i < SHOP_ITEMS.length; i++) {
+    var it = SHOP_ITEMS[i];
+    var can = SHOP_GOLD >= (+it.price || 0);
+    h += '<div class="shopRow"><div class="shopIco">' + (it.icon || '🛒') + '</div>' +
+      '<div class="shopMain"><div class="shopName">' + (it.name || '') + '</div>' +
+      '<div class="shopDesc">' + (it.desc || '') + '</div></div>' +
+      '<div><span class="shopPrice">' + (it.price || 0) + '</span>' +
+      '<button class="shopBuy" ' + (can ? '' : 'disabled ') +
+      'onclick="shopBuy(\'' + it.key + '\')">购买</button></div></div>';
+  }
+  body.innerHTML = h;
+}
+function shopApply(d) {
+  if (!d) { return; }
+  if (typeof d.gold === 'number') { SHOP_GOLD = d.gold; }
+  if (d.items) { SHOP_ITEMS = d.items; }
+  if (d.msg) { SHOP_MSG = d.msg; }
+  if (d.ok === 0 && d.msg) { SHOP_MSG = d.msg; }
+  if (SHOP_OPEN) { shopRender(); }
+  if (d.ok && d.bagsig) {
+    setTimeout(function () { try { if (typeof bagFetch === 'function') { bagFetch(); } } catch (e) { } }, 500);
+  }
+}
+function shopBuy(key) {
+  if (!SHOP_ID) { return; }
+  try { wsSend('shop_buy', { id: SHOP_ID, item: key }); SHOP_MSG = '购买中…'; shopRender(); } catch (e) { }
+}
+(function shopBind() {
+  var c = document.getElementById('shopClose');
+  if (c && !c._bound) { c._bound = true; c.addEventListener('click', shopClose); }
+})();
+
+/* ---------- 睡觉 ---------- */
+function trySleep() {
+  if (!SLEEP_NEAR) { return; }
+  var pr = document.getElementById('sleepPrompt');
+  if (pr) { pr.style.display = 'none'; }
+  try { wsSend('house_sleep', { id: SLEEP_NEAR.id }); } catch (e) { }
+}
+function tryWake() {
+  try { wsSend('house_wake', {}); } catch (e) { }
+}
+function sleepApply(d) {
+  if (!d) { return; }
+  if (d.on) {
+    MY_SLEEP = d.id || '';
+    if (typeof d.x === 'number') { P.x = +d.x; P.z = +d.z; }
+    SLEEP_NEAR = null;
+    try { if (UI.bedNear) { UI.bedNear(null); } } catch (e1) { }
+    try { if (UI.houseNear) { UI.houseNear(null); } } catch (e2) { }
+    try { if (UI.sleepState) { UI.sleepState(true); } } catch (e3) { }
+  } else {
+    MY_SLEEP = '';
+    if (typeof d.x === 'number') { P.x = +d.x; P.z = +d.z; }
+    try { if (UI.sleepState) { UI.sleepState(false); } } catch (e4) { }
+  }
+}
+UI.bedNear = function (h) {
+  SLEEP_NEAR = h || null;
+  var atk = document.getElementById('atk');
+  var pr = document.getElementById('sleepPrompt');
+  if (h) {
+    if (atk) { atk.classList.remove('seat', 'teleport', 'house', 'interact'); atk.classList.add('sleep'); atk.title = '睡觉'; }
+    if (pr) { pr.textContent = '按 E / 点击交互按钮 睡觉'; pr.style.display = 'block'; }
+  } else {
+    if (atk) { atk.classList.remove('sleep'); }
+    if (pr) { pr.style.display = 'none'; }
+  }
+};
+UI.sleepState = function (on) {
+  var atk = document.getElementById('atk');
+  var pr = document.getElementById('sleepPrompt');
+  if (on) {
+    if (atk) { atk.classList.remove('sleep', 'seat', 'teleport', 'house', 'interact'); atk.classList.add('wake'); atk.title = '起床'; }
+    if (pr) { pr.textContent = '睡觉中 · 按 E / 点按钮 起床'; pr.style.display = 'block'; }
+  } else {
+    if (atk) { atk.classList.remove('wake'); }
+    if (pr) { pr.style.display = 'none'; }
+  }
+};
+
+/* ---------- 住宅 ---------- */
+var HOUSE_DATA = {}, HOUSE_NEAR = null, HOUSE_OPEN = false, HOUSE_SEL = null, HOUSE_DAYS = 1, HOUSE_MSG = '';
+function houseTierName(t) { return t === 'villa' ? '别墅' : (t === 'yard' ? '小院' : '小平楼'); }
+function houseGold(v) {
+  v = Math.round(+v || 0);
+  if (v >= 10000) { return (v / 10000).toFixed(v % 10000 ? 1 : 0) + ' 万'; }
+  return String(v);
+}
+function housesApply(list) {
+  for (var i = 0; i < (list || []).length; i++) {
+    var h = list[i];
+    if (!h || !h.id) { continue; }
+    HOUSE_DATA[h.id] = h;
+    try { TOWN_HOUSE_INFO[h.id] = h; } catch (eTI) { }
+    try {
+      if (typeof townHouseSignSet === 'function') {
+        townHouseSignSet(h.id, h.owner_name || '', h.remaining_days || 0);
+      }
+    } catch (eS) { }
+  }
+  if (HOUSE_OPEN) { houseRender(); }
+}
+function houseApply(d) {
+  if (!d) { return; }
+  if (d.list) { housesApply(d.list); }
+  if (d.msg) { HOUSE_MSG = d.msg; }
+  try {
+    var _hh = HOUSE_DATA[HOUSE_SEL];
+    var _me = +(WSC.role && WSC.role.id) || 0;
+    if (_hh && +_hh.owner_id === _me && (+_hh.remaining_days || 0) > 0 && (+_hh.remaining_days || 0) < 7) {
+      HOUSE_DAYS = Math.min(7, (+_hh.remaining_days || 0) + 1);
+    }
+  } catch (eD) { }
+  houseRender();
+}
+function houseNearApply(h) {
+  HOUSE_NEAR = h || null;
+  var atk = document.getElementById('atk');
+  var pr = document.getElementById('housePrompt');
+  if (h) {
+    if (atk) { atk.classList.remove('seat', 'teleport', 'interact'); atk.classList.add('house'); atk.title = '查看住宅'; }
+    if (pr) { pr.textContent = '按 E / 点击交互按钮 查看住宅 · ' + (h.name || ''); pr.style.display = 'block'; }
+  } else {
+    if (atk) { atk.classList.remove('house'); }
+    if (pr) { pr.style.display = 'none'; }
+  }
+}
+UI.houseNear = function (h) { houseNearApply(h); };
+function houseClose() {
+  HOUSE_OPEN = false;
+  var p = document.getElementById('housePanel');
+  if (p) { p.style.display = 'none'; }
+}
+function houseOpen() {
+  if (!HOUSE_NEAR) { return; }
+  HOUSE_OPEN = true;
+  HOUSE_SEL = HOUSE_NEAR.id;
+  HOUSE_DAYS = 1;
+  var p = document.getElementById('housePanel');
+  if (p) { p.style.display = 'block'; }
+  try { wsSend('house_info', { id: HOUSE_SEL }); } catch (e) { }
+  houseRender();
+}
+function houseEstimate(h, days) {
+  if (!h) { return 0; }
+  var price = +h.price_day || 0, rem = +h.remaining_days || 0;
+  var owner = +h.owner_id || 0, me = +(WSC.role && WSC.role.id) || 0;
+  if (owner && owner === me) { return Math.max(0, days - rem) * price; }
+  if (owner && rem > 0) {
+    return Math.ceil(rem * price * 1.5) + Math.max(0, days - rem) * price;
+  }
+  return days * price;
+}
+function houseRender() {
+  var body = document.getElementById('houseBody');
+  if (!body || !HOUSE_OPEN) { return; }
+  var h = HOUSE_DATA[HOUSE_SEL] || HOUSE_NEAR;
+  if (!h) { body.innerHTML = '<div class="hMuted">房屋数据加载中…</div>'; return; }
+  var me = +(WSC.role && WSC.role.id) || 0;
+  var owner = +h.owner_id || 0;
+  var rem = +h.remaining_days || 0;
+  var price = +h.price_day || 0;
+  var mine = owner && owner === me;
+  var occupied = owner && owner !== me;
+  var minDays = occupied ? Math.max(1, rem) : 1;
+  var days = Math.max(minDays, Math.min(7, +HOUSE_DAYS || 1));
+  HOUSE_DAYS = days;
+  var est = houseEstimate(h, days);
+  var opts = '';
+  for (var d = 1; d <= 7; d++) {
+    opts += '<option value="' + d + '"' + (d === days ? ' selected' : '') + '>' + d + ' 天</option>';
+  }
+  var html = '';
+  html += '<div class="hRow"><b style="font-size:18px">' + (h.name || '') + '</b><span class="hMuted">' + houseTierName(h.tier) + '</span></div>';
+  html += '<div class="hRow"><span>日价</span><span class="hPrice">' + houseGold(price) + ' / 天</span></div>';
+  html += '<div class="hRow"><span>房主</span><span>' + (owner ? (h.owner_name || '—') : '待售') + '</span></div>';
+  html += '<div class="hRow"><span>剩余</span><span>' + (rem > 0 ? rem + ' 天' : '—') + '</span></div>';
+  if (occupied) {
+    html += '<div class="hRow"><span>买断底价</span><span class="hPrice">' + houseGold(Math.ceil(rem * price * 1.5)) + '</span></div>';
+    html += '<div class="hMuted">买断需接手剩余 ' + rem + ' 天；原房主按剩余天数 + 溢价 10% 退款。</div>';
+  } else if (mine) {
+    html += '<div class="hMuted">续期最多到 7 天；退房返还剩余天数 50%。</div>';
+  } else {
+    html += '<div class="hMuted">购买 1~7 天，到期自动待售。</div>';
+  }
+  html += '<div class="hRow" style="margin-top:10px"><span>选择天数</span><span class="hPrice" id="houseEst">' + houseGold(est) + '</span></div>';
+  html += '<select id="houseDays" onchange="HOUSE_DAYS=+this.value;houseRender();">' + opts + '</select>';
+  html += '<div id="houseMsg" class="hMuted"></div>';
+  if (occupied) {
+    html += '<button class="hBtn alt" onclick="houseDoBuy()">买断 · 支付 ' + houseGold(est) + '</button>';
+  } else if (mine) {
+    html += '<button class="hBtn" onclick="houseDoBuy()">续期 · 支付 ' + houseGold(est) + '</button>';
+    html += '<button class="hBtn danger" onclick="houseDoLeave()">退房 · 返还剩余 50%</button>';
+  } else {
+    html += '<button class="hBtn" onclick="houseDoBuy()">购买 · 支付 ' + houseGold(est) + '</button>';
+  }
+  body.innerHTML = html;
+  var m = document.getElementById('houseMsg');
+  if (m && HOUSE_MSG) { m.textContent = HOUSE_MSG; }
+}
+var HOUSE_MSG = HOUSE_MSG || '';
+function houseDoBuy() {
+  if (!HOUSE_SEL) { return; }
+  try { wsSend('house_buy', { id: HOUSE_SEL, days: HOUSE_DAYS }); HOUSE_MSG = '处理中…'; houseRender(); } catch (e) { }
+}
+function houseDoLeave() {
+  if (!HOUSE_SEL) { return; }
+  try { wsSend('house_leave', { id: HOUSE_SEL }); HOUSE_MSG = '处理中…'; houseRender(); } catch (e) { }
+}
+function houseBind() {
+  var c = document.getElementById('houseClose');
+  if (c && !c._bound) { c._bound = true; c.addEventListener('click', houseClose); }
+}
+(function houseInit() {
+  var c = document.getElementById('houseClose');
+  if (c && !c._bound) { c._bound = true; c.addEventListener('click', houseClose); }
+})();
+
+/* ---------- 传送阵 ---------- */
+var TP = { open: false };
+function tpApply(d) {
+  if (!d) { return; }
+  P.x = +d.x; P.z = +d.z;
+  TP.open = false;
+  var p = document.getElementById('tpPanel');
+  if (p) { p.style.display = 'none'; }
+  var pr = document.getElementById('tpPrompt');
+  if (pr) { pr.style.display = 'none'; }
+  toast('已传送：' + (d.name || ''));
+}
+function tpClose() {
+  TP.open = false;
+  var p = document.getElementById('tpPanel');
+  if (p) { p.style.display = 'none'; }
+}
+function tpOpen() {
+  if (!TP_NEAR) { return; }
+  TP.open = true;
+  var p = document.getElementById('tpPanel');
+  if (p) { p.style.display = 'block'; }
+  tpRender();
+}
+function tpRender() {
+  var box = document.getElementById('tpList');
+  if (!box) { return; }
+  var h = '';
+  var list = (typeof TOWN_TELEPORTS !== 'undefined') ? TOWN_TELEPORTS : [];
+  for (var i = 0; i < list.length; i++) {
+    h += '<button class="tpBtn" data-tpid="' + list[i].id + '" onclick="tpPick(\'' + list[i].id + '\')">' +
+      '<b>' + list[i].name + '</b><span>传送</span></button>';
+  }
+  box.innerHTML = h;
+}
+function tpPick(id) {
+  var pr = document.getElementById('tpPrompt');
+  if (pr) { pr.style.display = 'none'; }
+  try { wsSend('teleport', { id: id }); } catch (e) { }
+  tpClose();
+}
+function tpBind() {
+  var c = document.getElementById('tpClose');
+  if (c && !c._bound) { c._bound = true; c.addEventListener('click', tpClose); }
+  if (window._tpDocBound) { return; }
+  window._tpDocBound = true;
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    while (t && t !== document && !(t.getAttribute && t.getAttribute('data-tpid'))) { t = t.parentNode; }
+    if (!t || t === document) { return; }
+    var tid = t.getAttribute('data-tpid');
+    if (!tid) { return; }
+    try { wsSend('teleport', { id: tid }); } catch (e2) { }
+    tpClose();
+  });
+}
+UI.teleportNear = function (t) {
+  TP_NEAR = t || null;
+  var atk = document.getElementById('atk');
+  var pr = document.getElementById('tpPrompt');
+  if (t) {
+    if (atk) { atk.classList.remove('seat', 'interact'); atk.classList.add('teleport'); atk.title = '传送'; }
+    if (pr) { pr.textContent = '按 E / 点击交互按钮 打开传送阵 · ' + (t.name || ''); pr.style.display = 'block'; }
+  } else {
+    if (atk) { atk.classList.remove('teleport'); }
+    if (pr) { pr.style.display = 'none'; }
+  }
+  if (t) { tpBind(); }
+};
+
+/* ---------- 椅子交互 ---------- */
+var SEAT_NEAR = (typeof SEAT_NEAR !== 'undefined') ? SEAT_NEAR : null;
+function trySit() {
+  if (!SEAT_NEAR) { return; }
+  if (typeof WSC !== 'undefined' && !WSC.ready) { toast('连接中，请稍后再试'); return; }
+  try { SIT_PENDING = true; } catch (eP) { }
+  setTimeout(function () {
+    try {
+      SIT_PENDING = false;
+      if (!MY_SEAT && SEAT_NEAR && UI.seatNear) { UI.seatNear(SEAT_NEAR); }
+    } catch (eP2) { }
+  }, 1600);
+  var pr = document.getElementById('sitPrompt');
+  if (pr) { pr.textContent = '正在坐下…'; }
+  try { wsSend('sit', { id: SEAT_NEAR.idx }); } catch (eS) { toast('坐下失败'); }
+}
+function tryStand() {
+  if (typeof WSC !== 'undefined' && !WSC.ready) { return; }
+  try { wsSend('stand', {}); } catch (eT) { }
+}
+UI.seatNear = function (seat) {
+  SEAT_NEAR = seat || null;
+  var atk = document.getElementById('atk');
+  var prompt = document.getElementById('sitPrompt');
+  var wp = document.getElementById('whPrompt');
+  if (seat) {
+    if (atk) {
+      atk.classList.remove('interact'); atk.classList.add('seat');
+      atk.title = '坐下：' + (seat.label || '椅子');
+    }
+    if (prompt) {
+      prompt.textContent = '按 E / 点击交互按钮 坐下 · ' + (seat.label || '椅子');
+      prompt.style.display = 'block';
+    }
+    if (wp) { wp.style.display = 'none'; }
+  } else {
+    if (atk) { atk.classList.remove('seat'); }
+    if (prompt) { prompt.style.display = 'none'; }
+  }
+};
+UI.seatState = function (on) {
+  var atk = document.getElementById('atk');
+  var prompt = document.getElementById('sitPrompt');
+  var wp = document.getElementById('whPrompt');
+  if (on) {
+    if (atk) { atk.classList.remove('interact', 'seat'); atk.classList.add('stand'); atk.title = '起身'; }
+    if (prompt) { prompt.textContent = '坐着 · 按 E / 点按钮 / 移动 起身'; prompt.style.display = 'block'; }
+    if (wp) { wp.style.display = 'none'; }
+  } else {
+    if (atk) { atk.classList.remove('stand'); }
+    if (prompt) { prompt.style.display = 'none'; }
+  }
+};
+
+UI.warehouseNear = function (on) {
+  WH_NEAR = !!on;
+  var atk = document.getElementById('atk');
+  if (atk) { atk.classList.toggle('interact', !!on); atk.title = on ? '交互：打开仓库' : ''; }
+  var pr = document.getElementById('whPrompt');
+  if (pr) { pr.style.display = on ? 'block' : 'none'; }
+};
+
+/* ============================================================ 视角转动（round497）
+   ★ 用户："加一个按钮，点击后开启，再点击锁定视角；长按恢复默认；图标带状态；
+           像攻击键一样可以移动"
+   ★ 状态只有两个：
+       CAMROT.on = false → 锁定（默认）：手势不响应旋转 ✓
+       CAMROT.on = true  → 可转：右半屏单指 / 双指任意位置 拖动 → 转视角 ✓
+   ★ 角度存在 localStorage（core 不碰浏览器 ✓）
+   ============================================================ */
+var CAMROT = { on: false, dragId: null, lx: 0, ly: 0, moved: false,
+               pressT: 0, timer: null, saved: 0, saveT: null, loaded: false };
+var CAM_STORE = 'camView_v1';
+var CAM_LAND_ON = null;
+var WH_OPEN = false;
+var WH_NEAR = false;
+var CAM_VIEW_START, CAM_PITCH_START;
+var CAM_VIEW_STORE = 'camViewMode_v1';
+var CAM_LAND_STORE = 'camOrient_v1';
+
+function camEl() { return document.getElementById('cam'); }
+
+function camApplyVisual() {
+  var el = camEl();
+  if (el) {
+    if (CAMROT.on) { el.classList.add('on'); } else { el.classList.remove('on'); }
+    el.title = CAMROT.on ? '视角：可转（点一下锁定 · 长按回正）'
+                         : '视角：已锁定（点一下解锁）';
+  }
+  camToolsSync();
+}
+
+function camLandApply(on) {
+  var target = on ? 'landscape' : 'portrait';
+  function finish(ok, why) {
+    if (ok) {
+      CAM_LAND_ON = !!on;
+      try { localStorage.setItem(CAM_LAND_STORE, on ? '1' : '0'); } catch (eSaveL) { }
+      try { document.body.classList.toggle('landscape', !!on); } catch (e0) { }
+      setTimeout(function () { uiApplyAllSaved(); uiApplyAtkScale(); uiClampPositions(); }, 50);
+      try { camToolsSync(); } catch (e1) { }
+      try { toast(on ? '已切换为横屏' : '已切换为竖屏'); } catch (e2) { }
+    } else {
+      /* 系统不允许实际转屏时，明确退化为布局切换，保证按钮/界面跟着用户选择走 */
+      CAM_LAND_ON = !!on;
+      try { localStorage.setItem(CAM_LAND_STORE, on ? '1' : '0'); } catch (eSaveL2) { }
+      try { document.body.classList.toggle('landscape', !!on); } catch (e3) { }
+      setTimeout(function () { uiApplyAllSaved(); uiApplyAtkScale(); uiClampPositions(); }, 50);
+      try { camToolsSync(); } catch (e4) { }
+      try {
+        var t = on ? '横屏' : '竖屏';
+        toast('设备不支持实际转屏，已切换为' + t + '布局（原因：' + (why || '系统拒绝了方向锁') + '）');
+      } catch (e5) { }
+    }
+  }
+  function lockNow() {
+    try {
+      var nativeShell = window.AndroidShell;
+      if (nativeShell && nativeShell.setOrientation) {
+        nativeShell.setOrientation(on ? 'landscape' : 'portrait');
+        finish(true);
+        return;
+      }
+    } catch (eNative) { }
+    if (!window.isSecureContext) { finish(false, '需要 HTTPS 或 localhost'); return; }
+    var so = (typeof screen !== 'undefined') ? screen.orientation : null;
+    if (!so || !so.lock) { finish(false, '此浏览器没有方向锁 API'); return; }
+    var cur = String(so.type || '');
+    if (on && (cur.indexOf('landscape') >= 0)) { finish(true); return; }
+    if (!on && (cur.indexOf('portrait') >= 0)) { finish(true); return; }
+    var list = on ? ['landscape', 'landscape-primary'] : ['portrait-primary', 'portrait'];
+    var retried = false;
+    function failOrRetry(why) {
+      if (!retried) {
+        retried = true;
+        try { if (so.unlock) { so.unlock(); } } catch (eU) { }
+        setTimeout(function () { attempt(0); }, 100);
+      } else {
+        finish(false, why || '系统拒绝了方向锁');
+      }
+    }
+    function attempt(i) {
+      if (i >= list.length) { failOrRetry('系统拒绝了方向锁'); return; }
+      try {
+        var pr = so.lock(list[i]);
+        if (pr && pr.then) {
+          pr.then(function () { finish(true); }).catch(function () { attempt(i + 1); });
+        } else {
+          finish(true);
+        }
+      } catch (eL) { attempt(i + 1); }
+    }
+    attempt(0);
+  }
+  try {
+    if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
+      document.documentElement.requestFullscreen().then(lockNow).catch(lockNow);
+    } else {
+      lockNow();
+    }
+  } catch (eF) {
+    lockNow();
+  }
+}
+
+function camRequestLandscape() {
+  var isLand = (CAM_LAND_ON === true) ||
+    ((CAM_LAND_ON !== false) && window.innerWidth > window.innerHeight + 40);
+  camLandApply(!isLand);
+}
+
+function camSetViewMode(v) {
+  try { CAM_VIEW = v; } catch (e0) { }
+  try { localStorage.setItem(CAM_VIEW_STORE, v); } catch (eSave) { }
+  if (v === 'third') {
+    try { CAM_PITCH_T = 0.42; CAM_PITCH = 0.42; } catch (e1) { }
+  } else if (v === 'first') {
+    try { CAM_PITCH_T = 1.0; CAM_PITCH = 1.0; } catch (e1b) { }
+  }
+  try { if (typeof applyWorldZoom === 'function') { applyWorldZoom(); } } catch (e2) { }
+  try { toast(v === 'first' ? '第一人称' : (v === 'third' ? '第三人称' : '自由视角')); } catch (e3) { }
+  try { camToolsSync(); } catch (e4) { }
+}
+function camSettingsSync() {
+  var map = [['setCamFirst','first'],['setCamThird','third'],['setCamFree','free']];
+  var cur = (typeof CAM_VIEW !== 'undefined') ? CAM_VIEW : 'third';
+  for (var i = 0; i < map.length; i++) {
+    var el = document.getElementById(map[i][0]);
+    if (el) { el.className = 'bagB' + (cur === map[i][1] ? ' on' : ''); }
+  }
+  var land = document.getElementById('setCamLand'), port = document.getElementById('setCamPortrait');
+  var isLand = (CAM_LAND_ON === true) || ((CAM_LAND_ON !== false) && window.innerWidth > window.innerHeight + 40);
+  if (land) { land.className = 'bagB' + (isLand ? ' on' : ''); }
+  if (port) { port.className = 'bagB' + (!isLand ? ' on' : ''); }
+}
+function camSettingsBind() {
+  var f = document.getElementById('setCamFirst'), t = document.getElementById('setCamThird'), r = document.getElementById('setCamFree');
+  if (f && !f._b) { f._b = true; f.addEventListener('click', function () { camSetViewMode('first'); camSettingsSync(); }); }
+  if (t && !t._b) { t._b = true; t.addEventListener('click', function () { camSetViewMode('third'); camSettingsSync(); }); }
+  if (r && !r._b) { r._b = true; r.addEventListener('click', function () { camSetViewMode('free'); camSettingsSync(); }); }
+  var l = document.getElementById('setCamLand'), p = document.getElementById('setCamPortrait');
+  if (l && !l._b) { l._b = true; l.addEventListener('click', function () { camLandApply(true); camSettingsSync(); }); }
+  if (p && !p._b) { p._b = true; p.addEventListener('click', function () { camLandApply(false); camSettingsSync(); }); }
+  camSettingsSync();
+}
+function camToolsSync() {
+  var box = document.getElementById('camTools');
+  if (box) { box.style.display = CAMROT.on ? 'block' : 'none'; }
+  var z = document.getElementById('camZoom');
+  var zv = document.getElementById('camZoomVal');
+  if (z) {
+    var v = (typeof setWorldZoom === 'function') ? setWorldZoom() : 100;
+    if (!z._b) {
+      z._b = true;
+      z.addEventListener('input', function () {
+        if (CAM_VIEW !== 'free') {
+          try { toast('自由视角才能缩放画面'); } catch (eZZ) { }
+          z.value = String((typeof setWorldZoom === 'function') ? setWorldZoom() : 100);
+          return;
+        }
+        var nv = Math.max(60, Math.min(300, parseInt(z.value, 10) || 100));
+        try {
+          SETCFG.zoom = nv;
+          if (typeof saveSet === 'function') { saveSet(); }
+          if (typeof applyWorldZoom === 'function') { applyWorldZoom(); }
+          var zr = document.getElementById('zoomRange');
+          if (zr) { zr.value = String(nv); }
+          var zrv = document.getElementById('zoomVal');
+          if (zrv) { zrv.textContent = nv + '%'; }
+        } catch (eZ) { }
+        if (zv) { zv.textContent = nv + '%'; }
+      });
+    }
+    z.value = String(v);
+    if (zv) { zv.textContent = v + '%'; }
+  }
+  var fp = document.getElementById('camFirst'), tp = document.getElementById('camThird');
+  var fr = document.getElementById('camFree');
+  function camSetMode(v) {
+    try { CAM_VIEW = v; } catch (e0) { }
+    try { localStorage.setItem(CAM_VIEW_STORE, v); } catch (eSave0) { }
+    if (v === 'third') {
+      try { CAM_PITCH_T = 0.42; CAM_PITCH = 0.42; } catch (e1) { }
+    }
+    else if (v === 'first') {
+      try { CAM_PITCH_T = 1.0; CAM_PITCH = 1.0; } catch (e1b) { }
+    }
+    try { if (typeof applyWorldZoom === 'function') { applyWorldZoom(); } } catch (e2) { }
+    try { toast(v === 'first' ? '第一人称' : (v === 'third' ? '第三人称' : '自由视角')); } catch (e3) { }
+    camToolsSync();
+  }
+  if (fp && !fp._b) {
+    fp._b = true;
+    fp.addEventListener('click', function () { camSetMode('first'); });
+  }
+  if (tp && !tp._b) {
+    tp._b = true;
+    tp.addEventListener('click', function () { camSetMode('third'); });
+  }
+  if (fr && !fr._b) {
+    fr._b = true;
+    fr.addEventListener('click', function () { camSetMode('free'); });
+  }
+  var view = (typeof CAM_VIEW !== 'undefined') ? CAM_VIEW : 'third';
+  if (fp) {
+    var _on = view === 'first';
+    fp.style.background = _on ? '#ffd83d33' : '#ffffff10';
+    fp.style.color = _on ? '#ffd83d' : '#dfe8f2';
+  }
+  if (tp) {
+    var _on2 = view === 'third';
+    tp.style.background = _on2 ? '#ffd83d33' : '#ffffff10';
+    tp.style.color = _on2 ? '#ffd83d' : '#dfe8f2';
+  }
+  if (fr) {
+    var _on3 = view === 'free';
+    fr.style.background = _on3 ? '#ffd83d33' : '#ffffff10';
+    fr.style.color = _on3 ? '#ffd83d' : '#dfe8f2';
+  }
+  if (z) {
+    var _free = (view === 'free');
+    z.disabled = false;
+    z.style.opacity = _free ? '1' : '0.55';
+    z.title = _free ? '' : '自由视角才能缩放画面';
+  }
+  if (zv) {
+    zv.style.opacity = (view === 'free') ? '1' : '0.42';
+  }
+  var land = document.getElementById('camLand');
+  if (land && !land._b) {
+    land._b = true;
+    land.addEventListener('click', camRequestLandscape);
+  }
+  if (land) {
+    var _land = false;
+    try { _land = (CAM_LAND_ON === true) || ((CAM_LAND_ON !== false) && !!(window.matchMedia && window.matchMedia('(orientation: landscape)').matches)); } catch (eL) { }
+    land.textContent = _land ? '竖屏' : '横屏';
+    land.style.background = _land ? '#ffd83d33' : '#ffffff10';
+    land.style.color = _land ? '#ffd83d' : '#dfe8f2';
+  }
+  try { if (typeof camSettingsSync === 'function') { camSettingsSync(); } } catch (eS) { }
+  if (!window._camOriBind) {
+    window._camOriBind = true;
+    try {
+      window.addEventListener('orientationchange', function () { try { camToolsSync(); } catch (e0) { } });
+      window.addEventListener('resize', function () { try { camToolsSync(); } catch (e1) { } });
+    } catch (e2) { }
+  }
+}
+
+function uiApplyAtkScale() {
+  try {
+    var base = (typeof setAtkSize === 'function') ? (+setAtkSize() || 84) : 84;
+    var land = document.body.classList.contains('landscape');
+    var v = land ? base : Math.min(base, Math.max(58, window.innerWidth * 0.20), Math.max(58, window.innerHeight * 0.14));
+    document.documentElement.style.setProperty('--atk', Math.round(v) + 'px');
+  } catch (e) { }
+}
+
+function uiClampPositions() {
+  try {
+    var ids = ['atk', 'jmp', 'auto', 'cam', 'uiEdit', 'setBtn', 'skBar'];
+    var W = window.innerWidth, H = window.innerHeight;
+    for (var i = 0; i < ids.length; i++) {
+      var el = document.getElementById(ids[i]);
+      if (!el) { continue; }
+      var r = el.getBoundingClientRect();
+      if (!r || r.width <= 0 || r.height <= 0) { continue; }
+      var l = Math.max(6, Math.min(Math.max(6, W - r.width - 6), r.left));
+      var t = Math.max(6, Math.min(Math.max(6, H - r.height - 6), r.top));
+      if (Math.abs(l - r.left) > 0.6 || Math.abs(t - r.top) > 0.6) {
+        el.style.left = l.toFixed(1) + 'px';
+        el.style.top = t.toFixed(1) + 'px';
+        el.style.right = 'auto';
+        el.style.bottom = 'auto';
+      }
+    }
+  } catch (e) { }
+}
+
+function camPrefsLoad() {
+  try {
+    var v = localStorage.getItem(CAM_VIEW_STORE);
+    if (v !== 'first' && v !== 'third' && v !== 'free') { v = 'free'; }
+    /* platform 比 core 先执行：先写 START，core 声明 CAM_VIEW 时再取，避免被 core 默认值覆盖 */
+    CAM_VIEW_START = v;
+    try { CAM_VIEW = v; } catch (eVC) { }
+    var l = localStorage.getItem(CAM_LAND_STORE);
+    CAM_LAND_ON = (l === '1') ? true : ((l === '0') ? false : null);
+    if (v === 'first') { CAM_PITCH_START = 1.0; CAM_PITCH_T = 1.0; CAM_PITCH = 1.0; }
+    else if (v === 'third') { CAM_PITCH_START = 0.42; CAM_PITCH_T = 0.42; CAM_PITCH = 0.42; }
+    else { CAM_PITCH_START = 1.02; CAM_PITCH_T = 1.02; CAM_PITCH = 1.02; }
+    try {
+      if (window.AndroidShell && window.AndroidShell.setOrientation && CAM_LAND_ON !== null) {
+        window.AndroidShell.setOrientation(CAM_LAND_ON ? 'landscape' : 'portrait');
+      }
+    } catch (eN) { }
+  } catch (e) { }
+}
+camPrefsLoad();
+(function uiOrientationBind() {
+  function apply() {
+    try {
+      var land = (CAM_LAND_ON === true) ? true : ((CAM_LAND_ON === false) ? false : (window.innerWidth > window.innerHeight + 40));
+      if (land) { document.body.classList.add('landscape'); }
+      else { document.body.classList.remove('landscape'); }
+      setTimeout(function () { uiApplyAllSaved(); uiApplyAtkScale(); uiClampPositions(); }, 40);
+    } catch (e) { }
+  }
+  apply();
+  try {
+    window.addEventListener('resize', apply);
+    window.addEventListener('orientationchange', function () { setTimeout(apply, 120); });
+    if (window.visualViewport) { window.visualViewport.addEventListener('resize', apply); }
+  } catch (e2) { }
+})();
+
+function camToggle() {
+  CAMROT.on = !CAMROT.on;
+  camApplyVisual();
+  try {
+    toast(CAMROT.on ? '视角面板已展开' : '视角面板已收起：仍可拖动转视角');
+  } catch (e) { }
+}
+
+/* 长按 1 秒 → 回默认视角（并锁回锁定态 ✓）*/
+function camResetNow() {
+  try { if (typeof camReset === 'function') { camReset(); } } catch (e) { }
+  try { CAM_VIEW = 'free'; localStorage.setItem(CAM_VIEW_STORE, 'free'); } catch (e1) { }
+  CAMROT.on = false;
+  camApplyVisual();
+  var el = camEl();
+  if (el) {
+    el.classList.add('reset');
+    setTimeout(function () { el.classList.remove('reset'); }, 900);
+  }
+  camSaveNow();
+  try { toast('视角已恢复默认'); } catch (e2) { }
+}
+
+function camBind() {
+  var el = camEl();
+  if (!el || el._camBound) { return; }
+  el._camBound = true;
+
+  el.addEventListener('pointerdown', function (e) {
+    if (e && e.preventDefault) { e.preventDefault(); }
+    if (typeof UI_EDIT !== 'undefined' && UI_EDIT) { return; }  /* 键位模式：只拖不带功能 ✓ */
+    CAMROT.pressT = Date.now();
+    CAMROT.moved = false;
+    if (CAMROT.timer) { clearTimeout(CAMROT.timer); }
+    /* ★ 长按 1 秒 = 回正（用户要求）✗ 短按 = 开/关 ✓ */
+    CAMROT.timer = setTimeout(function () {
+      CAMROT.timer = null;
+      CAMROT.moved = true;          /* 标记成"已消费"→ 抬手不再触发开关 ✓ */
+      camResetNow();
+    }, 1000);
+  });
+  function up() {
+    if (CAMROT.timer) { clearTimeout(CAMROT.timer); CAMROT.timer = null; }
+    if (el._dragged) { el._dragged = false; return; }   /* 刚拖过 → 不算点击 ✓ */
+    if (CAMROT.moved) { CAMROT.moved = false; return; } /* 长按已经处理过 ✓ */
+    camToggle();
+  }
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', function () {
+    if (CAMROT.timer) { clearTimeout(CAMROT.timer); CAMROT.timer = null; }
+    CAMROT.moved = false;
+  });
+  camApplyVisual();
+}
+
+/* ---------------- 手势：右半屏单指 / 双指任意位置 ----------------
+   ★ 左半屏是摇杆（走路）✗ 绝对不能抢 ✓
+   ★ 双指时不管在哪都算旋转 ✓（很多人的习惯）*/
+function camGestureBind() {
+  var cv = document.getElementById('cv') || document.querySelector('canvas');
+  if (!cv || cv._camGest) { return; }
+  cv._camGest = true;
+
+  function findTouch(list, id) {
+    for (var i = 0; i < (list || []).length; i++) {
+      if (list[i].identifier === id) { return list[i]; }
+    }
+    return null;
+  }
+  function startRotate(t) {
+    CAMROT.dragId = t.identifier;
+    CAMROT.lx = t.clientX; CAMROT.ly = t.clientY;
+  }
+  cv.addEventListener('touchstart', function (e) {
+    var ts = e.touches || [];
+    if (CAMROT.dragId !== null) { return; }
+    if (ts.length >= 2) { startRotate(ts[1]); return; }      /* 双指 → 用第二根 ✓ */
+    var t0 = ts[0];
+    if (t0 && t0.clientX >= window.innerWidth * 0.5) { startRotate(t0); }
+  }, { passive: true });
+
+  cv.addEventListener('touchmove', function (e) {
+    if (CAMROT.dragId === null) { return; }
+    var t = findTouch(e.touches, CAMROT.dragId);
+    if (!t) { return; }
+    var dx = t.clientX - CAMROT.lx, dy = t.clientY - CAMROT.ly;
+    CAMROT.lx = t.clientX; CAMROT.ly = t.clientY;
+    if (Math.abs(dx) + Math.abs(dy) > 0.5) { CAMROT.moved = true; }
+    try { if (typeof camAdd === 'function') { camAdd(dx, dy); } } catch (e2) { }
+    camSaveSoon();
+  }, { passive: true });
+
+  function endTouch(e) {
+    if (CAMROT.dragId === null) { return; }
+    var ts = e.touches || [];
+    if (!findTouch(ts, CAMROT.dragId)) {
+      CAMROT.dragId = null;
+      /* ★ round500：松手立刻存一次 ✗ 别等防抖（用户可能马上刷新/切后台 ✓）*/
+      camSaveNow();
+    }
+  }
+  cv.addEventListener('touchend', endTouch, { passive: true });
+  cv.addEventListener('touchcancel', function () { CAMROT.dragId = null; }, { passive: true });
+
+  /* 电脑端：右键拖 / 按住 Shift 拖 也能转（顺手 ✓ 不然没法测）*/
+  cv.addEventListener('mousedown', function (e) {
+    /* 右键随时可转；左键只在面板展开时转，避免抢攻击 */
+    if (!(e.button === 2 || (CAMROT.on && e.button === 0))) { return; }
+    CAMROT.mouseDrag = true;
+    CAMROT.lx = e.clientX; CAMROT.ly = e.clientY;
+  });
+  window.addEventListener('mousemove', function (e) {
+    if (!CAMROT.mouseDrag) { return; }
+    var dx = e.clientX - CAMROT.lx, dy = e.clientY - CAMROT.ly;
+    CAMROT.lx = e.clientX; CAMROT.ly = e.clientY;
+    try { if (typeof camAdd === 'function') { camAdd(dx, dy); } } catch (e2) { }
+    camSaveSoon();
+  });
+  window.addEventListener('mouseup', function () {
+    if (CAMROT.mouseDrag) { CAMROT.mouseDrag = false; camSaveNow(); }
+  });
+  camToolsSync();
+}
+
+/* ---------------- 存档 ---------------- */
+function camSaveNow() {
+  try {
+    if (typeof camState !== 'function') { return; }
+    var st = camState();
+    localStorage.setItem(CAM_STORE, JSON.stringify({ y: st.yaw, p: st.pitch }));
+  } catch (e) { }
+}
+function camSaveSoon() {
+  /* ★★ round500（用户："这个锁定视角的数据有保存吗，重启游戏/服务器后会不会恢复默认"）
+     ★ 原来那个"400ms 节流"有个洞：最后一下拖动如果落在节流窗口里就【永远没存】✗
+       → 拖动结束后角度可能回到上次存的位置 ✓ 看起来像"没保存" ✓
+     ★ 改成【防抖 + 尾随】：每次变化都重置 450ms 定时器 ✗ 停手 450ms 后必存一次 ✓
+       拖动过程中也照存（不会丢）✓ 代价是把写 localStorage 的次数压到最低 ✓ */
+  if (CAMROT.saveT) { clearTimeout(CAMROT.saveT); }
+  CAMROT.saveT = setTimeout(function () {
+    CAMROT.saveT = null;
+    camSaveNow();
+  }, 450);
+}
+/* 切后台 / 关页面：补存一次（有些手机直接杀进程，尾随定时器来不及跑）*/
+(function camFlushBind() {
+  if (window._camFlush) { return; }
+  window._camFlush = true;
+  function flush() { try { camSaveNow(); } catch (e) { } }
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) { flush(); }
+  });
+  window.addEventListener('pagehide', flush);
+})();
+
+function camLoadSaved() {
+  /* ★★★ round499 真 bug（用户："拖动来回抖动，还拖不太动"）★★★
+     病根：`uiDragInit()` 是【每 100ms 调一次】的（为了保证按钮一定挂上 ✓）
+          而我在里面调了 camLoadSaved() ✗
+       → 每 100ms 就把视角【读回上次存的角度】✗
+       → 一边拖一边被拽回去 → 看起来就是"抖 + 拖不动" ✓✓ 一字不差
+     ★ 修：读档只做一次 ✓（存档照样每 400ms 写 ✓）
+     ★ 教训：往一个"幂等初始化"函数里加东西前，先确认它到底被调几次 ✗ */
+  if (CAMROT.loaded) { return; }
+  CAMROT.loaded = true;
+  try {
+    var raw = localStorage.getItem(CAM_STORE);
+    if (!raw) { return; }
+    var o = JSON.parse(raw);
+    if (typeof camSet === 'function' && o && typeof o.y === 'number') {
+      camSet(o.y, o.p);
+    }
+  } catch (e) { }
+}
+
+/* ============================================================ 界面刷新（round508）
+   ★ 用户："信息界面那两个自动开关删了，换成【界面刷新】✗ 60 秒 CD ✗ 防止一直按"
+   ★ 用途：界面卡住 / 热更新之后，不用重开 APP ✓
+   ★ CD 存 localStorage ✗ 刷新之后依然记着 ✓（不然刷新完又能立刻点 = 没 CD ✓）
+   ★ 为什么 60 秒：热更新传文件一般几十秒内传完 ✗ 60 秒刚好一个来回 ✓ */
+var UI_RELOAD_CD = 60;
+var UI_RELOAD_KEY = 'uiReloadAt';
+
+function uiReloadLeft() {
+  var last = 0;
+  try { last = +(localStorage.getItem(UI_RELOAD_KEY) || 0) || 0; } catch (e) { }
+  var left = UI_RELOAD_CD - Math.floor((Date.now() - last) / 1000);
+  return left > 0 ? left : 0;
+}
+
+function uiReloadPaint() {
+  var b = document.getElementById('uiReload');
+  var tip = document.getElementById('uiReloadTip');
+  if (!b) { return; }
+  var left = uiReloadLeft();
+  if (left > 0) {
+    b.textContent = '刷新（' + left + 's）';
+    b.style.opacity = '0.45';
+    b.style.cursor = 'not-allowed';
+    b.style.pointerEvents = 'none';
+    if (tip) { tip.textContent = '刚刷过 · 还要等 ' + left + ' 秒才能再点'; }
+  } else {
+    b.textContent = '界面刷新';
+    b.style.opacity = '1';
+    b.style.cursor = 'pointer';
+    b.style.pointerEvents = 'auto';
+    if (tip) {
+      tip.textContent = '界面卡住 / 热更新后用 · 点一下重新载入（60 秒只能点一次）';
+    }
+  }
+}
+
+function uiReloadBind() {
+  var b = document.getElementById('uiReload');
+  if (!b || b._rb) { return; }
+  b._rb = true;
+  b.addEventListener('click', function () {
+    if (uiReloadLeft() > 0) { return; }
+    try { localStorage.setItem(UI_RELOAD_KEY, String(Date.now())); } catch (e) { }
+    try { toast('正在刷新界面…'); } catch (e2) { }
+    /* ★ 给 toast 一帧时间画出来 ✗ 再刷 ✓ */
+    setTimeout(function () {
+      try { location.reload(); } catch (e3) { }
+    }, 160);
+  });
+  uiReloadPaint();
+  /* 冷却中每秒把秒数往下减 ✓（不用重建 DOM）*/
+  setInterval(function () {
+    var pane = document.querySelector('.tabpane[data-pane="about"]');
+    if (!pane || pane.className.indexOf('on') < 0) { return; }
+    uiReloadPaint();
+  }, 1000);
+}
+
 function uiDragInit() {
   makeDraggable('atk');
   makeDraggable('jmp');
   makeDraggable('auto');
   autoBind();
+  /* ★ round497：视角按钮（同一个拖动系统 → 像攻击键一样能移动 ✓）*/
+  makeDraggable('cam');
+  camBind();
+  uiReloadBind();
+  setSubBind();
+  camGestureBind();
+  camLoadSaved();
 }
 
 /* ★ round353：自动战斗按钮绑定（点一下开/关 ✓ 拖动时不触发 ✓ 见 makeDraggable）*/
@@ -2571,16 +7406,25 @@ function autoToggle() {
   if (_nowT - (autoToggle._last || 0) < 250) { return; }
   autoToggle._last = _nowT;
   AUTO.on = !AUTO.on;
+  /* ★★ round442（用户："挂机的击杀数和时间，只有关闭了自动战斗才会清零"）★★
+     → 关掉才清零 ✗ 打开时接着上次的继续 ✓ */
+  try {
+    if (AUTO.on) { autoStatRestore(); } else { autoStatReset(); }
+  } catch (e0) { }
   /* ★ 关掉时把阶段和目标一起清掉 ✗ 免得下一帧 AI 还接着跑 ✓ */
   if (!AUTO.on) { AUTO.phase = 'find'; AUTO.tgt = ''; AUTO.detourT = 0; }
   AUTO.tgt = ''; AUTO.phase = 'find'; AUTO.t = 0; AUTO.kills = 0;
   AUTO.deaths = []; AUTO.pauseUntil = 0; AUTO.stuckT = 0;
   AUTO.info = AUTO.on ? '自动战斗：正在找目标…' : '';
+  /* ★ round437：开始记时 + 开/关那个击杀数面板 ✓ */
+  AUTO.t0 = performance.now();
+  AUTO.statT = 0;
+  try { autoStatShow(!!AUTO.on, 0, 0); } catch (e0) { }
   /* ★ 第 209 轮：关掉时立刻把摇杆还回去 ✗ 不然人会一直往前走 ✓ */
   try { if (typeof autoRelease === 'function') { autoRelease(); } } catch (e) { }
   try { if (typeof SETCFG !== 'undefined') { SETCFG.auto = AUTO.on; } saveSet(); } catch (e) { }
   autoUiUpd();
-  toast(AUTO.on ? '自动战斗已开启（再长按攻击键 3 秒关闭）' : '自动战斗已关闭');
+  toast(AUTO.on ? '自动战斗已开启' : '自动战斗已关闭');
 }
 
 /* 手动操作 → 暂停 3 秒（不是关掉 ✓ 方便临时接管 ✓）
@@ -2678,6 +7522,96 @@ function tpEnsureBtn() {
   if (btn && btn.onclick !== tpDo) { btn.onclick = tpDo; }
 }
 
+/* ★★★ round467：装备页的「属性详情」✗
+   数值全部用现成的客户端工具函数算（wStatsOf / wRealHit / wInterval / wMastery）✓
+   ★ 不重写公式 ✗ 和背包里看到的完全一致 ✓ */
+/* ★ round468：词条块（一条一行 ✗ 没词条时只写一句）*/
+function affixBlock(title, list) {
+  if (!list || !list.length) {
+    return stRow(title, '无', '');
+  }
+  /* ★★ round468b：外层 .bagStat 是 display:flex;flex-wrap:wrap ✗
+     所以我直接放进去的每个 div 都变成了【flex 项】✗
+     → 三条词条被排成一行 ✗✗（截图里就是挤在一起）
+     修：整块包一个 flex:0 0 100% 的容器 ✗ 里面才老老实实换行 ✓ */
+  var h = '<div style="flex:0 0 100%;width:100%;display:block;padding:2px 0">' +
+    '<div class="ptLine" style="justify-content:space-between;padding:2px 0">' +
+    '<span style="color:#cfd8e4">' + title + '</span>' +
+    '<span class="bagTip">' + list.length + ' 条</span></div>';
+  for (var i = 0; i < list.length; i++) {
+    h += '<div style="display:block;color:#8ee0ff;font-size:13px;padding:2px 0 2px 8px">• ' +
+      (list[i].text || list[i].name || '') + '</div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+function equipRender() {
+  var box = document.getElementById('eqDetail');
+  if (!box) { return; }
+  var h = '';
+  /* ★ round472b：下面防具段用到 lv ✗ 之前没声明 → ReferenceError ✗（已修）*/
+  var lv = (WSC.role && WSC.role.level) || 1;
+  var w = (typeof MY_WEAPON !== 'undefined') ? MY_WEAPON : null;
+  if (w && w.slot === 'weapon') {
+    var ws = wStatsOf(w);
+    var wm = wMastery(w);
+    h += '<div style="color:' + tierHex(w.tier || 0) + ';font-weight:700;margin-bottom:4px">' +
+      '武器 · ' + (w.name || '?') + '（' + ((w.tier || 0) + 1) + ' 阶）' +
+      (w.broken ? '<span style="color:#ff5a4a"> · 已损坏</span>' : '') + '</div>' +
+      stRow('发挥度', Math.round(wm * 100) + '%',
+            wm < 1 ? ('建议 ' + (w.reqLevel || 1) + ' 级') : '已满') +
+      /* ★ round470：基础属性单独列出来（和防具一个口径 ✓）*/
+      stRow('基础伤害', Math.round(wFlat(w)) + ' 点', '随品阶和物品等级长') +
+      stRow('武器系数', '×' + (+((w.base || {}).coeff) || 1.0).toFixed(2),
+            '乘在你的固有攻击上') +
+      stRow('实际每击', Math.round(wRealHit(w)), '含发挥度和封顶') +
+      stRow('每秒伤害', Math.round(wRealDps(w)), '含暴击期望') +
+      stRow('攻速', '×' + ws.spd.toFixed(2) + '（' + wInterval(w).toFixed(2) + ' 秒一刀）',
+            '基础 ×' + ws.spdBase.toFixed(2) +
+            (ws.spdPct ? (' + 词条 ' + ws.spdPct.toFixed(1) + '%') : '') +
+            ' · 上限 ×' + W_SPD_MAX) +
+      stRow('每秒攻击', (1 / wInterval(w)).toFixed(2) + ' 刀/秒',
+            '×' + ws.spd.toFixed(2) + ' = 0.62 ÷ ' + ws.spd.toFixed(2) + ' 秒一刀') +
+      stRow('范围', ws.reach.toFixed(1) + ' 米 · ' + rangeWord(ws.reach), arcWord(ws.arc)) +
+      /* ★★ round468（用户："词条每一条要换行显示，更清楚"）★★ */
+      affixBlock('武器词条', w.affixes) +
+      ((+w.durMax > 0)
+        ? stRow('耐久', ((typeof w.dur === 'number') ? w.dur : w.durMax) + ' / ' + w.durMax,
+                '还能挥这么多次')
+        : '');
+  } else {
+    h += '<div class="bagTip">空手（在背包里点武器 → 使用）</div>';
+  }
+  h += '<div style="height:10px"></div>';
+
+  var ar = (typeof BAG !== 'undefined') ? BAG.armor : null;
+  if (ar && ar.base) {
+    var b = ar.base || {};
+    /* round468：防具词条也一条一行（affixBlock）*/
+    h += '<div style="color:' + tierHex(ar.tier || 0) + ';font-weight:700;margin-bottom:4px">' +
+      '防具 · ' + (ar.name || '?') + '（' + ((ar.tier || 0) + 1) + ' 阶）' +
+      (ar.broken ? '<span style="color:#ff5a4a"> · 已损坏</span>' : '') + '</div>' +
+      stRow('发挥度', Math.round(aStatsOf(ar).mastery * 100) + '%',
+            aStatsOf(ar).mastery < 0.999
+              ? ('装备 ' + (+ar.itemLv || 1) + ' 级，你现在 ' + lv + ' 级')
+              : '已满') +
+      stRow('减伤（固定）', (Math.round(aStatsOf(ar).dr * 10) / 10) + ' 点',
+            '挨打时先扣这么多' +
+            (aStatsOf(ar).mastery < 0.999 ? ('（满发挥 ' + Math.round(aStatsOf(ar).drFull) + '）') : '')) +
+      stRow('生命上限', '+' + Math.round(aStatsOf(ar).hp),
+            aStatsOf(ar).mastery < 0.999 ? ('满发挥 +' + Math.round(aStatsOf(ar).hpFull)) : '') +
+      affixBlock('防具词条', ar.affixes) +
+      ((+ar.durMax > 0)
+        ? stRow('耐久', ((typeof ar.dur === 'number') ? ar.dur : ar.durMax) + ' / ' + ar.durMax,
+                '还能挨这么多次')
+        : '');
+  } else {
+    h += '<div class="bagTip">没穿防具（在背包里点防具 → 使用）</div>';
+  }
+  box.innerHTML = h;
+}
+
 function bagRender() {
   var grid = document.getElementById('bagGrid');
   var eqs = document.getElementById('bagEqSlot');
@@ -2686,7 +7620,7 @@ function bagRender() {
   var cnt = document.getElementById('bagCount');
   if (!grid || !eqs || !st) { return; }
 
-  /* ---- 背包格子（7 列 ✓ 每页 35 格 ✓ 空位也画出来 → 才像格子而不是列表 ✓）---- */
+  /* ---- 背包格子（6 列 ✓ 每页 30 格 ✓ 空位也画出来 → 才像格子而不是列表 ✓）---- */
   bagPagerUpd();
   bagPageBind();
   var html = '';
@@ -2715,15 +7649,18 @@ function bagRender() {
     /* ★ 第 233 轮：损坏的装备要有明显样式（挂机回来一眼看得出来 ✓）*/
     var brk = !!it.broken;
     if (brk) { cur = ''; }   /* 坏了的显示损坏 ✗ 不显示已装备绿点 ✓ */
+    /* ★ round410：锁住的物品右上角一把小锁 ✓ 一眼看得出为什么卖不掉 ✓ */
+    var lkd = !!it.locked;
     var lowm = isW ? (wMastery(it) < 1) : false;      // 发挥不满 → 黄标（不是锁 ✓）
     var n = (e.stack || 1);
     var bg = 'background:linear-gradient(180deg,' + tierRgba(it.tier || 0, 0.40) + ','
              + tierRgba(it.tier || 0, 0.18) + ')';
-    html += '<div class="slot' + cur + sel + (_pk ? ' pick' : '') + (lowm ? ' lowmastery' : '') +(brk ? ' broken' : '') +  '" style="' + bg + '"' +
+    html += '<div class="slot' + cur + sel + (_pk ? ' pick' : '') + (lowm ? ' lowmastery' : '') +(brk ? ' broken' : '') + (lkd ? ' locked' : '') +  '" style="' + bg + '"' +
       ' data-id="' + e.id + '" data-w="' + (isW ? 1 : 0) + '" data-i="' + i + '"' +
       (lowm ? (' title="建议 ' + (it.reqLevel || 1) + ' 级（发挥 ' +
         Math.round(wMastery(it) * 100) + '%）"') : '') + '>' +
       (BAG.multi ? ('<span class="pickbox">' + (_pk ? '✓' : '') + '</span>') : '') +
+      (lkd ? '<span class="lk">🔒</span>' : '') +
       '<span style="color:' + col + '">' + iconOfItem(it) + '</span>' +
       '<span class="tg">' + ((it.tier || 0) + 1) + '</span>' +      // ★ 显示 1~12 ✓
       (!isW && n > 1 ? '<span class="cnt">' + n + '</span>' : '') +
@@ -2744,7 +7681,7 @@ function bagRender() {
       (lowm ? '<span class="lvl">' + Math.round(wMastery(it) * 100) + '%</span>' : '') + '</div>';
   }
   var total = Math.max(16, Math.min(BAG_PAGE_SIZE + 8, Math.ceil((BAG.items.length + 1) / 8) * 8));   /* round252: cap slots (was 800 empty divs at 797 items -> GPU pressure -> WebGL lost -> white screen) */
-  /* 第 171 轮（用户 #4）：空位要按【每页 35 格】补。
+  /* 第 171 轮（用户 #4）：空位要按【每页 30 格】补。
      不能按背包总容量补 —— 不然第二页开头一个空位都没有，页面长短不一。 */
   var _filled = (_to - _from);
   for (var p = _filled; p < BAG_PAGE_SIZE; p++) { html += '<div class="slot empty"></div>'; }
@@ -2855,7 +7792,24 @@ function bagRender() {
   /* ---- 使用 / 脱下（用户要求：点武器出现"使用"，穿上后变"脱下"）---- */
   var useBtn = document.getElementById('bagUse');
   if (useBtn) {
-    if (selIsEquipped) {
+    if (selItem && selItem.kind === 'skillbook') {
+      /* ★ round538：技能书 → "学习"（学完书消耗掉）*/
+      useBtn.textContent = '学 习';
+      useBtn.className = 'bagB';
+      useBtn.disabled = false;
+      useBtn.setAttribute('data-act', 'useskillbook');
+    } else if (selItem && selItem.kind === 'food') {
+      useBtn.textContent = '食 用';
+      useBtn.className = 'bagB';
+      useBtn.disabled = false;
+      useBtn.setAttribute('data-act', 'usefood');
+    } else if (selItem && selItem.kind === 'skin') {
+      /* ★ round487：皮肤卡 → "使用"= 解锁（不是穿上）*/
+      useBtn.textContent = '解 锁';
+      useBtn.className = 'bagB';
+      useBtn.disabled = false;
+      useBtn.setAttribute('data-act', 'useskin');
+    } else if (selIsEquipped) {
       useBtn.textContent = '脱 下';
       useBtn.className = 'bagB off';
       useBtn.disabled = false;
@@ -2909,18 +7863,28 @@ function bagRender() {
       if (BAG.items[_bi].item === selItem) { sellId = BAG.items[_bi].id; break; }
     }
   }
+  /* ★ round409（用户："坏掉的武器只能出售给系统，并且只值 10 金币"）
+     ★ 所以【卖给系统】要放行坏装备 ✗【挂交易所】不行 ✓
+     （这行以前是 !selItem.broken ✗ 结果坏武器根本卖不掉 ✓）*/
   var sellable = !!(selItem && !selIsEquipped && selItem !== DEFAULT_W && sellId
-                       && !selItem.broken && !selItem.locked_by && !selItem.locked);
+                       && !selItem.locked_by && !selItem.locked);
+  var mktOk = !!(sellable && !selItem.broken);
   if (sellBtn) {
     sellBtn.disabled = !sellable;
     sellBtn.className = sellable ? 'bagB' : 'bagB off';
   }
+  /* ★ round411：上锁按钮【搬到格子浮窗】里了 ✗ 这里不再画一行藏起来的按钮 ✓
+     （round410 就错在往 #bagRowUse 里加 ✗ 那一排是 display:none 的 ✓
+       玩家永远看不到那个按钮 ✓
+       而我当时只查了 DOM 存在 ✗ 没查它能不能被看到 ✓）*/
   /* round303: 批量按钮的亮/灰 + 提示文字 ✓（勾了几件也写在那里 ✓）*/
   var _sortBtn = document.getElementById('bagSort');
   if (_sortBtn && !_sortBtn._b) {
     _sortBtn._b = true;
     _sortBtn.onclick = function () {
       /* ★ round304v（用户："一键整理"）★
+         ★ round416（用户："最高品质的装备放前面，其次再按类型分类"）
+           → 规则改成【品阶优先】✗ 仍然全在服务端算 ✓
          ★ 顺序由【服务端】定 ✗ 客户端不自己排 ✓
            （排序规则和 slot_index 都在服务端 ✓ 两端各排一次迟早不一致 ✓）
          ★ 发完只等着 notice"（背包已更新）"✗ 它会自动重拉背包 ✓ */
@@ -2932,6 +7896,7 @@ function bagRender() {
   }
   var _pickBtn = document.getElementById('bagPick');
   var _multiBtn = document.getElementById('bagSellMulti');
+  var _pageBtn = document.getElementById('bagPickPage');
   var _pickTip = document.getElementById('bagPickTip');
   /* 勾中的东西要是已经不在背包里了（卖掉了/换页了）✗ 顺手清掉 ✓ */
   if (BAG.pick && BAG.pick.length) {
@@ -2953,8 +7918,36 @@ function bagRender() {
   }
   if (_pickTip) {
     _pickTip.textContent = BAG.multi
-      ? '点格子勾选 ✓ 再点【批量出售】'
+      ? '点格子勾选 / 【整页勾选】勾这一页 30 格 ✗ 再点【批量出售】'
       : '勾选多件一起卖（5 阶以上会再确认一次）';
+  }
+  /* ★★★ round409（用户："背包出售再增加一个整页勾选的按钮"）★★★
+     ★ 只勾【当前这一页】（30 格）✗ 不碰别的页的勾 ✓
+     ★ 装备在身上 / 上架锁定中 / 默认那把 → 不勾 ✓（勾了也卖不掉 ✗ 只会让人困惑 ✓）
+     ★ 再点一次 = 取消本页的勾 ✓（不用手动一个个点掉 ✓）
+     ★ 闭包规矩：这里只绑一次 ✗ 每次点击【现算】当前页 ✓（round301 的教训 ✓）*/
+  if (_pageBtn) {
+    _pageBtn.className = BAG.multi ? 'bagB' : 'bagB';
+    if (!_pageBtn._b) {
+      _pageBtn._b = true;
+      _pageBtn.onclick = function () {
+        if (!BAG.multi) { BAG.multi = true; BAG.pick = []; }
+        try { bagTipHide(); } catch (e0) { }     /* ★ 进出批量都先把浮窗关掉 ✓ */
+        var ids = bagPageIds();
+        var _allOn = true;
+        for (var _q = 0; _q < ids.length; _q++) {
+          if (_pickHas(ids[_q]) < 0) { _allOn = false; break; }
+        }
+        if (_allOn) {
+          BAG.pick = BAG.pick.filter(function (id) { return ids.indexOf(id) < 0; });
+        } else {
+          for (var _r2 = 0; _r2 < ids.length; _r2++) {
+            if (_pickHas(ids[_r2]) < 0) { BAG.pick.push(ids[_r2]); }
+          }
+        }
+        bagRender();
+      };
+    }
   }
   /* ============================================================
      round304c：交易所那一行（★ 只在这里算"亮/灰"✗ 判定一律现算 ✓）
@@ -2966,8 +7959,8 @@ function bagRender() {
      ============================================================ */
   var mktBtn = document.getElementById('bagMkt');
   if (mktBtn) {
-    mktBtn.disabled = !sellable;
-    mktBtn.className = sellable ? 'bagB' : 'bagB off';
+    mktBtn.disabled = !mktOk;
+    mktBtn.className = mktOk ? 'bagB' : 'bagB off';
     if (!mktBtn._b) {
       mktBtn._b = true;
       var _mktGo = function () {
@@ -2984,7 +7977,7 @@ function bagRender() {
     /* 参考价：换了一件就问一次它的【系统收购价】✗ 填进输入框 ✓
        ★ 只在"换了另一件"时覆盖 ✗ 免得玩家刚改完价格就被冲掉 ✓ */
     var _priceEl = document.getElementById('bagMktPrice');
-    if (_priceEl && sellable && String(mktBtn._sid) !== String(sellId)) {
+    if (_priceEl && mktOk && String(mktBtn._sid) !== String(sellId)) {
       mktBtn._sid = String(sellId);
       _priceEl.value = '';
       if (typeof sellQuote === 'function') {
@@ -3128,6 +8121,30 @@ function bagRender() {
 function sellItems(ids, isBatch) {
   ids = (ids || []).filter(function (v) { return v !== null && v !== undefined; });
   if (!ids.length) { return; }
+  /* ★★★ round412（用户："用批量出售上锁的物品会显示 POST /api/sell 400"）★★★
+     ★ 病根：勾选之后才上锁的物品还留在 BAG.pick 里 ✗ 一起发过去 ✓
+       服务端逐件拒 ✗ 如果【一件都没卖成】就回 400 → 浏览器控制台一条红字 ✓
+       而且玩家只看到"卖不了"✗ 不知道是锁的问题 ✓
+     ★ 修法：发请求之前把【锁住的】摘掉 ✓
+       · 全都锁着 → 一条请求都不发（不会再有 400 ✓）只提示一句
+       · 混着 → 只卖没锁的 ✓ 并告诉玩家跳过了几件 */
+  var _locked = [];
+  ids = ids.filter(function (v) {
+    for (var i = 0; i < (BAG.items || []).length; i++) {
+      if (String(BAG.items[i].id) === String(v)) {
+        if ((BAG.items[i].item || {}).locked) { _locked.push(v); return false; }
+        return true;
+      }
+    }
+    return true;     /* 本地找不到就别拦 ✗ 交给服务端判 ✓ */
+  });
+  if (_locked.length) {
+    if (typeof toast === 'function') {
+      toast('跳过 ' + _locked.length + ' 件锁住的（要卖先解锁）');
+    }
+    if (!isBatch) { bagRender(); return; }
+  }
+  if (!ids.length) { bagRender(); return; }
   var tok = '';
   try { tok = localStorage.getItem('token') || ''; } catch (e) {}
   var sellBtn = document.getElementById('bagSell');
@@ -3167,7 +8184,9 @@ function sellItems(ids, isBatch) {
           toast('卖出【' + (j.name || '物品') + '】+' + fmtGold(j.total !== undefined ? j.total : j.gold) + ' 金币');
         }
       }
-      if (j && j.failed) { toast('有 ' + j.failed + ' 件没能卖出（状态已变化）'); }
+      if (j && j.failed) {
+        toast('有 ' + j.failed + ' 件没能卖出' + (j.error ? ('：' + j.error) : '（状态已变化）'));
+      }
       if (typeof bagFetch === 'function') { bagFetch(bagRender); }
     } else if (typeof toast === 'function') {
       toast((j && j.error) || '卖不了');
@@ -3461,6 +8480,7 @@ function mktIcon(it, tier, icon) {
   }
   var fake = { tier: tier | 0, slot: (icon || {}).slot || null,
                look: (icon || {}).look || null, kind: (icon || {}).kind || null,
+               key: (icon || {}).key || null,
                name: mktMatName(icon, tier), rarity: (icon || {}).rarity || null };
   return '<span style="color:' + tierHex(tier) + '">' + iconOfItem(fake) + '</span>';
 }
@@ -4072,12 +9092,21 @@ function bagTipHTML(it, id, acts, seller) {
         ((WSC.role && WSC.role.level) || 1) + ' 级）· 只能发挥 ' +
         Math.round(mT * 100) + '%</b><br>';
     }
-    extra += '实际每击 <b>' + wRealHit(it).toFixed(0) + '</b> · 每秒 <b>' +
+    /* ★★ round470（用户："武器的基础属性要显示出来，例如基础伤害"）★★
+       防具那边写的是装备自己的基础值（减伤/生命）✗ 武器这边只有"实际每击" ✗
+       → 补：基础伤害 · 武器系数 · 基础攻速 → 当前攻速（含词条）✓ */
+    extra += '基础伤害 <b>' + wFlat(it).toFixed(0) + '</b> 点<br>' +
+      '武器系数 <b>×' + (+((it.base || {}).coeff) || 1.0).toFixed(2) + '</b><br>' +
+      '基础攻速 <b>×' + s.spdBase.toFixed(2) + '</b>' +
+      (s.spdPct ? (' · 词条 <b style="color:#8ee0ff">+' + s.spdPct.toFixed(1) + '%</b>') : '') +
+      ' → 当前 <b style="color:#ffd83d">×' + s.spd.toFixed(2) + '</b>' +
+      '（' + wInterval(it).toFixed(2) + ' 秒一刀 = <b>每秒 ' +
+      (1 / wInterval(it)).toFixed(2) + ' 刀</b> · 上限 ×' + W_SPD_MAX + '）<br>' +
+      '实际每击 <b>' + wRealHit(it).toFixed(0) + '</b> · 每秒 <b>' +
       wRealDps(it).toFixed(0) + '</b><br>' +
       '武器强度 <b>' + wStrength(it).toFixed(0) + '</b>（纯比较用、不含你的等级）<br>' +
       '范围 <b>' + s.reach.toFixed(1) + '</b> 米（' + rangeWord(s.reach) + '）<br>' +
-      '打击面：' + arcWord(s.arc) + '<br>' +
-      '攻速 ×' + s.spd.toFixed(2) + '（' + wInterval(it).toFixed(2) + ' 秒一刀）<br>';
+      '打击面：' + arcWord(s.arc) + '<br>';
   } else if (it.slot === 'armor' && it.base) {
     /* ★★ 第 107 轮（用户选的 B：悬停那个浮窗信息太少）★★
        根因：这段"详细信息"原来【只给武器拼】✗（if slot === 'weapon' ✓）
@@ -4085,8 +9114,19 @@ function bagTipHTML(it, id, acts, seller) {
        用户要求：不用补得特别完整，重要的有就行 ✓
        → 只放四样：减伤 / 生命上限 / 词条条数 / 耐久 ✓ */
     var bA = it.base || {};
-    extra += '减伤 <b>' + (Math.round((+bA.dr || 0) * 10) / 10) + '</b> 点 · ' +
-      '生命上限 <b>+' + Math.round(+bA.hp || 0) + '</b><br>';
+    /* ★ round472：显示【打折后】的数值 ✗ 并标出发挥度 ✓
+       （不然 1 级看到 1000 级防具写着"减伤 3000"会以为真能减这么多 ✗）*/
+    var aS = aStatsOf(it);
+    extra += '减伤 <b>' + (Math.round(aS.dr * 10) / 10) + '</b> 点' +
+      (aS.mastery < 0.999 ? ('<i>（满发挥 ' + Math.round(aS.drFull) + '）</i>') : '') +
+      ' · 生命上限 <b>+' + Math.round(aS.hp) + '</b>' +
+      (aS.mastery < 0.999 ? ('<i>（满 ' + Math.round(aS.hpFull) + '）</i>') : '') + '<br>' +
+      (aS.mastery < 0.999
+        ? ('<b style="color:#ffd83d">⚠ 装备 ' + (+it.itemLv || 1) + ' 级（建议 ' +
+           (+it.reqLevel || 1) + '），你现在 ' +
+           ((WSC.role && WSC.role.level) || 1) + ' 级 · 只发挥 ' +
+           Math.round(aS.mastery * 100) + '%</b><br>')
+        : '');
   }
   /* ★★★ round304h（用户："耐久的显示有做吗，如果有词条这些能看到吗"）★★★
      问出来的真相：词条和耐久这两行原来【只写在防具那个分支里】✗
@@ -4100,10 +9140,16 @@ function bagTipHTML(it, id, acts, seller) {
   if (it.slot === 'weapon' || it.slot === 'armor') {
     var afG = it.affixes || [];
     if (afG.length) {
-      var afGTxt = [];
-      for (var ig = 0; ig < afG.length; ig++) { afGTxt.push(afG[ig].text || ''); }
-      extra += '<span style="color:#8ee0ff">词条 ' + afG.length + ' 条：' +
-        afGTxt.join(' · ') + '</span><br>';
+      /* ★★ round469（用户："把悬停的信息显示的词条也换行，交易所的悬停也是"）★★
+         原来是 afGTxt.join(' · ') ✗ 三条挤成一行 ✗
+         现在一条一行 ✗
+         ★ 交易所的悬停也走这个函数（mktTipShow → bagTipHTML）→ 一处改两处生效 ✓ */
+      extra += '<span style="color:#ffd83d">词条 ' + afG.length + ' 条：</span>';
+      for (var ig = 0; ig < afG.length; ig++) {
+        extra += '<span style="display:block;color:#8ee0ff;padding-left:6px;line-height:1.55">• ' +
+          (afG[ig].text || '') + '</span>';
+      }
+      extra += '';
     } else {
       extra += '<span style="opacity:.7">这件没有词条</span><br>';
     }
@@ -4131,8 +9177,25 @@ function bagTipHTML(it, id, acts, seller) {
     extra += '<span style="opacity:.7">' + (it.slot === 'weapon'
       ? '拿在手上 · 点下面的【使用】装上'
       : '穿在武器槽右边那个槽 · 点下面的【使用】穿上') + '</span><br>';
+  } else if (it.kind === 'skin') {
+    /* ★★ round505：皮肤卡的说明（以前当成"材料 · skin"✗ 说的是卖钱 ✓ 不对）*/
+    var _skOwn = false;
+    try {
+      if (it._unlocked !== undefined && it._unlocked !== null) {
+        _skOwn = !!it._unlocked;
+      } else {
+        var _sl = (SKIN.items || []);
+        for (var _si = 0; _si < _sl.length; _si++) {
+          if (_sl[_si].k === it.key) { _skOwn = !!_sl[_si].own; break; }
+        }
+      }
+    } catch (e) { }
+    extra += '皮肤卡 · <b style="color:#8ee0ff">' + (it.key || '') + '</b>' +
+      (_skOwn ? '（<b style="color:#7ee08a">已拥有</b>）' : '（还没解锁）') + '<br>';
+    extra += '<span style="opacity:.75">点【使用】= 解锁这套皮肤 ✗ 解锁后<b>永久</b>拥有，随时在 菜单→皮肤 换 ✓</span><br>';
+    extra += '<span style="opacity:.7">重复的可以【卖给系统】' +
+      '<b style="color:#ffd83d">5000</b> 金币，或者【挂交易所】卖给别人 ✓</span><br>';
   } else if (!it.slot) {
-    /* ★ round304g：材料也要说清楚（原来只写"材料（以后做合成用）"✓）*/
     var rar = it.rarity || '';
     extra += '材料' + (rar ? (' · 稀有度 ' + rar) : '') +
       (it.kind ? (' · ' + it.kind) : '') + '<br>';
@@ -4162,8 +9225,11 @@ function bagTipHTML(it, id, acts, seller) {
     }
   }
   return '<b style="color:' + tierHex(it.tier || 0) + '">' + (it.name || '?') + '</b>' +
+    (it.locked ? ' <span style="color:#ffd83d">🔒 已锁</span>' : '') +
     '<i> · ' + ((it.tier || 0) + 1) + ' 阶' + (it.itemLv ? (' · 物品 ' + it.itemLv + ' 级') : '') +
     '</i>' + lvlTxt + '<br>' + extra +
+    (it.locked ? '<span style="color:#ffd83d">🔒 已锁住：不能卖、不能挂交易所、不会被批量出售' +
+      '（点【解 锁】放开）</span><br>' : '') +
     (acts === 'none' ? '' : bagTipBtnsHTML(it, id, acts, _seller));
 }
 
@@ -4267,6 +9333,54 @@ function bagTipBtnsHTML(it, id, acts, seller) {
   if (isW) {
     h += '<button class="bagB" data-tipact="' +
       (equipped ? 'off' : 'use') + '">' + (equipped ? '脱 下' : '使 用') + '</button>';
+  }
+  /* ★★ round505（用户："背包里点开卡片的悬浮窗口应该有皮肤的使用按钮"）
+     → 皮肤卡在这排加一个「使 用」✗ 点了直接解锁并换上 ✓
+       （以前只有选中后【详情区】那个「解 锁」✗ 浮窗里没有 ✓）
+     ★ 锁定的卡不给用（和上锁的装备一个道理 ✓ 先解锁再换）*/
+  if (!isW && it.kind === 'skin' && it.key && id && !it.locked && !it.locked_by) {
+    var _skOwnBtn = false;
+    try {
+      if (it._unlocked !== undefined && it._unlocked !== null) {
+        _skOwnBtn = !!it._unlocked;
+      } else {
+        for (var _sb2 = 0; _sb2 < (SKIN.items || []).length; _sb2++) {
+          if (SKIN.items[_sb2].k === it.key) { _skOwnBtn = !!SKIN.items[_sb2].own; break; }
+        }
+      }
+    } catch (eB2) { }
+    if (_skOwnBtn) {
+      h += '<button class="bagB" disabled>已解锁</button>';
+    } else {
+      h += '<button class="bagB" data-tipact="useskin">使 用</button>';
+    }
+  }
+  /* ★ round557（用户："技能书的悬浮窗口没有学习按钮"）
+     ★ 之前把【皮肤】那条改成了 useskillbook ✗ 技能书反而没有按钮 ✓ 已修 */
+  /* ★ round560（用户："背包里技能书的浮窗要有技能效果说明"）*/
+  if (it.kind === 'skillbook' && it.key) {
+    var sd = (typeof SK !== 'undefined' && SK.byKey) ? (SK.byKey[it.key] || {}) : {};
+    var _kn = sd.kind === 'A' ? '主动' : (sd.kind === 'B' ? '被动释放' : '被动加成');
+    h += '<div style="margin:6px 0 4px;padding:6px 8px;border-radius:7px;background:#0e141c;' +
+      'border:1px solid #ffffff14;font-size:11.5px;line-height:1.6;color:#cfdae6">' +
+      '<b style="color:#ffd83d">' + (sd.n || it.key) + '</b>' +
+      (sd.k ? ('<i style="color:#8fa3b8"> · ' + _kn + '</i>') : '') + '<br>' +
+      '<i style="color:#9fb0c2">' + (sd.qi ? ('灵气 ' + sd.qi + ' · ') : '') +
+      (sd.cd ? ('CD ' + sd.cd + ' 秒') : '无冷却') +
+      (sd.r ? (' · 半径 ' + sd.r + ' 米') : '') + '</i><br>' +
+      '<span>' + (sd.d || '（说明拉取中…）') + '</span></div>';
+  }
+  if (!isW && it.kind === 'skillbook' && id && !it.locked && !it.locked_by) {
+    h += '<button class="bagB" data-tipact="useskillbook">学 习</button>';
+  }
+  /* ★★★ round411（用户："我没看到上锁的按钮在哪"）★★★
+     ★ 之前放在 #bagRowUse 里 ✗ 那一排是故意藏起来的（display:none ✓）
+       → 玩家永远看不到 ✓
+     ★ 现在放进【格子浮窗】✗ 和 使用/卖给系统 并排 ✓
+     ★ 锁住的也要显示（不然锁上以后就再也解锁不了了 ✓）*/
+  if (id) {
+    h += '<button class="bagB" data-tipact="lock">' +
+      (it.locked ? '解 锁' : '上 锁') + '</button>';
   }
   if (sellable) {
     h += '<button class="bagB off" data-tipact="sell">卖给系统</button>';
@@ -4440,7 +9554,85 @@ function bagTipBind() {
     }
     if (act === 'sell') { sellItems([id], false); bagTipHide(); return; }
     if (act === 'use') { bagEquip(id); bagTipHide(); return; }
+    if (act === 'useskillbook') {
+      var _bkId = null;
+      for (var _bi = 0; _bi < (BAG.items || []).length; _bi++) {
+        if (String(BAG.items[_bi].id) === String(id)) { _bkId = BAG.items[_bi].id; break; }
+      }
+      if (_bkId) { try { wsSend('useskillbook', { iid: _bkId }); } catch (e3) { } }
+      bagTipHide();
+      return;
+    }
+    if (act === 'useskin') {
+      /* ★ round487：发 iid + key（服务器会核对这张卡真是他的、key 也对 ✓）
+         ★ round505：按【浮窗这一格】的 id 找 ✗ 不再用 BAG.sel（可能是别的格子 ✓）*/
+      var _skIt = null, _skId = null;
+      for (var _i2 = 0; _i2 < (BAG.items || []).length; _i2++) {
+        if (String(BAG.items[_i2].id) === String(id)) {
+          _skIt = BAG.items[_i2].item; _skId = BAG.items[_i2].id; break;
+        }
+      }
+      if (_skIt && _skIt.kind === 'skin' && _skIt.key) {
+        /* ★ round598：已经解锁的皮肤，前端先拦一次（服务器仍会再校验）*/
+        var _ownSkin = false;
+        try {
+          if (_skIt._unlocked !== undefined && _skIt._unlocked !== null) {
+            _ownSkin = !!_skIt._unlocked;
+          } else {
+            for (var _oi = 0; _oi < (SKIN.items || []).length; _oi++) {
+              if (SKIN.items[_oi].k === _skIt.key && SKIN.items[_oi].own) { _ownSkin = true; break; }
+            }
+          }
+        } catch (eOwn) { }
+        if (_ownSkin) {
+          toast('这个皮肤已经解锁过了，不用再用卡');
+          bagTipHide();
+          return;
+        }
+        try { wsSend('useskin', { iid: _skId, key: _skIt.key }); } catch (e2) { }
+        /* ★ round597：先本地扣 1 张，卡片立刻消失/减数量；服务器 bagrefresh 会再校准 */
+        try {
+          for (var _si3 = 0; _si3 < (BAG.items || []).length; _si3++) {
+            if (String(BAG.items[_si3].id) === String(_skId)) {
+              if ((BAG.items[_si3].stack || 1) > 1) { BAG.items[_si3].stack -= 1; }
+              else { BAG.items.splice(_si3, 1); }
+              break;
+            }
+          }
+          if (String(BAG.sel) === String(_skId)) { BAG.sel = null; }
+          bagRender();
+        } catch (eBag3) { }
+        /* ★ round504：解锁完了要【告诉玩家下一步去哪换】✗ 不然以为只是解锁 ✓ */
+        toast('正在解锁「' + ((_skIt.n || _skIt.key)) + '」…');
+      }
+      bagTipHide();
+      return;
+    }
     if (act === 'off') { bagUnequip(); bagTipHide(); return; }
+    /* ★★★ round411（用户："我没看到上锁的按钮在哪"）★★★
+       ★ 病根：round410 我把按钮加进了 #bagRowUse ✗
+         而那一排是 round304f【故意藏起来】的（display:none ✗ 只给程序读状态 ✓）
+         → 按钮确实存在、但玩家永远看不见 ✓✓ 一字不差
+       ★ 现在：加进【格子浮窗】这一排 ✗ 玩家点/悬停格子就看得到 ✓
+       ★ 同一个按钮两态：上 锁 / 解 锁 ✓ 再点一次解锁 ✓ */
+    if (act === 'lock') {
+      /* ★ 背包格子上没有 row._it（那是交易所那些行才挂的 ✓）
+           所以以 BAG.items 为准 ✗ 读不到才退回 row._it ✓ */
+      var _cur = false;
+      var _found = false;
+      for (var _i2 = 0; _i2 < (BAG.items || []).length; _i2++) {
+        if (String(BAG.items[_i2].id) === String(id)) {
+          _cur = !!(BAG.items[_i2].item || {}).locked;
+          _found = true;
+          break;
+        }
+      }
+      if (!_found && it && typeof it === 'object') { _cur = !!it.locked; }
+      BAG.msg = _cur ? '正在解锁…' : '正在上锁…';
+      wsSend('baglock', { iid: id, lock: _cur ? 0 : 1 });
+      bagTipHide();
+      return;
+    }
   };
 }
 function bagTipHide() {
@@ -4480,7 +9672,7 @@ function bagEquip(id) {
   BAG.msg = (_slot === 'armor') ? '正在穿上防具…' : '正在穿上…';
   if (!wsSend(_mtype, { itemId: id })) { BAG.busy = false; BAG.msg = '没连上服务器'; bagRender(); return; }
   // ★ 服务器的回执走 ws（notice + weapon 消息）→ 这里稍等一下重新拉一次 ✓
-  setTimeout(function () { BAG.busy = false; bagFetch(bagRender); }, 420);
+  bagAfterEquip();
 }
 
 /* ★ 第 68 轮：点防具槽 = 脱下防具 ✓（和武器槽一个手感 ✓）*/
@@ -4493,7 +9685,7 @@ function bagUnequipArmor() {
   if (!wsSend('unequiparmor', {})) {
     BAG.busy = false; BAG.msg = '没连上服务器'; bagRender(); return;
   }
-  setTimeout(function () { BAG.busy = false; bagFetch(bagRender); }, 420);
+  bagAfterEquip();
 }
 
 function bagUnequip() {
@@ -4506,7 +9698,7 @@ function bagUnequip() {
   if (!wsSend(_slot2 === 'armor' ? 'unequiparmor' : 'unequip', {})) {
     BAG.busy = false; BAG.msg = '没连上服务器'; bagRender(); return;
   }
-  setTimeout(function () { BAG.busy = false; bagFetch(bagRender); }, 420);
+  bagAfterEquip();
 }
 
 function bindBag() {
@@ -4568,6 +9760,16 @@ function bindBag() {
     var has = bagPickHas(id);
     if (_drag.on && !has) {
       if ((BAG.pick || []).length >= 100) { toast('一次最多勾 100 件'); return; }
+      /* ★ round410：锁住的不能勾进批量出售 ✗ 免得勾完才发现卖不掉 ✓ */
+      for (var _lk = 0; _lk < (BAG.items || []).length; _lk++) {
+        if (String(BAG.items[_lk].id) === String(id)) {
+          if ((BAG.items[_lk].item || {}).locked) {
+            toast('这件锁住了，先解锁');
+            return;
+          }
+          break;
+        }
+      }
       BAG.pick.push(id);
     } else if (!_drag.on && has) {
       for (var k = 0; k < (BAG.pick || []).length; k++) {
@@ -4668,6 +9870,9 @@ function bindBag() {
       var el = e.target;
       while (el && el !== grid && !(el.getAttribute && el.getAttribute('data-id'))) { el = el.parentNode; }
       if (!el || el === grid || !el.getAttribute) { bagTipHideSoon(120); return; }
+      /* ★★ round534（用户："批量选择时不要弹悬浮窗，会影响点选"）
+         → 批量模式下一律不弹 ✓ */
+      if (BAG.multi) { bagTipHide(); return; }
       bagTipAt(e, el);
     };
     /* ★ 离开整个格子区 → 延时关 ✗ 不再"立刻关" ✓
@@ -4680,6 +9885,7 @@ function bindBag() {
       var el = e.target;
       while (el && el !== grid && !(el.getAttribute && el.getAttribute('data-id'))) { el = el.parentNode; }
       if (!el || el === grid || !el.getAttribute) { return; }
+      if (BAG.multi) { bagTipHide(); return; }     /* ★ 批量模式：不弹浮窗 ✓ */
       bagTipStickyOn();
       var t = (e.touches && e.touches[0]) || e;
       bagTipAt({ clientX: t.clientX, clientY: t.clientY }, el);
@@ -4692,6 +9898,13 @@ function bindBag() {
       if (e) { e.preventDefault(); }
       var act = useBtn.getAttribute('data-act');
       if (act === 'use' && BAG.sel) { bagEquip(BAG.sel); }
+      else if (act === 'usefood' && BAG.sel) {
+        var _rec = null;
+        for (var _bi = 0; _bi < BAG.items.length; _bi++) { if (String(BAG.items[_bi].id) === String(BAG.sel)) { _rec = BAG.items[_bi]; break; } }
+        var _mdl = (_rec && _rec.item && _rec.item.model) || 'cup';
+        try { wsSend('useitem', { iid: BAG.sel }); } catch (eUF) { }
+        try { if (typeof eatStart === 'function') { eatStart(_mdl); } } catch (eEF) { }
+      }
       else if (act === 'off') { bagUnequip(); }
     };
   }
@@ -4703,6 +9916,7 @@ function bindBag() {
       if (e) { e.preventDefault(); }
       BAG.multi = !BAG.multi;
       if (!BAG.multi) { BAG.pick = []; }
+      try { bagTipHide(); } catch (e0) { }   /* ★ round534：进批量先关浮窗 ✓ */
       BAG.msg = '';
       bagRender();
     };
@@ -4962,6 +10176,126 @@ function toast(msg) {
   _toastTimer = setTimeout(function () { _toastEl.style.opacity = '0'; }, 1600);
 }
 
+/* ============================================================ 公告弹窗（round496）
+   ★ 用户："玩家打开游戏先看到公告 15 秒自动关闭，点击滑动了就手动关闭"
+   ★ 渲染用 web/lib/annrender.js（和发群的图同一套样式 ✓）
+   ★ 关掉那一刻才发 annread ✗ 中途掉线不算看过 ✓ */
+var ANN = { el: null, left: 0, timer: null, id: 0, cd: null, closing: false };
+/* ★ round496：渲染器在 /lib/annrender.js（index.html 里先加载 ✓）
+   ★ 这里显式声明一下：① 门禁认它是"已声明" ② 万一没加载也不炸（null ✓）*/
+var AnnRender = (typeof window !== 'undefined' && window.AnnRender) || null;
+
+function annShow(a) {
+  try {
+    if (!a || !a.id) { return; }
+    if (ANN.el) { return; }              /* 同时只弹一个 ✓ */
+    ANN.id = a.id; ANN.left = 15; ANN.closing = false;
+
+    var ov = document.createElement('div');
+    ov.id = 'annBox';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:120;display:flex;' +
+      'align-items:center;justify-content:center;background:#000000cc;padding:12px';
+
+    var panel = document.createElement('div');
+    panel.style.cssText = 'position:relative;width:min(560px,94vw);max-height:86vh;' +
+      'overflow:auto;-webkit-overflow-scrolling:touch;border-radius:14px;' +
+      'border:1px solid #ffd83d55;box-shadow:0 16px 46px #000d;background:#14120d';
+
+    var inner = (AnnRender && AnnRender.html)
+      ? AnnRender.html(a, { scale: 0.62 })
+      : ('<div style="padding:18px;color:#dfe8d4">' +
+         AnnRenderFallback(a) + '</div>');
+    panel.innerHTML = inner +
+      '<div style="position:sticky;bottom:0;display:flex;justify-content:center;' +
+      'padding:10px 0 12px;background:linear-gradient(180deg,#14120d00,#14120d 40%)">' +
+      '<button id="annOk" style="min-width:120px;padding:8px 20px;border-radius:9px;' +
+      'border:1px solid #ffd83d88;background:#3a300f;color:#ffe9a0;font-size:14px;' +
+      'font-weight:700;cursor:pointer">知道了</button></div>';
+
+    /* 右上角倒计时圈 */
+    var cd = document.createElement('div');
+    cd.style.cssText = 'position:fixed;right:18px;top:16px;width:46px;height:46px;' +
+      'border-radius:50%;display:flex;align-items:center;justify-content:center;' +
+      'font-size:14px;font-weight:800;color:#ffd83d;background:#14120dd9;' +
+      'border:2px solid #ffd83d55;pointer-events:none;z-index:121';
+    cd.textContent = '15';
+
+    ov.appendChild(panel);
+    ov.appendChild(cd);
+    document.body.appendChild(ov);
+    ANN.el = ov; ANN.cd = cd;
+    panel.scrollTop = 0;
+
+    /* ★★★ round498（用户："公告要点关闭按钮才能关，我随便点一个地方都自己关了"）
+       → 只留两条关闭路径：
+           ① 点【知道了】按钮 ✓
+           ② 15 秒倒计时到 ✓
+       ✗ 点遮罩不关（防止手滑）
+       ✗ 面板里滑动不关（长公告要能滚着看完）
+       ✗ 键盘不关（按 WASD 走路时顺手关掉太冤） */
+    var okBtn = document.getElementById('annOk');
+    if (okBtn) { okBtn.addEventListener('click', function (e) {
+      if (e && e.stopPropagation) { e.stopPropagation(); }
+      annClose();
+    }); }
+    /* ★ 遮罩挡住点击（不让它穿透到下面的游戏按钮）✗ 但不触发关闭 ✓ */
+    ov.addEventListener('click', function (e) {
+      if (e && e.stopPropagation) { e.stopPropagation(); }
+      if (e && e.preventDefault) { e.preventDefault(); }
+    });
+    /* ★ 面板里的滑动只滚公告 ✗ 不关（阻止冒泡给游戏）✓ */
+    panel.addEventListener('touchmove', function (e) {
+      if (e && e.stopPropagation) { e.stopPropagation(); }
+    }, { passive: true });
+
+    /* 倒计时 */
+    ANN.timer = setInterval(function () {
+      ANN.left -= 0.1;
+      var n = Math.max(0, Math.ceil(ANN.left));
+      if (ANN.cd) {
+        ANN.cd.textContent = String(n);
+        var deg = Math.max(0, Math.min(360, (ANN.left / 15) * 360));
+        ANN.cd.style.background = 'conic-gradient(#ffd83d55 ' + deg + 'deg,#14120dd9 ' +
+          deg + 'deg)';
+      }
+      if (ANN.left <= 0) { annClose(); }
+    }, 100);
+  } catch (e) {
+    console.log('[ann] 显示失败', e);
+    annClose();
+  }
+}
+
+function AnnRenderFallback(a) {
+  /* 渲染器没加载时的兜底（极简 ✓ 至少能看到标题和条目）*/
+  var out = '<div style="font-size:18px;color:#ffd83d;font-weight:800">' +
+    (a.title || '公告') + '</div>';
+  var its = a.items || [];
+  for (var i = 0; i < its.length; i++) {
+    out += '<div style="margin-top:8px;font-size:13px">' + (i + 1) + '. ' +
+      (its[i].t || '') + '</div>';
+  }
+  return out;
+}
+
+function annClose() {
+  if (ANN.closing) { return; }
+  ANN.closing = true;
+  try {
+    if (ANN.timer) { clearInterval(ANN.timer); }
+    ANN.timer = null;
+    if (ANN._key) { window.removeEventListener('keydown', ANN._key); ANN._key = null; }
+    if (ANN.el && ANN.el.parentNode) { ANN.el.parentNode.removeChild(ANN.el); }
+    ANN.el = null; ANN.cd = null;
+    /* ★ 关掉那一刻才上报已读 ✓（没关 = 没看 ✓ 下次还弹 ✓）*/
+    if (ANN.id && typeof wsSend === 'function') {
+      try { wsSend('annread', { id: ANN.id }); } catch (e2) { }
+    }
+    ANN.id = 0;
+  } catch (e) { }
+  ANN.closing = false;
+}
+
 /* ============================================================
    round303: 二次确认弹窗（用户要求：批量出售 / 5 阶以上装备 都要再问一次）
    ------------------------------------------------------------
@@ -5056,6 +10390,8 @@ function wsConnect() {
   s.onclose = function () {
     var wasReady = WSC.ready;
     WSC.ready = false;
+    /* ★ round463b：先把横幅显示出来（玩家能看见、能点重连 ✓）*/
+    try { if (WSC.on) { netBarShow(wasReady ? '连接已断开，正在重连…' : '连不上服务器'); } } catch (eNB) { }
     if (WSC.on) { wsRetry(wasReady ? '连接断开' : '连不上服务器'); }
     /* ★★ 第 186 轮（用户）：断开后【自动刷新一次】★★
        用户原话："断开连接后自动刷新一次，这样可以同步一下服务器的界面改动"
@@ -5069,22 +10405,90 @@ function wsConnect() {
               （一开始就连不上 → 不刷 ✓ 只显示"连不上服务器"提示 ✓）
        ★ 为什么用 sessionStorage 而不是 localStorage：
          标签页关掉就清 ✓ 下次打开是干净的一次 ✓ 不会越攒越多 ✓ */
-    try {
-      if (wasReady) {
-        var K = 'autoReloadAt';
-        var last = +(sessionStorage.getItem(K) || 0);
-        var now = Date.now();
-        if (now - last > 20000) {
-          sessionStorage.setItem(K, String(now));
-          console.log('[net] 断开 → 自动刷新一次（同步服务器上的界面改动）');
-          location.reload();
-        } else {
-          console.log('[net] 断开 → 20 秒内已经刷过一次了，这次只重连不刷新');
-        }
-      }
-    } catch (e) { }
+    /* ★★★ round464（用户："点重连加载不进去了，只能关了 APP 重新进"）★★★
+       病根：这里以前会 `location.reload()` ✗✗
+         整页刷新要经过 Service Worker + 加载遮罩 ✗
+         在 APK 的 WebView 里这一刷就卡住（一直"正在载入资源…"）✗✗
+       修：【不再刷新页面】✗ 只重新连 socket ✓
+         （页面不动 → 不会卡在加载中；真想刷新，横幅上有按钮 ✓）*/
+    console.log('[net] 断开（wasReady=' + wasReady + '）→ 原地重连（不刷新页面）');
   };
   s.onerror = function () { };
+}
+
+/* ★★★ round463b：断线横幅 + “重连”按钮 ✗
+   用户："点重连没办法连接进不去，要重启 APK 才行"✗
+   → 至少要让玩家看得见"断了"、点得动"重连"，而不是对着冻结的画面发呆 ✓ */
+var _netBar = null;
+function netBarMake() {
+  if (_netBar) { return _netBar; }
+  var d = document.createElement('div');
+  d.id = 'netBar';
+  d.style.cssText = 'position:fixed;left:50%;top:0;transform:translateX(-50%);z-index:96;' +
+    'display:none;align-items:center;gap:10px;padding:8px 14px;' +
+    'background:#3a0d0d;color:#ffd0c8;border:2px solid #ff6a5a;border-bottom-left-radius:10px;' +
+    'border-bottom-right-radius:10px;font:13px/1.4 system-ui,"Microsoft YaHei",sans-serif;' +
+    'box-shadow:0 6px 18px rgba(0,0,0,.5);white-space:nowrap';
+  d.innerHTML = '<span id="netBarTxt">连接已断开</span>' +
+    '<button id="netBarBtn" style="border:2px solid #7a1f14;background:#f2c14a;color:#2a1c00;' +
+    'font-weight:800;padding:5px 14px;border-radius:0;cursor:pointer;letter-spacing:2px">重 连</button>' +
+    '<button id="netBarReload" style="border:2px solid #445;background:#2a3140;color:#cfe0f5;' +
+    'font-weight:700;padding:5px 10px;border-radius:0;cursor:pointer;letter-spacing:1px;font-size:12px">刷新</button>';
+  document.body.appendChild(d);
+  d.querySelector('#netBarBtn').onclick = function () {
+    try { netHardReconnect('手动重连'); } catch (e) { }
+  };
+  /* ★ round464：真要整页刷新时用它 ✗ ?fresh= 能绕开 Service Worker 的缓存副本 ✓ */
+  d.querySelector('#netBarReload').onclick = function () { netHardReload('玩家点了刷新'); };
+  _netBar = d;
+  return d;
+}
+function netBarShow(msg) {
+  var d = netBarMake();
+  var t = d.querySelector('#netBarTxt');
+  if (t) { t.textContent = msg || '连接已断开'; }
+  d.style.display = 'flex';
+}
+function netBarHide() {
+  if (_netBar) { _netBar.style.display = 'none'; }
+}
+
+/* ★ 硬重连：把旧连接彻底扒掉 → 重新建连接并重新 hello ✓
+   （软重连只是等下一次尝试 ✗ 半死的握手会一直卡着 ✓）*/
+/* ★ round464：硬刷新（带 ?fresh= 时间戳）✗
+   为什么带参数：Service Worker 对导航请求是 network-first ✗
+     但一旦离线/超时它会回退到缓存里的【旧 index.html】✗
+     加一个不同的 URL → 它就不会拿那份旧的 ✓ */
+function netHardReload(why) {
+  console.log('[net] 硬刷新：' + (why || ''));
+  try {
+    var u = '/?fresh=' + Date.now();
+    location.replace(u);
+  } catch (e) {
+    try { location.reload(); } catch (e2) { }
+  }
+}
+function netBarHardReload(msg) { try { netBarShow(msg); } catch (e) { } }
+
+function netHardReconnect(why) {
+  console.log('[net] 硬重连：' + (why || ''));
+  try {
+    if (WSC.sock) {
+      WSC.sock.onclose = null;
+      WSC.sock.onerror = null;
+      WSC.sock.onmessage = null;
+      try { WSC.sock.close(); } catch (e0) { }
+      WSC.sock = null;
+    }
+  } catch (e1) { }
+  WSC.ready = false;
+  WSC.retrying = false;
+  if (WSC.timer) { clearTimeout(WSC.timer); WSC.timer = null; }
+  WSC.retry = 0;
+  netBarShow('正在重新连接…');
+  setTimeout(function () {
+    if (WSC.on) { wsConnect(); }
+  }, 120);
 }
 
 /* ---------- wsOnMessage ---------- */
@@ -5092,10 +10496,85 @@ function wsOnMessage(raw) {
   var m;
   try { m = JSON.parse(raw); } catch (e) { return; }
   var t = m.t, d = m.d || {};
-  if (t === 'welcome') { wsWelcome(d); return; }
+  if (t === 'order') { try { orderApply(d); } catch (eOr) { } return; }
+  if (t === 'tablecups') { try { cupsApply(d); } catch (eCup) { } return; }
+  if (t === 'waiter') { try { spawnWaiter(d); } catch (eWt) { } return; }
+  if (t === 'work') { try { workApply(d); } catch (eWk) { } return; }
+  if (t === 'jobstep') { try { jobRemote(d); } catch (eJs) { } return; }
+  if (t === 'fridge') { try { fridgeApply(d); } catch (eFr) { } return; }
+  if (t === 'shop') { try { shopApply(d); } catch (eShop) { } return; }
+  if (t === 'sleep_state') { try { sleepApply(d); } catch (eSl) { } return; }
+  if (t === 'houses') { try { housesApply(d.list || []); } catch (eH) { } return; }
+  if (t === 'house') { try { houseApply(d); } catch (eH2) { } return; }
+  if (t === 'teleported') { try { tpApply(d); } catch (eT) { } return; }
+  if (t === 'seated') { try { townSeatApply(d); } catch (eS) { } return; }
+  if (t === 'stood') { try { townSeatClear(d); } catch (eT) { } MY_TABLE = ''; return; }
+  if (t === 'warehouse') { whApply(d); return; }
+  if (t === 'welcome') {
+    try { setTimeout(function () { skAsk(); }, 600); } catch (e9) { } wsWelcome(d); return; }
   if (t === 'world') {
     window._lastWorldT = Date.now();
     wsApplyWorld(d);
+    try { skShieldHud(d && d.me ? d.me.shield : 0); } catch (eS) { }
+    /* ★ round587：护盾/疾风步状态断线重连也能恢复，结束/破碎就淡出 */
+    try {
+      if (window.VFX && typeof H !== 'undefined' && H && H.g && d && d.me) {
+        var _shv2 = +d.me.shield || 0, _sht = +d.me.shieldT || 0;
+        if (_shv2 <= 0 && _myShieldFx) { VFX.kill(_myShieldFx); _myShieldFx = null; }
+        else if (_shv2 > 0 && !_myShieldFx && _sht > 0) {
+          _myShieldFx = VFX.spawn('shield', { attach: H.g, dur: _sht }, null);
+        }
+        var _gvt = +d.me.galeT || 0;
+        if (_gvt <= 0 && _myGaleFx) { VFX.kill(_myGaleFx); _myGaleFx = null; }
+        else if (_gvt > 0 && !_myGaleFx) {
+          _myGaleFx = VFX.spawn('gale', { attach: H.g, dur: _gvt, n: 0, drift: 3 }, null);
+        }
+        var _bkt = +d.me.berserkT || 0;
+        if (_bkt <= 0 && _myBerserkFx) { VFX.kill(_myBerserkFx); _myBerserkFx = null; }
+        else if (_bkt > 0 && !_myBerserkFx) {
+          _myBerserkFx = VFX.spawn('berserk', { attach: H.g, dur: _bkt, n: 0 }, null);
+        }
+        var _brt = +d.me.bloodrageT || 0;
+        if (_brt <= 0 && _myBloodrageFx) { VFX.kill(_myBloodrageFx); _myBloodrageFx = null; }
+        else if (_brt > 0 && !_myBloodrageFx) {
+          _myBloodrageFx = VFX.spawn('bloodrage', { attach: H.g, dur: _brt, n: 0 }, null);
+        }
+        if (MY_FROZEN && !_myIceFx) {
+          _myIceFx = VFX.spawn('iceblock', { attach: H.g, dur: 5 }, null);
+        } else if (!MY_FROZEN && _myIceFx) {
+          VFX.kill(_myIceFx); _myIceFx = null;
+        }
+        var _tsz = (typeof MY_SIZE === 'number') ? MY_SIZE : 1;
+        if (_tsz > 1.01 && !_myTankFx) {
+          _myTankFx = VFX.spawn('tank', { attach: H.g, dur: 3600,
+                                          r: Math.min(3.5, 1.05 + _tsz * 0.18),
+                                          spin: 2.2 }, null);
+        } else if (_tsz <= 1.01 && _myTankFx) {
+          VFX.kill(_myTankFx); _myTankFx = null;
+        }
+        if (MY_PLAGUE && !_myPlagueFx) {
+          _myPlagueFx = VFX.spawn('tank', { attach: H.g, dur: 3600, r: 1.25,
+                                            spin: 3.0, color: 0x58e878,
+                                            color2: 0x9dffb0 }, null);
+        } else if (!MY_PLAGUE && _myPlagueFx) {
+          VFX.kill(_myPlagueFx); _myPlagueFx = null;
+        }
+      }
+    } catch (eFx2) { }
+    try {
+      if (d && d.me && typeof d.me.qimax === 'number' && d.me.qimax > 0) {
+        MY_QIMAX = d.me.qimax;
+      }
+      if (d && d.me) { MY_SHIELD = Math.max(0, Math.round(+d.me.shield || 0)); }
+      if (d && d.me) { MY_GALE_T = Math.max(0, +d.me.galeT || 0); }
+      if (d && d.me) { MY_BERSERK_T = Math.max(0, +d.me.berserkT || 0); }
+      if (d && d.me) { MY_BLOODRAGE_T = Math.max(0, +d.me.bloodrageT || 0); }
+      if (d && d.me) { MY_BLOODTHIRST_T = Math.max(0, +d.me.bloodthirstT || 0); }
+      if (d && d.me) { MY_SHIELD_T = Math.max(0, +d.me.shieldT || 0); }
+      if (d && d.me) { MY_SKDUR_MUL = Math.max(1, +d.me.skdur || 1); }
+      if (d && d.me) { MY_PLAGUE = (+d.me.plague || 0) ? 1 : 0; }
+      updQi();
+    } catch (eQ) { }
     /* ★ 第 219 轮：兜住"假死"（用户实测："别人看你已经死了，自己看还活着"）✗
        服务器本来会发一条 dead 消息 ✓ 但它只在【状态翻转那一刻】发一次 ✗
        万一那次丢了 / 被别的东西盖住了 → 客户端就永远显示活着 ✓✓
@@ -5109,14 +10588,32 @@ function wsOnMessage(raw) {
   }
   if (t === 'pong') { WSC.rtt = (performance.now() / 1000 - WSC.lastPing) * 1000; return; }
   if (t === 'kick') {
+    /* ★★ round464：只有【真的认证失败】才清 token ✗
+       以前不管什么 kick（版本不符 / 别处登录）都清 ✗✗
+       → 刷新后直接掉回登录框 → APK 里不好输入 → "进不去" ✓ */
+    var _code = d.code || '';
+    var _kill = (_code === 'auth' || _code === 'norole');
     WSC.on = false; WSC.ready = false;
-    try { localStorage.removeItem('token'); } catch (e2) { }
-    netGoOffline();
-    if (window.showLogin) { showLogin(d.msg || '请重新登录'); }
+    if (_kill) {
+      try { localStorage.removeItem('token'); } catch (e2) { }
+      netGoOffline();
+      if (window.showLogin) { showLogin(d.msg || '请重新登录'); }
+    } else {
+      /* 保留 token（下次连接还能用），只提示 + 特定情况给刷新按钮 ✓ */
+      try { netBarShow(d.msg || ('被断开（' + _code + '）')); } catch (e3) { }
+      if (_code === 'ver' && window.netBarHardReload) {
+        try { netBarHardReload('版本不一致，需要刷新'); } catch (e4) { }
+      }
+    }
     return;
   }
   /* ★ 第 248 轮：弹幕（全服滚动通知 ✓）*/
   if (t === 'ticker') { tkPush(d.text, d.kind); return; }
+  /* ★ round577：坦克引擎叠层提示（图标 + 当前层数）*/
+  if (t === 'tank') {
+    try { skTankNotice(+d.n || 0, +d.bonus || 0); } catch (e) { }
+    return;
+  }
   if (t === 'error' || t === 'notice') {
     var _tx = d.msg || d.text || '';
     /* ★ round304c：交易所的最终回执会在 notice 尾巴上带这个记号 ✗
@@ -5157,6 +10654,16 @@ function wsOnMessage(raw) {
     /* ★ round406（用户："玩家也会被长棍击退"）
        ★ 玩家位置是客户端权威 ✗ 服务端只能发"推多少"让客户端自己执行 ✓
        ★ 用 moveWithCollision → 撞墙不会穿过去 ✓ */
+    /* ★ round575：黑洞吸力 —— 和击退一样走 moveWithCollision（撞墙不穿 ✓）
+       ★ 单独一个 kind ✗ 不用 kb：kb 会震屏，吸力每帧都来 → 画面会一直抖 ✓ */
+    if (d.kind === 'pull') {
+      try {
+        if (typeof moveWithCollision === 'function' && typeof P !== 'undefined') {
+          moveWithCollision(+d.dx || 0, +d.dz || 0, G.BODY_W / 2, G.BODY_D / 2, true, null);
+        }
+      } catch (e) { }
+      return;
+    }
     if (d.kind === 'kb') {
       try {
         if (typeof moveWithCollision === 'function' && typeof P !== 'undefined') {
@@ -5179,10 +10686,45 @@ function wsOnMessage(raw) {
       if (typeof hitFlash === 'function') { hitFlash(+d.x, 0.4, +d.z, true); }
       return;
     }
+    /* ★★★ round407（交接文档第四节 ④）：长枪把【玩家】挑到空中 ★★★
+       ★ launch_me  = 我自己被挑飞 → 由 core 的 flyYNow() 接管 1.5 秒的高度 ✓
+         （位置是客户端权威 ✗ 服务端只能发事件 ✓ 高度绝对不能由服务端推 ✓）
+       ★ launch_him = 别人被挑飞 → 记到那个人头上，渲染时按他自己的弧线抬 ✓
+         （和 saber/staff/spin 那种"记到作者头上"一个套路 ✓）*/
+    if (d.kind === 'launch_me') {
+      _flyT0 = performance.now();
+      _flyDur = Math.max(0.2, +d.t || 1.5) * 1000;
+      _flyH = +d.h || 3.72;
+      if (typeof shake !== 'undefined') { shake = 0.35; }
+      return;
+    }
+    if (d.kind === 'launch_him') {
+      var _rofly = (typeof NET !== 'undefined' && NET.others &&
+                    NET.others[d.who]) ? NET.others[d.who] : null;
+      if (_rofly) {
+        _rofly.flyT0 = performance.now();
+        _rofly.flyDur = Math.max(0.2, +d.t || 1.5) * 1000;
+        _rofly.flyH = +d.h || 3.72;
+      }
+      return;
+    }
+    /* ★ round586：全能吸血回血飘字（服务端已算好，0 不显示）*/
+    if (d.kind === 'heal') {
+      if (+d.v > 0) { healNum('+' + Math.round(+d.v), +d.x, 2.9, +d.z); }
+      return;
+    }
+    /* ★ round590：服务端广播的疾风步残影 */
+    if (d.kind === 'ghost') {
+      try { VFX.spawn('ghost', { x: +d.x, z: +d.z, yaw: +d.yaw || 0,
+                                color: (+d.color || 0x9fe8ff),
+                                dur: 0.5, seed: (Date.now() & 0xffff) }, scene); } catch (eG) { }
+      return;
+    }
     /* ★ round400：别人打的伤害 → 弹一个灰色数字 */
     if (d.kind === 'dmg') {
       var _dmgTxt = String(+d.v || 0) + (d.crit ? ' 暴击' : '');
-      dmg(_dmgTxt, +d.x, 2.4, +d.z, !!d.crit);
+      if (d.sk) { dmgSkill(_dmgTxt, +d.x, 2.4, +d.z, !!d.crit); }
+      else { dmg(_dmgTxt, +d.x, 2.4, +d.z, !!d.crit); }
       return;
     }
     var _fxOp = d.by;
@@ -5326,12 +10868,236 @@ function wsOnMessage(raw) {
     if ((SETCFG.setTab || '') === 'stat') { statRender(); }
     return;
   }
+  if (t === 'skillok') {
+    /* ★ round538：技能全量状态（定义 + 学习 + 装配 + 提示）*/
+    var _sd = m.d || {};
+    SK.defs = _sd.defs || [];
+    SK.byKey = {};
+    for (var _si = 0; _si < SK.defs.length; _si++) { SK.byKey[SK.defs[_si].k] = SK.defs[_si]; }
+    SK.learn = _sd.learn || {};
+    SK.load = _sd.load || { A: [], B: [], C: [] };
+    if (_sd.err) {
+      SK.msg = String(_sd.err);
+      /* ★ round558（用户："学习技能没有提示"）→ 弹个小提示 ✓ */
+      try { toast(SK.msg); } catch (eT) { }
+    }
+    try { skRender(); } catch (e0) { }
+    try { skBarRender(); } catch (e1) { }
+    return;
+  }
+  if (t === 'skillfx') {
+    try { skFxPlay(m.d); } catch (e2) { }
+    return;
+  }
+  if (t === 'skillcd') {
+    var _cd = (m.d || {}).cd || {};
+    SKCD = {};
+    for (var _k in _cd) { SKCD[_k] = +_cd[_k] || 0; }
+    try { skBarRender(); } catch (e3) { }
+    return;
+  }
+  if (t === 'towns') {
+    try {
+      if (d.catalog && d.catalog.length) { window.MY_TOWN_CATALOG = d.catalog; }
+      if (d.list) { window.MY_TOWNS = d.list; }
+      if (d.perms) { window.MY_TOWN_PERMS = d.perms; }
+      if (typeof window.townRender === 'function') { window.townRender(); }
+    } catch (eT) { }
+    return;
+  }
+  if (t === 'townresult') {
+    try { if (d.msg && typeof toast === 'function') { toast(d.msg); } } catch (eT2) { }
+    if (d.town) { window.MY_TOWNS = [d.town]; }
+    try { if (typeof window.townRender === 'function') { window.townRender(); } } catch (eT3) { }
+    if (d.ok && typeof window.townRefresh === 'function') { window.townRefresh(); }
+    return;
+  }
+  /* ---- v4.2 物件放置 ---- */
+  if (t === 'objects') {
+    try {
+      window.MY_OBJECTS = d.list || [];
+      try { TOWN_OBJECTS_CACHE = window.MY_OBJECTS; } catch (eC) { }
+      if (typeof window.onObjects === 'function') { window.onObjects(window.MY_OBJECTS, d.town); }
+    } catch (eO) { }
+    return;
+  }
+  if (t === 'placed') {
+    try {
+      var _add = [d.object].concat(d.list || []);
+      window.MY_OBJECTS = (window.MY_OBJECTS || []).concat(_add);
+      try { TOWN_OBJECTS_CACHE = window.MY_OBJECTS; } catch (eC2) { }
+      if (typeof window.onPlaced === 'function') { window.onPlaced(d.object, d.furniture, d.list || []); }
+      if (typeof toast === 'function') {
+        toast((d.furniture ? ('放置成功，附家具 ' + d.furniture + ' 件') : '放置成功'));
+      }
+    } catch (eP) { }
+    return;
+  }
+  if (t === 'moved') {
+    try {
+      if (typeof window.onMoved === 'function') { window.onMoved(d.object); }
+    } catch (eM) { }
+    return;
+  }
+  if (t === 'removed') {
+    try {
+      if (typeof window.onRemoved === 'function') { window.onRemoved(d.id); }
+    } catch (eR) { }
+    return;
+  }
+  if (t === 'qi') {
+    MY_QI = +((m.d || {}).q || 0);
+    try { updQi(); } catch (e4) { }
+    try { skBarRender(); } catch (e4b) { }
+    return;
+  }
+  if (t === 'mobmarks') {
+    try { UI.mobMarks(d.list || []); } catch (eMM) { }
+    return;
+  }
+  if (t === 'mobspawn') {
+    try {
+      var _sm = NET.rmobs[String(d.mid)];
+      if (_sm) {
+        _sm.name = d.name || _sm.name;
+        _sm.rank = +d.rank || _sm.rank || 0;
+        _sm.skin = d.skin || _sm.skin || '';
+        _sm.affixes = d.affixes || [];
+        var _at = (_sm.affixes || []).slice(0, 3).map(function (a) { return a.n; }).join(' · ');
+        if (_sm.ui && d.name) { UI.plate.name(_sm.ui, d.name + (_at ? ' · ' + _at : '')); }
+      }
+    } catch (eMS) { }
+    return;
+  }
+  if (t === 'mobzone') {
+    try {
+      VFX.spawn('boss_zone', { x: +d.x || 0, z: +d.z || 0,
+        r: +d.r || 4, dur: +d.dur || 6 }, scene);
+    } catch (eZone) { }
+    return;
+  }
+  if (t === 'mobshot') {
+    try {
+      VFX.spawn('mob_shot', {
+        x: +d.x || 0, z: +d.z || 0, tx: +d.tx || 0, tz: +d.tz || 0,
+        rank: +d.rank || 0, dur: +d.dur || 0.18
+      }, scene);
+    } catch (eShot) { }
+    return;
+  }
+  if (t === 'mobskill') {
+    try {
+      var _mk = NET.rmobs[String(d.mid)];
+      var _bfx = bossSkillFx(d.key);
+      if (_mk && d.phase === 'windup') {
+        _mk.castT = +(d.cast_time || 1.0);
+        _mk.castDur = +(d.cast_time || 1.0);
+        _mk.castKey = d.key || '';
+        _mk.castStyle = bossCastStyle(d.key);
+        _mk.castPhase = d.phase;
+        _mk.castYaw = +d.yaw || 0;
+      }
+      if (d.phase === 'windup' && d.name) {
+        try {
+          VFX.spawn('boss_cast', {
+            x: +d.x || 0, z: +d.z || 0, r: +(d.radius || 3),
+            dur: +(d.cast_time || 1.2), color: _bfx.c,
+            shape: String(d.shape || 'aoe'), cone: +(d.cone || 70), yaw: +(d.yaw || 0)
+          }, scene);
+        } catch (eCast) { }
+        if (d.tx !== undefined) {
+          try {
+            VFX.spawn('boss_lock', {
+              x: +d.tx || 0, z: +d.tz || 0, r: Math.min(3.2, +(d.radius || 2.2)),
+              dur: +(d.cast_time || 1.2), color: _bfx.c
+            }, scene);
+          } catch (eLock) { }
+        }
+        try {
+          VFX.spawn('skillname', {
+            text: d.name, color: '#' + _bfx.c.toString(16).padStart(6, '0'),
+            x: +d.x || 0, z: +d.z || 0,
+            boss: +d.rank >= 2,
+            h: (+d.rank >= 2 ? 3.0 : 2.15)
+          }, scene);
+        } catch (eSN) {
+          if (+d.rank >= 2) { try { toast('BOSS技能：' + d.name); } catch (eTN) { } }
+        }
+      }
+      if (d.phase === 'strike' && _mk) {
+        try {
+          _mk.castPhase = 'strike';
+          _mk.castDur = 0.25;
+          _mk.castT = 0.25;
+          if (d.key !== 'serpent_pools') {
+            VFX.spawn('boss_hit', { x: +d.x || 0, z: +d.z || 0, r: +(d.radius || 2),
+              color: _bfx.c, mode: _bfx.m, seed: (Date.now() % 997) | 0 }, scene);
+          }
+        } catch (eStrike) { }
+      }
+    } catch (eMSk) { }
+    return;
+  }
+  if (t === 'mobevt') {
+    try {
+      var _me = NET.rmobs[String(d.mid)];
+      if (_me && d.kind === 'crit') {
+        _me.critJumpT = 0.35;
+        _me.jumpCrit = 1;
+      }
+    } catch (eME) { }
+    return;
+  }
+  if (t === 'skillerr') {
+    SK.msg = String((m.d || {}).msg || '操作失败');
+    try { toast(SK.msg); skRender(); } catch (e1) { }
+    return;
+  }
+  if (t === 'skincustomok') {      // ★ round511：我的皮肤自定义（全量 map）
+    MY_CUSTOM_MAP = (d && d.custom && typeof d.custom === 'object') ? d.custom : {};
+    if (d && d.cards && typeof d.cards === 'object') { MY_CARD_MAP = d.cards; }
+    try {
+      var _mk = (WSC.role && WSC.role.skin) || MY_SKIN || '';
+      if (_mk) { skinApplySelf(_mk, MY_CUSTOM_MAP[_mk] || null); }
+    } catch (eC0) { }
+    if (typeof SKC !== 'undefined' && SKC.open) {
+      SKC.base = skcCustomOf(SKIN.sel);   /* ★ 保存过的东西 → 变成新的"上次" ✓ */
+      SKC.pending = {};                    /* ★ 这趟的改动都落地了 ✗ 清空 ✓ */
+      skcRender(); skcPreview();
+    }
+    skcSay('');
+    try { toast('自定义已保存 ✓'); } catch (eT) { }
+    return;
+  }
+  if (t === 'skin') {              // ★ round485：服务器说"你的皮肤换了"
+    try {
+      if (typeof skinApplySelf === 'function') {
+        skinApplySelf(d.key || '', (d && d.c) ? d.c : null);
+      }
+    } catch (eS1) { }
+    return;
+  }
+  if (t === 'skinpage') {          // ★ round485：皮肤页数据（40 个状态 + 榜单）
+    try {
+      SKIN.items = d.items || [];
+      SKIN.start = +d.start || 20000;
+      SKIN.step = +d.step || 5000;
+      SKIN.gold = +d.gold || 0;
+      skinPageRender();
+    } catch (eS2) { }
+    return;
+  }
   if (t === 'talents') {          // ★ 第 116 轮：天赋状态 ✓
     TAL.free = +d.free || 0;
     TAL.pts = d.pts || {};
     TAL.raw = d.raw || {};
     TAL.eff = d.eff || {};
     TAL.live = d.live || [];
+    /* ★ round411：属性总览（服务器算好的：当前值 / 人物 / 装备 / 天赋 / 上限 ✓）
+       ★ 客户端【不再自己算一遍】✗ 不然又是两套公式 ✓ */
+    TAL.stats = d.stats || [];
+    /* ★ round474：防具移速词条（走路速度要用 ✗ 不然只有数字没效果 ✓）*/
+    TAL.speedGear = +d.speedGear || 0;
     TAL.perLevel = +d.perLevel || 3;
     TAL.ready = true;
     /* ★★ 第 117 轮：血量天赋会改生命上限 → 服务器会一并带上 hpm ✓
@@ -5346,6 +11112,8 @@ function wsOnMessage(raw) {
       updHP();
     }
     if ((SETCFG.setTab || '') === 'talent') { talRender(); }
+    /* ★ round467：正在看装备页时吃到装备变化 → 重画 ✓ */
+    if ((SETCFG.setTab || '') === 'equip') { try { bagRender(); equipRender(); } catch (eE) { } }
     return;
   }
   /* ★ round310（P1 破坏）：服务端说"这几格变了"→ 改覆盖 + 重建那几片瓦片 ✓ */
@@ -5370,6 +11138,7 @@ function wsOnMessage(raw) {
   }
   if (t === 'armor') {
     BAG.armor = d.a || null;
+    if (d && d.iid !== undefined) { BAG.armorItemId = d.iid; }
     /* ★★★ 第 105 轮：这段我第 102 轮加过，但被后面的补丁冲掉了 ✗ 现在补回来 ★★★
        用户报："穿戴防具后血量还是没有变化"
        根因：客户端的 HPMAX 只在 core 里由 me 通道赋过值 ✗
@@ -5402,15 +11171,80 @@ function wsOnMessage(raw) {
     if ((SETCFG.setTab || '') === 'bag') { bagRender(); }
     return;
   }
+  if (t === 'bagrefresh') {
+    if (typeof bagFetch === 'function') { bagFetch(bagRender); }
+    return;
+  }
+  if (t === 'ranktitleok') {
+    /* ★★ round425：称号设置的回执（原来【没接这个包】✗
+       表现：点了按钮头像上确实变了（服务器那边生效了 ✓）
+             但界面上的高亮/说明不变 ✗ 看着像"没点上" ✓
+       ★ 这就是"服务器做对了、客户端少接一条消息"的老坑 ✓）*/
+    if (typeof rankOnTitleOk === 'function') { rankOnTitleOk(d || {}); }
+    return;
+  }
+  if (t === 'baglockok') {
+    /* ★★★ round412（用户："上锁后不能马上看到图标，得刷新"）★★★
+       ★ 不能用 bagFetch：那要等【落库】✗ 而落库是排队的 ✓
+         → 拉回来的还是旧数据 ✗ 图标不变 → 看着就是"没生效" ✓
+       ★ 现在：服务器把【新状态】直接发过来 ✗ 客户端改这一格 + 重画 ✓ */
+    var _bi2 = null;
+    for (var _i3 = 0; _i3 < (BAG.items || []).length; _i3++) {
+      if (String(BAG.items[_i3].id) === String(d.iid)) { _bi2 = BAG.items[_i3]; break; }
+    }
+    if (_bi2 && _bi2.item) {
+      if (d.lock) { _bi2.item.locked = 1; } else { delete _bi2.item.locked; }
+    }
+    bagTipHide();                    /* 浮窗里那集按钮是旧的 ✗ 先收掉 ✓ */
+    BAG.msg = d.lock ? ('已上锁：' + (d.name || '')) : ('已解锁：' + (d.name || ''));
+    if ((SETCFG.setTab || '') === 'bag' || typeof bagRender === 'function') { bagRender(); }
+    return;
+  }
+  /* ★★ round507：一键整理的回执（纯 id 数组）→ 就地重排 ✗ 不再重拉 647KB ✓ */
+  if (t === 'bagsortok') {
+    var _ord = (d && d.ids) || [];
+    if (_ord.length) {
+      var _byId = {}, _rest = [];
+      for (var _bi = 0; _bi < (BAG.items || []).length; _bi++) {
+        var _rec = BAG.items[_bi];
+        _byId[String(_rec.id)] = _rec;
+      }
+      var _new = [];
+      for (var _oi = 0; _oi < _ord.length; _oi++) {
+        var _r2 = _byId[String(_ord[_oi])];
+        if (_r2) { _new.push(_r2); delete _byId[String(_ord[_oi])]; }
+      }
+      for (var _lk in _byId) { if (_byId.hasOwnProperty(_lk)) { _rest.push(_byId[_lk]); } }
+      BAG.items = _new.concat(_rest);       /* 服务器没列到的（理论上没有）放最后 ✓ */
+      try { BAG_PAGE = 0; } catch (e0) { }   /* ★ 页号是全局 BAG_PAGE ✗ 不是 BAG.page ✓ */
+      BAG.total = BAG.items.length;
+      BAG.msg = '';
+      bagRender();
+      toast('背包已整理');
+    }
+    return;
+  }
   if (t === 'weapon') {
     setWeapon(d.w || null);
     BAG.weapon = d.w || null;
+    /* ★★ round507：服务器把 iid 一起推下来了 ✗ 就地改这两格就行 ✓
+       以前：这里无条件 bagFetch → 一次穿装备 = 647KB（1420 件的号） → 5 秒 ✓✓ */
+    if (d && d.iid !== undefined) { BAG.weaponItemId = d.iid; }
     BAG.busy = false;
-    if ((SETCFG.setTab || '') === 'bag') { bagFetch(bagRender); }
+    BAG.msg = '';
+    _bagLocalApplied = true;
+    if ((SETCFG.setTab || '') === 'bag') { bagRender(); }
     return;
   }
   if (t === 'chat') { toast('[' + (d['from'] || '?') + '] ' + (d.text || '')); return; }
-  if (t === 'snd') { if (d.name) { sfxAt(d.name, d.x || P.x, d.z || P.z, 1.0); } return; }
+  if (t === 'snd') {
+    if (d.name) {
+      var _sx = (typeof d.x === 'number') ? d.x : P.x;
+      var _sz = (typeof d.z === 'number') ? d.z : P.z;
+      sfxAt(d.name, _sx, _sz, (+d.v > 0 ? +d.v : 1.0));
+    }
+    return;
+  }
   if (t === 'hurt') { netApplyHurt(d); return; }
   if (t === 'dead') { playerDie(d.by); return; }
   if (t === 'revived') {
@@ -5423,10 +11257,21 @@ function wsOnMessage(raw) {
 
 /* ---------- wsWelcome ---------- */
 function wsWelcome(d) {
+  /* ★ round463b：连上了 → 收横幅 ✓ */
+  try { netBarHide(); } catch (eB) { }
   WSC.ready = true;
   WSC.role = d.role || null;
   if (d.cfg) { WSC.cfg = d.cfg; }
+  /* ★ round442：记下服务器启动号（以后要判"重启过没"用得上 ✓ 现在挂机计数不用它 ✓）*/
+  if (typeof d.boot === 'number') { WSC.boot = d.boot; }
   setWeapon((d.role && d.role.weapon) || null);   // ★ 第 47 轮：进世界就知道手上拿的是啥 ✓
+  /* ★ round496：有未读公告 → 进世界第一件事先弹它 ✓
+     （服务端只在"没看过"时才带 ann ✗ 所以这里不用再判断 ✓）*/
+  try { if (d.ann && typeof annShow === 'function') { annShow(d.ann); } } catch (eA) { }
+  /* ★ round485：进世界先套用自己的皮肤（服务端给 '' 就用老外观 ✓）*/
+  try { if (typeof skinApplySelf === 'function') { skinApplySelf((d.role && d.role.skin) || ''); } } catch (eSk) { }
+  /* ★ round511：拉我的皮肤自定义（瞳色/发色/眼型/嘴型）*/
+  try { wsSend('skincustomask', {}); } catch (eSk2) { }
   MY_MQ = +((d.role && d.role.mq) || 0);   // ★ 第 152 轮：进世界先读自己的魔气 ✓
   WSC.myId = (d.role && d.role.id) || 0;
   NET.myUid = WSC.myId;
@@ -5472,11 +11317,16 @@ function wsWelcome(d) {
     updHP();
   }
   if (window.hideLogin) { hideLogin(); }
+  /* ★ round443：进世界了 → 剩下的音效在后台慢慢加载 ✓ */
+  try { if (!_sfxCoreLoaded) { _sfxCoreLoaded = true; setTimeout(warmSfxRest, 800); } } catch (e7) { }
   netGoOnline();        // ★ 清掉本地自己模拟的那几只 → 世界归服务器 ✓
   /* ★ 第 206 轮：进游戏时恢复上次的自动战斗开关（存了 SETCFG.auto ✓）*/
   try {
     if (typeof AUTO !== 'undefined' && typeof SETCFG !== 'undefined' && SETCFG.auto) {
       AUTO.on = true; AUTO.tgt = ''; AUTO.phase = 'find'; AUTO.info = '自动战斗：正在找目标…';
+      /* ★★ round440：这一条路以前没设 t0 → 计时永远 0:00 ✗✗
+         （用户："挂机的时间不会动"）→ 现在读上次存的，没有就从现在算 ✓ */
+      try { autoStatRestore(); } catch (e9) { }
       if (SETCFG.autoLoot === false) { AUTO.lootOn = false; }
       autoUiUpd();
     }
@@ -5508,6 +11358,7 @@ function playerDie(byName) {
   if (t) { t.textContent = byName ? ('你被 ' + byName + ' 击败') : '你被妖兽击败'; }
   if (d) { d.className = 'on'; }
   jx = 0; jy = 0; keys = {}; atkHeld = false;   // ★ 松开操作（不然倒下后还拖得动 ✗）
+  try { if (typeof townSeatClear === 'function') { townSeatClear(null); } } catch (eD) { }
   sfx('zdeath', 1.0);
 }
 
@@ -5568,6 +11419,36 @@ function bindDead() {
    ============================================================================ */
 window._renderStalls = 0;
 
+/* ★★★ round463b：世界快照看门狗 ✗✗
+   为什么需要它：手机锁屏 / 切后台 → webview 的 JS 被挂起 ✗
+     回来时 socket 已经死了，但 onclose 可能迟迟不触发 ✗
+     → 界面停在旧画面，玩家看着像“还活着”，实际上已经断了 ✓
+   做法：8 秒没收到 world → 直接硬重连（不等 onclose ✗）✓ */
+(function worldWatchdog() {
+  setInterval(function () {
+    if (typeof WSC === 'undefined' || !WSC.ready || !WSC.on) { return; }
+    /* ★ 后台时不判（手机锁屏后 rAF/计时器本来就会停 ✗ 误判会一直重连 ✓）*/
+    if (document.visibilityState !== 'visible') { window._lastWorldT = Date.now(); return; }
+    var gap = (Date.now() - (window._lastWorldT || Date.now())) / 1000;
+    if (gap > 8) {
+      console.log('[net] ' + gap.toFixed(1) + ' 秒没收到世界快照 → 硬重连');
+      try { netBarShow('连接已断开，正在重连…'); } catch (e1) { }
+      window._lastWorldT = Date.now();
+      netHardReconnect('快照超时 ' + gap.toFixed(0) + ' 秒');
+    }
+  }, 2000);
+})();
+
+/* ★ round463b：从后台回到前台，立刻探一下连接还在不在 ✓ */
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState !== 'visible') { return; }
+  if (typeof WSC === 'undefined' || !WSC.on) { return; }
+  var gap = (Date.now() - (window._lastWorldT || Date.now())) / 1000;
+  if (gap > 5 || !WSC.ready) {
+    netHardReconnect('回到前台（' + gap.toFixed(0) + ' 秒没数据）');
+  }
+});
+
 (function renderWatchdog() {
   var lastReload = 0;
   function softReload(why) {
@@ -5580,8 +11461,8 @@ window._renderStalls = 0;
       if (now - k < 20000) { return; }        /* 和"断线重连"那套共用一个防抖 ✓ */
       sessionStorage.setItem('autoReloadAt', String(now));
     } catch (e) { }
-    console.log('[render] ' + why + ' → 自动刷新一次');
-    location.reload();
+    console.log('[render] ' + why + ' → 硬刷新一次（带 ?fresh 绕开缓存）');
+    netHardReload('主循环卡住');
   }
   setInterval(function () {
     /* ★ 标签页在后台时 rAF 本来就会停 ✗ 别误判 ✓ */
@@ -5627,6 +11508,20 @@ function hideCanvasDead() {
   if (d && d.parentNode) { d.parentNode.removeChild(d); }
 }
 
+/* ★★ round464：加载遮罩的【铁超时】✗✗
+   以前只有一个出口（进了世界才收）✗
+   任何一步卡住（SW、音效、网络）→ 永远盖着 → "下载不进去" ✓
+   现在：20 秒到点无论如何都收掉 ✓（收了之后界面自己会说明状态 ✓）*/
+setTimeout(function () {
+  try {
+    var b = document.getElementById('boot');
+    if (b && !b._gone) {
+      console.log('[boot] 20 秒超时 → 强制收掉加载遮罩');
+      bootDone();
+    }
+  } catch (e) { }
+}, 20000);
+
 function bootDone() {
   var b = document.getElementById('boot');
   if (!b || b._gone) { return; }
@@ -5652,7 +11547,7 @@ function bootDone() {
     }
   }, 1000);
   document.addEventListener('click', function (e) {
-    if (e.target && e.target.id === 'bootReload') { location.reload(); }
+    if (e.target && e.target.id === 'bootReload') { netHardReload('加载遮罩上的重新载入'); }
   });
 })();
 
@@ -5671,29 +11566,42 @@ setInterval(function () {
   if (typeof WSC === 'undefined' || !WSC.ready) { window._lastWorldT = Date.now(); return; }
   var gap = (Date.now() - window._lastWorldT) / 1000;
   if (gap > 8) {
-    try {
-      var last = +(sessionStorage.getItem('autoReloadAt') || 0);
-      if (Date.now() - last > 20000) {
-        sessionStorage.setItem('autoReloadAt', String(Date.now()));
-        window._desyncCount++;
-        console.log('[net] 检测到与服务器不同步（' + gap.toFixed(1) + ' 秒没收到世界数据）→ 自动刷新');
-        location.reload();
-      }
-    } catch (e) { }
+    /* ★★★ round464（用户："点重连加载不进去了，只能关了 APP"）★★★
+       这里以前也是 `location.reload()` ✗ 而且这条几乎每次掉线都会触发 ✗✗
+       整页刷新在 APK 的 WebView 里会卡在加载遮罩（没法自拔）✗
+       修：原地硬重连（不动页面）✓ 真要刷新就点横幅上的「刷新」✓ */
+    window._desyncCount++;
+    console.log('[net] 与服务器不同步（' + gap.toFixed(1) + ' 秒没收到世界数据）→ 原地重连');
     window._lastWorldT = Date.now();
+    try { netBarShow('与服务器不同步，正在重连…'); } catch (e1) { }
+    netHardReconnect('快照看门狗 ' + gap.toFixed(0) + ' 秒');
   }
 }, 2000);
 
+/* ★★★ round448：登录界面的氛围层（灰烬 + 远处闪电 ✗ 全程 2D canvas，零素材 ✓）
+   ★ 只在登录界面显示时跑 ✗ 进游戏就停（不占帧 ✓） */
 function showLogin(msg) {
   var el = document.getElementById('login');
   if (!el) { return; }
   el.classList.add('show');
+  /* ★★★ round453b：先把加载遮罩关掉 ✗✗
+     病根：#boot 一直盖在 canvas 上面（z-index 9999），
+           而登录层是半透明的 → 透出来的是【遮罩的深褐背景】，
+           根本不是游戏画面 ✗（难怪看着就是一片黑 + 背景不搭）
+     修：登录层出现时就把加载遮罩收掉 ✓ */
+  try { bootDone(); } catch (eB) { }
+  /* ★★ round452/453：登录界面 → 电影镜头 + 藏掉 HUD（背景就是游戏画面 ✓） */
+  try { window.LOGIN_CINE = true; } catch (e0) { }
+  try { document.body.classList.add('atLogin'); } catch (e0b) { }
   if (msg) { document.getElementById('loginHint').textContent = msg; }
   var n = document.getElementById('loginName');
   if (n && !n.value) { setTimeout(function () { n.focus(); }, 60); }
 }
 function hideLogin() {
   bootDone();   /* ★ 第 213 轮：真正进游戏了才揭开加载动画 ✓ */
+  /* ★ round452：进游戏 → 关掉电影镜头，回到正常跟随相机 ✓ */
+  try { window.LOGIN_CINE = false; } catch (e0) { }
+  try { document.body.classList.remove('atLogin'); } catch (e0b) { }
   var el = document.getElementById('login');
   if (el) { el.classList.remove('show'); }
 }
@@ -5705,6 +11613,7 @@ function authBusy(on) {
 function doAuth(kind, nameIn, pwIn) {
   var name = nameIn || (document.getElementById('loginName') || {}).value || '';
   var pw = pwIn || (document.getElementById('loginPass') || {}).value || '';
+  /* ★ 宣传片录制专用：URL 带 ?rec=1 时自动填录录制账号并登录（不做宣传时此分支永不触发）*/
   name = (name + '').trim();
   if (!name || !pw) {
     document.getElementById('loginHint').textContent = '游戏名和密码都要填';
@@ -5743,6 +11652,19 @@ function bindLogin() {
   var onKey = function (ev) { if (ev.key === 'Enter') { doAuth('login'); } };
   if (ln) { ln.onkeydown = onKey; }
   if (lp) { lp.onkeydown = onKey; }
+  /* ★ 宣传片录制：URL 带 ?rec=1 → 自动填 bot01 并登录（录完删此段即可）*/
+  try {
+    if (new window.URLSearchParams(location.search).get('rec') === '1') {
+      setTimeout(function () {
+        var n = document.getElementById('loginName'), p = document.getElementById('loginPass');
+        if (n) { n.value = 'bot01'; }
+        if (p) { p.value = 'bot12345'; }
+        doAuth('reg', 'bot01', 'bot12345');
+        /* 已注册过会自动报"已存在"，再兜底登录一次 */
+        setTimeout(function () { doAuth('login', 'bot01', 'bot12345'); }, 1500);
+      }, 800);
+    }
+  } catch (eR) { }
 }
 
 /* ============================================================
