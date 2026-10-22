@@ -7534,13 +7534,15 @@ function netUpdate(dt) {
         /* ★ 2026-10-22（用户：躺/坐的高度要和地板一样）：不再额外加高，
            直接站在"脚下地板高度"上（躺姿只沿朝向偏一点，保持躺在床上）。 */
         var _y3b = (typeof o.fy === 'number') ? o.fy : 0;
-        _gs0.position.set(_pX + Math.sin(_sy3) * _so3, _y3b,
+        /* 床垫顶面 0.53（和自己躺姿同一份数值） */
+        _gs0.position.set(_pX + Math.sin(_sy3) * _so3, _y3b + 0.53,
                           _pZ + Math.cos(_sy3) * _so3);
         _gs0.rotation.set(-1.45, _sy3, 0);
         o.hh.legL.rotation.x = 0; o.hh.legR.rotation.x = 0;
       } else {
         var _y3c = (typeof o.fy === 'number') ? o.fy : 0;
-        _gs0.position.set(_pX, _y3c, _pZ);
+        /* 椅面 0.48（和自己坐姿同一份数值） */
+        _gs0.position.set(_pX, _y3c + 0.48, _pZ);
         _gs0.rotation.set(0, o.cur.yaw || 0, 0);
         o.hh.legL.rotation.x = -1.35; o.hh.legR.rotation.x = -1.35;
         o.hh.armL.rotation.x = 0.15; o.hh.armR.rotation.x = 0.15;
@@ -9376,8 +9378,10 @@ function frame(ts) {
     SIT_K = Math.min(1, SIT_K + dt * 9);
     var sk2 = SIT_K;
     P.x = +st.x; P.z = +st.z; P.yaw = +st.yaw;
-    var sitY = (+st.y || 0.30) - 0.36;
-    H.g.position.set(st.x, P.y + sitY, st.z);
+    /* ★ 2026-10-22（用户：坐下的高度应该和地板一样）：以前这里减了 0.36 让人往下沉，
+       现在和别人看到的一致 —— 直接用脚下地板高度。 */
+    /* 椅面在 0.48（模型里 chair_*_seat 的中心高度）→ 坐上去臀部贴着椅面 */
+    H.g.position.set(st.x, P.y + 0.48, st.z);
     H.g.rotation.set(0, st.yaw, 0);
     H.legL.rotation.x = -1.34 * sk2;
     H.legR.rotation.x = -1.34 * sk2;
@@ -9394,7 +9398,10 @@ function frame(ts) {
        把脚放到床尾（本地 +Z），身体正好铺到床头。 */
     var _sy = (typeof P.sleepYaw === 'number') ? P.sleepYaw : (P.yaw || 0);
     var _so = (typeof SLEEP_OFF !== 'undefined') ? SLEEP_OFF : 0.85;
-    H.g.position.set(P.x + Math.sin(_sy) * _so, P.y + 0.62, P.z + Math.cos(_sy) * _so);
+    /* ★ 2026-10-22（用户：自己睡觉的高度变高了）：和"别人看你"保持一致 ——
+       高度就是脚下地板高度（P.y 已经是 supportYAt 的结果），不再额外 +0.62。 */
+    /* 床垫顶面在 0.53（模型里 bed_mattress 中心 0.43、厚 0.20）→ 身体贴着床面 */
+    H.g.position.set(P.x + Math.sin(_sy) * _so, P.y + 0.53, P.z + Math.cos(_sy) * _so);
     /* ★ 欧拉顺序必须是 YXZ：先绕 Y 转向，再绕本地 X 躺下。
        用默认 XYZ 的话，Y 转 90/180 度后"躺"的方向就跟着歪了 → 头穿出床外。 */
     H.g.rotation.order = 'YXZ';
@@ -10145,7 +10152,7 @@ function frame(ts) {
         /* ★ 2026-10-22（用户：坐下高度不对）：这里原来写死 _gy - 0.06（沉到地面下），
            改成和服务端一致的"地板高度 + 坐高"。 */
         var _seatY = (typeof _fo.fy === 'number') ? _fo.fy : _gy;
-        _mg.position.set(_os.x, _seatY, _os.z);
+        _mg.position.set(_os.x, _seatY + 0.48, _os.z);
         _mg.rotation.set(0, _os.yaw, 0);
         if (_fo.hh) {
           _fo.hh.legL.rotation.x = -1.34;

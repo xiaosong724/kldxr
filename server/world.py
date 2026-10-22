@@ -1359,14 +1359,16 @@ class World(object):
                 if bed is not None:
                     bx, bz = float(bed['x']), float(bed['z'])
                     bed_rot = float(bed['rot'] or 0)
-                    # ★ 2026-10-22：双人床按玩家站的那一侧分左右（一左一右各睡一个）
+                    # ★ 2026-10-22（用户："睡觉应该是和沙发一样要一左一右，不能睡中间"）：
+                    #   所有床都按玩家站的那一侧分左右 —— 单人床也一样，
+                    #   两个人挤一张床时一个在左一个在右，不会叠在正中间。
+                    _rot = float(bed['rot'] or 0)
                     _cat = str(bed['catalog_id'] or '')
-                    if _cat in ('bed_double', 'bed_king'):
-                        _rot = float(bed['rot'] or 0)
-                        _side = (((p.x - bx) * math.cos(_rot) - (p.z - bz) * math.sin(_rot)))
-                        _off = 0.55 if _side >= 0 else -0.55
-                        bx += _off * math.cos(_rot)
-                        bz -= _off * math.sin(_rot)
+                    _halfw = 0.55 if _cat in ('bed_double', 'bed_king') else 0.32
+                    _side = (((p.x - bx) * math.cos(_rot) - (p.z - bz) * math.sin(_rot)))
+                    _off = _halfw if _side >= 0 else -_halfw
+                    bx += _off * math.cos(_rot)
+                    bz -= _off * math.sin(_rot)
             except Exception as _be:
                 print('[sleep] bed lookup failed: %r' % (_be,))
             dx = p.x - float(h['x']); dz = p.z - float(h['z'])
@@ -1412,7 +1414,7 @@ class World(object):
         p.sleepHouse = ''
         # ★ 2026-10-22：起床了就把"上次的姿态"清掉，否则 90 秒内刷新还会恢复成在睡觉
         try:
-            self._send_cid(p.cid, P.pack('sleep_state', on=0, x=p.x, z=p.z))
+            self._send_cid(p.cid, P.pack('sleep_state', on=0, x=p.x, z=p.z, self=1))
         except Exception:
             pass
 
@@ -1425,7 +1427,7 @@ class World(object):
         if lay:
             p.x = float(lay['x0']) + 3.2
             p.z = float(lay['z0']) + 2.2
-        self._send_cid(p.cid, P.pack('sleep_state', on=0, x=p.x, z=p.z))
+        self._send_cid(p.cid, P.pack('sleep_state', on=0, x=p.x, z=p.z, self=1))
 
     def _qi_regen_tick(self):
         # passive qi recovery: 1% max/s in town, 0.5/s outside

@@ -116,7 +116,11 @@ def main():
             dbed = ((sx - bed['x']) ** 2 + (sz - bed['z']) ** 2) ** 0.5
             print('  distance to bed: %.3f m' % dbed)
             assert dbed < 0.35, 'not sleeping on the bed (%.2f m away)' % dbed
-            await ws.send(json.dumps({'t': 'stand', 'd': {}}))
+            # ★ 2026-10-22：起床必须收到自己的 sleep_state(on=0, self=1)
+            await ws.send(json.dumps({'t': 'house_wake', 'd': {}}))
+            w = await ws_wait(ws, lambda m: m['t'] == 'sleep_state' and not m['d'].get('on'))
+            print('  wake:', w['d'] if w else None)
+            assert w and w['d'].get('self') == 1, 'wake message missing self flag'
             await asyncio.sleep(0.3)
         asyncio.run((lambda: _run(reg['token'], flow))())
         ok = True
