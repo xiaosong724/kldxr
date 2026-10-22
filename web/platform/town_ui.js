@@ -15,13 +15,28 @@
   function townRefresh() {
     try { if (typeof wsSend === 'function' && (!WSC || WSC.ready)) { wsSend('town_list', {}); } } catch (e) { }
   }
+  /* ★ 2026-10-22：小镇面板改成多个导航页 */
+  var NAV = 'overview';
+  function navBar() {
+    var tabs = [['overview', '概览'], ['place', '放置'], ['edit', '编辑'], ['perm', '权限']];
+    return '<div class="townNav">' + tabs.map(function (t) {
+      return '<button class="' + (NAV === t[0] ? 'on' : '') +
+        '" onclick="townNav(\'' + t[0] + '\')">' + t[1] + '</button>';
+    }).join('') + '</div>';
+  }
   function townRender() {
     var body = el('townBody');
     if (!body) { return; }
+    var head = navBar();
     var t = (window.MY_TOWNS || [])[0];
+    if (NAV === 'place') { body.innerHTML = head + placeHTML(t); return; }
+    if (NAV === 'edit') { body.innerHTML = head + editHTML(t); return; }
+    if (NAV === 'perm') { body.innerHTML = head + permHTML(t); return; }
+    body.innerHTML = head + overviewHTML(t);
+  }
+  function overviewHTML(t) {
     if (!t) {
-      body.innerHTML =
-        '<div class="townHint">你还没有小镇。选尺寸和坐标，支付首日费用后创建；每人只能拥有 1 座。</div>' +
+      return '<div class="townHint">你还没有小镇。选尺寸和坐标，支付首日费用后创建；每人只能拥有 1 座。</div>' +
         '<div class="row"><input id="townName" maxlength="12" placeholder="小镇名字（2~12字）" style="flex:1"></div>' +
         '<div class="row"><select id="townTier">' +
         [30, 50, 80, 100].map(function (n) {
@@ -33,7 +48,6 @@
         '<button onclick="townPick(\'create\')">地图选点</button></div>' +
         '<div class="row"><button onclick="townCreate()">支付首日费用并创建</button></div>' +
         '<div class="townHint">小镇必须建在主城/其它小镇外，边界之间至少空 50 格；创建后成为安全区（边界外扩 2 格）。</div>';
-      return;
     }
     var frozen = (t.status === 'frozen' || t.status === 'restoring');
     var h = '<div class="row" style="justify-content:space-between"><b>' + (t.name || '') + '</b><span>' +
@@ -50,9 +64,43 @@
     } else {
       h += '<div class="row"><button onclick="townDissolve()">主动解散（保留 7 天）</button></div>';
     }
-    h += '<hr style="border:0;border-top:1px solid #ffffff1a;margin:12px 0">' +
-      '<div class="townHint">权限：主人默认全部；访客默认 可交互+可交易+可传送。给某个玩家单独授权。</div>' +
-      '<div class="row"><input id="townTarget" type="number" placeholder="玩家角色 ID" style="flex:1"></div>' +
+    h += '<div class="townHint">放置 / 移动 / 删除：切到「放置」「编辑」页。</div>';
+    return h;
+  }
+  function placeHTML(t) {
+    var cats = (window.PlaceMode && PlaceMode.catalog) ? PlaceMode.catalog() : [];
+    var cn = { building: '建筑', furniture: '家具', decor: '装饰', function: '功能' };
+    var groups = {};
+    cats.forEach(function (c) { var k = c.category || 'decor'; (groups[k] = groups[k] || []).push(c); });
+    if (!cats.length) {
+      return '<div class="townHint">目录还没加载，稍等一下再切回来。</div>';
+    }
+    var h = '<div class="townHint">选一项 → 点地面放置；R 旋转；Esc 取消。' +
+      (t ? '' : '（你还没有镇，会放在系统主城）') + '</div>';
+    ['building', 'furniture', 'decor', 'function'].forEach(function (k) {
+      var arr = groups[k];
+      if (!arr || !arr.length) { return; }
+      h += '<div class="townSub">' + (cn[k] || k) + '</div><div class="townGrid">';
+      arr.forEach(function (c) {
+        h += '<button onclick="townPlace(\'' + c.id + '\')">' + (c.name || c.id) +
+          '<s>' + (+c.price || 0).toLocaleString() + '</s></button>';
+      });
+      h += '</div>';
+    });
+    return h;
+  }
+  function editHTML(t) {
+    return '<div class="townHint">编辑模式：点场景里的物件选中，然后用底部的工具条' +
+      '「移动 / 旋转 90° / 删除」。Esc 退出。</div>' +
+      '<div class="row"><button onclick="townEdit()">进入编辑模式</button></div>' +
+      '<div class="townHint">删除会连同该建筑自带的家具一起删除，不退款。</div>';
+  }
+  function permHTML(t) {
+    if (!t) {
+      return '<div class="townHint">你还没有小镇。系统主城的权限请在 /admin 里设置。</div>';
+    }
+    var h = '<div class="townHint">权限：主人默认全部；访客默认 可交互+可交易+可传送。给某个玩家单独授权。</div>' +
+      '<div class="row"><input id="townTarget" type="number" placeholder="玩家角色 ID（设置-信息里能看到自己的）" style="flex:1"></div>' +
       '<div class="permGrid">' + PERMS.map(function (p) {
         return '<label><input type="checkbox" class="townPerm" value="' + p[0] + '">' + p[1] + '</label>';
       }).join('') + '</div>' +
@@ -64,8 +112,17 @@
         return '#' + p.player + '=' + p.mask;
       }).join(' · ') + '</div>';
     }
-    body.innerHTML = h;
+    return h;
   }
+  window.townNav = function (n) { NAV = n; townRender(); };
+  window.townPlace = function (id) {
+    close();
+    if (window.PlaceMode && PlaceMode.startPlaceById) { PlaceMode.startPlaceById(id); }
+  };
+  window.townEdit = function () {
+    close();
+    if (window.PlaceMode && PlaceMode.startEdit) { PlaceMode.startEdit(); }
+  };
   function townUsePos() {
     var x = el('townX'), z = el('townZ');
     if (x) { x.value = (+P.x).toFixed(1); }

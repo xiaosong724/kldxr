@@ -1007,6 +1007,15 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
   padding:8px 12px;cursor:pointer;font:600 13px system-ui}
 #townBox button:hover{background:#3a3020}
 #townBox .townHint{font-size:12px;color:#a99c84;line-height:1.6}
+#townBox .townNav{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+#townBox .townNav button{flex:1;min-width:64px;padding:7px 8px;font-size:13px}
+#townBox .townNav button.on{background:linear-gradient(180deg,#ffefb0,#d6a24a 60%,#a97a28);
+  color:#2a1806;border-color:#ffd83d;font-weight:800}
+#townBox .townSub{margin:10px 0 4px;color:#9fe0a8;font-size:12px}
+#townBox .townGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px}
+#townBox .townGrid button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;
+  text-align:left;padding:6px 8px;font-size:12px}
+#townBox .townGrid button s{text-decoration:none;color:#a99c84;font-size:11px}
 #townBox .permGrid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:8px 0}
 #townBox .permGrid label{font-size:13px;color:#d8cdb8;display:flex;gap:6px;align-items:center}
 @media(max-width:760px){#townBtn{top:126px;right:12px;padding:7px 10px;font-size:12px}
@@ -1961,6 +1970,9 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
   <div class="tabpane" data-pane="about">
    <div class="setLabel">账号</div>
    <div id="rowAcct"></div>
+   <div class="setLabel">角色 ID（给小镇权限要用）</div>
+   <div id="rowRoleId" style="font-size:12px;color:#9fe8ff;background:#0e1218;border-radius:8px;
+        padding:8px 10px;font-family:ui-monospace,Consolas,monospace">—</div>
    <div class="setLabel">信息（实时）</div>
    <div id="infoBox" style="font-size:11px;color:#8ee08a;background:#0e1218;border-radius:8px;padding:8px 10px;line-height:1.7">—</div>
    <div class="setLabel">版本</div>

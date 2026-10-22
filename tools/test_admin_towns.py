@@ -156,6 +156,35 @@ async def cdP_ui():
                                " ? document.getElementById('rows').innerHTML.indexOf('金币') >= 0 : false;")
             print('  gold button in player list:', goldBtn)
             assert goldBtn, 'gold button missing'
+            # ID 列 + 按名字查 ID + 玩家行「小镇权限」
+            hasIdCol = await ev("var tb=document.getElementById('rows');"
+                                "if(!tb){return false;}"
+                                "var ths=[].map.call(tb.closest('table').querySelectorAll('thead th'),"
+                                "function(t){return (t.textContent||'').trim();});"
+                                "return ths.indexOf('ID')>=0;")
+            print('  ID column:', hasIdCol)
+            assert hasIdCol, 'ID column missing'
+            tp = await ev("var b=document.querySelector('#rows button[data-a=\"townperm\"]');"
+                          "if(!b){return 'nobtn';} b.click();"
+                          "var box=document.getElementById('permBox');"
+                          "return (box?getComputedStyle(box).display:'none') + '|' +"
+                          "(document.getElementById('permPlayer')||{}).value + '|' +"
+                          "(document.getElementById('permTownSel')||{}).options.length;")
+            print('  per-row perm button:', tp)
+            assert str(tp).startswith('flex|') and str(tp).split('|')[1] not in ('', 'undefined'), \
+                'perm dialog did not prefill id: %r' % (tp,)
+            found = await ev("document.getElementById('permName').value='ADM';"
+                             "document.getElementById('permFind').click(); return 1;")
+            await asyncio.sleep(0.6)
+            found = await ev("var s=document.getElementById('permFound');"
+                             "return (s?getComputedStyle(s).display:'none') + '|' +"
+                             "(s?s.options.length:0) + '|' +"
+                             "(document.getElementById('permPlayer')||{}).value;")
+            print('  name lookup:', found)
+            assert str(found).startswith('block|') and int(str(found).split('|')[1]) >= 1, \
+                'name lookup failed: %r' % (found,)
+            await ev("var x=document.getElementById('permX'); if(x){x.click();} return 1;")
+
             goldBox = await ev("var b=document.querySelector('#rows button[data-a=\"gold\"]');"
                                "if(!b){return 'nobtn';} b.click();"
                                "var g=document.getElementById('goldBox');"

@@ -292,6 +292,8 @@ class Api(BaseHTTPRequestHandler):
         # ★ C1：小镇管理（列表 / 冻结 / 恢复 / 结算 / 目录价格）
         if path == '/api/admin/towns':
             return self.api_admin_towns()
+        if path == '/api/admin/roleid':
+            return self.api_admin_roleid()
         # round303: 卖东西前的【报价】（只读 ✗ 不动任何东西 ✓）
         #   ★ 为什么要有这个接口：确认框里要写"这次能卖多少钱" ✗
         #     而价格公式只在服务器的 value.py 里 ✗
@@ -571,6 +573,26 @@ class Api(BaseHTTPRequestHandler):
         except Exception as e:
             return self._send(500, {'ok': False, 'error': '读取失败：%s' % e})
         return self._send(200, {'ok': True, 'towns': out, 'catalog': catalog})
+
+    def api_admin_roleid(self):
+        """按名字查角色 ID（权限面板用）：支持前缀/包含匹配，最多 10 条"""
+        if not self._admin_ok():
+            return self._send(401, {'ok': False, 'error': '没登录或登录过期了'})
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        nm = (qs.get('name') or [''])[0].strip()
+        if not nm:
+            return self._send(400, {'ok': False, 'error': '要填名字'})
+        try:
+            with dbmod.db(self.cfg) as c:
+                rows = c.execute(
+                    'SELECT id, name, level FROM roles WHERE name LIKE ?'
+                    ' ORDER BY (name = ?) DESC, id ASC LIMIT 10',
+                    ('%' + nm + '%', nm)).fetchall()
+            return self._send(200, {'ok': True, 'list': [
+                {'id': int(r['id']), 'name': r['name'] or '',
+                 'level': int(r['level'] or 1)} for r in rows]})
+        except Exception as e:
+            return self._send(500, {'ok': False, 'error': str(e)})
 
     def api_admin_town(self, body):
         """小镇操作：freeze / restore / dissolve / settle / price"""

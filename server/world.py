@@ -2623,12 +2623,41 @@ class World(object):
         except Exception:
             pass
 
+    def _obj_edit_check(self, p, oid, bit):
+        """移动/移除前的统一校验（2026-10-22）：
+
+        ① 物件真的存在；
+        ② 它所属的小镇在 active；
+        ③ 玩家小镇要求对应权限（move / remove），系统主城是公共区不拦；
+        返回 (ok, msg, town_row, obj_row)。
+        """
+        try:
+            with dbmod.db(self.cfg) as c:
+                row = c.execute('SELECT * FROM town_objects WHERE id=?',
+                                (int(oid),)).fetchone()
+        except Exception as e:
+            return False, '查询失败：%s' % e, None, None
+        if row is None:
+            return False, '物件不存在', None, None
+        row = {k: row[k] for k in row.keys()}
+        if str(row.get('state') or 'active') != 'active':
+            return False, '物件已经被移除', None, None
+        tid = int(row.get('town_id') or 0)
+        tr = self.towns.get(tid)
+        if not tr:
+            return False, '小镇不存在', None, None
+        if str(tr.get('status')) != 'active':
+            return False, '小镇不在正常状态', None, None
+        if not int(tr.get('is_system') or 0):
+            try:
+                if not townreg.has_perm(self.cfg, getattr(p, 'role_id', 0), tr, bit):
+                    return False, '没有该小镇的操作权限', None, None
+            except Exception:
+                return False, '权限校验失败', None, None
+        return True, '', tr, row
+
     def _intent_move_object(self, p, d):
         d = d or {}
-        r = self._obj_town_ok(p)
-        if not r:
-            self._town_result(p, False, '没有可用小镇')
-            return
         try:
             oid = int(d.get('id'))
             x = float(d.get('x')); z = float(d.get('z'))
@@ -2636,6 +2665,10 @@ class World(object):
             rot = None if rot is None else float(rot)
         except Exception:
             self._town_result(p, False, '参数错误')
+            return
+        ok, msg, r, _row = self._obj_edit_check(p, oid, townreg.P_MOVE)
+        if not ok:
+            self._town_result(p, False, msg)
             return
         ok, err, res = objreg.move_object(self.cfg, r, oid, x, z, rot)
         if not ok:
@@ -2649,6 +2682,10 @@ class World(object):
             oid = int(d.get('id'))
         except Exception:
             self._town_result(p, False, '参数错误')
+            return
+        ok, msg, _r, _row = self._obj_edit_check(p, oid, townreg.P_REMOVE)
+        if not ok:
+            self._town_result(p, False, msg)
             return
         ok, err = objreg.remove_object(self.cfg, oid,
                                        cascade=bool(d.get('cascade', 1)))

@@ -4806,6 +4806,11 @@ function openSet(wantTab) {
 
   /* ★ 账号（第 32 轮）：登录 / 登出 / 切换账号都挪到这儿了 ✓ */
   var acct = document.getElementById('rowAcct');
+  var ridEl = document.getElementById('rowRoleId');
+  if (ridEl) {
+    ridEl.textContent = (WSC.ready && WSC.role && WSC.role.id)
+      ? ('#' + WSC.role.id) : '（登录后显示）';
+  }
   if (acct) {
     acct.innerHTML = '';
     var who = document.createElement('div');

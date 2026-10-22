@@ -114,6 +114,7 @@
     var mesh = buildMesh(o);
     mesh.position.set(+o.x + _TOFF.x, 0, +o.z + _TOFF.z);
     mesh.rotation.y = +o.rot || 0;
+    mesh.userData.objId = o.id;          /* 2026-10-22：编辑模式拾取用 */
     grp.add(mesh);
     P.objs[o.id] = { mesh: mesh, data: o };
   }
@@ -212,6 +213,10 @@
       (groups[k] = groups[k] || []).push(c);
     });
     var html = '<div style="font-weight:700;color:#ffe9b0;margin-bottom:6px">放置目录</div>' +
+      '<div style="display:flex;gap:6px;margin-bottom:8px">' +
+      '<button id="editTownBtn" style="flex:1;background:#3a2f18;border:1px solid #ffd83d66;' +
+      'color:#ffe9b0;border-radius:6px;padding:5px;font-size:12px;cursor:pointer">编辑小镇（移动/删除）</button>' +
+      '</div>' +
       '<div style="font-size:11px;color:#9aa3a8;margin-bottom:8px">' +
       '选一项 → 点地面 → 确认；R 旋转；Esc 取消</div>';
     ['building', 'furniture', 'decor', 'function'].forEach(function (k) {
@@ -232,6 +237,8 @@
   function renderPanel() {
     if (!panel) { return; }
     panel.innerHTML = panelHTML();
+    var eb = panel.querySelector('#editTownBtn');
+    if (eb) { eb.onclick = function () { editEnter(); }; }
     var btns = panel.querySelectorAll('button[data-cat]');
     for (var i = 0; i < btns.length; i++) {
       btns[i].onclick = function () {
@@ -282,6 +289,153 @@
     }, true);
   }
 
+  /* ---------- 2026-10-22：编辑模式（选中 → 移动 / 旋转 / 删除） ---------- */
+  var EDIT = { on: false, id: null, moving: false, box: null, bar: null, hint: null };
+
+  function editCam() {
+    try { return (typeof W().cam !== 'undefined') ? W().cam : null; } catch (e) { return null; }
+  }
+  function editPick(cx, cy) {
+    var c = editCam(), grp = ensureGroup();
+    if (!c || !grp || typeof THREE === 'undefined') { return null; }
+    var rc = new THREE.Raycaster();
+    rc.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1,
+                                       -(cy / innerHeight) * 2 + 1), c);
+    var hits = rc.intersectObjects(grp.children, true);
+    for (var i = 0; i < hits.length; i++) {
+      var o = hits[i].object;
+      while (o && o !== grp) {
+        if (o.userData && o.userData.objId != null) { return o.userData.objId; }
+        o = o.parent;
+      }
+    }
+    return null;
+  }
+  function editClear() {
+    if (EDIT.box) {
+      if (EDIT.box.parent) { EDIT.box.parent.remove(EDIT.box); }
+      EDIT.box = null;
+    }
+  }
+  function editSelect(id) {
+    editClear();
+    EDIT.id = id;
+    EDIT.moving = false;
+    if (id == null) { editBarRender(); return; }
+    var e = P.objs[id];
+    if (!e || !e.mesh) { EDIT.id = null; editBarRender(); return; }
+    try {
+      EDIT.box = new THREE.BoxHelper(e.mesh, 0xffd83d);
+      (sceneOf() || W().scene).add(EDIT.box);
+    } catch (e1) { EDIT.box = null; }
+    editBarRender();
+  }
+  function sceneOf() { return (typeof W().scene !== 'undefined') ? W().scene : null; }
+  function editBarRender() {
+    if (!EDIT.on) {
+      if (EDIT.bar) { EDIT.bar.style.display = 'none'; }
+      return;
+    }
+    if (!EDIT.bar) {
+      EDIT.bar = document.createElement('div');
+      EDIT.bar.id = 'editBar';
+      EDIT.bar.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);' +
+        'z-index:55;background:#111417ee;border:1px solid #ffffff22;border-radius:12px;' +
+        'padding:8px 12px;color:#e9e1cf;font:12px system-ui;display:flex;gap:8px;align-items:center;' +
+        'box-shadow:0 12px 40px #000a;max-width:94vw;flex-wrap:wrap';
+      document.body.appendChild(EDIT.bar);
+      EDIT.bar.addEventListener('click', function (e) {
+        var b = e.target.closest ? e.target.closest('button[data-e]') : null;
+        if (!b) { return; }
+        editAct(b.getAttribute('data-e'));
+      });
+    }
+    EDIT.bar.style.display = 'flex';
+    if (EDIT.id == null) {
+      EDIT.bar.innerHTML = '<b style="color:#ffe9b0">编辑小镇</b>' +
+        '<span style="color:#9aa3a8">点场景里的物件选中 · Esc 退出</span>' +
+        '<button data-e="done" style="background:#2f6b3f;border-color:#7ee08a">完成</button>';
+      return;
+    }
+    var e = P.objs[EDIT.id], o = e && e.data;
+    var nm = (o && (o.catalog || o.model)) || ('#' + EDIT.id);
+    EDIT.bar.innerHTML = '<b style="color:#ffe9b0">已选：' + nm + '</b>' +
+      (EDIT.moving ? '<span style="color:#7ee08a">点地面确定新位置</span>' : '') +
+      '<button data-e="move">移动</button>' +
+      '<button data-e="rot">旋转 90°</button>' +
+      '<button data-e="del" style="background:#6a2f2f;border-color:#ff9a8a">删除</button>' +
+      '<button data-e="unsel">取消选中</button>' +
+      '<button data-e="done" style="background:#2f6b3f;border-color:#7ee08a">完成</button>';
+  }
+  function editAct(a) {
+    if (a === 'done') { editExit(); return; }
+    if (a === 'unsel') { editSelect(null); return; }
+    if (EDIT.id == null) { return; }
+    if (a === 'move') { EDIT.moving = true; editBarRender(); return; }
+    if (a === 'rot') {
+      var e = P.objs[EDIT.id];
+      if (!e || !e.data) { return; }
+      var nr = (+e.data.rot || 0) + Math.PI / 2;
+      send('move_object', { id: EDIT.id, x: +e.data.x, z: +e.data.z, rot: nr });
+      return;
+    }
+    if (a === 'del') {
+      if (!confirm('删除这个物件？家具会一起删除，不退款。')) { return; }
+      send('remove_object', { id: EDIT.id });
+      editSelect(null);
+    }
+  }
+  function editEnter() {
+    if (P.placing) { stopPlace(); }
+    EDIT.on = true;
+    closePanel();
+    if (!EDIT.hint) {
+      EDIT.hint = document.createElement('div');
+      EDIT.hint.id = 'editHint';
+      EDIT.hint.style.cssText = 'position:fixed;left:50%;top:56px;transform:translateX(-50%);' +
+        'z-index:55;background:#111417ee;border:1px solid #ffd83d55;border-radius:10px;' +
+        'padding:6px 14px;color:#ffe9b0;font:12px system-ui';
+      document.body.appendChild(EDIT.hint);
+    }
+    EDIT.hint.style.display = 'block';
+    EDIT.hint.textContent = '编辑小镇：点物件选中 → 底部工具条操作';
+    editSelect(null);
+  }
+  function editExit() {
+    EDIT.on = false; EDIT.moving = false; EDIT.id = null;
+    editClear();
+    if (EDIT.bar) { EDIT.bar.style.display = 'none'; }
+    if (EDIT.hint) { EDIT.hint.style.display = 'none'; }
+  }
+  addEventListener('keydown', function (e) {
+    if (!EDIT.on) { return; }
+    if (e.key === 'Escape') {
+      if (EDIT.moving) { EDIT.moving = false; editBarRender(); }
+      else { editExit(); }
+    }
+  });
+  addEventListener('pointerdown', function (e) {
+    if (!EDIT.on) { return; }
+    if (EDIT.bar && EDIT.bar.contains(e.target)) { return; }
+    if (EDIT.moving && EDIT.id != null) {
+      var p = groundPoint(e.clientX, e.clientY);
+      var ed = P.objs[EDIT.id];
+      if (p && ed && ed.data) {
+        send('move_object', { id: EDIT.id, x: +p.x.toFixed(2), z: +p.z.toFixed(2),
+                              rot: +ed.data.rot || 0 });
+        EDIT.moving = false;
+        editBarRender();
+      }
+      e.stopPropagation();
+      return;
+    }
+    var id = editPick(e.clientX, e.clientY);
+    if (id != null) {
+      editSelect(id);
+      try { e.stopPropagation(); } catch (e2) { }
+    }
+  }, true);
+
   /* ---------- public ---------- */
   window.PlaceMode = {
     open: openPanel,
@@ -301,11 +455,27 @@
       return { rendered: n, legacySkipped: legacy };
     },
     onPlaced: function (o) { if (o) { placeAt(o); } },
-    onMoved: function (o) { if (o) { placeAt(o); } },
+    onMoved: function (o) {
+      if (!o) { return; }
+      placeAt(o);
+      if (EDIT.on && EDIT.id != null && String(EDIT.id) === String(o.id)) { editSelect(EDIT.id); }
+    },
+    startEdit: editEnter,
+    stopEdit: editExit,
+    /* 小镇面板里用：给它目录 id，直接开始放置 */
+    startPlaceById: function (id) {
+      var item = null;
+      catalogItems().forEach(function (c) { if (String(c.id) === String(id)) { item = c; } });
+      if (item) { startPlace(item); }
+      return !!item;
+    },
+    catalog: function () { return catalogItems(); },
+    editState: function () { return { on: EDIT.on, id: EDIT.id, moving: EDIT.moving }; },
     onRemoved: function (id) {
       var e = P.objs[id];
       if (e && e.mesh && e.mesh.parent) { e.mesh.parent.remove(e.mesh); }
       delete P.objs[id];
+      if (EDIT.on && String(EDIT.id) === String(id)) { editSelect(null); }
     },
     /* 小镇被冻结/解散：把这块区域里的物件全部撤掉（服务端 towncleared） */
     clearArea: function (x, z, r) {
@@ -333,14 +503,8 @@
 
   function boot() {
     bindInput();
-    // a small button next to the town button
-    var b = document.createElement('button');
-    b.id = 'placeBtn';
-    b.textContent = '放置';
-    b.style.cssText = 'position:fixed;right:14px;top:120px;z-index:40;background:#1f2a30;' +
-      'color:#ffe9b0;border:1px solid #ffffff22;border-radius:8px;padding:6px 10px;font:12px system-ui;cursor:pointer';
-    b.onclick = function () { window.PlaceMode.toggle(); };
-    document.body.appendChild(b);
+    /* ★ 2026-10-22：不再单独放一个「放置」按钮 ✓
+       放置 / 编辑 / 权限都并进「小镇」面板的导航里了 */
   }
   if (document.readyState === 'loading') {
     addEventListener('DOMContentLoaded', boot);
