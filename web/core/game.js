@@ -1380,7 +1380,48 @@ function init() {
   scene.fog = new THREE.Fog(0x9c917c, 45, 175);
   cam = new THREE.PerspectiveCamera(CAM_FOV_BASE, innerWidth / innerHeight, 0.1, 400);
   scene.add(cam);   // 第一人称手/武器挂在相机上，必须让相机进场景才会被渲染
-  rd = new THREE.WebGLRenderer({ canvas: UI.mainCanvas(), antialias: (AA_MODE === 'msaa') });
+  /* ★★★ 2026-10-22（用户："有时候显示 启动失败: Error creating WebGL context，重启APP又好了"）★★★
+     根因：浏览器给每个页面家的 WebGL 上下文是有上限的（常见 8~16 个）。
+       开了皮肤页/自定义预览（各建了一个 WebGLRenderer）之后，
+       主画布这一次 new WebGLRenderer 就可能直接抛错 → 整个游戏起不来。
+     处理：① 先把【辅助上下文】释放掉（它们都是懒加载建出来的）
+           ② 主渲染器重试 3 次
+     注：辅助上下文释放函数挂在 platform 层（SKC / SKIN），这里只按 typeof 判空调用。 */
+  function _freeAuxGl() {
+    try {
+      if (typeof SKC !== 'undefined' && SKC && SKC._tc && SKC._tc.r) {
+        var _r1 = SKC._tc.r;
+        try { _r1.dispose(); } catch (e1) { }
+        try { _r1.forceContextLoss(); } catch (e2) { }
+        SKC._tc = null;
+      }
+    } catch (e3) { }
+    try {
+      if (typeof SKIN !== 'undefined' && SKIN && SKIN.r) {
+        var _r2 = SKIN.r;
+        try { _r2.dispose(); } catch (e4) { }
+        try { _r2.forceContextLoss(); } catch (e5) { }
+        SKIN.r = null;
+        SKIN.ready = false;
+      }
+    } catch (e6) { }
+  }
+  function _makeMainRenderer() {
+    var lastErr = null;
+    for (var _att = 0; _att < 3; _att++) {
+      try {
+        return new THREE.WebGLRenderer({
+          canvas: UI.mainCanvas(), antialias: (AA_MODE === 'msaa')
+        });
+      } catch (eMr) {
+        lastErr = eMr;
+        console.warn('[render] WebGL 上下文创建失败（第 ' + (_att + 1) + ' 次）', eMr);
+        _freeAuxGl();
+      }
+    }
+    throw lastErr || new Error('Error creating WebGL context');
+  }
+  rd = _makeMainRenderer();
   rd.setPixelRatio(Math.min(DPR, devicePixelRatio || 1));
   rd.setSize(innerWidth, innerHeight);
   rd.shadowMap.enabled = true;
@@ -10344,5 +10385,17 @@ function frame(ts) {
 if (typeof THREE === 'undefined') {
   E('three.js 未加载 ✗');
 } else {
-  try { init(); } catch (e) { E('启动失败：' + (e && e.message ? e.message : e)); }
+  try {
+    init();
+  } catch (e) {
+    var _msg = (e && e.message ? e.message : String(e));
+    /* WebGL 上下文创建失败 = 显卡上下文被别的页面占满了，不是代码崩了 */
+    if (/webgl|context/i.test(_msg)) {
+      E('启动失败：显卡上下文创建不出来（' + _msg + '）\n' +
+        '· 关掉别的游戏/3D 网页标签，再刷新\n' +
+        '· 或者退出 APP 重进（已经自动重试过 3 次）');
+    } else {
+      E('启动失败：' + _msg);
+    }
+  }
 }

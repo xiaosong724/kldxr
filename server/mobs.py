@@ -18,6 +18,9 @@
 """
 
 import random
+import math
+import mob_affixes
+import mob_ranks
 
 # ------------------------------------------------------------------ 上限 / 范围
 MOB_CAP = 60              # 服务器同时存在的僵尸天花板（§3.2：每区域 60）
@@ -247,9 +250,22 @@ class Mob(object):
                   # ★ round350：逃跑音效只播一次的标记
                   'fleeSnd',
                   # ★ round404：长枪挑飞（flyT = 还要飞多久 · flyH = 多高）
-                  'flyT', 'flyH', 'latDmg' )
+                  'flyT', 'flyH', 'latDmg',
+                  # ★ round581：冰封/时间凝滞
+                  'freezeT', 'slowT', 'slowMul',
+                  # ★ round600：精英 / Boss
+                  'rank', 'skin', 'name', 'hitR', 'dmgBy', 'dmgTotal', 'aff',
+                  'hit_pt', 'pen_pt', 'dodge_pt', 'dr_flat', 'dr_pct',
+                  'anticrit', 'anticritdmg', 'crit_pt', 'crit_dmg',
+                  'lifesteal', 'thorns', 'regen', 'control_res',
+                  'speed_pct', 'aspd_pct',
+                  'castKey', 'castName', 'castPhase', 'castT', 'castX', 'castZ',
+                'castFromX', 'castFromZ',
+                  'castYaw', 'castTarget', 'skillCd', 'animState', 'animT',
+                  'jumpT', 'bossPhase', 'homeX', 'homeZ', 'markT',
+                  'summoner', 'hp_pct', 'atk_pct' )
 
-    def __init__(self, mid, lv, x, z, kind=None):
+    def __init__(self, mid, lv, x, z, kind=None, rank=0, skin='', name=None):
         # ★ 第 132 轮：硬配额 —— 这只僵尸是【替谁刷的】✓
         #   用 role_id 标记 ✗ 不进协议 ✗（客户端不需要知道 ✓）
         self.owner = None
@@ -259,19 +275,73 @@ class Mob(object):
         self.flyT = 0.0         # ★ round404：还要飞多久（秒）
         self.flyH = 0.0         # 飞多高（格）
         self.latDmg = 0         # ★ 落地时砸多少伤害
+        self.freezeT = 0.0      # ★ round581：冻结剩余秒
+        self.slowT = 0.0        # ★ round581：减速剩余秒
+        self.slowMul = 1.0      # ★ round581：减速倍率
         self.mid = str(mid)
         self.kind = kind or random.choice(KINDS)
         self.lv = int(lv)
         self.x = float(x)
         self.z = float(z)
+        self.homeX = float(x)
+        self.homeZ = float(z)
         self.yaw = 0.0
-        # ★ 职业倾向（第 40 轮）：血量/攻击/移速 三个乘数 —— 查不到就用普通杂兵 ✓
+        self.rank = int(rank or 0)
+        self.skin = str(skin or '')
+        self.name = str(name or (mob_ranks.name_of(skin, self.rank) if self.rank else self.kind))
+        self.hitR = float(mob_ranks.cfg(self.rank).get('hit_r', 0.0))
+        self.dmgBy = {}
+        self.dmgTotal = 0
+        self.aff = {}
+        self.hp_pct = 0.0
+        self.atk_pct = 0.0
+        self.hit_pt = 0.0
+        self.pen_pt = 0.0
+        self.dodge_pt = 0.0
+        self.dr_flat = 0.0
+        self.dr_pct = 0.0
+        self.anticrit = 0.0
+        self.anticritdmg = 0.0
+        self.crit_pt = 0.0
+        self.crit_dmg = 0.0
+        self.lifesteal = 0.0
+        self.thorns = 0.0
+        self.regen = 0.0
+        self.control_res = 0.0
+        self.speed_pct = 0.0
+        self.aspd_pct = 0.0
+        self.castKey = ''
+        self.castName = ''
+        self.castPhase = ''
+        self.castT = 0.0
+        self.castX = 0.0
+        self.castZ = 0.0
+        self.castFromX = 0.0
+        self.castFromZ = 0.0
+        self.castYaw = 0.0
+        self.castTarget = None
+        self.skillCd = {}
+        self.animState = 'idle'
+        self.animT = 0.0
+        self.jumpT = 0.0
+        self.bossPhase = 1
+        self.markT = 0.0
+        self.summoner = None
+        # ★ 职业倾向：普通怪才有；精英/Boss 不套普通职业系数
         hm, am, sm = CLASS_STATS.get(self.kind, (1.0, 1.0, 1.0))
-        self.mhp = max(1, int(round(mob_hp(self.lv) * hm)))
+        if self.rank:
+            self.mhp = max(1, int(round(mob_hp(self.lv) * mob_ranks.cfg(self.rank).get('hp_mul', 1.0))))
+            self.atk = mob_atk(self.lv) * mob_ranks.cfg(self.rank).get('atk_mul', 1.0)
+            self.exp = int(round(mob_exp(self.lv) * mob_ranks.cfg(self.rank).get('exp_mul', 1.0)))
+            self.spd = mob_spd(self.lv)
+            self.aff = mob_affixes.roll(self.rank, self.lv)
+            mob_affixes.apply(self, self.aff)
+        else:
+            self.mhp = max(1, int(round(mob_hp(self.lv) * hm)))
+            self.atk = mob_atk(self.lv) * am
+            self.exp = int(round(mob_exp(self.lv)))
+            self.spd = mob_spd(self.lv) * sm
         self.hp = self.mhp
-        self.atk = mob_atk(self.lv) * am
-        self.exp = int(round(mob_exp(self.lv)))
-        self.spd = mob_spd(self.lv) * sm
         self.atkT = 0.0          # 攻击冷却（秒；到 0 就能再咬）
         self.atkAnim = -1.0      # ★ 挥爪动画计时：没在攻击时必须是【-1】（见 wire 的注释）
         self.windT = 0.0         # ★ 起手蓄力倒计时（>0 = 正在蓄力，蓄完才咬出去）
@@ -310,7 +380,9 @@ class Mob(object):
               现在拆成两个值：atkT 管冷却（不下发），atkAnim 管动画（下发，没攻击 = -1）✓"""
         return [self.mid, round(self.x, 2), round(self.z, 2), round(self.yaw, 2),
                 max(0, int(self.hp)), self.mhp, 1 if self.alive() else 0,
-                round(self.atkAnim, 2), self.lv, self.kind]
+                round(self.atkAnim, 2), self.lv, self.kind,
+                1 if float(getattr(self, 'freezeT', 0) or 0) > 0 else 0,
+                int(self.rank), self.skin, self.name]
 
 
 def in_front(px, pz, yaw, tx, tz, rng=ATK_RANGE, arc=ATK_ARC):

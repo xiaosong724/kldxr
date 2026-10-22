@@ -730,6 +730,14 @@ class World(object):
                 _np.hp = int(self._hp_max(_np))
                 _np.invulnT = max(float(getattr(_np, 'invulnT', 0) or 0), 1.5)   # 落地保护 ✓
             self.players[conn.cid] = _np
+            # ★★★ 2026-10-22（用户："消息转发到QQ群怎么没有转发了"）★★★
+            #   病根：转发桥一直活着（/api/health 里 on=true），但【没有任何地方往队列里塞】
+            #   → sent 永远是 0。上线播报本来就不存在，这里补上（kind='join'）。
+            try:
+                if getattr(self, 'qq', None):
+                    self.qq.post('%s 上线了' % _np.name, 'join')
+            except Exception as _qqe:
+                print('[qq] join post failed: %r' % (_qqe,))
             self._town_zones_send(_np)
             try:
                 _tr = self._obj_town_ok(_np)
@@ -3206,7 +3214,9 @@ class World(object):
 
     def _handle_intent(self, p, t, d):
         _TP = ('house_info', 'house_buy', 'house_leave', 'house_sleep', 'house_wake',
-               'run', 'skinask',
+               # ★ 2026-10-22：换皮肤 / 保存自定义以前【不在白名单】→ 包直接被丢掉，
+               #   表现就是"点了换肤没反应""别人看不到我的自定义"。
+               'run', 'skinask', 'setskin', 'customset',
                'warehouse_open', 'warehouse_move', 'warehouse_move_many',
                'shop_open', 'shop_buy', 'usefood', 'fridge_open', 'order_open',
                'order_buy', 'cup_take', 'work_start', 'work_stop', 'jobstep', 'jobdone',
@@ -4848,11 +4858,11 @@ class World(object):
         if clear:
             self.mobs.clear()
             return
-        n = max(0, min(int(n), mobs.MOB_CAP))
+        n = max(0, min(int(n), int(getattr(self, 'mob_cap', 0) or mobs.MOB_CAP)))
         for _ in range(n):
             # ★ 调试刷怪不受上限"挡住"：满了就淘汰最远的那只腾位置 ✓
             #   （以前这里是 break → 上限被远处的僵尸占满时，调试按钮点了没反应 ✗）
-            if len(self.mobs) >= mobs.MOB_CAP and not self._evict_far():
+            if len(self.mobs) >= (int(getattr(self, 'mob_cap', 0) or mobs.MOB_CAP)) and not self._evict_far():
                 break
             ang = random.random() * math.pi * 2
             dist = 3.0 + random.random() * 6.0
@@ -7093,6 +7103,90 @@ class World(object):
             print('[place] building_at failed: %r' % (e,))
         return best
 
+    def _intent_setskin(self, p, d):
+        """换上某个已解锁的皮肤（★ 2026-10-22：以前这个包根本没人接）"""
+        try:
+            import skins as skinsmod
+        except Exception:
+            return
+        key = str((d or {}).get('key') or '')
+        if not skinsmod.valid(key):
+            self._send_cid(p.cid, P.pack('notice', text='没有这个皮肤'))
+            return
+        rid = int(getattr(p, 'role_id', 0) or 0)
+        owned = False
+        try:
+            with dbmod.db(self.cfg) as c:
+                owned = bool(c.execute('SELECT 1 FROM skin_unlocks WHERE role_id=? AND key=?',
+                                       (rid, key)).fetchone())
+        except Exception:
+            owned = False
+        if not owned:
+            self._send_cid(p.cid, P.pack('notice', text='这个皮肤还没解锁'))
+            return
+        # 内存里的 role 立刻改（别人快照读的就是它）
+        try:
+            role = getattr(p, 'role', None)
+            if isinstance(role, dict):
+                role['skin'] = key
+        except Exception:
+            pass
+        try:
+            with dbmod.db(self.cfg) as c:
+                c.execute('UPDATE roles SET skin=? WHERE id=?', (key, rid))
+                c.commit()
+        except Exception as e:
+            print('[skin] setskin save failed: %r' % (e,))
+        cv = None
+        try:
+            import skin_custom as scmod
+            data = scmod.get(self.cfg, rid, key)
+            if data:
+                cv = scmod.to_client(data, skinsmod.GENDER.get(key, 'f'))
+        except Exception:
+            cv = None
+        self._send_cid(p.cid, P.pack('skin', key=key, c=cv))
+        self._skin_broadcast(p, key, cv)
+        self._send_cid(p.cid, P.pack('notice',
+                                     text='换上了：%s' % skinsmod.NAME.get(key, key)))
+
+    def _intent_customset(self, p, d):
+        """保存皮肤自定义（瞳色/发色/衣服色…）→ 更新内存 + 让客户端重建"""
+        try:
+            import skins as skinsmod
+            import skin_custom as scmod
+        except Exception:
+            return
+        sk = str((d or {}).get('skin') or (getattr(p, 'role', {}) or {}).get('skin') or '')
+        data = (d or {}).get('data')
+        if not sk or not isinstance(data, dict):
+            return
+        cv = None
+        try:
+            cv = scmod.to_client(data, skinsmod.GENDER.get(sk, 'f'))
+        except Exception:
+            cv = None
+        if not cv:
+            return
+        try:
+            role = getattr(p, 'role', None)
+            if isinstance(role, dict):
+                m = role.get('skcMap')
+                if not isinstance(m, dict):
+                    m = {}
+                    role['skcMap'] = m
+                m[sk] = cv
+        except Exception:
+            pass
+        self._send_cid(p.cid, P.pack('skin', key=sk, c=cv))
+        self._skin_broadcast(p, sk, cv)
+        self._send_cid(p.cid, P.pack('notice', text='自定义已保存'))
+
+    def _skin_broadcast(self, p, key, cv):
+        """别人的模型靠【世界快照】重建（快照里带 sk / skc，
+        客户端发现 skcKey 变了就重建 ✓）—— 这里不用额外发消息。"""
+        return
+
     def _intent_skinask(self, p, d):
         """皮肤页数据（★ 2026-10-22：这个 intent 协议里有、服务端一直没实现 →
         皮肤页永远是空的）。返回 40 个皮肤的拥有/使用状态。"""
@@ -7387,9 +7481,13 @@ class World(object):
                 cand.append((d2, m))
         if not cand:
             return None
-        if len(cand) > mobs.MOB_RENDER_CAP:
+        # ★ 2026-10-22（用户："怪的总上限按管理页面为准，不要设置固定值了"）：
+        #   以前写死 MOB_RENDER_CAP=40 → 管理页把上限调到 80 也只发 40 只。
+        #   现在按管理页的 mob_cap 走。
+        _rc = max(1, int(getattr(self, 'mob_cap', 0) or mobs.MOB_RENDER_CAP))
+        if len(cand) > _rc:
             cand.sort(key=lambda it: it[0])
-            cand = cand[:mobs.MOB_RENDER_CAP]
+            cand = cand[:_rc]
         return [m.wire() for _, m in cand]
 
     def _save_role(self, p):
@@ -7447,6 +7545,13 @@ class World(object):
                 if n:
                     text = text + '（等 %d 条）' % n
                 self._ticker_last[tag] = now
+            # ★ 2026-10-22：弹幕也进 QQ 转发队列（要发哪些 kind 由 config 的 kinds 决定；
+            #   注意用【没截断】的原文，弹幕那条 22 字限制是画面用的）
+            try:
+                if getattr(self, 'qq', None):
+                    self.qq.post(text, kind)
+            except Exception as _qqe2:
+                pass
             if len(text) > 22:
                 text = text[:21] + '…'
             self._broadcast(P.pack('ticker', text=text, kind=kind))

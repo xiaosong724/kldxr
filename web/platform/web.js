@@ -10962,6 +10962,15 @@ function wsOnMessage(raw) {
   if (t === 'stood') { try { townSeatClear(d); } catch (eT) { } MY_TABLE = ''; return; }
   if (t === 'warehouse') { whApply(d); return; }
   if (t === 'welcome') {
+    /* ★ 2026-10-22（用户："怪的总上限按管理页面为准，不要设置固定值了"）：
+       管理页的僵尸上限随 welcome 下发 → 覆盖客户端写死的 G.MOB_MAX */
+    try {
+      var _mc = +(d && d.mobCap);
+      if (_mc > 0) {
+        window.MY_MOB_CAP = _mc;
+        if (typeof G !== 'undefined') { G.MOB_MAX = _mc; }
+      }
+    } catch (eMc) { }
     try { setTimeout(function () { skAsk(); }, 600); } catch (e9) { } wsWelcome(d);
     try {
       setTimeout(function () { try { wsSend('town_objects', {}); } catch (eTo) { } }, 900);

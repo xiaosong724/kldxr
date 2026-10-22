@@ -1138,11 +1138,12 @@ class Api(BaseHTTPRequestHandler):
                         it = {'name': '皮肤·' + skinsmod.NAME.get(k2, k2), 'tier': 0,
                               'kind': 'skin', 'key': k2}
                         js = _json.dumps(it, ensure_ascii=False)
-                        for _i in range(cnt):
-                            c.execute('INSERT INTO items(role_id, in_storage, slot_index,'
-                                      ' stack, item_json, created_at) VALUES(?,0,-1,1,?,?)',
-                                      (rid, js, dbmod.now_ms()))
-                            n_card += 1
+                        # ★ 2026-10-22（用户："皮肤卡没有堆叠"）：同一种卡合成一行，
+                        #   stack=张数（以前是 cnt 行、每行 1 张 → 背包里铺一片）
+                        c.execute('INSERT INTO items(role_id, in_storage, slot_index,'
+                                  ' stack, item_json, created_at) VALUES(?,0,-1,?,?,?)',
+                                  (rid, cnt, js, dbmod.now_ms()))
+                        n_card += cnt
                     c.commit()
             except Exception as e:
                 return self._send(500, {'ok': False, 'error': '发皮肤卡失败：%s' % e})
