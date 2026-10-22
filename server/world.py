@@ -38,6 +38,15 @@ import boss_skills               # ★ 2026-10-22：Boss 技能表
 import drops
 import market as mkmod  # ★ round304b：交易所规则中心（纯函数 ✗ 可离线测 ✓）
 import mobs
+try:
+    import battlereport as rptmod    # ★ 2026-10-22：战报统计（依赖 PIL，没装就跳过）
+except Exception:                     # ★ 绝不因为一个可选模块让服务器起不来
+    class _RptStub(object):
+        def add_exp(self, *a, **kw):
+            pass
+        def __getattr__(self, name):
+            return lambda *a, **kw: None
+    rptmod = _RptStub()
 import mob_ranks               # ★ 2026-10-22：精英/Boss 配置
 import mq as mqmod      # ★ 第 149 轮：魔气规则中心 ✓
 import value as valuemod  # ★ round304b：价格/上限（和卖系统同一份 ✓）
@@ -9275,6 +9284,10 @@ class World(object):
         """
         if q is None or amount <= 0:
             return
+        try:
+            rptmod.add_exp(q, amount)      # ★ round502：战报统计（内存 ✓）
+        except Exception:
+            pass
         role = q.role
         role['exp'] = int(role.get('exp') or 0) + int(amount)
         ups = 0
@@ -9311,10 +9324,17 @@ class World(object):
                    #    所以"穿了防具血量没变化"✓ 根因就在这 ✗）
                    'hpm': self._hp_max(q)}
         if ups:
-            self._send_cid(q.cid, P.pack('notice', text='升到 %d 级！' % level, level=level))
+            # ★ round409（用户："滚动通知的升级，把升级改成玩家突破到 xx 层"）
+            #   ★ 两处一起改 ✗ 只改滚动通知的话，自己屏幕上还是"升到 X 级" ✓
+            #     会出现"弹幕说突破、自己看是升级"✓ 同一个事件两种说法 ✓
+            self._send_cid(q.cid, P.pack('notice', text='突破到第 %d 层！' % level,
+                                         level=level))
             # ★ 第 247 轮：升级还要播报给全服（用户要求：谁升到了多少级）
-            self._ticker('%s 升到了 %d 级' % (q.name, level), 'up', tag='up:%d' % q.role_id)
-            # ★ 2026-10-22（云端 round446）：突破动画也要同步给同屏的人
+            self._ticker('%s 突破到第 %d 层' % (q.name, level), 'up',
+                         tag='up:%d' % q.role_id)
+            # ★★ round446（用户："突破的动画没有同步给别的玩家"）★★
+            #   把"谁在哪里突破了"发给【同屏】的人 ✗ 他们也能看到雷击 + 听到雷声 ✓
+            #   ★ 格式：[x, z, 新等级, 是不是本人]（和 hurts/mhits 一样走快照 ✓）
             try:
                 _v2 = VIEW * VIEW
                 for _q2 in self.players.values():
