@@ -113,9 +113,8 @@
       '深灰块 = 放置的建筑；浅褐块 = 放置的家具。点一下可以看名字和坐标。</div>';
   }
   function permHTML(t) {
-    if (!t) {
-      return '<div class="townHint">你还没有小镇。系统主城的权限请在 /admin 里设置。</div>';
-    }
+    /* ★ 2026-10-22（用户："权限管理真的有生效吗"）：系统主城现在也校验权限，
+       所以这里也要能给它授权 —— 以前直接显示"请在 /admin 里设置"。 */
     var h = '<div class="townHint">权限：主人默认全部；访客默认 可交互+可交易+可传送。给某个玩家单独授权。</div>' +
       '<div class="row"><input id="townTarget" type="number" placeholder="玩家角色 ID（设置-信息里能看到自己的）" style="flex:1"></div>' +
       '<div class="permGrid">' + PERMS.map(function (p) {
@@ -173,18 +172,25 @@
       wsSend('town_dissolve', { id: t.id });
     }
   }
-  function townRefreshPerms() {
+  /* 当前要管的小镇：自己的优先，没有就是系统主城（服务端在 objects 包里下发 id） */
+  function permTownId() {
     var t = (window.MY_TOWNS || [])[0];
-    if (t) { wsSend('town_perm_list', { id: t.id }); }
+    if (t) { return t.id; }
+    return +(window.MY_TOWN_ID || 0);
+  }
+
+  function townRefreshPerms() {
+    var tid = permTownId();
+    if (tid) { wsSend('town_perm_list', { id: tid }); }
   }
   function townPermSave() {
-    var t = (window.MY_TOWNS || [])[0];
-    if (!t) { return; }
+    var tid = permTownId();
+    if (!tid) { toast('还没连上小镇'); return; }
     var target = +(el('townTarget') && el('townTarget').value || 0);
     if (!target) { toast('先填玩家角色 ID'); return; }
     var mask = 0;
     document.querySelectorAll('.townPerm:checked').forEach(function (c) { mask |= +c.value; });
-    wsSend('town_perm_set', { id: t.id, player: target, mask: mask });
+    wsSend('town_perm_set', { id: tid, player: target, mask: mask });
   }
   /* ================= B5：地图选点 + 占地预览 =================
      只做"选中心 + 画一块占地框"，不碰服务端；创建/恢复仍然走原来的协议。

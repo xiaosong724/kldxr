@@ -2722,8 +2722,14 @@ class World(object):
             _pf = int(o.get('parent_id') or 0)
             _fy = _bfloor.get(_pf, 0.0) if _pf else 0.0
             _pub.append(self._obj_pub(o, _fy))
+        # ★ 2026-10-22：把我在这座小镇的权限位一起下发，客户端据此提前禁用建造/编辑
+        try:
+            _mask = int(townreg.perm_mask_of(getattr(p, 'role_id', 0), town_row, self.cfg))
+        except Exception:
+            _mask = 0
         self._send_cid(p.cid, P.pack('objects', town=int(town_row['id']),
                                      list=_pub,
+                                     mask=_mask,
                                      # ★ 2026-10-22：目录一起下发（客户端要用 size 算室内地板）
                                      catalog=self.town_catalog))
 
@@ -2740,9 +2746,15 @@ class World(object):
         if not r:
             self._town_result(p, False, '没有可用小镇')
             return
-        # 系统主城：所有玩家都可以放置（主城是公共建造区）
-        # 玩家自己的小镇：必须拥有 move 权限
-        if not int(r.get('is_system') or 0):
+        # ★ 2026-10-22（用户："权限管理真的有生效吗，fangou 没有权限也可以操作系统小镇"）：
+        #   以前这里写的是「系统主城：所有玩家都可以放置」→ 整个主城【完全跳过权限】。
+        #   现在系统主城也走同一套校验：房主 P_ALL；其他人看 town_perms，
+        #   没有记录的就是访客模板（交互/交易/传送，不含移动/移除）。
+        try:
+            _admin = bool(int(getattr(p, 'role', {}).get('admin') or 0))
+        except Exception:
+            _admin = False
+        if not _admin:
             try:
                 allowed = townreg.has_perm(self.cfg, getattr(p, 'role_id', 0),
                                            r, townreg.P_MOVE)
@@ -2827,7 +2839,12 @@ class World(object):
         except Exception:
             self._town_result(p, False, '坐标错误')
             return
-        if not int(r.get('is_system') or 0):
+        # ★ 2026-10-22：系统主城同样要校验（见上）
+        try:
+            _admin2 = bool(int(getattr(p, 'role', {}).get('admin') or 0))
+        except Exception:
+            _admin2 = False
+        if not _admin2:
             try:
                 allowed = townreg.has_perm(self.cfg, getattr(p, 'role_id', 0),
                                            r, townreg.P_MOVE)
@@ -2897,7 +2914,12 @@ class World(object):
             return False, '小镇不存在', None, None
         if str(tr.get('status')) != 'active':
             return False, '小镇不在正常状态', None, None
-        if not int(tr.get('is_system') or 0):
+        # ★ 2026-10-22：系统主城也要校验（移动/移除/改价各自一位）
+        try:
+            _admin3 = bool(int(getattr(p, 'role', {}).get('admin') or 0))
+        except Exception:
+            _admin3 = False
+        if not _admin3:
             try:
                 if not townreg.has_perm(self.cfg, getattr(p, 'role_id', 0), tr, bit):
                     return False, '没有该小镇的操作权限', None, None
@@ -3048,7 +3070,16 @@ class World(object):
         if not r:
             self._town_result(p, False, 'no town')
             return
-        if not (self._town_owner_ok(p, r) or int(getattr(p, 'role', {}).get('admin') or 0)):
+        # ★ 2026-10-22：系统主城没有"主人"，所以要允许持有 P_PERM 的人查看权限表
+        _ok = bool(self._town_owner_ok(p, r)
+                   or int(getattr(p, 'role', {}).get('admin') or 0))
+        if not _ok:
+            try:
+                _ok = bool(townreg.has_perm(self.cfg, getattr(p, 'role_id', 0), r,
+                                            townreg.P_PERM))
+            except Exception:
+                _ok = False
+        if not _ok:
             self._town_result(p, False, 'no permission')
             return
         out = []

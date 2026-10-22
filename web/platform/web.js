@@ -11376,6 +11376,10 @@ function wsOnMessage(raw) {
   if (t === 'objects') {
     try {
       window.MY_OBJECTS = d.list || [];
+      /* ★ 2026-10-22（用户："权限管理真的有生效吗"）：把本人在本镇的权限位存下来，
+         没「可移动(1)」就不让进建造/编辑模式（服务端也会拒绝，这里是提前拦住） */
+      if (d.mask != null) { window.MY_TOWN_MASK = +d.mask || 0; }
+      if (d.town != null) { window.MY_TOWN_ID = +d.town || 0; }   /* 系统主城也能管权限 */
       try { TOWN_OBJECTS_CACHE = window.MY_OBJECTS; } catch (eC) { }
       if (d.catalog && d.catalog.length) {
         window.MY_TOWN_CATALOG = d.catalog;

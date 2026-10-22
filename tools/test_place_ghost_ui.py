@@ -200,6 +200,11 @@ def cleanup(name):
                 if 'role_id' in cols:
                     c.execute('DELETE FROM %s WHERE role_id=?' % t, (rid,))
             c.execute('DELETE FROM roles WHERE id=?', (rid,))
+        # ★ 2026-10-22：刚才授的权限也要清掉，不然 town_perms 越积越多
+        try:
+            c.execute('DELETE FROM town_perms WHERE player_id=?', (rid,))
+        except Exception:
+            pass
         c.execute('DELETE FROM tokens WHERE account_id=?', (acc[0],))
         c.execute('DELETE FROM accounts WHERE id=?', (acc[0],))
         c.commit()
@@ -211,6 +216,14 @@ def main():
     name = 'GHO%05d' % random.randint(0, 99999)
     reg = http_json('/api/register', {'name': name, 'password': 'e2e-pass-123'})
     print('test role:', name)
+    # ★ 2026-10-22：系统主城现在也校验权限了（没权限不能进建造模式）。
+    #   测试账号要先授予 P_ALL(127)，否则 startPlace 直接被拦。
+    with sqlite3.connect(DB, timeout=10) as c:
+        acc = c.execute('SELECT id FROM accounts WHERE name=?', (name,)).fetchone()
+        rid = c.execute('SELECT id FROM roles WHERE account_id=?', (acc[0],)).fetchone()[0]
+        c.execute('INSERT OR REPLACE INTO town_perms'
+                  '(town_id,player_id,mask,granted_by,granted_at) VALUES(1,?,127,0,0)', (rid,))
+        c.commit()
     ok = False
     try:
         ok = asyncio.run(main_async(reg['token']))

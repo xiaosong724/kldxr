@@ -457,7 +457,19 @@
     PLACEBAR.el.style.display = need ? 'flex' : 'none';
   }
 
+  /* ★ 2026-10-22（用户："权限管理真的有生效吗，fangou 没有权限也可以操作系统小镇"）：
+     服务端现在会对系统主城也校验权限；这里在客户端提前拦住，
+     免得点了半天建造/编辑才被服务器打回来。P_MOVE = 1。 */
+  function canBuildInTown() {
+    try {
+      var m = window.MY_TOWN_MASK;
+      if (m == null || m === '') { return true; }   /* 还没收到 → 交给服务端判定 */
+      return (+m & 1) !== 0;
+    } catch (e) { return true; }
+  }
+
   function startPlace(item) {
+    if (!canBuildInTown()) { try { toast('没有放置权限（找镇长开通「可移动」）'); } catch (eT) { } return; }
     P.sel = item;
     P.placing = true;
     P.rot = 0;
@@ -1011,6 +1023,7 @@
   window.__padRender = padRender;
 
   function editEnter() {
+    if (!canBuildInTown()) { try { toast('没有编辑权限（找镇长开通「可移动 / 可移除」）'); } catch (eT) { } return; }
     if (P.placing) { stopPlace(); }
     EDIT.on = true;
     closePanel();
