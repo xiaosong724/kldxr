@@ -389,6 +389,11 @@ def seed_catalog(cfg):
                       (cid, name, cat, w, d, h, int(price), fn, fj, cj,
                        int(price // 1000000), now, mid, 'v1',
                        json.dumps(layout, ensure_ascii=False), 'grid', 0))
+        # ★ C2：布局是代码里的默认值，改了要覆盖旧行（价格是后台改的 ✗ 不能碰）
+        for (cid, name, cat, w, d, h, price, fn, fj, cj, mid, lk) in BUILDING_SEED:
+            layout = json.dumps(LAYOUTS.get(lk, {}), ensure_ascii=False)
+            c.execute('UPDATE town_catalog SET layout_json=? WHERE id=? AND layout_json<>?',
+                      (layout, cid, layout))
         c.commit()
 
 

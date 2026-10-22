@@ -71,6 +71,16 @@ LAYOUTS = {
                 {'catalog': 'shower_tray', 'x': 5.45, 'z': -2.95, 'rot': 0.0},
                 {'catalog': 'plant_pot', 'x': 6.00, 'z': 4.20, 'rot': 0.0},
                 {'catalog': 'ceiling_lamp', 'x': 0.0, 'z': 0.0, 'rot': 0.0},
+                # C2：一楼补一间小书房（左前角）+ 玄关/装饰
+                {'catalog': 'desk', 'x': -5.40, 'z': 4.20, 'rot': 0.0},
+                {'catalog': 'desk_chair', 'x': -5.40, 'z': 3.42, 'rot': 3.1416},
+                {'catalog': 'bookshelf', 'x': -6.10, 'z': 2.10, 'rot': 0.0},
+                {'catalog': 'rug_rect', 'x': -1.30, 'z': 2.10, 'rot': 0.0},
+                {'catalog': 'wardrobe', 'x': 0.60, 'z': 5.05, 'rot': 3.1416},
+                {'catalog': 'wall_clock', 'x': -0.30, 'z': 5.32, 'rot': 0.0},
+                {'catalog': 'wall_art', 'x': -3.60, 'z': 5.32, 'rot': 0.0},
+                {'catalog': 'plant_pot', 'x': -6.05, 'z': 4.95, 'rot': 0.0},
+                {'catalog': 'ceiling_lamp', 'x': 3.60, 'z': 0.60, 'rot': 0.0},
             ]},
             {'y': 3.30, 'items': [
                 # 二楼只有一张床
@@ -85,6 +95,18 @@ LAYOUTS = {
                 {'catalog': 'toilet', 'x': 2.05, 'z': -3.25, 'rot': 3.1416},
                 {'catalog': 'bath_vanity', 'x': 1.60, 'z': -1.20, 'rot': 0.0},
                 {'catalog': 'bathtub', 'x': -1.05, 'z': -2.00, 'rot': 0.0},
+                # C2：二楼补次卧（右前）+ 起居角 + 装饰
+                {'catalog': 'bed_single', 'x': 4.35, 'z': 1.30, 'rot': 0.0},
+                {'catalog': 'bed_nightstand', 'x': 5.40, 'z': 1.30, 'rot': 0.0},
+                {'catalog': 'bed_lamp', 'x': 5.40, 'z': 1.30, 'rot': 0.0},
+                {'catalog': 'wardrobe', 'x': 6.15, 'z': 3.45, 'rot': -1.5708},
+                {'catalog': 'sofa_modern_2', 'x': 4.10, 'z': -1.80, 'rot': 3.1416},
+                {'catalog': 'rug_rect', 'x': 0.40, 'z': 0.20, 'rot': 0.0},
+                {'catalog': 'wall_art', 'x': -3.10, 'z': 5.32, 'rot': 0.0},
+                {'catalog': 'wall_clock', 'x': 3.20, 'z': 5.32, 'rot': 0.0},
+                {'catalog': 'plant_pot', 'x': 6.10, 'z': 4.60, 'rot': 0.0},
+                {'catalog': 'ceiling_lamp', 'x': 0.20, 'z': 0.20, 'rot': 0.0},
+                {'catalog': 'ceiling_lamp', 'x': 4.30, 'z': 0.60, 'rot': 0.0},
             ]},
         ]
     },
