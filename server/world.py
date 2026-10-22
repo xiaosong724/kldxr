@@ -831,6 +831,8 @@ class World(object):
             if int(_np.hp or 0) <= 0:
                 _np.hp = int(self._hp_max(_np))
                 _np.invulnT = max(float(getattr(_np, 'invulnT', 0) or 0), 1.5)   # 落地保护 ✓
+            # ★ 2026-10-22：皮肤自定义（云端原版）
+            self._apply_skc(_np)
             self.players[conn.cid] = _np
             # ★★★ 2026-10-22（用户："消息转发到QQ群怎么没有转发了"）★★★
             #   病根：转发桥一直活着（/api/health 里 on=true），但【没有任何地方往队列里塞】
@@ -850,6 +852,8 @@ class World(object):
                 for _k in ('A', 'B', 'C'):
                     while len(_np.skLoad[_k]) < 5:
                         _np.skLoad[_k].append(None)
+                print('[skill] %s 装配 A=%s B=%s C=%s' % (
+                    _np.name, _np.skLoad['A'], _np.skLoad['B'], _np.skLoad['C']))
             except Exception as _sle:
                 print('[skill] load 装配失败: %r' % (_sle,))
             # ★ 2026-10-22：把我自己的刷怪上限推给客户端（组队页滑块的初值）
@@ -1468,6 +1472,7 @@ class World(object):
         st = _tal.pack_state(lv, p.tal)
         p.talRaw = _tal.raw_of(p.tal)
         p.talEff = _tal.effective(p.talRaw)
+        self._invalidate_stats(p)   # ★ 天赋变了 → 清派生属性缓存
         # ★ 第 117 轮：血量天赋会改生命上限 → 必须一起带上 ✓
         #   不然加完血量，界面上的血量上限不动 ✗（用户一定会问"生效了吗"✗）
         st['hpm'] = self._hp_max(p)
@@ -6826,13 +6831,66 @@ class World(object):
                 if (m.x - cx) ** 2 + (m.z - cz) ** 2 <= hr2:
                     hit = m
                     break
+            # ★★★ round407（交接文档第四节 ③）：投掷物 / 箭也要打到玩家 ★★★
+            #   病根：这里原来【只遍历 self.mobs】✗ 玩家站在箭前面完全不掉血 ✓
+            #   ★ 匕首的飞刀和弓的箭共用这个函数 → 两边一起生效 ✓
+            #   ★ 怪的优先级不变（上面先判 ✓ 没打到怪才判人 ✓）
+            #   ★ 别打自己 ✗ 别打 PvP 关着的 / 队友 / 安全区里的人 ✓（_pvp_ok 同一套）
+            hitp = None
+            if hit is None:
+                shooter0 = self.players.get(a['by'])
+                for q in self.players.values():
+                    if q.cid == a['by'] or int(q.hp or 0) <= 0:
+                        continue
+                    if shooter0 is None or not self._pvp_ok(shooter0, q)[0]:
+                        continue
+                    vx, vz = a['x'] - x0, a['z'] - z0
+                    wx, wz = q.x - x0, q.z - z0
+                    L2 = vx * vx + vz * vz
+                    u = 0.0 if L2 <= 1e-9 else max(0.0, min(1.0, (wx * vx + wz * vz) / L2))
+                    cx, cz = x0 + vx * u, z0 + vz * u
+                    if (q.x - cx) ** 2 + (q.z - cz) ** 2 <= hr2:
+                        hitp = q
+                        break
+            if hitp is not None:
+                _q = hitp
+                shooter0 = self.players.get(a['by'])
+                dv = int(a['dmg'])
+                dv = self._on_player_hurt(_q, dv, shooter0)
+                if dv <= 0:
+                    self.arrows.pop(str(a['id']), None)
+                    continue
+                _q.hp = max(0, int(_q.hp) - dv)
+                _h_ar = self._lifesteal(shooter0, dv, _q.x, _q.z) if shooter0 else 0
+                self._add_pend(_q.cid, 'hurts', {'dmg': dv, 'x': round(_q.x, 2),
+                                                 'z': round(_q.z, 2),
+                                                 'by': (shooter0.name if shooter0 else '?'),
+                                                 'pvp': 1})
+                if shooter0 is not None:
+                    self._add_pend(shooter0.cid, 'mhits',
+                                   {'mid': 'p:' + str(_q.cid), 'dmg': dv,
+                                    'crit': bool(a['crit']), 'arrow': True,
+                                    'heal': _h_ar,
+                                    'x': round(_q.x, 2), 'z': round(_q.z, 2)})
+                    self._sk_b_attack_hit(shooter0, a.get('seq'))   # ★ 命中才掷被动
+                if int(_q.hp) <= 0 and shooter0 is not None:
+                    self._pvp_killed(shooter0, _q)
+                self.arrows.pop(str(a['id']), None)
+                continue
             if hit is not None:
                 shooter = self.players.get(a['by'])
                 dv = int(a['dmg'])
+                if shooter is not None:
+                    dv = self._mob_defense(shooter, hit, dv, True)
+                    if dv <= 0:
+                        self.arrows.pop(str(a['id']), None)
+                        continue
+                self._record_mob_damage(hit, shooter, dv)
                 hit.hp -= dv
                 if shooter is not None:
                     self._report_hit(shooter, hit.mid, dv, a['crit'], hit.x, hit.z,
                                      {'arrow': True})
+                    self._sk_b_attack_hit(shooter, a.get('seq'))   # ★ 命中才掷被动
                 else:
                     self._add_pend(None, 'mhits',
                                    {'mid': hit.mid, 'dmg': dv, 'crit': bool(a['crit']),
@@ -6895,17 +6953,24 @@ class World(object):
         if extra:
             item.update(extra)
         if p is not None:
+            item['heal'] = self._lifesteal(p, dmg, x, z)
+        # ★ round583：附近的玩家也能听到命中（按距离衰减）
+        self._snd_near(x, z, 'crit' if crit else 'hit', 0.8,
+                       exclude=(p.cid if p is not None else None))
+        if p is not None:
             self._add_pend(p.cid, 'mhits', item)
         if p is not None:
+            _skf = 1 if (extra and extra.get('sk')) else 0
             self._fx_broadcast(p, {'kind': 'dmg', 'v': int(dmg),
-                                   'crit': 1 if crit else 0,
+                                   'crit': 1 if crit else 0, 'sk': _skf,
                                    'x': round(x, 2), 'z': round(z, 2),
                                    '_skip': p.cid})
         else:
             # 没有攻击者（比如怪自己触发）→ 广播给所有人（不 skip）
+            _skf = 1 if (extra and extra.get('sk')) else 0
             for _q in self.players.values():
                 self._send_cid(_q.cid, P.pack('fx', kind='dmg', v=int(dmg),
-                                              crit=1 if crit else 0,
+                                              crit=1 if crit else 0, sk=_skf,
                                               x=round(x, 2), z=round(z, 2)))
 
     def _fx_broadcast(self, p, payload):
@@ -6969,7 +7034,7 @@ class World(object):
            → 只要没有待结算的伤害 ✗ 投掷就永远不会被发射 ✓
            ★ 教训：一个函数管两件事时，早退条件必须同时看两个队列 ✓
         """
-        if not self._later and not self._later_arrow:
+        if not self._later and not self._later_arrow and not self._later_pl:
             return
         _now = now_s()
         _keep = []
@@ -6982,7 +7047,13 @@ class World(object):
             m = self.mobs.get(mid)
             if not m or m.hp <= 0:
                 continue
+            _p0 = self.players.get(cid)
+            dmg = self._mob_defense(_p0, m, dmg, False)
+            if dmg <= 0:
+                continue
+            self._record_mob_damage(m, _p0, dmg)
             m.hp -= dmg
+            m.freezeT = 0.0          # ★ round584：受伤破冰
             self._report_hit(self.players.get(cid), mid, dmg, False, m.x, m.z,
                              {'back': False, 'mb': None, 'heal': 0})
             # ★ round395：连砍的"前进 + 击退"
@@ -6999,12 +7070,46 @@ class World(object):
                 if p2:
                     self._mob_died(p2, m)
         self._later = _keep
+        # ★★★ round408：到点结算【打玩家】的延迟伤害（连刺第二段 / 连砍后续刀）★★★
+        #   病根（用户实测）：直接打玩家只走 _pvp_hit ✗ 连刺/连砍从来没触发过 ✓
+        #   现在压在这个队列里 ✗ 到点由这里结算 ✓
+        #   ★ 结算前【重新】过一遍 _pvp_ok：这 0.18 秒里对方可能关了 PvP /
+        #     进了安全区 / 被打死 / 下线 ✓（和"打怪那条会先查怪还活着"同一个意思 ✓）
+        if getattr(self, '_later_pl', None):
+            _kp = []
+            for (_dp, _acp, _vcp, _dmp) in self._later_pl:
+                if _now < _dp:
+                    _kp.append((_dp, _acp, _vcp, _dmp))
+                    continue
+                _a3 = self.players.get(_acp)
+                _v3 = self.players.get(_vcp)
+                if _a3 is None or _v3 is None or int(_v3.hp or 0) <= 0:
+                    continue
+                if not self._pvp_ok(_a3, _v3)[0]:
+                    continue
+                _dm3 = max(1, int(_dmp))
+                _v3.hp = max(0, int(_v3.hp) - _dm3)
+                self._add_pend(_v3.cid, 'hurts', {'dmg': _dm3,
+                                                  'x': round(_a3.x, 2),
+                                                  'z': round(_a3.z, 2),
+                                                  'by': _a3.name, 'pvp': 1})
+                self._add_pend(_a3.cid, 'mhits', {'mid': 'p:' + str(_v3.cid),
+                                                  'dmg': _dm3, 'crit': False,
+                                                  'x': round(_v3.x, 2),
+                                                  'z': round(_v3.z, 2)})
+                self._fx_broadcast(_a3, {'kind': 'dmg', 'v': _dm3, 'crit': 0,
+                                         'x': round(_v3.x, 2), 'z': round(_v3.z, 2),
+                                         '_skip': _a3.cid})
+                if int(_v3.hp) <= 0:
+                    _v3.hp = 0
+                    self._pvp_killed(_a3, _v3)
+            self._later_pl = _kp
         # ★ 到点发射投掷物（round391 ✓）
         if getattr(self, '_later_arrow', None):
             _ka = []
-            for (_due2, _cid2, _dmg2, _crit2, _isdag) in self._later_arrow:
+            for (_due2, _cid2, _dmg2, _crit2, _isdag, _seq2) in self._later_arrow:
                 if _now < _due2:
-                    _ka.append((_due2, _cid2, _dmg2, _crit2, _isdag))
+                    _ka.append((_due2, _cid2, _dmg2, _crit2, _isdag, _seq2))
                     continue
                 pp = self.players.get(_cid2)
                 if not pp or len(self.arrows) >= ARROW_MAX:
@@ -7018,6 +7123,7 @@ class World(object):
                     'kind': 'dagger' if _isdag else 'arrow',
                     'life': (14.0 if _isdag else 8.0) / ARROW_SPEED,
                     'by': pp.cid,
+                    'seq': _seq2,
                 }
             self._later_arrow = _ka
 
@@ -7140,6 +7246,13 @@ class World(object):
                 continue                      # 跳过后面所有追击/咬人逻辑 ✓
             if near is not None and nd2 <= agg2:
                 # ---- 有目标：追 / 咬（外卖残血时改成逃，见下）----
+                # ★ 2026-10-22：精英/Boss 先用技能状态机（返回 True 表示这帧不做普通追击）
+                if int(getattr(m, 'rank', 0) or 0) > 0:
+                    try:
+                        if self._mob_skill_ai(m, near, dt):
+                            continue
+                    except Exception as _se:
+                        print('[mob] skill ai failed: %r' % (_se,))
                 m.tgt = near.cid
                 d = math.sqrt(nd2) if nd2 > 0 else 0.0
                 # ★ 外卖骑手：残血就逃（方案 §3.3"移速最快，会逃跑"）
@@ -9064,12 +9177,18 @@ class World(object):
           · 物品【留在背包里】✗ 标记 broken: true ✓
           · 而且【继续保持穿戴】✗ 这样穿戴格子上能看到"已损坏" ✓
           · 但打不出伤害（_atk_of 里判 ✓）· 也不能再穿（auth 里判 ✓）
+        ★★ round409（用户："武器坏了直接放回背包，用空手打；
+                       坏掉的武器只能出售给系统，并且只值 10 金币"）★★
+          → 不再"继续穿戴"：卸下装备表那条 + 手上换空手 ✓
+          → 物品本身留在背包（items 里 in_storage=0 + broken:true ✓）
+          → 价格走 value.BROKEN_SCRAP = 10 ✓（交易所不收坏的 ✓ 只能卖系统 ✓）
         """
         import json
         nm = (p.weapon or {}).get('name') or '武器'
         old_id = p.weaponItemId
         if p.weapon is not None:
             p.weapon['broken'] = True          # ★ 身上这份也标上（画穿戴格子要用 ✓）
+        self._invalidate_stats(p)
         p.wDur = 0
         p.wDurDirty = 0
         if old_id:
@@ -9083,10 +9202,21 @@ class World(object):
                 wv['dur'] = 0
                 self.post_save('UPDATE items SET item_json=? WHERE id=? AND role_id=?',
                                (json.dumps(wv, ensure_ascii=False), old_id, p.role_id))
+                # ★ round409：把【装备表】里那条也删掉 ✗
+                #   不删的话重登又会把它穿回身上 ✓（用户要的是"放回背包、空手打"✓）
+                self.post_save('DELETE FROM equipment WHERE role_id=? AND slot=?',
+                               (p.role_id, 'weapon'))
             except Exception as e:
                 print('[装备] 标记武器损坏失败：%r' % (e,))
+        # ★ round409：手上换成【空手】✗ 不再留着那把坏的 ✓
+        #   （_atk_of 里对 broken 也按空手算 ✓ 双保险 ✓ 但服务器状态要一致 ✓）
+        p.weapon = dict(weapons.FIST)
+        p.weaponItemId = None
+        p.wDurMax = 0
         self._send_cid(p.cid, P.pack('notice',
-                                     text='⚠ %s 耐久耗尽，已损坏（还在背包里，不能再用了）' % nm))
+                                     text='⚠ %s 耐久耗尽，已损坏 → 已放回背包（现在空手）；'
+                                          '坏武器只能卖给系统，值 %d 金币'
+                                          % (nm, int(getattr(valuemod, 'BROKEN_SCRAP', 10)))))
         self._send_cid(p.cid, P.pack('weapon', w=None))
 
     def _break_armor(self, p):
@@ -9096,6 +9226,7 @@ class World(object):
         old_id = p.armorItemId
         if p.armor is not None:
             p.armor['broken'] = True
+        self._invalidate_stats(p)
         p.aDur = 0
         p.aDurDirty = 0
         if old_id:
@@ -9140,6 +9271,10 @@ class World(object):
           那样才有前摇可看：抬手 → 咬 → 收招 ✓ 在这里再点一次会把动画重置，看着像抖一下 ✗
         """
         # ★ 第 56 轮：复活无敌期间【咬不动】✓（不然复活的瞬间又被围死 ✗）
+        # ★ 2026-10-22：目标是分身 → 走分身自己的结算（不套玩家防具/天赋）
+        if getattr(p, 'clone', False):
+            self._mob_bite_clone(m, p)
+            return
         if getattr(p, 'invulnT', 0) > 0:
             return
         # ★★ 第 134 轮：妖兽伤害开关 ✓（关了就咬不动 ✓）
@@ -9147,6 +9282,8 @@ class World(object):
         #     比" 算完伤害再丢掉"省 CPU ✓ 而且不会误触发反伤类效果 ✓
         if not self._mob_atk_on(p):
             return
+        if str(getattr(m, 'kind', '') or '') == '程序员':
+            self._mob_shot_send(m, p)
         dv, crit = mobs.roll_damage(m.atk)
         # ★★ 第 118 轮：记下【原始伤害】★★
         #   这一行下面就开始各种减伤了 ✗（招架 / 防具固定 / 天赋百分比）
@@ -9314,47 +9451,100 @@ class World(object):
         book[(ka, kb)] = now
         return True
 
-    def _pvp_hit(self, p, q, reach, arc):
+    def _pvp_hit(self, p, q, reach, arc, allow_area=True):
         """p 打 q 一下（伤害算法和打怪完全一样 ✓ 用户确认 ✓）
 
         返回打中了几次（0 或 1 ✓）
+        ★ allow_area：这一次挥砍要不要放【区域型】武器机制（横扫/旋击/溅射）
+          False = 这一刀已经打到怪了 ✗ 区域效果打怪那条路径已经放过 ✓
         """
         if not mobs.in_front(p.x, p.z, p.yaw, q.x, q.z, reach, arc):
             return 0
         ok, why = self._pvp_ok(p, q)
         if not ok:
             return 0
+        # ★★★ round411：天赋【命中 / 闪避】★★★
+        #   ★ 规则：我打得到你吗 = 我的命中 抵消 你的闪避 ✓
+        #     剩余部分才是真的闪避率（和"对抗类成对相减"那条设计一致 ✓）
+        _dodge = max(0.0, self._tal(q, 'dodge') - self._tal(p, 'hit'))
+        # ★ round580（疾风步）：闪避 +30%，可突破上限
+        if float((getattr(q, 'skTA', {}) or {}).get('gale', 0) or 0) > 0:
+            _dodge += 30.0
+        if _dodge > 0 and random.random() * 100.0 < _dodge:
+            # 闪开了：双方各一条提示 ✗ 不然打的人以为"点了没反应" ✓
+            try:
+                self._send_cid(q.cid, P.pack('fx', kind='dodge'))
+                self._add_pend(p.cid, 'mhits',
+                               {'mid': 'p:' + str(getattr(q, 'cid', '')),
+                                'dmg': 0, 'crit': False, 'dodge': 1,
+                                'x': round(q.x, 2), 'z': round(q.z, 2)})
+            except Exception:
+                pass
+            return 0
         # ---- 伤害：走和打怪一样的口径（攻击力 → 随武器系数 → 暴击 ✓）----
         _w = p.weapon or {}
         _T = affixes.totals(_w.get('affixes'))
         atk = self._atk_of(p)
-        dv, crit = mobs.roll_damage(atk, crit_pt=_T.get('crit_pt', 0.0),
-                                    crit_dmg=_T.get('crit_dmg', 0.0))
+        # ★ round411：暴击 = 武器词条 + 天赋暴击 − 对方天赋免爆 ✓
+        _cp = (_T.get('crit_pt', 0.0) + self._tal(p, 'crit')
+               - self._tal(q, 'anticrit'))
+        # ★★ round473：暴伤 = 词条 + 天赋 − 对方【抗爆】✗ 封顶 250% ✓
+        #   对抗关系和 命中↔闪避 完全同构 ✓
+        _cd = (_T.get('crit_dmg', 0.0) + self._tal(p, 'critdmg')
+               - max(0.0, self._tal(q, 'anticritdmg')))
+        _cd = max(0.0, min(100.0, _cd))          # 150% + 100% = 250% 封顶 ✓
+        dv, crit = mobs.roll_damage(atk, crit_pt=_cp, crit_dmg=_cd)
         dv = int(dv)
         # ---- 对方的减伤：固定（防具）+ 百分比（天赋）✓ 最后吃 30% 地板 ✓
-        _st = armormod.stats_of(q.armor)
+        _lvq = (q.role or {}).get('level') or 1
+        _st = armormod.stats_of(q.armor, weapons.mastery_of(q.armor, _lvq), level=_lvq)
         _dv0 = dv
+        # ★ round474：穿透词条（无视 N 点减伤）先抵掉对方的固定减伤 ✓
+        _pen_f2 = self._aff(p, 'pen_pt')
+        if _pen_f2 > 0:
+            _st = dict(_st)
+            _st['dr'] = max(0.0, float(_st['dr']) - _pen_f2)
         if _st['dr'] > 0:
             dv = max(max(1, int(round(_dv0 * DMG_FLOOR))), int(round(dv - _st['dr'])))
-        _tdr = float((q.talEff or {}).get('dr') or 0.0)
+        # ★ round411：天赋减伤 = 他的减伤 − 我的穿透（对抗相减 ✗ 战斗时才算 ✓）
+        # ★ round474：两边都加上装备词条（减伤% / 穿透），合计上限 50% ✓
+        _tdr = max(0.0, min(50.0,
+                            (self._tal(q, 'dr') + self._aff(q, 'dr_pct'))
+                            - self._tal(p, 'pen')))
         if _tdr > 0:
             dv = int(round(dv * (1.0 - _tdr / 100.0)))
         dv = max(dv, max(1, int(round(_dv0 * DMG_FLOOR))))
         if dv <= 0:
             return 0
         self._tp_break(q)      # 第 173 轮：被打也打断传送 ✓
+        dv = self._on_player_hurt(q, dv, p)   # ★ 护盾/不灭/荆棘/血怒
+        _was_q2 = int(q.hp or 0) > 0
         q.hp = max(0, int(q.hp) - dv)
+        self._snd_near(q.x, q.z, 'zhurt', 0.8, exclude=q.cid)   # ★ round583
+        if _was_q2 and int(q.hp or 0) <= 0:
+            self._tank_reset(q)      # ★ PvP 死亡 → 坦克层数清零
         # ---- 告诉被打的人（红色数字 + 谁打的 ✓ 客户端已有 ✓）----
         self._add_pend(q.cid, 'hurts', {'dmg': dv, 'x': round(p.x, 2), 'z': round(p.z, 2),
                                        'by': p.name, 'kind': 'mob', 'pvp': True,
                                        'crit': bool(crit)})
         # ---- 打人的人的反馈（和打怪一样弹数字 ✓）----
+        _heal = self._lifesteal(p, dv, q.x, q.z)
         self._add_pend(p.cid, 'mhits', {'mid': 'p:' + str(getattr(q, 'cid', '')),
-                                        'dmg': dv, 'crit': bool(crit),
+                                        'dmg': dv, 'crit': bool(crit), 'heal': _heal,
                                         'x': round(q.x, 2), 'z': round(q.z, 2)})
+        # ★★★ round407/408：武器机制对玩家也要生效 ★★★
+        #   round407 先把【挑飞】挂上来 ✓ 那时其它机制还是"打怪才触发"✗
+        #   round408 用户实测："连刺/横扫一次都没对玩家触发过" ✓
+        #   → 统一走 _weapon_fx_player（挑飞也在里面 ✓ 这里只留一个入口 ✓）
+        #   ★ allow_area 由调用方给（这一次挥砍有没有已经打到怪 ✓）
+        self._weapon_fx_player(p, q,
+                               weapons.fx_of(_w.get('look') or weapons.DEFAULT_TYPE,
+                                             int(_w.get('tier') or 0)),
+                               dv, allow_area=allow_area)
         # ---- 打死了 → 魔气 + 击杀播报 ----
         if int(q.hp or 0) <= 0:
             self._pvp_killed(p, q)
+        p.lastTgt = ('p', q.cid)
         return 1
 
     def _pvp_killed(self, killer, victim):
@@ -9496,6 +9686,7 @@ class World(object):
                 loser.armor = None
                 loser.armorItemId = None
                 loser.aDur = loser.aDurMax = 0
+            self._invalidate_stats(loser)
             if iid:
                 self.post_save('UPDATE items SET role_id=? WHERE id=? AND role_id=?',
                                (stealer.role_id, iid, rid))
@@ -9748,6 +9939,11 @@ class World(object):
                                    'x': round(m.x, 2), 'z': round(m.z, 2),
                                    '_skip': p.cid})
             self._weapon_fx(p, m, _fxRun, dv)
+            # ★ 2026-10-22：这一刀真打中了 → 普攻类被动（影袭/分身/分裂箭）
+            try:
+                self._sk_b_attack_hit(p)
+            except Exception as _bae:
+                print('[skill] 命中被动失败：%r' % (_bae,))
 
             if m.hp <= 0:
                 m.hp = 0
@@ -9806,7 +10002,7 @@ class World(object):
                 m.bleedFrom = p
                 self._send_cid(p.cid, P.pack('fx', kind='bleed', mid=m.mid))
         elif nm == '击退':
-            if m.knockImmune <= 0:
+            if m.knockImmune <= 0 and self._mob_control_mul(m) > 0:
                 m.knockImmune = weapons.KNOCK_IMMUNE
                 # 顺着"我→他"的方向推出去 ✓
                 dx, dz = m.x - p.x, m.z - p.z
@@ -9815,8 +10011,8 @@ class World(object):
                 m.z += dz / d * fx['value']
                 self._send_cid(p.cid, P.pack('fx', kind='knock', mid=m.mid))
         elif nm == '眩晕':
-            if m.stunImmune <= 0:
-                m.stunT = fx['value']
+            if m.stunImmune <= 0 and self._mob_control_mul(m) > 0:
+                m.stunT = fx['value'] * self._mob_control_mul(m)
                 m.stunImmune = weapons.STUN_IMMUNE
                 self._send_cid(p.cid, P.pack('fx', kind='stun', mid=m.mid))
         elif nm == '挑飞':
@@ -9865,9 +10061,25 @@ class World(object):
                 if o.hp <= 0:
                     o.hp = 0
                     self._mob_died(p, o)
-            # ★ 溅射也打玩家（以主目标为中心 ✓）
-            self._aoe_players(p, m.x, m.z, weapons.SPLASH_R,
-                              max(1, int(round(dv * fx['value']))))
+            # ★★★ round409（用户："长棍对后面的人才击退，在打的目标不击退，改一下"）★★★
+            #   病根：上面那个循环第一句就是 `if o is m: continue` ✗
+            #        主目标连"被推开"都没有 ✓（它只吃了直击 dv ✓）
+            #   → 这里补上：主目标也沿玩家朝向推 1.2 米 ✓（和旁边的人一样 ✓）
+            #   ★ 只补【击退】不补【伤害】✗ 主目标已经吃过 dv 了 ✓
+            #     （和旋击那句"主目标不重复算"同一个道理 ✓）
+            m.x += _dxs * 1.2
+            m.z += _dzs * 1.2
+            # ★★★ round407 修的真 bug（交接文档第四节 ②）★★★
+            #   病根：这里原来是从【上一轮】误贴过来的溅射代码 ✗
+            #     _aoe_players(p, m.x, m.z, weapons.SPLASH_R, dv * fx['value'])
+            #     → 圆心是【主目标怪】✗ 半径只有 1.5 米（SPLASH_R）✗
+            #     → 伤害还被乘了 fx['value']（4~10）✗ 等于 4~10 倍伤害 ✓
+            #   正确 = 和上面打怪那段同一个判定：
+            #     圆心【玩家自己】· 半径 = 横扫长度 _d（4~10 米）·
+            #     夹角 37°（cos >= 0.80）· 伤害 dv × 0.8 ✓
+            self._aoe_players(p, p.x, p.z, _d,
+                              max(1, int(round(dv * 0.8))),
+                              push=1.2, cone=(p.yaw, 0.80))
         elif nm == '旋击':
             # ★ round381（用户："锤子触发了就转圈打整个一圈"）
             #   ★ 半径 2.2 米（≈ 锤的攻击距离）✗ 不看朝向 = 360° ✓
@@ -9929,6 +10141,13 @@ class World(object):
                 if o.hp <= 0:
                     o.hp = 0
                     self._mob_died(p, o)
+            # ★★★ round407 修的真 bug（交接文档第四节 ①）★★★
+            #   斧头溅射【打不到玩家】—— 上一轮这句被误贴到了横扫分支上 ✓
+            #   ★ 圆心 = 主目标怪（溅射是"以怪为中心炸开" ✓ 和打怪那段一致 ✓）
+            #   ★ 半径 = SPLASH_R（1.5 米）· 伤害 = dv × fx['value']（和打怪同一个公式 ✓）
+            #   ★ 不吃 _splashCap（那是"最多打几只怪"✓ 玩家不该被它挤掉 ✓）
+            self._aoe_players(p, m.x, m.z, weapons.SPLASH_R,
+                              max(1, int(round(dv * fx['value']))))
 
     def _mob_died(self, p, m):
         # ★★★ 第 217 轮修的真 bug（用户实测发现）★★★
@@ -9956,7 +10175,14 @@ class World(object):
         except Exception:
             pass
         """僵尸死了 → 给击杀者经验 → 队友分 10% → 落库"""
-        self._gain_exp(p, int(m.exp))
+        # ★ 2026-10-22：精英/Boss 按伤害贡献分经验（普通怪照旧）
+        _rank0 = int(getattr(m, 'rank', 0) or 0)
+        if _rank0 > 0:
+            _top = self._award_special_exp(m, p)
+            if p is None:
+                p = _top
+        else:
+            self._gain_exp(p, int(round(int(m.exp) * (1.0 + self._aff(p, 'exp_pct') / 100.0))))
         # round293: gold from kills. Base by kind, scaled by mob level.
         #   Small on purpose (~25 gold per mob) - user decision, see docs v3.
         try:
@@ -9978,6 +10204,11 @@ class World(object):
         self._save_role(p)
         # ★ 掉落（第 38 轮）：地上生成一件，走过去自动捡 ✓
         self._roll_loot(p, m)
+        # ★ 2026-10-22：击杀类被动（坦克引擎 +1% 生命上限 / 嗜血 等）
+        try:
+            self._sk_b_on_kill(p, m)
+        except Exception as _bke:
+            print('[skill] 击杀被动失败：%r' % (_bke,))
 
     def _roll_loot(self, p, m):
         """僵尸死了 roll 掉落（方案 §8：每次击杀【逐项独立】roll ✓）

@@ -234,6 +234,9 @@ class Net(object):
                 try:
                     role['skLe'] = list(learn.keys())
                     role['skLd'] = [k for k in (load.get('A') or []) if k]
+                    # ★ 2026-10-22：B/C 槽也要同步（坦克引擎这类被动装配后立刻生效）
+                    role['skLoad'] = {kk: [k for k in (load.get(kk) or []) if k]
+                                      for kk in ('A', 'B', 'C')}
                 except Exception:
                     pass
                 conn.push_text(P.pack('skillok', defs=skm.to_client(), learn=learn,
@@ -926,14 +929,22 @@ class Net(object):
         #   （技能释放要在 tick 线程做，而 tick 不许读库）
         try:
             import db as _db0
+            _sl = {'A': [], 'B': [], 'C': []}
             with _db0.db(self.cfg) as _c0:
+                _rid0 = int(role.get('id') or 0)
                 _le = [r['key'] for r in _c0.execute(
-                    'SELECT key FROM skill_learn WHERE role_id=?', (int(role.get('id') or 0),))]
-                _ld = [r['key'] for r in _c0.execute(
-                    'SELECT key FROM skill_load WHERE role_id=? AND kind=? ORDER BY slot',
-                    (int(role.get('id') or 0), 'A'))]
+                    'SELECT key FROM skill_learn WHERE role_id=?', (_rid0,))]
+                # ★ 2026-10-22 修：以前只读 kind='A' ✗ → B 类被动（坦克引擎等）
+                #   和 C 类加成永远装配不上 → 学过了也不生效
+                for _r in _c0.execute(
+                        'SELECT kind, slot, key FROM skill_load WHERE role_id=? '
+                        'ORDER BY kind, slot', (_rid0,)):
+                    _k = str(_r['kind'] or '')
+                    if _k in _sl and _r['key']:
+                        _sl[_k].append(_r['key'])
             role['skLe'] = _le
-            role['skLd'] = _ld
+            role['skLd'] = _sl['A']
+            role['skLoad'] = _sl
         except Exception as _ske:
             print('[skill] 读已学技能失败: %r' % (_ske,))
         try:
