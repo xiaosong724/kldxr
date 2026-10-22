@@ -29,7 +29,8 @@
         }).join('') + '</select></div>' +
         '<div class="row"><input id="townX" type="number" step="0.1" value="' + (+P.x).toFixed(1) + '">' +
         '<input id="townZ" type="number" step="0.1" value="' + (+P.z).toFixed(1) + '">' +
-        '<button onclick="townUsePos()">用当前位置</button></div>' +
+        '<button onclick="townUsePos()">用当前位置</button>' +
+        '<button onclick="townPick(\'create\')">地图选点</button></div>' +
         '<div class="row"><button onclick="townCreate()">支付首日费用并创建</button></div>' +
         '<div class="townHint">小镇必须建在主城/其它小镇外，边界之间至少空 50 格；创建后成为安全区（边界外扩 2 格）。</div>';
       return;
@@ -42,6 +43,7 @@
     if (frozen) {
       h += '<div class="row"><input id="townRX" type="number" step="0.1" placeholder="新 X（可选）">' +
         '<input id="townRZ" type="number" step="0.1" placeholder="新 Z（可选）">' +
+        '<button onclick="townPick(\'restore\')">地图选点</button>' +
         '<button onclick="townRestore()">支付当日费用并恢复</button>' +
         '<button onclick="townDissolve()">彻底解散</button></div>' +
         '<div class="townHint">恢复时优先原坐标；原坐标被占用会使用新坐标；7 天内不恢复永久删除。</div>';
@@ -106,6 +108,174 @@
     document.querySelectorAll('.townPerm:checked').forEach(function (c) { mask |= +c.value; });
     wsSend('town_perm_set', { id: t.id, player: target, mask: mask });
   }
+  /* ================= B5：地图选点 + 占地预览 =================
+     只做"选中心 + 画一块占地框"，不碰服务端；创建/恢复仍然走原来的协议。
+     红色 = 离主城太近（50 格间距不满足），绿色 = 可以放。 */
+  var PICK = { on: false, mode: 'create', ghost: null, size: 0,
+               downX: 0, downY: 0, valid: false };
+
+  function pickScene() {
+    if (typeof scene !== 'undefined' && scene) { return scene; }
+    return window.scene || null;
+  }
+  function pickCamera() {
+    if (typeof cam !== 'undefined' && cam) { return cam; }
+    return window.cam || null;
+  }
+  function pickTier() {
+    var t = (window.MY_TOWNS || [])[0];
+    if (PICK.mode === 'restore' && t) { return +t.tier || 30; }
+    var s = el('townTier');
+    return s ? (+s.value || 30) : 30;
+  }
+  function pickSize() { return pickTier() * 0.62; }
+
+  function pickGroundPoint(cx, cy) {
+    var c = pickCamera();
+    if (!c || typeof THREE === 'undefined') { return null; }
+    var rc = new THREE.Raycaster();
+    rc.setFromCamera(new THREE.Vector2((cx / window.innerWidth) * 2 - 1,
+                                       -(cy / window.innerHeight) * 2 + 1), c);
+    var hit = new THREE.Vector3();
+    var plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    return rc.ray.intersectPlane(plane, hit) ? hit : null;
+  }
+
+  function pickValid(x, z, size) {
+    /* 主城是 500×500、中心在原点；两镇边界至少空 50 格 = 31m */
+    var half = size / 2, pad = 250 + 31;
+    if (Math.abs(x) <= pad + half && Math.abs(z) <= pad + half) { return false; }
+    return true;
+  }
+
+  function pickGhost(x, z) {
+    var S = pickScene();
+    if (!S) { return; }
+    if (!PICK.ghost) {
+      var g = new THREE.Group();
+      var geo = new THREE.PlaneGeometry(1, 1);
+      var face = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: 0x66d9ff, transparent: true, opacity: 0.18,
+        depthWrite: false, side: THREE.DoubleSide }));
+      face.rotation.x = -Math.PI / 2;
+      face.position.y = 0.06;
+      g.add(face);
+      var edge = new THREE.LineSegments(new THREE.EdgesGeometry(geo),
+        new THREE.LineBasicMaterial({ color: 0x9fe8ff, transparent: true, opacity: 0.9 }));
+      edge.rotation.x = -Math.PI / 2;
+      edge.position.y = 0.07;
+      g.add(edge);
+      g.userData.face = face;
+      g.userData.edge = edge;
+      S.add(g);
+      PICK.ghost = g;
+    }
+    PICK.ghost.position.set(x, 0, z);
+    PICK.ghost.scale.set(PICK.size, 1, PICK.size);
+  }
+
+  function pickTint(valid) {
+    if (!PICK.ghost) { return; }
+    var f = PICK.ghost.userData.face, e = PICK.ghost.userData.edge;
+    if (f && f.material) { f.material.color.setHex(valid ? 0x66d9ff : 0xff5a4a); }
+    if (e && e.material) { e.material.color.setHex(valid ? 0x9fe8ff : 0xffb0a0); }
+  }
+
+  function pickMove(e) {
+    if (!PICK.on) { return; }
+    var p = pickGroundPoint(e.clientX, e.clientY);
+    if (!p) { return; }
+    PICK.valid = pickValid(p.x, p.z, PICK.size);
+    pickGhost(p.x, p.z);
+    pickTint(PICK.valid);
+  }
+
+  function pickDown(e) {
+    PICK.downX = e.clientX;
+    PICK.downY = e.clientY;
+  }
+
+  function pickClick(e) {
+    if (!PICK.on) { return; }
+    var dx = e.clientX - PICK.downX, dy = e.clientY - PICK.downY;
+    if (dx * dx + dy * dy > 36) { return; }      /* 拖动视角，不算选点 */
+    var p = pickGroundPoint(e.clientX, e.clientY);
+    if (!p) { return; }
+    if (!pickValid(p.x, p.z, PICK.size)) {
+      if (typeof toast === 'function') { toast('离主城/其它小镇太近：边界之间至少空 50 格'); }
+      return;
+    }
+    var ix = p.x.toFixed(1), iz = p.z.toFixed(1);
+    if (PICK.mode === 'restore') {
+      if (el('townRX')) { el('townRX').value = ix; }
+      if (el('townRZ')) { el('townRZ').value = iz; }
+    } else {
+      if (el('townX')) { el('townX').value = ix; }
+      if (el('townZ')) { el('townZ').value = iz; }
+    }
+    pickEnd();
+    var panel = el('townPanel');
+    if (panel) { panel.classList.add('on'); }   /* 只显示，不重渲染，保住已填的名字/尺寸 */
+  }
+
+  function pickKey(e) {
+    if (e.key === 'Escape') {
+      pickEnd();
+      var panel = el('townPanel');
+      if (panel) { panel.classList.add('on'); }
+    }
+  }
+
+  function pickStart(mode) {
+    if (PICK.on) { return; }
+    if (!pickScene() || !pickCamera()) {
+      if (typeof toast === 'function') { toast('场景还没准备好'); }
+      return;
+    }
+    PICK.on = true;
+    PICK.mode = mode === 'restore' ? 'restore' : 'create';
+    PICK.size = pickSize();
+    PICK.valid = pickValid(+P.x, +P.z, PICK.size);
+    pickGhost(+P.x, +P.z);
+    pickTint(PICK.valid);
+    close();
+    var hint = document.getElementById('townPickHint');
+    if (!hint) {
+      hint = document.createElement('div');
+      hint.id = 'townPickHint';
+      hint.style.cssText = 'position:fixed;left:50%;bottom:64px;transform:translateX(-50%);' +
+        'z-index:80;padding:8px 16px;border-radius:10px;background:rgba(10,14,20,.82);' +
+        'color:#e8f4ff;font:14px system-ui,"Microsoft YaHei";pointer-events:none';
+      document.body.appendChild(hint);
+    }
+    hint.textContent = '地图选点：左键确认 · Esc 取消 · 红框 = 离主城太近';
+    hint.style.display = 'block';
+    document.addEventListener('mousemove', pickMove, true);
+    document.addEventListener('mousedown', pickDown, true);
+    document.addEventListener('click', pickClick, true);
+    document.addEventListener('keydown', pickKey, true);
+  }
+
+  function pickEnd() {
+    PICK.on = false;
+    if (PICK.ghost) {
+      var S = pickScene();
+      if (S) { S.remove(PICK.ghost); }
+      PICK.ghost = null;
+    }
+    var hint = document.getElementById('townPickHint');
+    if (hint) { hint.style.display = 'none'; }
+    document.removeEventListener('mousemove', pickMove, true);
+    document.removeEventListener('mousedown', pickDown, true);
+    document.removeEventListener('click', pickClick, true);
+    document.removeEventListener('keydown', pickKey, true);
+  }
+
+  window.townPick = pickStart;
+  window.townPickState = function () {
+    return { on: PICK.on, ghost: !!PICK.ghost, size: PICK.size, valid: PICK.valid };
+  };
+
   window.townOpen = open;
   window.townClose = close;
   window.townRefresh = townRefresh;
