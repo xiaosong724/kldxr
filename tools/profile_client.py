@@ -117,13 +117,13 @@ class CDP:
         return (res.get('result') or {}).get('value')
 
 
-async def profile(token):
+async def profile(token, suffix=''):
     port = random.randint(10600, 10699)
     prof = tempfile.mkdtemp(prefix='prof-')
     proc = subprocess.Popen(
         [CHROME, '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run',
          '--mute-audio', '--user-data-dir=' + prof, '--remote-debugging-port=%d' % port,
-         '--window-size=1600,950', ORIGIN + '/'],
+         '--window-size=1600,950', ORIGIN + '/' + (suffix or '')],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         target = None
@@ -225,7 +225,8 @@ def main():
     reg = http_json('/api/register', {'name': name, 'password': 'e2e-pass-123'})
     print('test role:', name)
     try:
-        asyncio.run(profile(reg['token']))
+        suffix = sys.argv[1] if len(sys.argv) > 1 else ''
+        asyncio.run(profile(reg['token'], suffix))
     finally:
         for _ in range(40):
             if not http_json('/api/health')['world'].get('online'):

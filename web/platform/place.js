@@ -71,6 +71,26 @@
       return g0;
     }
     var g = buildTownModel(spec, {});
+    return batchModel(g);
+  }
+
+  /* ★ C4：每个放置物建完先合批（同材质类合并成 1~3 个网格）
+     否则 309 个物件 = 3000+ 个 mesh / 700+ draw call。
+     复用 static 镇那套合批器，但把 TOWN_STATS 原样还回去（它会被合批函数改写）。 */
+  function batchModel(g) {
+    try {
+      if (typeof townBatchStatic !== 'function') { return g; }
+      var keep = null;
+      if (typeof TOWN_STATS !== 'undefined' && TOWN_STATS) {
+        keep = { i: TOWN_STATS.instanced, m: TOWN_STATS.meshes,
+                 g: TOWN_STATS.merged, k: TOWN_STATS.kept };
+      }
+      townBatchStatic(g);
+      if (keep) {
+        TOWN_STATS.instanced = keep.i; TOWN_STATS.meshes = keep.m;
+        TOWN_STATS.merged = keep.g; TOWN_STATS.kept = keep.k;
+      }
+    } catch (e) { }
     return g;
   }
 
