@@ -11282,6 +11282,11 @@ class World(object):
         #   材料要堆叠（同名同阶合到一行 ✓），武器不堆叠 ✓
         #   但"查一下有没有同类的"要读库 ✗ → tick 线程不许碰磁盘 ✗
         #   → 把整件事交给存档线程（它收到 'PICK' 自己决定 +1 还是新建 ✓）
+        # ★ 2026-10-22（云端 round502）：战报统计只算武器/防具
+        try:
+            rptmod.add_gear(p, it)
+        except Exception:
+            pass
         self.post_save('PICK', (p.role_id, json.dumps(it, ensure_ascii=False),
                                 dbmod.now_ms()))
         self._send_cid(p.cid, P.pack('notice',
