@@ -1215,6 +1215,35 @@ class World(object):
                     _me0 = pend['me'] = {}
                 _me0['hp'] = int(p.hp or 0)
                 _me0['hpm'] = int(self._hp_max(p))
+                # ★ 2026-10-22（云端 round576/580/581/583）：这些字段客户端要读 ✗
+                #   以前只发 hp/hpm/gold/tt/tm/sz → 疾风步的移速、嗜血的攻速、
+                #   冰冻/减速/倒地/护盾 在客户端【完全没有表现】
+                _taM = getattr(p, 'skTA', {}) or {}
+                _aspd = 1.0
+                _mspd = 1.0
+                if float(_taM.get('bloodthirst', 0) or 0) > 0:
+                    _aspd *= 1.2
+                    _mspd *= 1.1
+                if float(_taM.get('berserk', 0) or 0) > 0:
+                    _aspd *= 1.5
+                if float(_taM.get('gale', 0) or 0) > 0:
+                    _mspd *= 1.8
+                _me0['atkSpd'] = round(_aspd, 3)
+                _me0['moveSpd'] = round(_mspd, 3)
+                _me0['frz'] = 1 if float(getattr(p, 'freezeT', 0) or 0) > 0 else 0
+                _me0['downT'] = round(float(getattr(p, 'downT', 0) or 0), 2)
+                _me0['shield'] = (int(p.skShield) if float(getattr(p, 'skShieldT', 0) or 0) > 0
+                                  else 0)
+                _me0['shieldT'] = round(float(getattr(p, 'skShieldT', 0) or 0), 2)
+                _me0['galeT'] = round(float((getattr(p, 'skTA', {}) or {}).get('gale', 0) or 0), 2)
+                _me0['berserkT'] = round(float((getattr(p, 'skTA', {}) or {}).get('berserk', 0) or 0), 2)
+                _me0['bloodrageT'] = round(float((getattr(p, 'skTA', {}) or {}).get('bloodrage', 0) or 0), 2)
+                _me0['bloodthirstT'] = round(float((getattr(p, 'skTA', {}) or {}).get('bloodthirst', 0) or 0), 2)
+                _me0['skdur'] = round(1.0 + self._sk_val(p, 'skdur'), 4)
+                _me0['plague'] = 1 if bool(getattr(p, 'plagueOn', False)) else 0
+                _me0['qimax'] = int(self._qi_max(p))
+                _me0['slow'] = (round(float(getattr(p, 'slowMul', 1.0) or 1.0), 3)
+                                if float(getattr(p, 'slowT', 0) or 0) > 0 else 1.0)
                 # round294: gold goes out with `me` (one extra int, no new message).
                 #   The client adopts it field-wise, so a missing value never zeroes it.
                 _me0['gold'] = int(getattr(p, 'gold', 0) or 0)
@@ -6420,6 +6449,84 @@ class World(object):
                     self._mq_save(p)
                     self._send_cid(p.cid, P.pack(
                         'notice', text='你摔死了，魔气 −%d（现在 %d）' % (_lost, int(p.mq or 0))))
+        elif t == 'baglock':
+            # ★★★ round410（用户："背包物品加个锁：锁住不能卖、不能交易、不能被批量出售，
+            #                要再点一次解锁才可以"）★★★
+            #   ★ 锁写在 item_json 的 locked 字段上 ✓
+            #     卖系统（auth.sell_item）/ 挂交易所（_mkt_list）/ 批量出售
+            #     都已经在查 locked / locked_by ✓ 这里只要把标记写进去 ✓
+            #   ★ tick 线程不能查库 ✗ 所以校验用登录时装好的背包快照 ✓
+            #     （和交易所 _mkt_list 用的是同一份 ✓）
+            try:
+                _iidL = int((d or {}).get('iid'))
+            except Exception:
+                _iidL = 0
+            if _iidL <= 0:
+                self._send_cid(p.cid, P.pack('notice', text='参数不对'))
+                return
+            _recL = None
+            for _x in (p.role.get('bag') or []):
+                try:
+                    if int(_x.get('id')) == _iidL:
+                        _recL = _x
+                        break
+                except Exception:
+                    continue
+            if _recL is None:
+                self._send_cid(p.cid, P.pack(
+                    'notice', text='背包里没有这件东西（刷新一下再看看）'))
+                return
+            _itL = _recL.get('item')
+            if not isinstance(_itL, dict):
+                self._send_cid(p.cid, P.pack('notice', text='这件东西不能上锁'))
+                return
+            if _itL.get('locked_by'):
+                self._send_cid(p.cid, P.pack('notice', text='这件正在上架中，不能动锁'))
+                return
+            _want = bool((d or {}).get('lock'))
+            if _want:
+                _itL['locked'] = 1
+            else:
+                _itL.pop('locked', None)
+            # ★★★ round414（用户："上锁两个装备，重启后锁没了"）★★★
+            #   ★ 第一个病根在 db.startup_unlock_items（启动时把 locked 也清了 ✗ 已修）
+            #   ★ 第二个病根在这里：装备【穿在身上】时，内存里有【两份」副本 ✗
+            #     · p.role['bag'] 里那份（本函数改的就是它 ✓）
+            #     · p.weapon / p.armor（装备上去的那份 ✓）
+            #     而耐久每 50 次就会把 p.weapon / p.armor 整份写回库 ✗
+            #     → 那份没有 locked 的旧副本把锁盖掉 ✗（不重启也会丢 ✓）
+            #   ★ 修：两份副本同步 ✗ 写库时哪份在后面都对 ✓
+            if p.weaponItemId and int(p.weaponItemId) == _iidL and isinstance(p.weapon, dict):
+                if _want:
+                    p.weapon['locked'] = 1
+                else:
+                    p.weapon.pop('locked', None)
+            if p.armorItemId and int(p.armorItemId) == _iidL and isinstance(p.armor, dict):
+                if _want:
+                    p.armor['locked'] = 1
+                else:
+                    p.armor.pop('locked', None)
+            # ★ 这里必须现导入 ✗ _handle_intent 里后面有 `import json` 的局部分支，
+            #   函数内一旦出现 import json，json 就变成【局部名】✗
+            #   在上面直接用它 = UnboundLocalError ✓（自测第一次就撞上了 ✓）
+            import json as _json
+            self.post_save('UPDATE items SET item_json=? WHERE id=? AND role_id=?',
+                           (_json.dumps(_itL, ensure_ascii=False), _iidL, p.role_id))
+            self._send_cid(p.cid, P.pack(
+                'notice',
+                text=('已上锁：%s（不能卖、不能挂交易所、不会被批量出售）'
+                      % (_itL.get('name') or '物品')) if _want
+                     else ('已解锁：%s' % (_itL.get('name') or '物品'))))
+            # ★★★ round412（用户："上锁后不能马上看到图标，得刷新才能看到"）★★★
+            #   病根：这里原来发的是 bagrefresh → 客户端去拉 /api/bag ✗
+            #     而那条落库是 post_save【排队】交给 saver 线程的 ✓
+            #     → 客户端读库的时机大概率还没写进去 ✗
+            #     → 拿回来的是【旧数据】✗ 图标当然不变 ✓
+            #   ★ 修法：不再让他去拉库 ✗ 直接把【新状态】发过去 ✓
+            #     客户端只改这一格的 locked 字段 + 重画 ✗ 零延迟 ✓
+            #     （库还是照常写 ✗ 但不再拿它当刷新信号 ✓）
+            self._send_cid(p.cid, P.pack('baglockok', iid=_iidL, lock=1 if _want else 0,
+                                         name=(_itL.get('name') or '')))
         elif t == 'equipset':
             #   （tick 线程不许碰磁盘 ✗ 所以查库那步在 net.py 做）
             w = d.get('weapon')
