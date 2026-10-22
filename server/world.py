@@ -1991,6 +1991,26 @@ class World(object):
     def _do_teleport(self, p, d):
         tid = str((d or {}).get('id') or '')
         tp = town.teleport_of_id(tid)
+        # ★ 2026-10-22（用户："传送阵应该用新模型，而且可以移动"）：
+        #   传送阵现在是可放置物件（function_type='teleport'），id 形如 obj<对象id>。
+        if not tp and tid.startswith('obj'):
+            try:
+                _oid = int(tid[3:])
+            except Exception:
+                _oid = 0
+            if _oid:
+                try:
+                    with dbmod.db(self.cfg) as _c:
+                        _r = _c.execute(
+                            'SELECT o.id,o.x,o.z,o.state,cat.function_type,cat.name'
+                            ' FROM town_objects o JOIN town_catalog cat'
+                            ' ON cat.id=o.catalog_id WHERE o.id=?', (_oid,)).fetchone()
+                    if _r is not None and str(_r['state']) == 'active' and \
+                       str(_r['function_type']) == 'teleport':
+                        tp = {'id': tid, 'name': str(_r['name'] or '传送阵'),
+                              'x': float(_r['x']), 'z': float(_r['z'])}
+                except Exception as _te:
+                    print('[tp] placed teleport lookup failed: %r' % (_te,))
         if not tp:
             self._send_cid(p.cid, P.pack('notice', text='NO_TELEPORT'))
             return

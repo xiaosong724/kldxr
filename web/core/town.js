@@ -201,10 +201,36 @@ function townSeatNear(x, z) {
   }
   return best;
 }
+/* ★★★ 2026-10-22（用户："传送阵没有用我们的新模型，并且传送阵也可以移动才对"）★★★
+   以前传送阵是静态表 TOWN_TELEPORTS（写死坐标、独立绘制）。
+   现在传送阵就是放置物件 `teleport_v1`：可移动、可删除，
+   近不近、是哪一座，全按【已放置物件】算。
+   静态传送阵只在 ?legacydeco=1 时画。 */
+function townTeleportList() {
+  var out = [];
+  var list = (typeof TOWN_OBJECTS_CACHE !== 'undefined' && TOWN_OBJECTS_CACHE) || [];
+  var cats = {};
+  var cl = (typeof MY_TOWN_CATALOG !== 'undefined' && MY_TOWN_CATALOG) || [];
+  for (var c = 0; c < cl.length; c++) { if (cl[c]) { cats[cl[c].id] = cl[c]; } }
+  for (var i = 0; i < list.length; i++) {
+    var o = list[i];
+    if (!o || o.parent) { continue; }
+    var cat = cats[o.catalog];
+    if (!cat || String(cat.function_type || '') !== 'teleport') { continue; }
+    out.push({
+      id: 'obj' + o.id, objId: o.id,
+      name: String(cat.name || o.catalog).replace(/\s+v\d+$/, ''),
+      x: +o.x, z: +o.z
+    });
+  }
+  return out;
+}
+
 function townTeleportNear(x, z) {
+  var pads = townTeleportList();
   var best = null, bd = 2.8 * 2.8;
-  for (var i = 0; i < TOWN_TELEPORTS.length; i++) {
-    var t = TOWN_TELEPORTS[i];
+  for (var i = 0; i < pads.length; i++) {
+    var t = pads[i];
     var dx = t.x - x, dz = t.z - z;
     var d2 = dx * dx + dz * dz;
     if (d2 <= bd) { bd = d2; best = t; }
@@ -410,8 +436,9 @@ function townHouseById(id) {
   return null;
 }
 function townTeleportById(id) {
-  for (var i = 0; i < TOWN_TELEPORTS.length; i++) {
-    if (TOWN_TELEPORTS[i].id === id) { return TOWN_TELEPORTS[i]; }
+  var pads = townTeleportList();
+  for (var i = 0; i < pads.length; i++) {
+    if (String(pads[i].id) === String(id)) { return pads[i]; }
   }
   return null;
 }
@@ -3110,6 +3137,9 @@ function townBatchStatic(root) {
 
 /* 传送阵：石台 + 发光环 + 符文 + 站牌 */
 function townTeleportPads(g) {
+  /* ★ 2026-10-22：传送阵已经是可放置物件（teleport_v1，用新模型），
+     这层静态旧画法只在 ?legacydeco=1 时保留 */
+  if (!_legacyDecoOn()) { return; }
   TOWN_TELEPORTS.forEach(function (t) {
     var x = t.x, z = t.z;
     townSoftShadow(g, x + 0.10, z + 0.08, 3.4, 3.4, 0, 0.22);
@@ -3412,11 +3442,86 @@ function townShopLabelsRebuild() {
 }
 
 function townTeleportLabels(g) {
+  if (!_legacyDecoOn()) { return; }
   (TOWN_TELEPORTS || []).forEach(function (t, i) {
     if (!t || !t.name) { return; }
     townFloatingLabel(g, t.name, '传送点 T' + (i + 1),
       t.x, 3.05, t.z, 'rgba(140,230,255,0.95)');
   });
+}
+
+/* ★★★ 2026-10-22（用户："旧 NPC 没移除；NPC 要放在对应店铺里，跟着店铺生成/移动"）★★★
+   店员 = 每家可交互店铺配一个，用玩家模型（hero()）建，
+   改动物件（放/挪/删）后调 townNpcsRebuild() 重建。 */
+var TOWN_NPC_GROUP = null;
+var TOWN_NPC_LIST = [];
+var TOWN_BUILD_FLOOR = {
+  shop_cafe_v1: 0.28, shop_cafe_v2: 0.28, shop_mart_v1: 0.28,
+  house_flat_v1: 0.28, house_villa_v1: 0.28
+};
+function townBuildFloorY(cat) {
+  var v = TOWN_BUILD_FLOOR[cat];
+  return (typeof v === 'number') ? v : 0.26;
+}
+function townNpcsInit(g) {
+  if (!TOWN_NPC_GROUP) {
+    TOWN_NPC_GROUP = new THREE.Group();
+    TOWN_NPC_GROUP.name = 'shopNpcs';
+    g.add(TOWN_NPC_GROUP);
+  }
+  townNpcsRebuild();
+}
+function townNpcsRebuild() {
+  var grp = TOWN_NPC_GROUP;
+  if (!grp) { return; }
+  for (var i = grp.children.length - 1; i >= 0; i--) { grp.remove(grp.children[i]); }
+  TOWN_NPC_LIST = [];
+  var list = (typeof TOWN_OBJECTS_CACHE !== 'undefined' && TOWN_OBJECTS_CACHE) || [];
+  var cats = {};
+  var cl = (typeof MY_TOWN_CATALOG !== 'undefined' && MY_TOWN_CATALOG) || [];
+  for (var c = 0; c < cl.length; c++) { if (cl[c]) { cats[cl[c].id] = cl[c]; } }
+  for (var k = 0; k < list.length; k++) {
+    var o = list[k];
+    if (!o || o.parent) { continue; }
+    var cat = cats[o.catalog];
+    if (!cat || cat.category !== 'building') { continue; }
+    /* 只给可交互店铺配店员（服务端给了 shop_x/shop_z） */
+    if (o.shop_x == null && o.shop_z == null) { continue; }
+    var rot = +o.rot || 0;
+    /* 店员站柜台后面：本地 (0, 0.8)，门在南 (+z)，所以 0.8 在柜台内侧 */
+    var lx = 0, lz = 0.8;
+    var wx = (+o.x) + lx * Math.cos(rot) + lz * Math.sin(rot);
+    var wz = (+o.z) - lx * Math.sin(rot) + lz * Math.cos(rot);
+    var fy = townBuildFloorY(o.catalog);
+    var nm = String(cat.name || o.catalog).replace(/\s+v\d+$/, '') + '掌柜';
+    var n = { id: 'clerk_' + o.id, name: nm, x: wx, z: wz, ry: rot, kind: 'clerk' };
+    var m = townNpcHero(n);
+    if (!m) { continue; }
+    m.position.y = (m.position.y || 0) + fy;
+    m.userData = m.userData || {};
+    grp.add(m);
+    TOWN_NPC_LIST.push({
+      g: m, x: wx, z: wz, baseY: m.position.y, baseRy: rot, t: Math.random() * 6
+    });
+  }
+}
+/* 每帧：玩家靠近时转头看你 + 轻微起伏（招呼动作） */
+function townNpcTick(px, pz, dt) {
+  if (!TOWN_NPC_LIST.length) { return; }
+  var st = (dt > 0) ? dt : 0.016;
+  for (var i = 0; i < TOWN_NPC_LIST.length; i++) {
+    var n = TOWN_NPC_LIST[i];
+    var dx = px - n.x, dz = pz - n.z;
+    var near = (dx * dx + dz * dz) < 25;          /* 5 米内 */
+    var want = near ? Math.atan2(dx, dz) : n.baseRy;
+    var cur = n.g.rotation.y;
+    var diff = want - cur;
+    while (diff > Math.PI) { diff -= Math.PI * 2; }
+    while (diff < -Math.PI) { diff += Math.PI * 2; }
+    n.g.rotation.y = cur + diff * Math.min(1, st * 7);
+    n.t += st;
+    n.g.position.y = n.baseY + (near ? Math.sin(n.t * 3.2) * 0.035 : 0);
+  }
 }
 
 function townLabelTick(px, pz) {
@@ -3540,14 +3645,23 @@ function buildTown() {
   townTeleportLabels(g);
   townShopLabels(g);
   townNewDistrictDetails(g);
-  TOWN_STATS.npcs = TOWN_NPCS.length;
+  /* ★ 2026-10-22（用户："以前旧的NPC没有移除，玩家模型的NPC没有放到对应的店铺里，
+     这个应该也是跟着店铺生成而生成，移动而移动"）：
+     旧 NPC 来自静态表 TOWN_NPCS（和建筑无关，挪走店铺人还杵在原地）。
+     现在改成【按店铺建筑生成店员】，跟着建筑走、删了也跟着消失。
+     静态 NPC 只在 ?legacydeco=1 时画。 */
+  TOWN_STATS.npcs = 0;
   var _npcBefore = g.children.length;
-  for (var ni = 0; ni < TOWN_NPCS.length; ni++) { townNpc(g, TOWN_NPCS[ni]); }
+  if (_legacyDecoOn()) {
+    for (var ni = 0; ni < TOWN_NPCS.length; ni++) { townNpc(g, TOWN_NPCS[ni]); }
+  }
   TOWN_STATS.npcMeshes = g.children.length - _npcBefore;
   TOWN_STATS.seats = TOWN_SEATS.length;
   TOWN_STATS.solids = TOWN_SOLIDS.length;
   townGroundFlush(g);
   townBatchStatic(g);
+  /* 店员在合批【之后】建，别被合批器吃掉 */
+  try { townNpcsInit(g); } catch (eNpcInit) { }
   return g;
 }
 

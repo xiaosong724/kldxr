@@ -6016,8 +6016,9 @@ function mapDraw() {
       group: isShop ? 'shop' : 'building', wx: bcx, wz: bcz });
   }
   /* 传送点 */
-  for (var ti = 0; ti < TOWN_TELEPORTS.length; ti++) {
-    var t = TOWN_TELEPORTS[ti];
+  var _tpList = (typeof townTeleportList === 'function') ? townTeleportList() : TOWN_TELEPORTS;
+  for (var ti = 0; ti < _tpList.length; ti++) {
+    var t = _tpList[ti];
     if (!mapPass('tp', t.x, t.z)) { continue; }
     c.fillStyle = '#6fd6ff'; c.strokeStyle = '#d8f8ff'; c.lineWidth = 1.5;
     c.beginPath(); c.arc(X(t.x), Y(t.z), Math.max(3, 4.2 * sc / 2), 0, Math.PI * 2); c.fill(); c.stroke();
@@ -7022,7 +7023,9 @@ function tpRender() {
   var box = document.getElementById('tpList');
   if (!box) { return; }
   var h = '';
-  var list = (typeof TOWN_TELEPORTS !== 'undefined') ? TOWN_TELEPORTS : [];
+  /* ★ 2026-10-22：传送阵现在是可放置物件，列表也按实际放置的算 */
+  var list = (typeof townTeleportList === 'function') ? townTeleportList()
+    : ((typeof TOWN_TELEPORTS !== 'undefined') ? TOWN_TELEPORTS : []);
   for (var i = 0; i < list.length; i++) {
     h += '<button class="tpBtn" data-tpid="' + list[i].id + '" onclick="tpPick(\'' + list[i].id + '\')">' +
       '<b>' + list[i].name + '</b><span>传送</span></button>';

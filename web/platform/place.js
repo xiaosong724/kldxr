@@ -255,6 +255,8 @@
   /* ★ 2026-10-22：物件增删改后重建店铺飘字（飘字跟着建筑走） */
   function rebuildLabels() {
     try { if (typeof townShopLabelsRebuild === 'function') { townShopLabelsRebuild(); } } catch (e) { }
+    /* 店员也要跟着店铺重建（放/挪/删都会走到这里） */
+    try { if (typeof townNpcsRebuild === 'function') { townNpcsRebuild(); } } catch (e2) { }
   }
 
   function placeAt(o) {
