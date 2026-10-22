@@ -626,8 +626,13 @@
       box.id = 'editConfirm';
       document.body.appendChild(box);
     }
+    /* ★★★ 2026-10-22（用户："还是不能删除，点取消也关不掉"）★★★
+       实测：确认框 z-index=70，但按钮位置上命中的是别的面板
+       （elementFromPoint 返回的 isInside=false）→ 点击全被上层拦掉了。
+       现在把确认框压到最上层，并强制可点。 */
     box.style.cssText =
-      'position:fixed;inset:0;z-index:70;display:flex;align-items:center;justify-content:center;' +
+      'position:fixed;inset:0;z-index:2147483000;display:flex;' +
+      'align-items:center;justify-content:center;pointer-events:auto;' +
       'background:rgba(4,6,9,.55)';
     box.innerHTML =
       '<div style="width:min(360px,88vw);border-radius:14px;background:#17110bee;' +
