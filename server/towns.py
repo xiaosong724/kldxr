@@ -331,29 +331,17 @@ BUILDING_SEED = (
      '{}', '[[-1.85,0,-1.85,1.85,0.5,1.85]]', 'teleport_v1', ''),
 )
 
-CATALOG_SEED = (
-    # id, name, category, w, d, h, price, function_type, function_json, collision_json
-    ('chair', '椅子', 'furniture', 0.62, 0.62, 0.9, 15000, 'seat', '{}', '[[-0.3,0,-0.3,0.3,0.9,0.3]]'),
-    ('table', '桌子', 'furniture', 1.24, 0.62, 0.8, 25000, 'none', '{}', '[[-0.6,0,-0.3,0.6,0.8,0.3]]'),
-    ('lamp', '路灯', 'decor', 0.62, 0.62, 3.0, 50000, 'none', '{}', '[[-0.12,0,-0.12,0.12,3.0,0.12]]'),
-    ('tree', '树', 'decor', 1.24, 1.24, 2.5, 30000, 'none', '{}', '[[-0.25,0,-0.25,0.25,2.5,0.25]]'),
-    ('flowerbed', '花坛', 'decor', 1.86, 1.24, 0.6, 20000, 'none', '{}', '[[-0.9,0,-0.6,0.9,0.6,0.6]]'),
-    ('bench', '长椅', 'furniture', 1.86, 0.62, 0.7, 20000, 'seat', '{}', '[[-0.9,0,-0.3,0.9,0.7,0.3]]'),
-    ('teleport', '传送阵', 'function', 3.1, 3.1, 0.3, 2000000, 'teleport', '{}', '[]'),
-    ('house_flat', '小平房', 'building', 9.3, 9.3, 3.0, 5000000, 'house', '{"tier":"flat"}', '[]'),
-    ('house_yard', '小院', 'building', 12.4, 12.4, 3.0, 8000000, 'house', '{"tier":"yard"}', '[]'),
-    ('house_villa', '别墅', 'building', 18.6, 18.6, 5.5, 12000000, 'house', '{"tier":"villa"}', '[]'),
-    ('shop_mart', '超市', 'building', 12.4, 12.4, 3.0, 20000000, 'shop', '{"shop":"mart"}', '[]'),
-    ('shop_cafe', '咖啡店', 'building', 9.3, 9.3, 3.0, 20000000, 'shop', '{"shop":"cafe"}', '[]'),
-    ('shop_ramen', '拉面店', 'building', 9.3, 9.3, 3.0, 20000000, 'shop', '{"shop":"ramen"}', '[]'),
-    ('shop_izakaya', '居酒屋', 'building', 9.3, 9.3, 3.0, 20000000, 'shop', '{"shop":"izakaya"}', '[]'),
-    ('shop_bakery', '面包店', 'building', 9.3, 9.3, 3.0, 20000000, 'shop', '{"shop":"bakery"}', '[]'),
-    ('shop_clinic', '药铺', 'building', 9.3, 9.3, 3.0, 20000000, 'shop', '{"shop":"clinic"}', '[]'),
-    ('shop_tea', '茶馆', 'building', 9.3, 9.3, 3.0, 20000000, 'shop', '{"shop":"tea"}', '[]'),
-    ('shop_flower', '花店', 'building', 9.3, 9.3, 3.0, 20000000, 'shop', '{"shop":"flower"}', '[]'),
-    ('shop_general', '杂货铺', 'building', 9.3, 9.3, 3.0, 20000000, 'shop', '{"shop":"general"}', '[]'),
-    ('shop_dessert', '奶茶店', 'building', 9.3, 9.3, 3.0, 20000000, 'shop', '{"shop":"dessert"}', '[]'),
-    ('hall', '大厅', 'building', 18.6, 12.4, 3.6, 50000000, 'building', '{}', '[]'),
+# ★ C3（2026-10-22）：旧的 22 条通用目录（椅子/桌子/路灯/树/旧房子/旧店铺/hall/teleport）
+#   已经被 FURNITURE_SEED + BUILDING_SEED 完全取代，没有任何布局或物件再引用它们。
+#   这里不再播种；启动时顺手把老库里的 legacy_* / 旧 id 清掉（见 seed_catalog）。
+CATALOG_SEED = ()
+
+DEAD_CATALOG_IDS = (
+    'chair', 'table', 'lamp', 'tree', 'flowerbed', 'bench', 'teleport',
+    'house_flat', 'house_yard', 'house_villa',
+    'shop_mart', 'shop_cafe', 'shop_ramen', 'shop_izakaya', 'shop_bakery',
+    'shop_clinic', 'shop_tea', 'shop_flower', 'shop_general', 'shop_dessert',
+    'hall',
 )
 
 
@@ -389,6 +377,10 @@ def seed_catalog(cfg):
                       (cid, name, cat, w, d, h, int(price), fn, fj, cj,
                        int(price // 1000000), now, mid, 'v1',
                        json.dumps(layout, ensure_ascii=False), 'grid', 0))
+        # ★ C3：清掉旧的通用目录 / legacy_*（没有物件引用它们）
+        c.execute("DELETE FROM town_catalog WHERE id LIKE 'legacy\\_%' ESCAPE '\\'")
+        qmarks = ','.join('?' * len(DEAD_CATALOG_IDS))
+        c.execute('DELETE FROM town_catalog WHERE id IN (%s)' % qmarks, DEAD_CATALOG_IDS)
         # ★ C2：布局是代码里的默认值，改了要覆盖旧行（价格是后台改的 ✗ 不能碰）
         for (cid, name, cat, w, d, h, price, fn, fj, cj, mid, lk) in BUILDING_SEED:
             layout = json.dumps(LAYOUTS.get(lk, {}), ensure_ascii=False)
