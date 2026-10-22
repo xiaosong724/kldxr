@@ -1520,6 +1520,45 @@ function buildFurnitureModel(spec, opts) {
   else if (id === 'chair_wood' || id === 'hall_chair' || id === 'desk_chair') {
     buildChairAt(g, add, 0, 0, 0, id, 0x8a5a3a, 0);
   }
+  else if (id === 'shop_counter' || id === 'checkout_counter') {
+    /* 柜台：柜体 + 台面（以前只在建筑内部函数里画，删掉后变成了方块） */
+    var f0 = TOWN_FURNITURE_SPECS[id] || { w: 3.2, d: 0.62, h: 1.22 };
+    add(tmBox(g, f0.w, 0.95, f0.d, 0x6b4a32, 0, 0.72, 0), id + '_body');
+    add(tmBox(g, f0.w + 0.15, 0.10, f0.d + 0.16, 0xd8cbb0, 0, 1.22, 0), id + '_top');
+  }
+  else if (id === 'dining_table' || id === 'outdoor_table' || id === 'coffee_table') {
+    /* 桌子：桌面 + 四条腿 */
+    var ft = TOWN_FURNITURE_SPECS[id] || { w: 1.3, d: 0.8, h: 0.75 };
+    add(tmBox(g, ft.w, 0.10, ft.d, 0x6b4a32, 0, ft.h - 0.05, 0), id + '_top');
+    var _lx = ft.w / 2 - 0.12, _lz = ft.d / 2 - 0.12;
+    [[-_lx, -_lz], [_lx, -_lz], [-_lx, _lz], [_lx, _lz]].forEach(function (q, qi) {
+      add(tmBox(g, 0.08, ft.h - 0.10, 0.08, 0x4a3423, q[0], (ft.h - 0.10) / 2, q[1]),
+          id + '_leg_' + qi);
+    });
+  }
+  else if (id === 'shop_shelf' || id === 'aisle_shelf') {
+    /* 货架：两侧立柱 + 四层隔板 */
+    var fs = TOWN_FURNITURE_SPECS[id] || { w: 0.72, d: 2.2, h: 1.9 };
+    add(tmBox(g, fs.w * 0.7, fs.h, fs.d, 0x5f4630, 0, fs.h / 2, 0), id + '_body');
+    for (var _sh = 0; _sh < 4; _sh++) {
+      add(tmBox(g, fs.w * 0.86, 0.06, fs.d * 0.92, 0x9a7650, 0,
+                fs.h * (0.22 + _sh * 0.26), 0), id + '_tier_' + (_sh + 1));
+    }
+  }
+  else if (id === 'plant_pot') {
+    var fp = TOWN_FURNITURE_SPECS[id] || { w: 0.5, d: 0.5, h: 0.9 };
+    add(tmCyl(g, fp.w * 0.45, fp.w * 0.52, 0.38, 0x9a5f42, 0, 0.19, 0), id + '_pot');
+    add(tmSphere(g, fp.w * 0.58, 0x5c8a52, 0, 0.78, 0), id + '_leaf');
+  }
+  else if (id === 'ceiling_lamp') {
+    var fl = TOWN_FURNITURE_SPECS[id] || { w: 0.32, d: 0.26, h: 0.1 };
+    add(tmBox(g, fl.w, 0.06, fl.d, 0xffd9a0, 0, 2.60, 0), id + '_lamp');
+  }
+  else if (id === 'umbrella') {
+    /* ★ 2026-10-22：遮阳伞原来走到下面的"简单盒体"兜底 → 被画成一个 2.7m 的大方块。
+       这里接上真正的伞模型（杆 + 圆锥伞面 + 底座）。 */
+    buildUmbrella(g, add, 0, 0);
+  }
   else if (id === 'fridge_display') { buildFridgeAt(g, add, 0, 0, 0); }
   else if (id === 'coffee_machine') { buildCoffeeMachine(g, add, 0, 0, 0); }
   else {
