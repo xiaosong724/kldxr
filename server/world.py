@@ -1189,6 +1189,106 @@ class World(object):
                        (p.role_id, stat, cur))
         self._tal_send(p)
 
+    def _intent_statask(self, p, d):
+        """客户端打开属性页时要一份最新的属性表"""
+        try:
+            self._tal_send(p)
+        except Exception as e:
+            print('[stat] statask failed: %r' % (e,))
+
+    def _stat_rows(self, p):
+        """属性总览的每一行（★ 2026-10-22：客户端一直在等这个，服务端从来不发）
+
+        行结构（和 web.js 的 statSheetHTML 对齐）：
+          {grp, n, v, unit, cap, base, bn, gear, tal}
+          grp  分组：生存 / 输出 / 手感 / 附加
+          v    当前值
+          base 人物基础 / bn 基础来源名 / gear 装备贡献 / tal 天赋贡献 / cap 上限
+        """
+        import mobs as _mobs2
+        import armor as _armor
+        import weapons as _wep
+        rows = []
+        lv = int((getattr(p, 'role', {}) or {}).get('level') or 1)
+        eff = dict(getattr(p, 'talEff', {}) or {})
+        ar = getattr(p, 'armor', {}) or {}
+        w = getattr(p, 'weapon', {}) or {}
+        if w.get('broken'):
+            w = {}
+        try:
+            g = _armor.stats_of(ar, _wep.mastery_of(ar, lv) if ar else 1.0, lv) if ar else {}
+        except Exception:
+            g = {}
+        gear_hp = float(g.get('hp') or 0) * (1.0 + float(g.get('hp_pct') or 0))
+        gear_dr = float(g.get('dr') or 0)
+
+        def add(grp, n, v, unit='', cap=0, base=0.0, bn='', gear=0.0, tal=0.0):
+            rows.append({'grp': grp, 'n': n, 'v': round(float(v), 3),
+                         'unit': unit, 'cap': round(float(cap), 2),
+                         'base': round(float(base), 3), 'bn': bn,
+                         'gear': round(float(gear), 3), 'tal': round(float(tal), 3)})
+
+        # ---------- 生存 ----------
+        try:
+            base_hp = float(_mobs2.level_hp(lv))
+            tal_hp = float(eff.get('hp') or 0)
+            add('生存', '生命上限', self._hp_max(p), '点', 0,
+                base_hp, '人物', gear_hp, tal_hp)
+        except Exception:
+            pass
+        try:
+            tal_qi = float(eff.get('qi') or 0)
+            qimax = float(self._qi_max(p))
+            add('生存', '灵气上限', qimax, '点', 0, qimax - tal_qi, '人物', 0, tal_qi)
+        except Exception:
+            pass
+        add('生存', '减伤', float(eff.get('dr') or 0) + gear_dr, '%', 50,
+            0, '', gear_dr, float(eff.get('dr') or 0))
+
+        # ---------- 输出 ----------
+        try:
+            tal_atk = float(eff.get('atk') or 0)
+            atk_v = float(self._atk_of(p))
+            # ★ 装备贡献 = 总值 − 固有 − 天赋；剩下算人物基础（保证三项加起来 = 总值）
+            inherent = float(_mobs2.player_atk(lv))
+            gear_atk = max(0.0, atk_v - inherent - tal_atk) if w else 0.0
+            add('输出', '攻击力', atk_v, '点', 0,
+                max(0.0, atk_v - gear_atk - tal_atk), '人物', gear_atk, tal_atk)
+        except Exception:
+            pass
+        add('输出', '暴击率', float(eff.get('crit') or 0), '%', 30, 0, '',
+            0, float(eff.get('crit') or 0))
+        add('输出', '爆伤', 150.0 + float(eff.get('critdmg') or 0), '%', 250,
+            150, '基础', 0, float(eff.get('critdmg') or 0))
+        add('输出', '穿透', float(eff.get('pen') or 0), '%', 0, 0, '',
+            0, float(eff.get('pen') or 0))
+        # ★ 2026-10-22：interval_of / reach_of 吃的是【外观 look】，不是整个武器 dict
+        _look = ''
+        _iv = 1.0
+        _reach = 2.4
+        try:
+            _look = str((w or {}).get('look') or '')
+            if _look:
+                _iv = float(_wep.interval_of(_look))
+                _reach = float(_wep.reach_of(_look))
+        except Exception:
+            _iv, _reach = 1.0, 2.4
+        if _iv > 0:
+            add('输出', '攻速', 1.0 / _iv, '刀/秒', 0, 0, '', 0, 0)
+
+        # ---------- 手感 ----------
+        add('手感', '移速', 100.0 + float(eff.get('speed') or 0), '%', 130,
+            100, '基础', 0, float(eff.get('speed') or 0))
+        add('手感', '攻击范围', _reach, '米', 0, 0, '', 0, 0)
+        add('手感', '攻击间隔', _iv, '秒', 0, 0, '', 0, 0)
+
+        # ---------- 附加 ----------
+        for key, nm in (('dodge', '闪避'), ('hit', '命中'),
+                        ('anticrit', '免爆'), ('anticritdmg', '抗爆')):
+            add('附加', nm, float(eff.get(key) or 0), '%', 30, 0, '',
+                0, float(eff.get(key) or 0))
+        return rows
+
     def _tal_send(self, p):
         """把天赋状态推给客户端（加点/洗点/升级/进世界 都要发 ✓ 方案 §7.2）"""
         import talents as _tal
@@ -1199,6 +1299,13 @@ class World(object):
         # ★ 第 117 轮：血量天赋会改生命上限 → 必须一起带上 ✓
         #   不然加完血量，界面上的血量上限不动 ✗（用户一定会问"生效了吗"✗）
         st['hpm'] = self._hp_max(p)
+        # ★ 2026-10-22（用户："属性页面怎么没有显示"）：属性总览一直是空的，
+        #   因为 pack_state() 里根本没有 stats 字段 —— 客户端只能显示"正在向服务器要…"
+        try:
+            st['stats'] = self._stat_rows(p)
+        except Exception as _se:
+            print('[stat] build rows failed: %r' % (_se,))
+            st['stats'] = []
         self._send_cid(p.cid, P.pack('talents', **st))
 
     def _send_houses(self, p):
@@ -3222,7 +3329,7 @@ class World(object):
         _TP = ('house_info', 'house_buy', 'house_leave', 'house_sleep', 'house_wake',
                # ★ 2026-10-22：换皮肤 / 保存自定义以前【不在白名单】→ 包直接被丢掉，
                #   表现就是"点了换肤没反应""别人看不到我的自定义"。
-               'run', 'skinask', 'setskin', 'customset',
+               'run', 'skinask', 'setskin', 'customset', 'statask',
                'warehouse_open', 'warehouse_move', 'warehouse_move_many',
                'shop_open', 'shop_buy', 'usefood', 'fridge_open', 'order_open',
                'order_buy', 'cup_take', 'work_start', 'work_stop', 'jobstep', 'jobdone',
