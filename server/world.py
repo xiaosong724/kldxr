@@ -211,7 +211,7 @@ class Player(object):
                  'jy',
                  'seat', 'tpEnd', 'tpAt',
                  'sleepHouse', 'sleepAcc', 'sleepYaw',
-                 'running', 'runAcc',
+                 'running', 'runAcc', 'footY',
                  'job', 'jobShop', 'jobT', 'jobAcc', 'qiAcc', 'qiLast', 'qiSync')
 
     def __init__(self, cid, role):
@@ -229,6 +229,7 @@ class Player(object):
         self.sleepYaw = 0.0
         self.running = False
         self.runAcc = 0.0
+        self.footY = float(role.get('y') or 0.0)
         self.sleepAcc = 0.0
         self.job = ''
         self.jobShop = ''
@@ -370,6 +371,8 @@ class World(object):
         self._joinq = queue.Queue()     # 认证通过的人（网络线程放，tick 消费）
         # ★ 2026-10-22：刷新页面后恢复"我正坐着 / 我正躺着"（role_id -> pose）
         self.last_pose = {}
+        self._floor_now = ()      # 室内地板矩形（每 10 帧刷一次）
+        self._floor_acc = 0
         # ★ round304b：上线时读好的货架（网络线程读 ✓ tick 只往内存里放 ✓）
         self._joinq2 = queue.Queue()
 
@@ -1109,6 +1112,14 @@ class World(object):
         # ★ 2026-10-22：跑步扣灵气必须【每帧】跑（放上面那个 15-tick 块里会变成 0.5 秒一次，
         #   而 runAcc 用 TICK_DT 累加 → 永远凑不满 1 秒 → 一点灵气都不扣）
         self._run_tick()
+        # ★ 地板表每 10 帧刷一次（建筑增删改后 fy 也能跟上；不必每帧查库）
+        self._floor_acc = getattr(self, '_floor_acc', 0) + 1
+        if self._floor_acc >= 10:
+            self._floor_acc = 0
+            try:
+                self._floor_now = self._floor_rects()
+            except Exception as _fe:
+                self._floor_now = ()
 
     def _talent_op(self, p, d):
         """天赋加点 / 洗点（方案 §7.1 · 第 116 轮）
@@ -1394,6 +1405,10 @@ class World(object):
             p.seat = -1
             # ★ 2026-10-22：带上床的朝向（客户端躺姿要用它，不能用玩家自己的朝向）
             p.sleepYaw = float(bed_rot if bed_rot is not None else (p.yaw or 0))
+            try:
+                p.footY = float(getattr(p, 'footY', 0.0) or 0.0)
+            except Exception:
+                p.footY = 0.0
             try:
                 self.last_pose[int(p.role_id)] = {'k': 'sleep', 'id': hid, 't': now_s()}
             except Exception:
@@ -1968,6 +1983,10 @@ class World(object):
         p.seat = seat['idx']
         p.x = sx
         p.z = sz
+        try:
+            p.footY = float(getattr(p, 'footY', 0.0) or 0.0)
+        except Exception:
+            p.footY = 0.0
         p.yaw = float(seat.get('yaw') or seat.get('ry') or 0)
         try:
             self.last_pose[int(p.role_id)] = {'k': 'seat', 'id': str(seat['idx']),
@@ -3123,6 +3142,12 @@ class World(object):
                 p.x = _nx
                 p.z = _nz
             p.moveT = _now
+            # ★ 2026-10-22：把客户端上报的脚下高度记下来，随快照广播给别人
+            try:
+                if 'y' in d:
+                    p.footY = float(d.get('y') or 0.0)
+            except Exception:
+                pass
             if _dist <= _allow:
                 p.moveBad = 0
             p.yaw = _f(d.get('yaw'), p.yaw)
@@ -6900,6 +6925,55 @@ class World(object):
         self._fridge_open(p, d)
 
     # ---------- 跑步（2026-10-22）----------
+    def _support_y(self, x, z):
+        """某点的"脚下高度" = 地形 + 室内地板（★ 2026-10-22）。
+
+        服务端自己算，不依赖客户端上报 —— 广播出去的 fy 永远是对的，
+        客户端只管照着画。
+        """
+        try:
+            best = 0.0
+            for f in getattr(self, '_floor_now', ()) or ():
+                if f[0] <= x <= f[1] and f[2] <= z <= f[3] and f[4] > best:
+                    best = f[4]
+            return best
+        except Exception:
+            return 0.0
+
+    def _floor_rects(self):
+        """所有放置建筑的室内地板矩形 [(x0,x1,z0,z1,y)]，几十条，直接算不缓存。"""
+        out = []
+        try:
+            with dbmod.db(self.cfg) as c:
+                rows = c.execute(
+                    "SELECT o.x,o.z,o.rot,cat.size_w,cat.size_d,cat.model_id,cat.id"
+                    " FROM town_objects o"
+                    " JOIN town_catalog cat ON cat.id=o.catalog_id"
+                    " JOIN towns t ON t.id=o.town_id"
+                    " WHERE o.state='active' AND o.parent_id=0"
+                    "   AND cat.category='building' AND t.status='active'").fetchall()
+        except Exception:
+            return out
+        for r in rows:
+            try:
+                w = float(r[3] or 0) - 0.4
+                d = float(r[4] or 0) - 0.4
+                if w <= 0 or d <= 0:
+                    continue
+                rot = float(r[2] or 0)
+                ca, sa = abs(math.cos(rot)), abs(math.sin(rot))
+                ex = w / 2 * ca + d / 2 * sa
+                ez = w / 2 * sa + d / 2 * ca
+                cx, cz = float(r[0]), float(r[1])
+                # ★ 2026-10-22：只有【模型里真有抬高地板】的建筑才抬
+                fy = townreg.floor_y_of(r[5] or r[6])
+                if fy <= 0.001:
+                    continue
+                out.append((cx - ex, cx + ex, cz - ez, cz + ez, fy))
+            except Exception:
+                continue
+        return out
+
     def _intent_run(self, p, d):
         """on=1 开始跑 / on=0 停。跑步每秒烧 1 点灵气，灵气为 0 自动停。"""
         want = 1 if int((d or {}).get('on') or 0) else 0
@@ -7192,12 +7266,20 @@ class World(object):
                 'y': round(o.yaw, 3),
                 # ★ round330：离地高度 ✗ 别人的客户端拿它还原跳跃动作 ✓
                 'jy': round(getattr(o, 'jy', 0.0) or 0.0, 3),
+                # ★ 2026-10-22：脚下高度（含室内地板）—— 别人的客户端直接用，不再自己算
+                'fy': round(self._support_y(float(o.x), float(o.z))
+                            + float(getattr(o, 'jy', 0.0) or 0.0), 2),
                 'seat': str(getattr(o, 'seat', -1)),
                 # ★ 2026-10-22：明确的布尔（客户端不用再猜字符串）
                 'seated': 1 if str(getattr(o, 'seat', '-1')) != '-1' else 0,
                 'sleep': 1 if getattr(o, 'sleepHouse', '') else 0,
                 # ★ 2026-10-22：别人躺下时的朝向（客户端躺姿要用）
                 'syaw': round(float(getattr(o, 'sleepYaw', 0.0) or 0.0), 3),
+                # ★ 2026-10-22（用户："动画也一起广播，让广播简单化"）：
+                #   姿态 + 渲染高度全由服务端说，客户端只照做、不再自己推导。
+                #   pose: '' 站 / 'sit' 坐 / 'sleep' 躺
+                'pose': ('sit' if str(getattr(o, 'seat', '-1')) != '-1'
+                         else ('sleep' if getattr(o, 'sleepHouse', '') else '')),
                 'job': getattr(o, 'job', ''),
                 'sk': str((o.role or {}).get('skin') or ''),
                 'skc': (((o.role or {}).get('skcMap') or {}).get(

@@ -5801,6 +5801,8 @@ function wsApplyWorld(d) {
          ★ 教训：服务器加字段 → ①打包 dict ②这里映射 ③addOther ④渲染
                  四层都要改 ✗ 少一层就静默失效 ✓ */
       jy: Math.max(0, +w.jy || 0),
+      fy: (typeof w.fy === 'number') ? w.fy : null,   // ★ 脚下高度（服务端广播）
+      pose: (typeof w.pose === 'string') ? w.pose : '',   // ★ '' 站 / 'sit' 坐 / 'sleep' 躺
       seat: (w.seat != null ? String(w.seat) : '-1'),
       sleep: !!w.sleep,                                        // ★ 他躺下了没有
       snapYaw: (typeof w.syaw === 'number') ? w.syaw : 0,
@@ -6405,6 +6407,10 @@ function netSync() {
   wsSend('move', {
     x: +P.x.toFixed(2),
     z: +P.z.toFixed(2),
+    /* ★ 2026-10-22（用户："只要 y 坐标动了就都同步"）：
+       把自己脚下的高度一起上报 —— 室内地板抬高、上下坡、掉坑，别人都能直接看到，
+       不用再各自算一遍地板高度（两套算法必然对不上）。 */
+    y: +(P.y || 0).toFixed(2),
     yaw: +P.yaw.toFixed(3),
     /* ★ round330（用户："看不到其他玩家的跳跃动作"）
        jy = 离地高度（跳起来 / 掉下去的那一段）✗ 别人的客户端拿它来还原动作 ✓
@@ -6465,8 +6471,14 @@ function addOther(w, t) {
     o = null;
   }
   var _ct = (typeof w.ct === 'number') ? w.ct : null;
+  /* ★★★ 2026-10-22（用户："进建筑后其他玩家高度没同步 / 一直抽动"）★★★
+     病根：这里原来是 Math.abs(差) > 5 —— 双向都算。
+       但玩家【站着不动】时客户端不再发 move → 服务端 ct 停住不动 →
+       观察者的本地时钟一直往前 → 差值越来越大 → 每隔几秒就把这个实体
+       【销毁重建】一次 → 位置/高度都回落到初始值（y 用 terYAt=0）→ 看着在抖。
+     修：只在 ct【真的倒退】时才判定他重连过。 */
   if (o && o.clk && typeof o.clk.lastT === 'number' && _ct !== null &&
-            Math.abs(o.clk.lastT - _ct) > 5.0) {   /* round284: two-way (a future clock may jump forward too) */
+            (o.clk.lastT - _ct) > 5.0) {
     console.log('[sync] ' + (w.name || w.uid) + ' 的时间戳大幅倒退（'
                 + o.clk.lastT.toFixed(1) + ' → ' + _ct.toFixed(1)
                 + '）→ 判定他重连/刷新过 ✗ 重建这个玩家 ✓');
@@ -6484,7 +6496,9 @@ function addOther(w, t) {
     var _osz = (typeof w.sz === 'number' && w.sz > 0) ? w.sz : 1;
     hh.g.scale.set(heroScaleOf(_osz), heroScaleOf(_osz), heroScaleOf(_osz));
     /* ★ round331：刚出现时就站在地形上（不然第一帧会陷进山里 ✓）*/
-    var _oy0 = (typeof terYAt === 'function') ? terYAt(w.x, w.z) : 0;
+    var _oy0 = (typeof w.fy === 'number') ? w.fy
+      : ((typeof supportYAt === 'function') ? supportYAt(w.x, w.z)
+        : ((typeof terYAt === 'function') ? terYAt(w.x, w.z) : 0));
     var _ojy0 = +w.jy || 0;
     if (_ojy0 < 0) { _ojy0 = 0; }
     hh.g.position.set(w.x, _oy0 + _ojy0, w.z);
@@ -6501,6 +6515,8 @@ function addOther(w, t) {
       galeT: +w.galeT || 0,                    // ★ round589：别人疾风步剩余
       downT: +w.downT || 0,                    // ★ round593：击倒剩余
       _galeAcc: 0, _galeLX: null, _galeLZ: null,
+      fy: (typeof w.fy === 'number') ? w.fy : null,
+      pose: (typeof w.pose === 'string') ? w.pose : '',
       seat: (w.seat != null ? String(w.seat) : '-1'),   // ★ 他坐哪张椅子
       seated: (typeof w.seated === 'number') ? !!w.seated : (w.seat != null && String(w.seat) !== '-1'),
       sleep: !!w.sleep,                                   // ★ 他躺下了没有
@@ -6555,6 +6571,23 @@ function addOther(w, t) {
      已经存在的小人走的是下面这条更新分支 → dead 永远停在 false ✗
      所以两处都要写 ✓（不然"别人看你死亡还是站着"永远修不好 ✗）*/
   o.dead = !!w.dead;
+  if (typeof w.fy === 'number') { o.fy = w.fy; }
+  /* ★ 2026-10-22：pose 不能被"没带这个字段的包"覆盖掉，
+     也不能出现"pose='' 但 seated=1"的自相矛盾。以布尔为准。 */
+  if (w.seated != null && w.seated) { o.pose = 'sit'; }
+  else if (w.sleep != null && w.sleep) { o.pose = 'sleep'; }
+  else if (typeof w.pose === 'string' && w.pose) { o.pose = w.pose; }
+  else if (w.seated != null || typeof w.pose === 'string') { o.pose = ''; }
+  /* ★ 2026-10-22：每包都把模型高度对齐到服务端广播的 fy（含室内地板）。
+     放在这里最稳 —— 不依赖 netUpdate 里哪条分支跑没跑到。 */
+  try {
+    if (o.hh && o.hh.g && typeof o.fy === 'number' && !o.dead) {
+      var _fySet = o.fy + ((o.pose === 'sit' || o.pose === 'sleep') ? 0.30 : 0);
+      if (Math.abs(o.hh.g.position.y - _fySet) > 0.0005) {
+        o.hh.g.position.y = _fySet;
+      }
+    }
+  } catch (eFy2) { }
   o.seat = (w.seat != null ? String(w.seat) : '-1');
   o.seated = (typeof w.seated === 'number') ? !!w.seated : (o.seat !== '-1');
   o.sleep = !!w.sleep;
@@ -7497,23 +7530,26 @@ function netUpdate(dt) {
          → 坐姿代码【这一帧不执行】、下一帧执行一次 → 大腿在 0 和 -1.35 之间跳
          → 看着就是"坐一下站一下"。
        修：坐/躺先用座位状态直接定姿态，不依赖位置采样。 */
-    var _seated0 = (o.seated != null) ? !!o.seated
-      : (o.seat != null && String(o.seat) !== '-1' && String(o.seat) !== '');
-    if ((_seated0 || o.sleep) && o.hh && o.hh.g) {
+    /* ★ 2026-10-22：姿态只看服务端广播的 pose（'' / 'sit' / 'sleep'） */
+    var _pose = (typeof o.pose === 'string' && o.pose) ? o.pose
+      : ((o.seated != null && o.seated) ? 'sit' : (o.sleep ? 'sleep' : ''));
+    var _seated0 = (_pose === 'sit');
+    var _sleep0 = (_pose === 'sleep');
+    if ((_seated0 || _sleep0) && o.hh && o.hh.g) {
       var _gs0 = o.hh.g;
       o.walkT = 0;
       _gs0.rotation.z = 0;
       _gs0.rotation.order = 'YXZ';
-      if (o.sleep) {
+      if (_sleep0) {
         var _sy3 = +((o.snapYaw != null) ? o.snapYaw : (o.cur.yaw || 0));
         var _so3 = (typeof SLEEP_OFF !== 'undefined') ? SLEEP_OFF : 0.55;
-        var _y3b = (typeof supportYAt === 'function') ? supportYAt(o.cur.x, o.cur.z) : 0;
+        var _y3b = (typeof o.fy === 'number') ? o.fy : 0;
         _gs0.position.set(o.cur.x + Math.sin(_sy3) * _so3, _y3b + 0.62,
                           o.cur.z + Math.cos(_sy3) * _so3);
         _gs0.rotation.set(-1.45, _sy3, 0);
         o.hh.legL.rotation.x = 0; o.hh.legR.rotation.x = 0;
       } else {
-        var _y3c = (typeof supportYAt === 'function') ? supportYAt(o.cur.x, o.cur.z) : 0;
+        var _y3c = (typeof o.fy === 'number') ? o.fy : 0;
         _gs0.position.set(o.cur.x, _y3c + 0.30, o.cur.z);
         _gs0.rotation.set(0, o.cur.yaw || 0, 0);
         o.hh.legL.rotation.x = -1.35; o.hh.legR.rotation.x = -1.35;
@@ -7522,14 +7558,24 @@ function netUpdate(dt) {
       if (o.hh.sw) { o.hh.sw.visible = false; }
       o.last.x = o.cur.x; o.last.z = o.cur.z;
     }
+    /* ★ 2026-10-22：坐姿/躺姿已经在上面处理过了 */
+    if (_seated0 || _sleep0) { continue; }
     // ★ 用【他的钟】换算该渲染哪一刻 → 网络抖动不再变成走路的忽快忽慢 ✓
-    if (!netSample(o.buf, netRenderAt(o, now, dt), o.cur)) { continue; }
+    /* ★★★ 2026-10-22（用户："进建筑后其他玩家的高度没同步"）★★★
+       病根：站立渲染原来在 netSample 之后 —— 他站着不动时没有新样本，
+         采样经常返回 false → 这里 continue → 位置和高度【都不更新】
+         → 模型停在很久以前的位置（实测差了 18 米）、y 也一直是 0。
+       修：采样失败就用上一次的 o.cur 继续渲染，只是一帧不推进插值。 */
+    netSample(o.buf, netRenderAt(o, now, dt), o.cur);
     var px = o.cur.x, pz = o.cur.z;
-    var _seated = (_seated0 != null) ? !!_seated0 : false;
-    /* 坐姿/躺姿已经在采样前处理过了，这里直接跳过站立渲染 */
-    if (_seated || o.sleep) { continue; }
     _gs_reset_order(o);
-    o.hh.g.position.set(px, 0, pz);
+    /* ★ 2026-10-22（用户：进建筑后别人的高度没同步）：站立也要用室内地板高度，
+       以前这里 y 写死 0 → 别人看你陷在室内地板下面 */
+    /* ★ 2026-10-22（用户："y 动了就都同步"）：直接用服务端广播的脚下高度，
+       不再自己算室内地板（两套算法必然对不上） */
+    /* 站立高度直接用服务端广播的 fy（不再本地算地板） */
+    var _oyR = (typeof o.fy === 'number') ? o.fy : 0;
+    o.hh.g.position.set(px, _oyR, pz);
     o.hh.g.rotation.y = o.cur.yaw;
     o.hh.g.rotation.z = 0;
     /* ★ 2026-10-22：小镇里不显示别人拿的武器（和"自己在镇上不举剑"保持一致） */
@@ -9704,6 +9750,23 @@ function frame(ts) {
   /* ---- 妖兽（6 帧攻击 ✓ 走近咬人 ✓）---- */
   mobT += dt;
   netUpdate(dt);   // ★ 缓冲插值（别人走动平滑 ✓ 不再一卡一卡 ✓）
+  /* ★ 2026-10-22（用户："y 动了就都同步"）：高度以服务端广播的 fy 为准，帧末统一落定。
+     放在这里是因为 netUpdate 之后还有别的逻辑会动别人的模型 y。 */
+  try {
+    var _fyNow = NET.others;
+    for (var _fk in _fyNow) {
+      var _fo2 = _fyNow[_fk];
+      if (!_fo2 || !_fo2.hh || !_fo2.hh.g || _fo2.dead) { continue; }
+      if (typeof _fo2.fy !== 'number') { continue; }
+      var _ty = _fo2.fy;
+      if (_fo2.pose === 'sit') { _ty += 0.30; }
+      else if (_fo2.pose === 'sleep') { _ty += 0.30; }
+      if (Math.abs(_fo2.hh.g.position.y - _ty) > 0.0005) {
+        _fo2.hh.g.position.y = _ty;
+      }
+    }
+  } catch (eFY) { }
+
   netSeparate(dt); // ★ 和别人重叠时慢慢推开（碰撞箱不叠在一起 ✓ 也不会互相卡住 ✓）
   updateMarks();   // ★ 附近队友的屏幕方位箭头 ✓
   updateSelfBar();   // ★ 第 87 轮：自己头顶的血条 ✓

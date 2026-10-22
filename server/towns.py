@@ -366,6 +366,22 @@ def shrink_boxes(cj, k=0.85):
     return json.dumps(out, ensure_ascii=False)
 
 
+# ★ 2026-10-22：只有这些建筑模型内部【真的铺了一块抬高地板】
+#   （web/core/town_models.js 里画了 interior_floor 的：咖啡店/超市/小平房/别墅）
+#   其它建筑室内就是原地形 → 不能抬，否则人会飘在半空
+FLOOR_Y_BY_MODEL = {
+    'shop_cafe_v1': 0.28,
+    'shop_cafe_v2': 0.28,
+    'shop_mart_v1': 0.28,
+    'house_flat_v1': 0.28,
+    'house_villa_v1': 0.28,
+}
+
+
+def floor_y_of(model_id):
+    return float(FLOOR_Y_BY_MODEL.get(str(model_id or ''), 0.0))
+
+
 def wall_boxes(w, d, h, door_w=1.7, t=0.26):
     """建筑碰撞：四面墙 + 南墙留门洞（所有新模型的门都朝 +Z）。
 

@@ -52,6 +52,17 @@
     return false;
   }
 
+  /* 这些建筑模型内部画了 interior_floor（抬高 0.28），其它室内就是原地形 */
+  var FLOOR_MODELS = {
+    shop_cafe_v1: 0.28, shop_cafe_v2: 0.28, shop_mart_v1: 0.28,
+    house_flat_v1: 0.28, house_villa_v1: 0.28
+  };
+  function isBuildingWithFloor(cid) {
+    var c = catOf(cid);
+    var mid = (c && (c.model_id || c.id)) || cid;
+    return (FLOOR_MODELS[mid] || 0) > 0;
+  }
+
   function isBuildingCat(cid) {
     var c = catOf(cid);
     return !!(c && c.category === 'building');
@@ -196,8 +207,11 @@
         var r = +d.rot || 0;
         var ca = Math.abs(Math.cos(r)), sa = Math.abs(Math.sin(r));
         var ex = hw * ca + hd * sa, ez = hw * sa + hd * ca;
+        /* ★ 2026-10-22：只有模型里真有抬高地板的建筑才加（和 towns.FLOOR_Y_BY_MODEL 一致） */
+        var _fy = 0.28;
+        if (!isBuildingWithFloor(d.catalog)) { continue; }
         out.push({ id: d.id, x0: +d.x - ex, x1: +d.x + ex,
-                   z0: +d.z - ez, z1: +d.z + ez, y: 0.28 });
+                   z0: +d.z - ez, z1: +d.z + ez, y: _fy });
       }
       townSetObjectFloors(out);
     } catch (e2) { }

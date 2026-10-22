@@ -115,7 +115,8 @@ async def main_async(token):
 
             nf = await c.ev('return (typeof TOWN_FLOORS!=="undefined") ? TOWN_FLOORS.length : -1;')
             print('  floor rects:', nf)
-            assert nf > 10, 'no building floor rects'
+            # ★ 2026-10-22：只有 5 个建筑模型真的有抬高地板（咖啡店/超市/小平房/别墅）
+            assert nf >= 1, 'no building floor rects'
 
             info = await c.ev(
                 "var f=TOWN_FLOORS[0];"
