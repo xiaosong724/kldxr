@@ -417,6 +417,7 @@ class World(object):
 
     def __init__(self, cfg):
         self.cfg = cfg
+        self.qq = None      # ★ 2026-10-22：app.py 启动时挂上来；没挂就是 None（不发）
         self.houses = {}
         try:
             housemod.ensure_seed(cfg)
@@ -6362,6 +6363,31 @@ class World(object):
                 self._send_cid(p.cid, P.pack('tpcast', t=TELEPORT_CAST))
                 self._send_cid(p.cid, P.pack(
                     'notice', text='开始传送回安全区（%.0f 秒，期间受伤会中断）' % TELEPORT_CAST))
+        elif t == 'autosell':
+            # ★ 2026-10-22（云端 round466）：设置自动出售阶数（0 = 关）
+            try:
+                _n = int((d or {}).get('tier') or 0)
+            except Exception:
+                _n = 0
+            _n = max(0, min(12, _n))
+            p.role['autosell'] = _n
+            self.post_save('UPDATE roles SET autosell=?, updated_at=? WHERE id=?',
+                           (_n, int(now_s() * 1000), p.role_id))
+            self._send_cid(p.cid, P.pack(
+                'notice',
+                text=('自动出售已开启：低于 %d 阶的装备拾取就卖' % _n)
+                     if _n > 0 else '自动出售已关闭'))
+        elif t == 'annread':
+            # ★ 2026-10-22（云端 round496）：公告已读（只增不减）
+            try:
+                _aid = int((d or {}).get('id') or 0)
+            except Exception:
+                _aid = 0
+            _cur = int((p.role or {}).get('announce_seen') or 0)
+            if _aid > _cur:
+                p.role['announce_seen'] = _aid
+                self.post_save('UPDATE roles SET announce_seen=? WHERE id=?',
+                               (_aid, p.role_id))
         elif t == 'ranktitle':
             # ★ 2026-10-22：用户选「头顶显示哪个榜」（'' = 关）
             #   写库由 net.py 做（tick 不碰磁盘）✗ 这里只改内存
@@ -11014,6 +11040,27 @@ class World(object):
         if (e['x'] - p.x) ** 2 + (e['z'] - p.z) ** 2 > drops.PICK_RANGE ** 2:
             return                      # 太远 → 不认（防"隔空捡"✗）
         it = e['item']
+        # ★★ 2026-10-22（云端 round466）：装备自动出售（低于设定阶数直接卖掉）
+        try:
+            _as = int((p.role or {}).get('autosell') or 0)
+        except Exception:
+            _as = 0
+        if _as > 0 and it.get('slot') in ('weapon', 'armor'):
+            _tier_no = int(it.get('tier') or 0) + 1          # 0 基 → 显示阶数
+            if _tier_no < _as:
+                try:
+                    import value as _vm
+                    _price = int(_vm.value_of(it, 1))
+                except Exception:
+                    _price = 0
+                if _price > 0:
+                    self._gain_gold(p, _price, '自动出售')
+                    self.loot.pop(lid, None)
+                    self._send_cid(p.cid, P.pack(
+                        'notice',
+                        text='自动出售：%s（%d 阶）→ +%d 金币'
+                             % (it.get('name') or '装备', _tier_no, _price)))
+                    return
         # ★ 第 250 轮（用户要求）：捡到 5 阶及以上要播报
         #   tier_no() 是 0 基的（内部 0 = 显示 1 阶）✗ 所以判断用 >= 4 ✓
         try:
