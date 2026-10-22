@@ -2670,7 +2670,9 @@ class World(object):
             return
         ok, err, row = objreg.place_object(self.cfg, r, cid, x, z, rot,
                                            owner_id=getattr(p, 'role_id', 0),
-                                           price_paid=price)
+                                           price_paid=price,
+                                           # ★ 2026-10-22：编辑模式允许重叠
+                                           check=False)
         if not ok:
             self._town_result(p, False, err)
             return

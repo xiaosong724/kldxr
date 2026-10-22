@@ -400,6 +400,7 @@
     }
     P.ghost = makeGhost(spec);
     grp.add(P.ghost);
+    try { padRender(); } catch (ePad3) { }
     /* ★ 立即放在玩家面前（不用等鼠标动就能看到预览） */
     var gy = 0;
     try { gy = (typeof P !== 'undefined' && P.y) ? 0 : 0; } catch (e) { }
@@ -412,6 +413,7 @@
     P.sel = null;
     if (P.ghost && P.ghost.parent) { P.ghost.parent.remove(P.ghost); }
     P.ghost = null;
+    try { padRender(); } catch (ePad4) { }
   }
 
   function updateGhost(x, z) {
@@ -526,6 +528,7 @@
     addEventListener('pointerdown', function (e) {
       if (!P.placing) { return; }
       if (panel && panel.contains(e.target)) { return; }
+      if (PAD.el && PAD.el.contains(e.target)) { return; }
       var p = groundPoint(e.clientX, e.clientY);
       if (p) {
         updateGhost(p.x, p.z);          /* 先让预览跳到落点，再确认 */
@@ -684,6 +687,7 @@
       EDIT.moving = false;
       editMoveGhostStop(true);
       editBarRender();
+      try { padRender(); } catch (ePad2) { }
       return;
     }
     if (EDIT.id == null) { return; }
@@ -693,6 +697,7 @@
       EDIT.moving = true;
       editBarRender();
       editHintText();
+      try { padRender(); } catch (ePad) { }
       return;
     }
     if (a === 'rot') {
@@ -743,6 +748,97 @@
     EDIT.ghost.position.set(x, 0, z);
   }
 
+  /* ★★★ 2026-10-22（用户："点击移动时用方向键控制方向，放置也一样，预览跟着动"）★★★
+     方向键盘：按住不放就持续朝那个方向挪预览（每秒 2.5 米），松开停。
+     和屏幕方向绑定（上=屏幕上方），和摇杆同一套换算。 */
+  var PAD = { el: null, timer: 0, dx: 0, dz: 0, spd: 2.5 };
+  function padTargetPos() {
+    if (P.placing && P.ghost) { return { x: P.ghost.position.x, z: P.ghost.position.z }; }
+    if (EDIT.moving && EDIT.ghost) { return { x: EDIT.ghost.position.x, z: EDIT.ghost.position.z }; }
+    return null;
+  }
+  function padStep() {
+    var t = padTargetPos();
+    if (!t) { return; }
+    var cy = (typeof CAM_YAW === 'number') ? CAM_YAW : 0;
+    /* 屏幕方向 → 世界方向（和玩家移动同一套） */
+    var mcy = Math.cos(cy), msy = Math.sin(cy);
+    var wx = PAD.dx * mcy + PAD.dz * msy;
+    var wz = -PAD.dx * msy + PAD.dz * mcy;
+    var nx = t.x + wx * PAD.spd * 0.05;
+    var nz = t.z + wz * PAD.spd * 0.05;
+    if (P.placing && P.ghost) { updateGhost(nx, nz); }
+    else if (EDIT.moving && EDIT.ghost) { editMoveGhostAt(nx, nz); }
+  }
+  function padStop() {
+    if (PAD.timer) { clearInterval(PAD.timer); PAD.timer = 0; }
+    PAD.dx = 0; PAD.dz = 0;
+  }
+  function padStart(dx, dz) {
+    padStop();
+    PAD.dx = dx; PAD.dz = dz;
+    PAD.timer = setInterval(padStep, 50);
+    padStep();
+  }
+  function padRender() {
+    var need = (P.placing && P.ghost) || (EDIT.moving && EDIT.ghost);
+    if (!PAD.el) {
+      PAD.el = document.createElement('div');
+      PAD.el.id = 'movePad';
+      PAD.el.style.cssText =
+        'position:fixed;right:16px;bottom:150px;z-index:56;display:grid;' +
+        'grid-template-columns:repeat(3,52px);grid-template-rows:repeat(3,52px);gap:6px;' +
+        'touch-action:none;user-select:none';
+      var keys = [
+        ['', '', 'up', '↑', '1 / 2'],
+        ['', '', 'left', '←', '1 / 1'], ['', '', 'stop', '·', '2 / 2'], ['', '', 'right', '→', '1 / 3'],
+        ['', '', 'down', '↓', '2 / 3']
+      ];
+      var cells = {};
+      cells['1/2'] = 'up'; cells['1/1'] = 'left'; cells['2/2'] = 'stop';
+      cells['1/3'] = 'right'; cells['2/3'] = 'down';
+      for (var r = 1; r <= 3; r++) {
+        for (var c = 1; c <= 3; c++) {
+          var k = cells[r + '/' + c];
+          var cell = document.createElement('div');
+          var key = 'g' + r + c;
+          cell.style.gridArea = r + ' / ' + c;
+          if (!k) { PAD.el.appendChild(cell); continue; }
+          cell.setAttribute('data-pad', k);
+          cell.textContent = k === 'up' ? '↑' : k === 'down' ? '↓' : k === 'left' ? '←' : k === 'right' ? '→' : '·';
+          cell.style.cssText += 'display:flex;align-items:center;justify-content:center;' +
+            'border-radius:12px;background:#111417dd;border:1px solid #ffffff2e;color:#e9e1cf;' +
+            'font:700 20px system-ui;cursor:pointer';
+          PAD.el.appendChild(cell);
+        }
+      }
+      PAD.el.addEventListener('pointerdown', function (e) {
+        var t = e.target.closest ? e.target.closest('[data-pad]') : null;
+        if (!t) { return; }
+        e.preventDefault();
+        /* ★ 别让这次按下冒泡到场景（否则会被当成"点地面确认移动"，一按就结束） */
+        e.stopPropagation();
+        if (e.stopImmediatePropagation) { e.stopImmediatePropagation(); }
+        var k = t.getAttribute('data-pad');
+        if (k === 'stop') { padStop(); return; }
+        var d = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[k];
+        if (d) { padStart(d[0], d[1]); }
+      }, { passive: false, capture: true });
+      /* 也要挡住"点空白取消选中"的那条 capture 监听 */
+      PAD.el.addEventListener('pointerdown', function (e) {
+        e.stopPropagation();
+      }, { capture: true });
+      var up = function () { padStop(); };
+      PAD.el.addEventListener('pointerup', up);
+      PAD.el.addEventListener('pointercancel', up);
+      PAD.el.addEventListener('pointerleave', up);
+      document.body.appendChild(PAD.el);
+    }
+    PAD.el.style.display = need ? 'grid' : 'none';
+    if (!need) { padStop(); }
+  }
+  window.__padRender = padRender;
+
   function editEnter() {
     if (P.placing) { stopPlace(); }
     EDIT.on = true;
@@ -781,6 +877,8 @@
   addEventListener('pointerdown', function (e) {
     if (!EDIT.on) { return; }
     if (EDIT.bar && EDIT.bar.contains(e.target)) { return; }
+    /* ★ 2026-10-22：方向键盘上的按下不算"点地面" */
+    if (PAD.el && PAD.el.contains(e.target)) { return; }
     if (EDIT.moving && EDIT.id != null) {
       var p = groundPoint(e.clientX, e.clientY);
       var ed = P.objs[EDIT.id];
@@ -791,6 +889,7 @@
                               rot: +ed.data.rot || 0 });
         EDIT.moving = false;
         editBarRender();
+        try { padRender(); } catch (ePad5) { }
       }
       e.stopPropagation();
       return;

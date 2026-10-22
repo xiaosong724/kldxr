@@ -115,13 +115,13 @@ def place_object(cfg, town_row, catalog_id, x, z, rot=0.0,
     if not cat:
         return False, '目录里没有这个物件', None
     boxes = world_boxes(cat, x, z, rot, floor_y)
-    if check:
-        if not inside_town(town_row, boxes):
-            return False, '超出小镇边界', None
-        if boxes:
-            hit = overlaps_existing(cfg, town_row['id'], boxes)
-            if hit:
-                return False, '和已有物件重叠', None
+    # ★ 2026-10-22：边界始终要校验；重叠检测由 check 控制（编辑模式允许重叠）
+    if not inside_town(town_row, boxes):
+        return False, '超出小镇边界', None
+    if check and boxes:
+        hit = overlaps_existing(cfg, town_row['id'], boxes)
+        if hit:
+            return False, '和已有物件重叠', None
     now = now_ms()
     with dbmod.db(cfg) as c:
         cur = c.execute(
@@ -148,8 +148,9 @@ def place_building(cfg, town_row, catalog_id, x, z, rot=0.0, owner_id=0):
     cat = _catalog(cfg, catalog_id)
     if not cat:
         return False, '目录里没有这个建筑', None
+    # ★ 2026-10-22：建筑放置也不做重叠检测（编辑模式允许重叠）
     ok, err, brow = place_object(cfg, town_row, catalog_id, x, z, rot,
-                                 owner_id=owner_id)
+                                 owner_id=owner_id, check=False)
     if not ok:
         return False, err, None
 
@@ -200,9 +201,8 @@ def move_object(cfg, town_row, obj_id, x, z, rot=None):
     boxes = world_boxes(cat, x, z, r, 0.0)
     if not inside_town(town_row, boxes):
         return False, '超出小镇边界', None
-    hit = overlaps_existing(cfg, town_row['id'], boxes, ignore_id=obj_id)
-    if hit:
-        return False, '和已有物件重叠', None
+    # ★ 2026-10-22（用户："编辑模式不管碰撞，可以任意移动，重叠也没关系"）：
+    #   移动时不再检测重叠，只保留"不能移出小镇边界"。
     dx = float(x) - float(row['x'])
     dz = float(z) - float(row['z'])
     dr = r - float(row['rot'] or 0.0)
