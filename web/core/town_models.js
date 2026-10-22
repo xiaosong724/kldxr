@@ -1522,10 +1522,13 @@ function buildFurnitureModel(spec, opts) {
     buildChairAt(g, add, 0, 0, 0, id, 0x8a5a3a, 0);
   }
   else if (id === 'shop_counter' || id === 'checkout_counter') {
-    /* 柜台：柜体 + 台面（以前只在建筑内部函数里画，删掉后变成了方块） */
+    /* 柜台：柜体 + 台面
+       ★ 2026-10-22：以前柜体中心写 0.72（含着"室内地板 0.26"的偏移），
+         现在室内家具会统一按地板高度抬高，所以这里改成从 y=0 起建，
+         否则柜台会浮空 0.26。 */
     var f0 = TOWN_FURNITURE_SPECS[id] || { w: 3.2, d: 0.62, h: 1.22 };
-    add(tmBox(g, f0.w, 0.95, f0.d, 0x6b4a32, 0, 0.72, 0), id + '_body');
-    add(tmBox(g, f0.w + 0.15, 0.10, f0.d + 0.16, 0xd8cbb0, 0, 1.22, 0), id + '_top');
+    add(tmBox(g, f0.w, 0.95, f0.d, 0x6b4a32, 0, 0.475, 0), id + '_body');
+    add(tmBox(g, f0.w + 0.15, 0.10, f0.d + 0.16, 0xd8cbb0, 0, 1.00, 0), id + '_top');
   }
   else if (id === 'dining_table' || id === 'outdoor_table' || id === 'coffee_table') {
     /* 桌子：桌面 + 四条腿 */

@@ -2597,10 +2597,15 @@ class World(object):
         except Exception:
             return []
 
-    def _obj_pub(self, o):
+    def _obj_pub(self, o, yfloor=0.0):
         d = {
             'id': int(o['id']), 'catalog': str(o['catalog_id']),
             'x': round(float(o['x']), 3), 'z': round(float(o['z']), 3),
+            # ★ 2026-10-22（用户："药铺的椅子和桌子模型有问题"）：
+            #   室内家具有的从 y=0 起画、有的从 0.245 起画（柜台），
+            #   而建筑室内地板在 0.26/0.28 —— 从 0 起画的全陷进地板。
+            #   这里把「脚下地面高度」一起发下去，客户端据此抬高。
+            'y': round(float(yfloor or 0.0), 3),
             'rot': round(float(o['rot']), 4),
             # ★ 2026-10-22：世界 AABB（客户端注册碰撞用）——墙有门洞，人能进店
             'col': self._obj_boxes(o),
@@ -2621,8 +2626,21 @@ class World(object):
         # 主城是 500x500，玩家出生点和建筑群可能相距很远：
         # 用 260m 覆盖整个主城，避免“看不到建筑”的错觉
         rows = objreg.nearby(self.cfg, town_row['id'], p.x, p.z, 260.0)[:limit]
+        # ★ 先算出「每栋顶层建筑的室内地板高度」，子家具按它抬高
+        _bfloor = {}
+        try:
+            for o in rows:
+                if int(o.get('parent_id') or 0) == 0:
+                    _bfloor[int(o['id'])] = townreg.floor_y_of(o.get('model_id'))
+        except Exception as _bfe:
+            print('[objects] floor map failed: %r' % (_bfe,))
+        _pub = []
+        for o in rows:
+            _pf = int(o.get('parent_id') or 0)
+            _fy = _bfloor.get(_pf, 0.0) if _pf else 0.0
+            _pub.append(self._obj_pub(o, _fy))
         self._send_cid(p.cid, P.pack('objects', town=int(town_row['id']),
-                                     list=[self._obj_pub(o) for o in rows],
+                                     list=_pub,
                                      # ★ 2026-10-22：目录一起下发（客户端要用 size 算室内地板）
                                      catalog=self.town_catalog))
 

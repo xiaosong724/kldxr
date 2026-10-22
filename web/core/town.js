@@ -170,7 +170,9 @@ function townSeatFromObjects(x, z) {
       best = {
         id: 'obj' + o.id + (offs.length > 1 ? ('#' + k) : ''),
         x: sx, z: sz,
-        y: 0.30, yaw: rot,
+        /* ★ 2026-10-22：座位高度要带上家具所在地板高度（室内 0.26/0.28），
+           否则人坐下去会比抬起来的椅面低一截。 */
+        y: 0.30 + (+o.y || 0), yaw: rot,
         pad: townPadOf(o.catalog),     /* 坐垫顶面高度 */
         label: townObjName(o.catalog), placed: true
       };
@@ -443,7 +445,7 @@ function townSeatById(id) {
         idx: sid, id: sid,
         x: +o.x + off * Math.cos(rot),
         z: +o.z - off * Math.sin(rot),
-        y: 0.30, yaw: rot,
+        y: 0.30 + (+o.y || 0), yaw: rot,
         pad: townPadOf(o.catalog),
         label: townObjName(o.catalog), placed: true
       };

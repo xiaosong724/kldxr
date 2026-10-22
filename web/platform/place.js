@@ -260,7 +260,9 @@
     var old = P.objs[o.id];
     if (old && old.mesh) { grp.remove(old.mesh); }
     var mesh = buildMesh(o);
-    mesh.position.set(+o.x + _TOFF.x, 0, +o.z + _TOFF.z);
+    /* ★ 2026-10-22：室内家具要抬到建筑地板高度（服务端下发 o.y），
+       否则从 y=0 起画的模型（椅子/桌子）会陷进 0.26 高的室内地板。 */
+    mesh.position.set(+o.x + _TOFF.x, +o.y || 0, +o.z + _TOFF.z);
     mesh.rotation.y = +o.rot || 0;
     mesh.userData.objId = o.id;          /* 2026-10-22：编辑模式拾取用 */
     if (isBuildingCat(o.catalog)) {

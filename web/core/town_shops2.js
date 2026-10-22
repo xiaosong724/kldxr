@@ -334,7 +334,19 @@ function buildShopWith(spec, interiorFn) {
     if (m) { tmTag(m, name); inner.userData.parts.push({ id: name, cn: townPartCn(name) }); }
     return m;
   };
-  interiorFn(inner, ictx);
+  /* ★★★ 2026-10-22（用户："药铺的进门的桌子和两个椅子模型有问题"）★★★
+     病根：这些 shop 模型【自己画了一整套室内家具】（药柜/柜台/药罐/候诊椅…），
+     而建筑放置时【又按 layout_json 摆了一份】→ 同一个屋子里出现两套桌椅，
+     而且模型自带的那套点不掉、也挪不动。
+     现在室内家具【只由 layout_json 提供】，这里不再画。
+     回滚：URL 加 ?shopinterior=1 */
+  var _innerOn = (function () {
+    try {
+      var q = (typeof UI !== 'undefined' && UI.search) ? (UI.search() || '') : '';
+      return q.indexOf('shopinterior=1') >= 0;
+    } catch (e) { return false; }
+  })();
+  if (_innerOn) { interiorFn(inner, ictx); }
   signboard(g, spec, ctx, spec.signText);
   awning(g, spec, ctx);
   tmCollectFurniture(g);
