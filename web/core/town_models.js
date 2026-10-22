@@ -1150,47 +1150,9 @@ function buildMartShelfRow(g, add, x, z, ry, prefix) {
 }
 
 function buildMartInterior(g, add, W, D, H) {
+  /* ★ 2026-10-22：同上，家具交给布局，这里只画室内地板。 */
   var iw = W - 0.65, id = D - 0.65;
-  var zBack = -D / 2 + 0.65;
   add(tmBox(g, iw, 0.05, id, 0x9a968a, 0, 0.255, 0), 'interior_floor');
-  var ccx = W / 2 - 1.21, ccz = D * 0.22;
-  var cg = new THREE.Group();
-  cg.position.set(ccx, 0, ccz);
-  cg.rotation.y = Math.PI / 2;
-  g.add(cg);
-  var PC = tmPiece(g, 'checkout_counter', '收银台');
-  var cm = tmBox(cg, 3.20, 0.95, 0.62, 0x6b4a32, -1.55, 0.72, 0); tmTag(cm, 'checkout_counter'); PC.add(cm);
-  var ct = tmBox(cg, 3.35, 0.10, 0.78, 0xd8cbb0, -1.55, 1.25, 0); tmTag(ct, 'checkout_counter_top'); PC.add(ct);
-  var cs = tmBox(cg, 0.10, 0.95, 0.62, 0x4a3423, -3.20, 0.72, 0); tmTag(cs, 'checkout_side'); PC.add(cs);
-  var bs = tmBox(cg, 0.34, 0.38, 0.34, 0x9aa0a4, -3.35, 0.22, 0.35); tmTag(bs, 'checkout_bag_stand'); PC.add(bs);
-  tmPieceEnd(g, PC);
-  /* cash_register piece */
-  var Prg = tmPiece(g, 'cash_register', '收银机');
-  buildCashRegister(cg, add, 0, 1.30, 0, 0);
-  cg.traverse(function(mm){ if(mm.isMesh && mm.userData && /^cash_register_/.test(mm.userData.partName||'')) { Prg.add(mm); } });
-  tmPieceEnd(g, Prg);
-  addNpcStand(g, add, ccx + 0.84, ccz + 0.35, 'npc_checkout_stand', 0x6fe0ff);
-  buildMartShelfRow(g, add, -W * 0.25, -D * 0.05, 0, 'aisle_shelf_1');
-  buildMartShelfRow(g, add, 0, -D * 0.05, 0, 'aisle_shelf_2');
-  buildMartShelfRow(g, add, W * 0.25, -D * 0.05, 0, 'aisle_shelf_3');
-  buildFridgeAt(g, add, -W * 0.31, -D / 2 + 1.03, 0);
-  var PB = tmPiece(g, 'basket_stack', '购物篮堆');
-  PB.add(add(tmBox(g, 0.45, 0.25, 0.32, 0x3e6a7a, -W * 0.29, 0.38, D * 0.31), 'basket_stack'));
-  PB.add(add(tmBox(g, 0.38, 0.22, 0.28, 0x3e6a7a, -W * 0.29, 0.64, D * 0.31), 'basket_stack_2'));
-  tmPieceEnd(g, PB);
-
-  var Pcart = tmPiece(g, 'shopping_cart', '购物车');
-  Pcart.add(add(tmBox(g, 0.45, 0.55, 0.30, 0x8a8f8e, W * 0.33, 0.35, D * 0.02), 'shopping_cart'));
-  Pcart.add(add(tmBox(g, 0.05, 0.07, 0.30, 0x2f3438, W * 0.33, 0.70, D * 0.02), 'shopping_cart_handle'));
-  tmPieceEnd(g, Pcart);
-
-  var Ppromo = tmPiece(g, 'promo_board', '促销牌');
-  Ppromo.add(add(tmBox(g, 1.10, 0.55, 0.05, 0xc84a3a, 0, 1.95, zBack + 0.10), 'promo_board'));
-  tmPieceEnd(g, Ppromo);
-
-  var Plamp = tmPiece(g, 'ceiling_lamp', '吊灯');
-  Plamp.add(add(tmBox(g, 0.22, 0.08, 0.22, 0xffd9a0, 0, H + 0.05, 0), 'lamp_ceiling'));
-  tmPieceEnd(g, Plamp);
 }
 
 function buildBedAt(g, add, x, z, ry, y0) {
@@ -1311,56 +1273,14 @@ function buildBathroomAt(g, add) {
   tmPieceEnd(g, Psh);
 }
 function buildHouseInterior(g, add, W, D, H) {
+  /* ★ 2026-10-22（用户：家具重叠）：这里以前自己画了一整套家具
+     （地毯/沙发/电视/电视柜/餐桌/椅子/衣柜/盆栽/吊灯），
+     而布局文件又生成一份 → 两套重叠。现在只画建筑固有部分。 */
   var iw = W - 0.45, id = D - 0.45;
   add(tmBox(g, iw, 0.05, id, 0xa8865c, 0, 0.255, 0), 'interior_floor');
-  /* partitions: kitchen/bath back, bedroom right, living/dining left */
+  /* 隔断墙（建筑固有，保留）*/
   add(tmBox(g, 1.00, 2.65, 0.12, 0xe4dccb, 1.78, 1.32, -2.05), 'partition_bath_front');
   add(tmBox(g, 0.12, 2.65, 2.0, 0xe4dccb, 1.25, 1.32, -3.05), 'partition_bath_side');
-  /* living room */
-  var Pr = tmPiece(g, 'rug_rect', '地毯');
-  Pr.add(add(tmBox(g, 2.5, 0.05, 1.8, 0x8a5a4a, -1.55, 0.30, 1.55), 'living_rug'));
-  tmPieceEnd(g, Pr);
-  buildSofaAt(g, add, -1.55, 1.35, 0);
-  var Pv2 = tmPiece(g, 'tv_wall', '壁挂电视');
-  Pv2.add(add(tmBox(g, 0.95, 0.55, 0.08, 0x2f3438, -1.55, 1.10, 3.20), 'living_tv'));
-  tmPieceEnd(g, Pv2);
-  var Pts = tmPiece(g, 'tv_stand', '电视柜');
-  Pts.add(add(tmBox(g, 1.10, 0.40, 0.30, 0x6b4a32, -1.55, 0.45, 3.20), 'living_tv_stand'));
-  tmPieceEnd(g, Pts);
-  /* dining set moved into the kitchen area, clockwise 90 deg, against the front wall */
-  var dg = new THREE.Group();
-  dg.position.set(1.35, 0, 3.10);
-  dg.rotation.y = -Math.PI / 2;
-  g.add(dg);
-  var Pdt = tmPiece(g, 'dining_table', '餐桌');
-  Pdt.add(add(tmBox(dg, 1.30, 0.10, 0.78, 0x6b4a32, 0, 0.635, 0), 'dining_table'));
-  Pdt.add(add(tmBox(dg, 0.10, 0.62, 0.10, 0x4a3423, 0, 0.335, 0), 'dining_table_leg'));
-  tmPieceEnd(g, Pdt);
-  buildChairAt(dg, add, -0.95, 0, Math.PI / 2, 'dining_chair_1', 0x8a5a3a);
-  buildChairAt(dg, add, 0.95, 0, -Math.PI / 2, 'dining_chair_2', 0x8a5a3a);
-  /* bedroom */
-  buildBedAt(g, add, -2.15, -2.65, 0);
-  var wg = new THREE.Group();
-  wg.position.set(-3.42, 0, -0.75);
-  wg.rotation.y = -Math.PI / 2;
-  g.add(wg);
-  var Pw = tmPiece(g, 'wardrobe', '衣柜');
-  Pw.add(add(tmBox(wg, 1.10, 1.85, 0.55, 0x6b4a32, 0, 1.18, 0), 'wardrobe'));
-  Pw.add(add(tmBox(wg, 1.00, 0.04, 0.04, 0x4a3423, 0, 2.06, 0), 'wardrobe_top_trim'));
-  Pw.add(add(tmBox(wg, 0.04, 1.55, 0.04, 0xbfc4c2, -0.52, 1.15, 0.30), 'wardrobe_handle'));
-  tmPieceEnd(g, Pw);
-  /* kitchen now in the front-right */
-  buildKitchenAt(g, add, W, D);
-  buildFridgeAt(g, add, W / 2 - 0.62, -0.55, -Math.PI / 2);
-  /* bathroom */
-  buildBathroomAt(g, add);
-  var Pp = tmPiece(g, 'plant_pot', '盆栽');
-  Pp.add(add(tmCyl(g, 0.16, 0.20, 0.30, 0x9a5f42, -3.05, 0.42, 3.10), 'plant_1'));
-  Pp.add(add(tmSphere(g, 0.22, 0x5c8a52, -3.05, 0.72, 3.10), 'plant_1_leaf'));
-  tmPieceEnd(g, Pp);
-  var Pl = tmPiece(g, 'ceiling_lamp', '吊灯');
-  Pl.add(add(tmBox(g, 0.22, 0.08, 0.22, 0xffd9a0, 0, H + 0.05, 0), 'lamp_ceiling'));
-  tmPieceEnd(g, Pl);
 }
 
 
@@ -1406,91 +1326,13 @@ function buildTownInterior(g, spec, add, W, D, H) {
   if (spec.type !== 'shop' && spec.type !== 'public') { return; }
   if (spec.interior === 'mart') { buildMartInterior(g, add, W, D, H); return; }
 
+  /* ★★★ 2026-10-22（用户：桌椅重叠）★★★
+     这个函数以前自己画了一整套家具（柜台/菜单板/吊灯/咖啡机/挂画/挂钟/
+     墙菜单/两个货架/餐桌/两把椅子/冰箱/盆栽/户外区），
+     而建筑放置时【又按 layout_json 生成了一份同样的家具】→ 两套完全重叠。
+     现在这里只画建筑固有的东西（室内地板），家具全部交给布局。 */
   var iw = W - 0.65, id = D - 0.65;
-  var zBack = -D / 2 + 0.65;
   add(tmBox(g, iw, 0.05, id, 0x8a6a48, 0, 0.255, 0), 'interior_floor');
-
-  /* ---- counter (one piece: body + top) ---- */
-  var cw = Math.min(iw * 0.64, 5.4), cz = -D / 2 + 1.75;
-  var P = tmPiece(g, 'shop_counter', '咖啡馆柜台');
-  P.add(add(tmBox(g, cw, 0.95, 0.62, 0x6b4a32, 0, 0.72, cz), 'counter'));
-  P.add(add(tmBox(g, cw + 0.18, 0.12, 0.78, 0xd8cbb0, 0, 1.22, cz), 'counter_top'));
-  tmPieceEnd(g, P);
-
-  var pm = tmPiece(g, 'menu_board', '菜单板');
-  pm.add(add(tmBox(g, 0.70, 0.38, 0.35, 0x2f3438, cw * 0.34, 1.02, zBack + 0.86), 'menu_board'));
-  tmPieceEnd(g, pm);
-
-  var pl = tmPiece(g, 'ceiling_lamp', '吊灯');
-  pl.add(add(tmBox(g, 0.32, 0.06, 0.26, 0xffd9a0, cw * 0.34, 1.24, zBack + 0.90), 'lamp_1'));
-  tmPieceEnd(g, pl);
-
-  buildCoffeeMachine(g, add, 1.35, 1.28, cz);
-  buildWallArt(g, add, -1.25, 2.12, zBack + 0.10, 0, 'wall_art_1', 0x8fa9b8);
-  buildWallArt(g, add, 1.75, 2.12, zBack + 0.10, 0, 'wall_art_2', 0xb89a8a);
-
-  /* ---- wall clock piece ---- */
-  var wallFaceZ = -D / 2 + 0.18 + 0.002;
-  var pc = tmPiece(g, 'wall_clock', '挂钟');
-  var clock = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.04, 24),
-    new THREE.MeshLambertMaterial({ color: 0xd8d2c4 }));
-  clock.rotation.x = Math.PI / 2;
-  clock.position.set(0.3, 2.20, wallFaceZ + 0.02);
-  clock.castShadow = true; clock.receiveShadow = true;
-  g.add(clock); add(clock, 'wall_clock'); pc.add(clock);
-  var clockFace = new THREE.Mesh(new THREE.CircleGeometry(0.17, 24),
-    new THREE.MeshLambertMaterial({ color: 0xf4efe4, side: THREE.DoubleSide }));
-  clockFace.position.set(0.3, 2.20, wallFaceZ + 0.041);
-  g.add(clockFace); add(clockFace, 'wall_clock_face'); pc.add(clockFace);
-  pc.add(add(tmBox(g, 0.02, 0.10, 0.01, 0x2f3438, 0.30, 2.24, wallFaceZ + 0.045), 'wall_clock_hand_hour'));
-  pc.add(add(tmBox(g, 0.02, 0.13, 0.01, 0x2f3438, 0.33, 2.22, wallFaceZ + 0.045, 0.6), 'wall_clock_hand_minute'));
-  tmPieceEnd(g, pc);
-
-  var pwm = tmPiece(g, 'wall_menu', '墙菜单');
-  pwm.add(add(tmBox(g, 0.85, 1.05, 0.03, 0x2f3438, -W / 2 + 0.15, 1.65, 0.4, Math.PI / 2), 'wall_menu'));
-  tmPieceEnd(g, pwm);
-
-  if (spec.type === 'shop') {
-    /* ---- shelves: body + every tier in one piece ---- */
-    var s1 = tmPiece(g, 'shop_shelf', '咖啡店货架');
-    s1.add(add(tmBox(g, 0.50, 1.90, 2.20, 0x5f4630, -W / 2 + 0.85, 1.18, zBack + 1.75), 'shelf_1'));
-    for (var sh = 0; sh < 4; sh++) {
-      s1.add(add(tmBox(g, 0.62, 0.07, 2.00, 0x9a7650, -W / 2 + 0.85,
-        0.42 + sh * 0.55, zBack + 1.75), 'shelf_1_tier_' + (sh + 1)));
-    }
-    tmPieceEnd(g, s1);
-
-    var s2 = tmPiece(g, 'shop_shelf', '咖啡店货架');
-    s2.add(add(tmBox(g, 0.50, 1.90, 1.80, 0x5f4630, W / 2 - 0.85, 1.18, zBack + 1.75), 'shelf_2'));
-    for (var sh2 = 0; sh2 < 3; sh2++) {
-      s2.add(add(tmBox(g, 0.62, 0.07, 1.60, 0x9a7650, W / 2 - 0.85,
-        0.55 + sh2 * 0.55, zBack + 1.75), 'shelf_2_tier_' + (sh2 + 1)));
-    }
-    tmPieceEnd(g, s2);
-
-    /* ---- table: top + leg in one piece ---- */
-    var tx = W * 0.20, tz = D * 0.18;
-    var pt = tmPiece(g, 'dining_table', '餐桌');
-    pt.add(add(tmBox(g, 1.45, 0.10, 0.90, 0x6b4a32, tx, 0.635, tz), 'table_1'));
-    pt.add(add(tmBox(g, 0.10, 0.62, 0.10, 0x4a3423, tx, 0.335, tz), 'table_1_leg'));
-    tmPieceEnd(g, pt);
-
-    buildChairAt(g, add, tx - 1.05, tz, Math.PI / 2, 'chair_1', 0x8a5a3a);
-    buildChairAt(g, add, tx + 1.05, tz, -Math.PI / 2, 'chair_2', 0x8a5a3a);
-    buildFridgeAt(g, add, -W / 2 + 0.82, 1.75, Math.PI / 2);
-
-    /* ---- plant: pot + leaves in one piece ---- */
-    var pp = tmPiece(g, 'plant_pot', '盆栽');
-    pp.add(add(tmCyl(g, 0.22, 0.26, 0.38, 0x9a5f42, W * 0.30, 0.44, D * 0.28), 'plant_1'));
-    pp.add(add(tmSphere(g, 0.28, 0x5c8a52, W * 0.30, 0.80, D * 0.28), 'plant_1_leaf'));
-    tmPieceEnd(g, pp);
-
-    buildCafeOutdoor(g, add, W, D);
-  }
-
-  var pl2 = tmPiece(g, 'ceiling_lamp', '吊灯');
-  pl2.add(add(tmBox(g, 0.22, 0.08, 0.22, 0xffd9a0, 0, H + 0.05, 0), 'lamp_ceiling'));
-  tmPieceEnd(g, pl2);
 }
 
 
