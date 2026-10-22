@@ -20,9 +20,9 @@
 
 /* 已放置对象缓存（core/town.js 读取，避免 core 碰 window） */
 var TOWN_OBJECTS_CACHE = [];
-/* ★ C3 对照实验开关（平台层解析 URL，core 只读这个全局） */
-var TOWN_OBJ_PREVIEW = (function () {
-  try { return ((location && location.search) || '').indexOf('townobj=1') >= 0; }
+/* ★ 主城切换：默认不画旧静态建筑/椅子；?static=1 回滚成旧渲染 */
+var TOWN_STATIC_ON = (function () {
+  try { return ((location && location.search) || '').indexOf('static=1') >= 0; }
   catch (e) { return false; }
 })();
 var UI = {
@@ -10590,9 +10590,7 @@ function wsOnMessage(raw) {
   if (t === 'welcome') {
     try { setTimeout(function () { skAsk(); }, 600); } catch (e9) { } wsWelcome(d);
     try {
-      if (((location && location.search) || '').indexOf('townobj=1') >= 0) {
-        setTimeout(function () { try { wsSend('town_objects', {}); } catch (eTo) { } }, 900);
-      }
+      setTimeout(function () { try { wsSend('town_objects', {}); } catch (eTo) { } }, 900);
     } catch (eTp) { }
     return; }
   if (t === 'world') {

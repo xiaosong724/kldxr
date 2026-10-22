@@ -117,7 +117,7 @@ async def main_async(name, token):
             await asyncio.sleep(0.4)
             await c.ev("try{SETCFG.zoom=16; if(typeof applyWorldZoom==='function') applyWorldZoom();}catch(e){} return 1;")
 
-            await c.ev("wsSend('sit',{id:'cafe_w1'}); return 1;")
+            await c.ev("wsSend('sit',{id:'obj514'}); return 1;")
             await asyncio.sleep(0.8)
             seat = await c.ev("return {seat: window.MY_SEAT || null};")
             print('  client seat:', seat)
@@ -193,7 +193,7 @@ def main():
     reg = http_json('/api/register', {'name': name, 'password': 'e2e-pass-123'})
     tok = reg['token']
     with sqlite3.connect(DB, timeout=10) as c:
-        c.execute('UPDATE roles SET gold=500, x=-141.05, z=135.2 WHERE name=?', (name,))
+        c.execute('UPDATE roles SET gold=500, x=-147.95, z=136.4 WHERE name=?', (name,))
         c.commit()
     print('test role:', name)
     ok = False

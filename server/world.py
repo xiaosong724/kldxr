@@ -710,6 +710,12 @@ class World(object):
                 _np.invulnT = max(float(getattr(_np, 'invulnT', 0) or 0), 1.5)   # 落地保护 ✓
             self.players[conn.cid] = _np
             self._town_zones_send(_np)
+            try:
+                _tr = self._obj_town_ok(_np)
+                if _tr:
+                    self._send_objects(_np, _tr)
+            except Exception as _ose:
+                print('[town] join objects failed: %r' % (_ose,))
             # ★ 第 63 轮：上线也让附近的人"看得见"✓（不是凭空冒出来 ✗）
             # ★★ 第 102 轮：进世界时主动告诉他【穿着的防具 + 有效血量上限】★★
             #   不然客户端登录后不知道上限（它那边原来是写死的 200 ✗）

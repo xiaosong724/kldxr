@@ -32,7 +32,7 @@ ITEM = 'americano'
 PRICE = 15
 START_GOLD = 500
 PASSWORD = 'e2e-pass-123'
-SEAT_X, SEAT_Z = -17.95, 6.4
+SEAT_X, SEAT_Z = -147.95, 136.4
 
 
 def http_json(path, data=None, token=None):
@@ -133,14 +133,27 @@ async def run(name):
         assert gold == START_GOLD - PRICE, 'gold %d' % gold
         cups = (bought['d'].get('table') or {}).get('cups') or []
         assert len(cups) == 1 and cups[0]['state'] == 'cooking', 'cup not cooking: %r' % (cups,)
-        print('  order_buy: gold=%d order=%s cup=%s' % (gold, order_id, cups[0]['state']))
+        assert isinstance(cups[0].get('x'), (int, float)) and isinstance(cups[0].get('z'), (int, float)), \
+            'cup has no world position: %r' % (cups[0],)
+        print('  order_buy: gold=%d order=%s cup=%s at (%.2f, %.2f)' % (
+            gold, order_id, cups[0]['state'], cups[0]['x'], cups[0]['z']))
+
+        waiter = await wait_for(ws, lambda m: m['t'] == 'waiter')
+        assert waiter, 'no waiter task'
+        wd = waiter['d']
+        assert len(wd.get('path') or []) >= 2 and wd['path'][0] != wd['path'][1], \
+            'bad waiter path: %r' % (wd.get('path'),)
+        print('  waiter: %s -> %s (%.1fs)' % (
+            wd['path'][0], wd['path'][-1], float(wd.get('secs') or 0)))
 
         served = await wait_for(
             ws, lambda m: m['t'] == 'tablecups' and any(
                 c.get('state') == 'served' for c in m['d']['table'].get('cups') or []),
             limit=600, timeout=8.0)
         assert served, 'cup never served'
-        print('  served: cup=%s' % served['d']['table']['cups'][0]['state'])
+        sc = served['d']['table']['cups'][0]
+        assert isinstance(sc.get('x'), (int, float)), 'served cup has no x'
+        print('  served: cup=%s at (%.2f, %.2f)' % (sc['state'], sc['x'], sc['z']))
 
         with db_conn() as c:
             st = c.execute('SELECT state FROM table_orders WHERE id=?', (order_id,)).fetchone()

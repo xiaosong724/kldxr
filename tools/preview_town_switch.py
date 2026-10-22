@@ -45,6 +45,7 @@ class CDP:
     def __init__(self, ws):
         self.ws = ws
         self.seq = 0
+        self.events = []
 
     async def send(self, method, params=None):
         self.seq += 1
@@ -117,6 +118,8 @@ async def shoot(token, url, out_path, want_objects):
             print('  %s stats=%r' % (os.path.basename(out_path), stats))
             if want_objects:
                 assert stats and stats.get('rendered', 0) > 100, 'objects not rendered: %r' % (stats,)
+            errs = [e for e in c.events if e.get('method') == 'Runtime.exceptionThrown']
+            assert not errs, 'JS exceptions: %r' % ([e['params'] for e in errs][:2],)
             shot = await c.send('Page.captureScreenshot', {'format': 'png'})
             with open(out_path, 'wb') as f:
                 f.write(base64.b64decode(shot['result']['data']))
@@ -158,11 +161,8 @@ def main():
         c.commit()
     print('test role:', name)
     try:
-        asyncio.run(shoot(reg['token'], ORIGIN + '/', 
-                          os.path.join(ROOT, 'docs', 'shots', 'town-switch-old.png'), False))
-        asyncio.run(shoot(reg['token'],
-                          ORIGIN + '/?townobj=1&tox=-130&toz=130',
-                          os.path.join(ROOT, 'docs', 'shots', 'town-switch-new.png'), True))
+        asyncio.run(shoot(reg['token'], ORIGIN + '/',
+                          os.path.join(ROOT, 'docs', 'shots', 'town-after-switch.png'), True))
     finally:
         for _ in range(40):
             if not http_json('/api/health')['world'].get('online'):

@@ -3274,17 +3274,22 @@ function buildTown() {
   townGroundFlush(TOWN_CORE_GROUP);
   TOWN_SOLID_OX = 0; TOWN_SOLID_OZ = 0;
   townOuterWalls(g);
-  var _preview = (typeof TOWN_OBJ_PREVIEW !== 'undefined') && TOWN_OBJ_PREVIEW;
-  if (!_preview) {
+  /* ★ 2026-10-22 主城切换：放置物已经平移到旧镇坐标，
+     旧静态【建筑】和【椅子】不再画（避免和新模型重影）；房子/道具/路灯照旧。
+     回滚：URL 加 ?static=1。 */
+  var _staticOn = (typeof TOWN_STATIC_ON !== 'undefined') && TOWN_STATIC_ON;
+  if (_staticOn) {
     for (var i = 0; i < TOWN_BUILDINGS.length; i++) {
       townBuilding(g, TOWN_BUILDINGS[i]);
     }
-    for (var hi = 0; hi < TOWN_HOUSES.length; hi++) {
-      townBuilding(g, TOWN_HOUSES[hi]);
-    }
-    for (var p = 0; p < (TOWN_DATA ? TOWN_DATA.props.length : 0); p++) {
-      townProp(g, TOWN_DATA.props[p]);
-    }
+  }
+  for (var hi = 0; hi < TOWN_HOUSES.length; hi++) {
+    townBuilding(g, TOWN_HOUSES[hi]);
+  }
+  for (var p = 0; p < (TOWN_DATA ? TOWN_DATA.props.length : 0); p++) {
+    townProp(g, TOWN_DATA.props[p]);
+  }
+  if (_staticOn) {
     TOWN_SEATS.forEach(function (s) { townSeat(g, s); });
   }
   townPolesAndLights(g);
