@@ -6271,6 +6271,56 @@ function waiterTick() {
     WAITER_TIMER = null;
   }
 }
+/* ================= 小镇范围（地图选点 / 安全区视觉） ================= */
+var TOWN_ZONES = [];
+var ZONE_GROUP = null;
+function zonesScene() {
+  if (typeof scene !== 'undefined' && scene) { return scene; }
+  return window.scene || null;
+}
+function renderTownZones() {
+  var S = zonesScene();
+  if (!S || typeof THREE === 'undefined') { return; }
+  if (!ZONE_GROUP) {
+    ZONE_GROUP = new THREE.Group();
+    ZONE_GROUP.name = 'townZones';
+    S.add(ZONE_GROUP);
+  }
+  while (ZONE_GROUP.children.length) {
+    var old = ZONE_GROUP.children[0];
+    ZONE_GROUP.remove(old);
+    if (old.traverse) {
+      old.traverse(function (o) {
+        if (o.geometry) { o.geometry.dispose(); }
+        if (o.material) { o.material.dispose(); }
+      });
+    }
+  }
+  for (var i = 0; i < TOWN_ZONES.length; i++) {
+    var z = TOWN_ZONES[i];
+    if (!z || +z.system) { continue; }       /* 主城 500m 的框不画，太吵 */
+    var size = +z.size || 0;
+    if (size <= 0) { continue; }
+    var col = (z.status === 'active') ? 0x66d9ff : 0xffaa55;
+    var geo = new THREE.PlaneGeometry(size, size);
+    var face = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color: col, transparent: true, opacity: 0.055, depthWrite: false,
+      side: THREE.DoubleSide }));
+    face.rotation.x = -Math.PI / 2;
+    face.position.set(+z.x, 0.035, +z.z);
+    ZONE_GROUP.add(face);
+    var edge = new THREE.LineSegments(new THREE.EdgesGeometry(geo),
+      new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.55 }));
+    edge.rotation.x = -Math.PI / 2;
+    edge.position.set(+z.x, 0.04, +z.z);
+    ZONE_GROUP.add(edge);
+  }
+}
+function townZonesApply(d) {
+  TOWN_ZONES = (d && d.list) || [];
+  try { renderTownZones(); } catch (e1) { }
+}
+
 function townClearedApply(d) {
   var x = +d.x || 0, z = +d.z || 0, r = +d.r || 60;
   try {
@@ -6284,8 +6334,8 @@ function townClearedApply(d) {
     try { window.MY_OBJECTS = keep; } catch (e1) { }
   } catch (e2) { }
   try {
-    if (window.PlaceMode && typeof PlaceMode.clearArea === 'function') {
-      PlaceMode.clearArea(x, z, r);
+    if (window.PlaceMode && typeof window.PlaceMode.clearArea === 'function') {
+      window.PlaceMode.clearArea(x, z, r);
     }
   } catch (e3) { }
   if (typeof toast === 'function') { toast('附近的小镇已冻结，建筑已移除'); }
@@ -10520,6 +10570,7 @@ function wsOnMessage(raw) {
   if (t === 'tablecups') { try { cupsApply(d); } catch (eCup) { } return; }
   if (t === 'waiter') { try { spawnWaiter(d); } catch (eWt) { } return; }
   if (t === 'towncleared') { try { townClearedApply(d); } catch (eTc) { } return; }
+  if (t === 'townzones') { try { townZonesApply(d); } catch (eTz) { } return; }
   if (t === 'work') { try { workApply(d); } catch (eWk) { } return; }
   if (t === 'jobstep') { try { jobRemote(d); } catch (eJs) { } return; }
   if (t === 'fridge') { try { fridgeApply(d); } catch (eFr) { } return; }

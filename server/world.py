@@ -709,6 +709,7 @@ class World(object):
                 _np.hp = int(self._hp_max(_np))
                 _np.invulnT = max(float(getattr(_np, 'invulnT', 0) or 0), 1.5)   # 落地保护 ✓
             self.players[conn.cid] = _np
+            self._town_zones_send(_np)
             # ★ 第 63 轮：上线也让附近的人"看得见"✓（不是凭空冒出来 ✗）
             # ★★ 第 102 轮：进世界时主动告诉他【穿着的防具 + 有效血量上限】★★
             #   不然客户端登录后不知道上限（它那边原来是写死的 200 ✗）
@@ -2296,6 +2297,33 @@ class World(object):
                                      catalog=self.town_catalog,
                                      owned=[int(r['id']) for r in rows]))
 
+    def _town_zone_list(self):
+        """公开的小镇范围（名字/坐标/尺寸/状态）：地图选点、安全区视觉共用"""
+        out = []
+        for r in self.towns.values():
+            if str(r.get('status')) not in ('active', 'frozen', 'restoring'):
+                continue
+            out.append({'id': int(r['id']), 'name': str(r.get('name') or ''),
+                        'x': float(r['x']), 'z': float(r['z']),
+                        'size': float(r.get('size_m') or 0.0),
+                        'status': str(r.get('status')),
+                        'system': 1 if int(r.get('is_system') or 0) else 0,
+                        'owner': int(r.get('owner_id') or 0)})
+        out.sort(key=lambda a: a['id'])
+        return out
+
+    def _town_zones_send(self, p):
+        try:
+            self._send_cid(p.cid, P.pack('townzones', list=self._town_zone_list()))
+        except Exception as e:
+            print('[town] zones send failed: %r' % (e,))
+
+    def _town_zones_broadcast(self):
+        try:
+            self._broadcast(P.pack('townzones', list=self._town_zone_list()))
+        except Exception as e:
+            print('[town] zones broadcast failed: %r' % (e,))
+
     def _town_cleared(self, r):
         """冻结/解散后，把这块区域里已经渲染的放置物从附近客户端撤掉"""
         try:
@@ -2390,6 +2418,7 @@ class World(object):
                 except Exception as e:
                     print('[town] rebuild after freeze failed: %r' % (e,))
                 self._town_cleared(r)
+                self._town_zones_broadcast()
                 for qq in list(self.players.values()):
                     if int(getattr(qq, 'role_id', 0) or 0) == owner:
                         self._send_cid(qq.cid, P.pack(
@@ -2681,6 +2710,7 @@ class World(object):
                        (tid, int(p.role_id), townreg.P_ALL, int(p.role_id), now))
         self._town_result(p, True, 'created fee %d' % fee, row)
         self._town_send_list(p)
+        self._town_zones_broadcast()
 
     def _town_owner_ok(self, p, r):
         return int(r.get('owner_id') or 0) == int(getattr(p, 'role_id', 0) or 0)
@@ -2783,6 +2813,7 @@ class World(object):
                        ' VALUES(?,?,?,?,?,?,?)',
                        (tid, 'restore', fee, nexp, now, 'paid', '{}'))
         self._town_result(p, True, 'restored fee %d' % fee, r)
+        self._town_zones_broadcast()
         try:
             self._rebuild_dyn_shops()
         except Exception as e:
@@ -2811,6 +2842,7 @@ class World(object):
                        'updated_at=? WHERE id=?',
                        ('frozen', r['original_x'], r['original_z'], r['deleted_at'], now, tid))
         self._town_result(p, True, 'dissolved, keep 7 days', r)
+        self._town_zones_broadcast()
         self._town_cleared(r)
         try:
             self._rebuild_dyn_shops()
@@ -4225,6 +4257,7 @@ class World(object):
             self.towns[tid] = row
             if str(row.get('status')) == 'frozen' and str(old.get('status')) == 'active':
                 self._town_cleared(row)
+            self._town_zones_broadcast()
             try:
                 self._rebuild_dyn_shops()
             except Exception as e:

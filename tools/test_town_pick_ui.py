@@ -110,6 +110,15 @@ async def main_async(token):
                        "for(var i=0;i<bs.length;i++){if((bs[i].textContent||'').indexOf('知道了')>=0){bs[i].click();}}"
                        "return 1;")
             await asyncio.sleep(0.4)
+            # 小镇范围视觉：塞一个假的小镇进 TOWN_ZONES，应该画出填充 + 边框两个对象
+            zn = await c.ev("TOWN_ZONES=[{id:9,name:'t',x:P.x+30,z:P.z,size:18.6,"
+                            "status:'active',system:0,owner:1}]; renderTownZones();"
+                            "return ZONE_GROUP ? ZONE_GROUP.children.length : -1;")
+            zones = await c.ev('return (TOWN_ZONES||[]).length;')
+            print('  zones: count=%s meshes=%s' % (zones, zn))
+            assert zn == 2, 'zone rectangle not rendered: %r' % (zn,)
+            await c.ev("TOWN_ZONES=[]; renderTownZones(); return 1;")
+
             await c.ev('townOpen(); return 1;')
             await asyncio.sleep(0.4)
             await c.ev("townPick('create'); return 1;")

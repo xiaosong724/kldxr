@@ -142,8 +142,19 @@
   }
 
   function pickValid(x, z, size) {
-    /* 主城是 500×500、中心在原点；两镇边界至少空 50 格 = 31m */
-    var half = size / 2, pad = 250 + 31;
+    /* 两镇边界至少空 50 格 = 31m。用服务端下发的 TOWN_ZONES 判，
+       这样不只避开主城，也避开别人已经建好的镇（以前只考虑了主城）。 */
+    var half = size / 2, gap = 31;
+    var zones = window.TOWN_ZONES || [];
+    for (var i = 0; i < zones.length; i++) {
+      var zn = zones[i], b = (+zn.size || 0) / 2;
+      if (b <= 0) { continue; }
+      var sepX = (x + half + gap <= (+zn.x) - b) || ((+zn.x) + b + gap <= x - half);
+      var sepZ = (z + half + gap <= (+zn.z) - b) || ((+zn.z) + b + gap <= z - half);
+      if (!sepX && !sepZ) { return false; }
+    }
+    if (zones.length) { return true; }
+    var pad = 250 + gap;
     if (Math.abs(x) <= pad + half && Math.abs(z) <= pad + half) { return false; }
     return true;
   }
