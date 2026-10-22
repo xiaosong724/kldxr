@@ -38,6 +38,7 @@ import boss_skills               # ★ 2026-10-22：Boss 技能表
 import drops
 import market as mkmod  # ★ round304b：交易所规则中心（纯函数 ✗ 可离线测 ✓）
 import mobs
+import mob_ranks               # ★ 2026-10-22：精英/Boss 配置
 import mq as mqmod      # ★ 第 149 轮：魔气规则中心 ✓
 import value as valuemod  # ★ round304b：价格/上限（和卖系统同一份 ✓）
 import weapons
@@ -790,7 +791,7 @@ class World(object):
             #     幽灵 6 秒后落库 → 把新会话的存档覆盖掉 ✗✓
             #   ★ 放在 Player() 之前 ✗ 保证新会话不会被旧的清掉 ✓
             try:
-                self._drop_ghosts_of(role.get('id'))
+                self._drop_ghosts_of(role.get('id'), role)   # ★ 把幽灵的坦克层数带回新会话
             except Exception:
                 pass
             # round302: 上一个会话（刚被清掉的幽灵）的内存余额比库里新 ✗ 用它 ✓
@@ -7431,17 +7432,22 @@ class World(object):
     def _mob_tick(self, dt):
         """刷怪 / 回收 / 追击 / 咬人 —— ★ 只在 tick 线程里跑"""
         if not self.players:
-            if self.mobs:
-                self.mobs.clear()       # 没人了 → 全收掉（省 CPU；下次来的是新世界 ✓）
-            return
+            # 普通怪没人就清掉；精英/Boss 留着自己的消失宽限
+            for _mid0, _m0 in list(self.mobs.items()):
+                if int(getattr(_m0, 'rank', 0) or 0) == 0:
+                    self.mobs.pop(_mid0, None)
+            if not self.mobs:
+                return
         ps = list(self.players.values())
 
         # ---- ① 刷怪（节流 + 上限）----
         self._spawn_acc += dt
-        if self._spawn_acc >= self.spawn_interval:   # ★ 第 133 轮：可调 ✓
+        if ps and self._spawn_acc >= self.spawn_interval:
             self._spawn_acc = 0.0
             for _ in range(mobs.SPAWN_PER_TRY):
-                if len(self.mobs) >= self.mob_cap and not self._evict_far():   # ★ 可调 ✓
+                _normal_n = sum(1 for _mm in self.mobs.values()
+                                if int(getattr(_mm, 'rank', 0) or 0) == 0)
+                if _normal_n >= self.mob_cap and not self._evict_far():
                     break
                 self._spawn_one(ps)
 
@@ -7455,7 +7461,21 @@ class World(object):
         #     （不然站在安全区里的人旁边，怪会凭空消失 ✓）
         live = [q for q in ps
                 if int(q.hp or 0) > 0
-                and not (abs(q.x) <= mqmod.SAFE_HALF and abs(q.z) <= mqmod.SAFE_HALF)]
+                and not (abs(q.x) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(q.z) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF))]
+        # ★ round575：分身也算僵尸目标（用户："分身 AI 可以被攻击"）
+        #   ★ 用一个轻量对象喂给现有的"找最近目标"逻辑 ✗ 不改那段 ✓
+        #   ★ 安全区里的分身不算（和玩家同一条规则 ✓）
+        for _c in getattr(self, 'clones', {}).values():
+            if int(_c.get('hp') or 0) <= 0:
+                continue
+            if abs(_c['x']) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(_c['z']) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+                continue
+            _co = self.players.get(_c.get('owner'))
+            if _co is None or int(getattr(_co, 'hp', 0) or 0) <= 0:
+                continue
+            live.append(types.SimpleNamespace(
+                clone=True, id=_c['id'], cid='clone:' + _c['id'],
+                x=_c['x'], z=_c['z'], hp=_c['hp'], owner=_co))
         away2 = mobs.AWAY_DIST * mobs.AWAY_DIST
         agg2 = mobs.AGGRO * mobs.AGGRO
         for m in list(self.mobs.values()):
@@ -7504,6 +7524,16 @@ class World(object):
                 if m.deadT >= mobs.MOB_KEEP_DEAD:
                     self.mobs.pop(m.mid, None)
                 continue
+            # ★ round581：冰封（不能移动/攻击）/ 减速
+            if float(getattr(m, 'freezeT', 0) or 0) > 0:
+                m.freezeT = max(0.0, float(m.freezeT) - dt)
+                m.windT = 0.0
+                m.atkAnim = -1.0
+                continue
+            if float(getattr(m, 'slowT', 0) or 0) > 0:
+                m.slowT = max(0.0, float(m.slowT) - dt)
+                if m.slowT <= 0:
+                    m.slowMul = 1.0
             near, nd2 = None, None
             for q in live:
                 dx = q.x - m.x
@@ -7514,6 +7544,10 @@ class World(object):
                     near = q
             # ★ 消失计时（用户要求）：离所有玩家都超过 20 米 → 开始计时；
             #   连续 60 秒都这样 → 自然消失 ✓（有人靠近就清零 ✓）
+            # ★ 2026-10-22（本地城镇功能，云端没有）：走进安全区的怪直接回收
+            if self._in_safe_zone(m.x, m.z):
+                self.mobs.pop(m.mid, None)
+                continue
             allnd2 = None
             for q in ps:
                 d2 = (q.x - m.x) ** 2 + (q.z - m.z) ** 2
@@ -7523,11 +7557,16 @@ class World(object):
                 m.awayT += dt
             else:
                 m.awayT = 0.0
-            # 镇内不刷新怪物：走进安全区的怪物直接回收
-            if self._in_safe_zone(m.x, m.z):
-                self.mobs.pop(m.mid, None)
-                continue
-            if m.awayT >= mobs.AWAY_GRACE:
+            _away_lim = mobs.AWAY_GRACE
+            if int(getattr(m, 'rank', 0) or 0) > 0:
+                _rc = mob_ranks.cfg(m.rank)
+                _ar = float(_rc.get('despawn_range', mobs.AWAY_DIST))
+                _away_lim = float(_rc.get('despawn_grace', 60.0))
+                if allnd2 is None or allnd2 > _ar * _ar:
+                    pass
+                else:
+                    m.awayT = 0.0
+            if m.awayT >= _away_lim:
                 self.mobs.pop(m.mid, None)
                 continue
             if m.atkT > 0:
@@ -7543,17 +7582,29 @@ class World(object):
             #   拦在"有目标"判断之前 ✓ 晕着就是彻底停下（这才叫眩晕 ✓）
             if m.stunT > 0:
                 m.stunT = max(0.0, m.stunT - dt)
-                m.windT = 0.0                 # 蓄力也取消 → 醒来要重新起手 ✓
-                continue                      # 跳过后面所有追击/咬人逻辑 ✓
+                m.windT = 0.0
+                continue
+            # ★ round600：精英/Boss 拴绳，不能被风筝到半张地图
+            if int(getattr(m, 'rank', 0) or 0) > 0 and not m.castT:
+                _leash = 50.0 if int(m.rank) == 1 else 80.0
+                _hx, _hz = float(getattr(m, 'homeX', m.x)), float(getattr(m, 'homeZ', m.z))
+                if (m.x - _hx) ** 2 + (m.z - _hz) ** 2 > _leash * _leash:
+                    m.yaw = math.atan2(_hx - m.x, _hz - m.z)
+                    _ls = float(m.spd) * dt
+                    self._move_mob(m, math.sin(m.yaw) * _ls, math.cos(m.yaw) * _ls)
+                    m.castPhase = ''
+                    m.castKey = ''
+                    m.castT = 0.0
+                    continue
             if near is not None and nd2 <= agg2:
-                # ---- 有目标：追 / 咬（外卖残血时改成逃，见下）----
-                # ★ 2026-10-22：精英/Boss 先用技能状态机（返回 True 表示这帧不做普通追击）
+                # ---- 有目标：先跑精英/Boss技能，再普通追击/咬 ----
                 if int(getattr(m, 'rank', 0) or 0) > 0:
                     try:
                         if self._mob_skill_ai(m, near, dt):
                             continue
                     except Exception as _se:
                         print('[mob] skill ai failed: %r' % (_se,))
+                # ---- 有目标：追 / 咬（外卖残血时改成逃，见下）----
                 m.tgt = near.cid
                 d = math.sqrt(nd2) if nd2 > 0 else 0.0
                 # ★ 外卖骑手：残血就逃（方案 §3.3"移速最快，会逃跑"）
@@ -7571,14 +7622,16 @@ class World(object):
                             _dzf = m.z - _pf.z
                             if _dxf * _dxf + _dzf * _dzf <= 900:
                                 self._add_pend(_pf.cid, 'flee', {'mid': m.mid})
+                _mspd = float(m.spd) * (float(getattr(m, 'slowMul', 1.0) or 1.0)
+                                        if float(getattr(m, 'slowT', 0) or 0) > 0 else 1.0)
                 if m.fleeT > 0:
                     m.fleeT -= dt
                     m.yaw = math.atan2(m.x - near.x, m.z - near.z)   # 背对着人 ✓
-                    step = m.spd * dt
+                    step = _mspd * dt
                     self._move_mob(m, math.sin(m.yaw) * step, math.cos(m.yaw) * step)
                     continue
                 m.yaw = math.atan2(near.x - m.x, near.z - m.z)
-                # ★ 2026-10-22（云端 round601）：精英/Boss 与程序员会停在射程内放远程弹
+                # ★ round601：精英/Boss 与程序员会停在射程内发射普通远程弹
                 _rr = self._mob_ranged_range(m)
                 _contact = self._mob_contact_dist(m)
                 if _rr > 0 and d > _contact and d <= _rr:
@@ -7593,7 +7646,7 @@ class World(object):
                             self._mob_bite(m, near)
                     continue
                 if d > _contact:
-                    step = m.spd * dt
+                    step = _mspd * dt
                     if step > d - _contact:
                         step = max(0.0, d - _contact)
                     self._move_mob(m, math.sin(m.yaw) * step, math.cos(m.yaw) * step)
