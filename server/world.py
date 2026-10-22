@@ -47,6 +47,7 @@ except Exception:                     # ★ 绝不因为一个可选模块让服
         def __getattr__(self, name):
             return lambda *a, **kw: None
     rptmod = _RptStub()
+import mob_affixes            # ★ 2026-10-22：精英词条（出生包要用）
 import mob_ranks               # ★ 2026-10-22：精英/Boss 配置
 import mq as mqmod      # ★ 第 149 轮：魔气规则中心 ✓
 import value as valuemod  # ★ round304b：价格/上限（和卖系统同一份 ✓）
@@ -7899,17 +7900,12 @@ class World(object):
     def _spawn_one(self, ps):
         """在一个随机玩家周围刷一只（等级按方案 §3.1 抽）
 
-        ★ 每人上限（用户要求）：只在"周围还没到 8 只"的玩家附近刷 ✓
+        ★ 每人上限（用户要求）：只在"周围还没到上限"的玩家附近刷
+        ★ 2026-10-22：精英（rank=1）按 3% 概率刷，受 mob_ranks 的 max_alive 限制
+        ★ 安全区判断用【多小镇版】_in_safe_zone（云端是单个方块 SPAWN_SAFE）
         """
-        # ★★★ 第 131 轮修的真 bug（用户："每人 8 只上限，但多个玩家时还是 8 只"）★★★
-        #   病根：原来是"数他 60 米内有几只"✗
-        #         两个人站得近时，两个 60 米圈【几乎完全重叠】✗
-        #         → A 周围 8 只，B 周围也是这 8 只 ✗
-        #         → 结果两个人加起来还是 8 只 ✓✓ 用户描述一字不差 ✓
-        #   修：改成【按归属算】—— 一只僵尸算谁的就看它离谁最近 ✓
-        #       （两个人站一起 → 各分一半 ✓ 于是每人能各刷到 8 ✓ 总共 16 ✓）
         cand = [q for q in ps
-                if self._owned_count(q) < self._cap_of(q)]   # ★ 第 133 轮：可调上限 ✓
+                if self._owned_count(q) < self._cap_of(q)]
         if not cand:
             return
         p = random.choice(cand)
@@ -7917,22 +7913,30 @@ class World(object):
         dist = mobs.SPAWN_MIN + random.random() * (mobs.SPAWN_MAX - mobs.SPAWN_MIN)
         x = p.x + math.sin(ang) * dist
         z = p.z + math.cos(ang) * dist
+        # ★ 本地城镇：任何 active 小镇的边界都不刷怪
         if self._in_safe_zone(x, z):
-            return                       # 安全区里不刷（方形 500x500）
-        # 组队时：以刷新点 SPAWN_TEAM_R 内【随机一个】队员的等级为准（§3.1）✓
+            return
         near = [q for q in ps if (q.x - x) ** 2 + (q.z - z) ** 2 <= mobs.SPAWN_TEAM_R ** 2]
         base = (random.choice(near) if near else p).role.get('level', 1) or 1
         self.mob_seq += 1
-        _m = mobs.Mob(self.mob_seq, mobs.roll_level(base), x, z)
-        # ★ 第 132 轮：打上【替谁刷的】标记 ✓（硬配额的依据 ✓）
+        _rank = 0
+        _skin = ''
+        _lv = mobs.roll_level(base)
+        try:
+            _elites = sum(1 for _x in self.mobs.values()
+                          if int(getattr(_x, 'rank', 0) or 0) == 1)
+            if _elites < int(mob_ranks.cfg(1).get('max_alive', 3)) and random.random() < 0.03:
+                _rank = 1
+                _skin = random.choice(mob_ranks.ELITE_SKINS)
+                _lv = max(1, int(base) + random.randint(1, 3))
+        except Exception:
+            _rank, _skin = 0, ''
+        _m = mobs.Mob(self.mob_seq, _lv, x, z, rank=_rank, skin=_skin,
+                      name=(mob_ranks.name_of(_skin, _rank) if _rank else None))
         _m.owner = getattr(p, 'role_id', None)
         self.mobs[str(self.mob_seq)] = _m
-        # ★ 2026-10-22：精英/Boss 出生包
-        try:
-            if int(getattr(_m, 'rank', 0) or 0) > 0:
-                self._special_spawn_send(_m)
-        except Exception as _sse:
-            print('[mob] spawn send failed: %r' % (_sse,))
+        if _rank:
+            self._special_spawn_send(_m)
 
     def _cap_of(self, q):
         """这个玩家的僵尸上限（第 133 轮）—— 单人覆盖优先，否则用全局值 ✓"""
