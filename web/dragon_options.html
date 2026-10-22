@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>骨龙模型方向 · 4 选 1</title>
+<style>
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#070a0c;
+    font-family:"Microsoft YaHei","PingFang SC",sans-serif}
+  #cv{display:block;width:100%;height:100%}
+  #tag{position:fixed;left:46px;top:38px;z-index:2;pointer-events:none}
+  #tag .no{color:#d8b56a;font-size:13px;letter-spacing:4px;font-weight:700}
+  #tag .nm{color:#f6ecda;font-size:34px;font-weight:900;letter-spacing:3px;margin-top:4px;
+    text-shadow:0 2px 18px #000}
+  #tag .sub{color:#94a29c;font-size:12px;letter-spacing:1px;margin-top:5px}
+  #foot{position:fixed;left:46px;bottom:30px;z-index:2;color:#6f817b;font-size:12px;
+    letter-spacing:1px;pointer-events:none}
+  #pick{position:fixed;right:38px;bottom:28px;z-index:2;color:#d8b56a;font-size:13px;
+    border:1px solid #d8b56a55;background:#17130dcc;border-radius:9px;padding:9px 14px;
+    letter-spacing:1px;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="tag"><div class="no" id="no"></div><div class="nm" id="nm"></div><div class="sub" id="sub"></div></div>
+<div id="foot">骨龙 · 高精度方向稿 / 连续曲面 · 无断缝 · 程序化 PBR 光照</div>
+<div id="pick">选这张请回复编号</div>
+<script src="./lib/three.min.js"></script>
+<script>
+(function(){
+'use strict';
+var Q = new URLSearchParams(location.search);
+var V = Math.max(1, Math.min(4, +(Q.get('v') || 1)));
+var STYLES = {
+  1: { no:'01 / IVORY', nm:'古骨龙', sub:'象牙骨 · 翡翠鳞 · 冷青瞳 · 厚膜暗紫翼',
+       bone:0xd7c7a8, bone2:0x9c896d, dark:0x5b4b3a, belly:0xefe2c8, wing:0x5d3d79,
+       wing2:0x24142f, trim:0x3f8f72, accent:0xd9b35c, glow:0x77f0ff, glow2:0x4fd8c4,
+       plate:0xb8a786 },
+  2: { no:'02 / BLIGHT', nm:'血骨龙', sub:'暗红骨甲 · 黑红厚翼 · 血火瞳',
+       bone:0x9a6a55, bone2:0x653e33, dark:0x2a1518, belly:0xc59070, wing:0x641a26,
+       wing2:0x21070c, trim:0x8a2d2a, accent:0xd08a4a, glow:0xff5a2a, glow2:0xff2f12,
+       plate:0x7b4a3b },
+  3: { no:'03 / FROST', nm:'霜骨龙', sub:'冰白骨 · 霜蓝鳍 · 冰晶厚翼',
+       bone:0xd7e8ef, bone2:0x8fb1c2, dark:0x4f6877, belly:0xf4ffff, wing:0x8fd4ea,
+       wing2:0x315d77, trim:0x7fb8d0, accent:0xe6efef, glow:0xa9f7ff, glow2:0x64e7ff,
+       plate:0xb8ced8 },
+  4: { no:'04 / OBSIDIAN', nm:'黑曜熔岩龙', sub:'黑曜骨甲 · 熔金瞳 · 火山厚翼',
+       bone:0x7a716a, bone2:0x474346, dark:0x24262b, belly:0xa3866c, wing:0x47232b,
+       wing2:0x14070a, trim:0x9a4a22, accent:0xd08a3a, glow:0xff6a20, glow2:0xff3a10,
+       plate:0x56504c }
+};
+var S = STYLES[V];
+
+var cv = document.getElementById('cv');
+var rd = new THREE.WebGLRenderer({canvas:cv, antialias:true, alpha:false});
+rd.setPixelRatio(1);
+rd.setSize(innerWidth, innerHeight, false);
+rd.shadowMap.enabled = true;
+rd.shadowMap.type = THREE.PCFSoftShadowMap;
+rd.outputEncoding = THREE.sRGBEncoding;
+rd.toneMapping = THREE.ACESFilmicToneMapping;
+rd.toneMappingExposure = 0.86;
+
+var scene = new THREE.Scene();
+scene.background = new THREE.Color(0x070a0c);
+scene.fog = new THREE.Fog(0x070a0c, 10, 24);
+var cam = new THREE.PerspectiveCamera(36, innerWidth/innerHeight, 0.1, 60);
+cam.position.set(5.4, 3.25, 9.2);
+cam.lookAt(0, 1.8, 0.4);
+
+scene.add(new THREE.HemisphereLight(0x8aa4a0, 0x120d0a, 0.30));
+var key = new THREE.DirectionalLight(0xffe1bd, 0.92);
+key.position.set(6, 9, 7); key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.left = -8; key.shadow.camera.right = 8;
+key.shadow.camera.top = 8; key.shadow.camera.bottom = -8;
+key.shadow.camera.near = 1; key.shadow.camera.far = 30; scene.add(key);
+var rim = new THREE.DirectionalLight(S.glow, 0.62);
+rim.position.set(-7, 5, -6); scene.add(rim);
+var fill = new THREE.DirectionalLight(0x6f9ec0, 0.28);
+fill.position.set(-6, 3, 5); scene.add(fill);
+var pt = new THREE.PointLight(S.glow, 0.42, 8);
+pt.position.set(0, 2.2, 2.2); scene.add(pt);
+
+var ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 30),
+  new THREE.MeshStandardMaterial({color:0x0c1213, roughness:0.98, metalness:0.02}));
+ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
+var grid = new THREE.GridHelper(40, 40, 0x1c2b29, 0x101918);
+grid.position.y = 0.01; grid.material.transparent = true; grid.material.opacity = 0.22; scene.add(grid);
+
+function mat(c, o) {
+  o = o || {};
+  return new THREE.MeshStandardMaterial({color:c, roughness:o.rough===undefined?0.68:o.rough,
+    metalness:o.metal===undefined?0.08:o.metal,
+    emissive:o.em||0x000000, emissiveIntensity:o.ei||0,
+    transparent:!!o.trans, opacity:o.op===undefined?1:o.op,
+    side:o.side||THREE.FrontSide, flatShading:false});
+}
+function box(g,w,h,d,m,x,y,z,rx,ry,rz) {
+  var o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);
+  o.position.set(x||0,y||0,z||0); o.rotation.set(rx||0,ry||0,rz||0);
+  o.castShadow=true; o.receiveShadow=true; g.add(o); return o;
+}
+function sph(g,r,m,x,y,z,sx,sy,sz) {
+  var o=new THREE.Mesh(new THREE.SphereGeometry(r,20,14),m);
+  o.position.set(x||0,y||0,z||0); o.scale.set(sx===undefined?1:sx,sy===undefined?1:sy,sz===undefined?1:sz);
+  o.castShadow=true; o.receiveShadow=true; g.add(o); return o;
+}
+function cone(g,r,h,m,x,y,z,rx,ry,rz) {
+  var o=new THREE.Mesh(new THREE.ConeGeometry(r,h,12),m);
+  o.position.set(x||0,y||0,z||0); o.rotation.set(rx||0,ry||0,rz||0);
+  o.castShadow=true; g.add(o); return o;
+}
+function cyl(g,rt,rb,h,m,x,y,z,rx,ry,rz) {
+  var o=new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,h,12),m);
+  o.position.set(x||0,y||0,z||0); o.rotation.set(rx||0,ry||0,rz||0);
+  o.castShadow=true; g.add(o); return o;
+}
+var _boneBump = null;
+function boneBump() {
+  if (_boneBump) return _boneBump;
+  var c=document.createElement('canvas'); c.width=c.height=128;
+  var g=c.getContext('2d'), im=g.createImageData(128,128);
+  for (var i=0;i<128*128;i++) { var v=118+((i*37)%41)-20; im.data[i*4]=v; im.data[i*4+1]=v; im.data[i*4+2]=v; im.data[i*4+3]=255; }
+  g.putImageData(im,0,0);
+  _boneBump=new THREE.CanvasTexture(c); _boneBump.wrapS=_boneBump.wrapT=THREE.RepeatWrapping;
+  _boneBump.repeat.set(3,3); return _boneBump;
+}
+function tapered(points, radii, seg, rad, back, belly, rough) {
+  var curve = new THREE.CatmullRomCurve3(points);
+  var frames = curve.computeFrenetFrames(seg, false);
+  var pos=[], nor=[], col=[], uv=[], idx=[];
+  var cb = new THREE.Color(back), ce = new THREE.Color(belly);
+  for (var i=0;i<=seg;i++) {
+    var t=i/seg, p=curve.getPoint(t);
+    var f=t*(radii.length-1), ri=Math.floor(f), fr=f-ri;
+    var r=radii[ri]+((radii[Math.min(ri+1,radii.length-1)]||radii[ri])-radii[ri])*fr;
+    var N=frames.normals[i], B=frames.binormals[i];
+    for (var j=0;j<=rad;j++) {
+      var a=j/rad*Math.PI*2;
+      var nx=Math.cos(a)*N.x+Math.sin(a)*B.x;
+      var ny=Math.cos(a)*N.y+Math.sin(a)*B.y;
+      var nz=Math.cos(a)*N.z+Math.sin(a)*B.z;
+      pos.push(p.x+nx*r,p.y+ny*r,p.z+nz*r);
+      nor.push(nx,ny,nz);
+      var c=cb.clone().lerp(ce, Math.max(0,Math.min(1,0.52-ny*0.52)));
+      col.push(c.r,c.g,c.b); uv.push(t,j/rad);
+    }
+  }
+  for (var ii=0;ii<seg;ii++) for (var jj=0;jj<rad;jj++) {
+    var a0=ii*(rad+1)+jj, b0=a0+rad+1;
+    idx.push(a0,b0,a0+1,b0,b0+1,a0+1);
+  }
+  var geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  geo.setAttribute('normal',new THREE.Float32BufferAttribute(nor,3));
+  geo.setAttribute('color',new THREE.Float32BufferAttribute(col,3));
+  geo.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));
+  geo.setIndex(idx); geo.computeVertexNormals();
+  var m=new THREE.Mesh(geo,new THREE.MeshStandardMaterial({vertexColors:true,
+    roughness:rough||0.62,metalness:0.04,side:THREE.DoubleSide,
+    bumpMap:boneBump(), bumpScale:0.045}));
+  m.castShadow=true; m.receiveShadow=true; return m;
+}
+
+function buildDragon() {
+  var g = new THREE.Group();
+  var b1 = mat(S.bone, {rough:0.5, metal:0.06});
+  var b2 = mat(S.bone2, {rough:0.72, metal:0.04});
+  var bd = mat(S.dark, {rough:0.82, metal:0.04});
+  var gl = mat(S.glow, {em:S.glow, ei:2.2, rough:0.2});
+  var wg = mat(S.wing, {rough:0.42, trans:true, op:0.92, side:THREE.DoubleSide});
+  var wgIn = mat(S.wing2, {rough:0.62, trans:true, op:0.88, side:THREE.DoubleSide});
+  var plate = mat(S.plate, {rough:0.46, metal:0.2});
+  var trim = mat(S.trim, {rough:0.62, metal:0.12});
+  var accent = mat(S.accent, {rough:0.32, metal:0.55, em:S.accent, ei:0.18});
+  var eye = mat(S.glow, {rough:0.18, em:S.glow, ei:2.4});
+  var pts = [
+    new THREE.Vector3(0,1.05,-3.6), new THREE.Vector3(0,1.14,-2.7),
+    new THREE.Vector3(0,1.22,-1.8), new THREE.Vector3(0,1.38,-0.9),
+    new THREE.Vector3(0,1.52,0.0), new THREE.Vector3(0,1.72,0.9),
+    new THREE.Vector3(0,2.05,1.5), new THREE.Vector3(0,2.42,1.95),
+    new THREE.Vector3(0,2.62,2.25)
+  ];
+  var body = tapered(pts, [0.035,0.08,0.18,0.35,0.5,0.46,0.32,0.22,0.19],
+    72, 12, S.bone, S.belly, 0.55);
+  g.add(body);
+  // 头部独立枢轴：龙头骨 + 上下颚 + 口腔 + 牙 + 角
+  var headPivot = new THREE.Group();
+  headPivot.position.set(0, 2.64, 2.26);
+  g.add(headPivot);
+  function ha(geo, material, x, y, z, rx, ry, rz, sx, sy, sz) {
+    var o = new THREE.Mesh(geo, material);
+    o.position.set(x || 0, y || 0, z || 0);
+    o.rotation.set(rx || 0, ry || 0, rz || 0);
+    o.scale.set(sx === undefined ? 1 : sx, sy === undefined ? 1 : sy, sz === undefined ? 1 : sz);
+    o.castShadow = true; headPivot.add(o); return o;
+  }
+  ha(new THREE.IcosahedronGeometry(0.31, 1), b1, 0, 0.04, 0.02, 0, 0, 0, 1.12, 0.82, 1.05);
+  // 上颚：长而窄的龙头吻部
+  ha(new THREE.CylinderGeometry(0.14, 0.23, 0.66, 6), b1, 0, -0.01, 0.44,
+    Math.PI / 2, 0, 0, 1.08, 1, 1);
+  // 下颚：比上颚略短，留出嘴线
+  ha(new THREE.BoxGeometry(0.31, 0.10, 0.60), b2, 0, -0.16, 0.39, 0.05, 0, 0.08, 1, 1, 1);
+  ha(new THREE.BoxGeometry(0.27, 0.035, 0.42), mat(0x170d0b, {rough:0.95}),
+    0, -0.09, 0.49);
+  // 上排牙 + 下排牙
+  for (var t = 0; t < 6; t++) {
+    var tx = (t - 2.5) * 0.045;
+    ha(new THREE.ConeGeometry(0.022, 0.10, 4), accent, tx, -0.10, 0.66, 0.12, 0, 0);
+    ha(new THREE.ConeGeometry(0.018, 0.08, 4), accent, tx, -0.18, 0.62, Math.PI, 0, 0);
+  }
+  // 鼻骨/鼻孔
+  ha(new THREE.BoxGeometry(0.16, 0.07, 0.20), b2, 0, 0.10, 0.68, -0.1, 0, 0);
+  ha(new THREE.SphereGeometry(0.035, 6, 5), mat(0x120c0b, {rough:1}),
+    -0.065, 0.085, 0.78, 0.3, 0, 0);
+  ha(new THREE.SphereGeometry(0.035, 6, 5), mat(0x120c0b, {rough:1}),
+    0.065, 0.085, 0.78, 0.3, 0, 0);
+  // 眼窝 + 发光瞳 + 眉骨
+  ha(new THREE.SphereGeometry(0.082, 8, 6), mat(0x0a0908, {rough:0.95}),
+    -0.18, 0.16, 0.16, 0, 0, 0, 1.2, 1.1, 0.5);
+  ha(new THREE.SphereGeometry(0.082, 8, 6), mat(0x0a0908, {rough:0.95}),
+    0.18, 0.16, 0.16, 0, 0, 0, 1.2, 1.1, 0.5);
+  ha(new THREE.SphereGeometry(0.052, 8, 6), eye, -0.18, 0.16, 0.20);
+  ha(new THREE.SphereGeometry(0.052, 8, 6), eye, 0.18, 0.16, 0.20);
+  ha(new THREE.ConeGeometry(0.07, 0.30, 5), b2, -0.28, 0.26, 0.10, -0.25, 0, 0.8);
+  ha(new THREE.ConeGeometry(0.07, 0.30, 5), b2, 0.28, 0.26, 0.10, -0.25, 0, -0.8);
+  // 金色后掠角
+  ha(new THREE.ConeGeometry(0.085, 0.58, 6), accent, -0.20, 0.32, -0.12, -0.45, 0, -0.30);
+  ha(new THREE.ConeGeometry(0.085, 0.58, 6), accent, 0.20, 0.32, -0.12, -0.45, 0, 0.30);
+  // 颊部鳞片/鳍：每个方向不同的副色
+  for (var ch = 0; ch < 3; ch++) {
+    ha(new THREE.ConeGeometry(0.055, 0.22, 4), trim,
+      (ch - 1) * 0.16, -0.02, -0.02, Math.PI / 2, 0, (ch - 1) * 0.35);
+  }
+  if (V === 1) {
+    for (var fr = 0; fr < 4; fr++) ha(new THREE.ConeGeometry(0.06, 0.28, 4), trim,
+      -0.25 + fr * 0.05, 0.38 + fr * 0.04, -0.18, -0.6, 0, -0.2);
+  } else if (V === 2) {
+    for (var br = 0; br < 4; br++) ha(new THREE.ConeGeometry(0.045, 0.20, 4), accent,
+      -0.22 + br * 0.15, -0.25, 0.08, 0.4, 0, 0);
+  } else if (V === 3) {
+    for (var ic = 0; ic < 4; ic++) ha(new THREE.ConeGeometry(0.06, 0.30, 5),
+      mat(0xc8f6ff, {rough:0.25, trans:true, op:0.75}),
+      -0.24 + ic * 0.16, 0.42, -0.06, -0.7, 0, 0);
+  } else {
+    for (var lc = 0; lc < 4; lc++) ha(new THREE.BoxGeometry(0.035, 0.12, 0.28),
+      mat(S.glow, {rough:0.25, em:S.glow, ei:1.8}),
+      -0.18 + lc * 0.12, 0.05, 0.24, 0, 0, 0.25);
+  }
+  // 胸腹肋骨：贴着连续身体，不悬空
+  for (var rb=0;rb<8;rb++) {
+    var rz=-1.55+rb*0.38, rr=0.46-Math.abs(rb-3.5)*0.025;
+    for (var side=-1;side<=1;side+=2) {
+      var rib=new THREE.Mesh(new THREE.TorusGeometry(rr,0.026,6,18,Math.PI*1.1),b2);
+      rib.position.set(side*0.03,1.50,rz);
+      rib.rotation.set(Math.PI/2,0,side*0.46);
+      rib.castShadow=true; g.add(rib);
+    }
+  }
+  // 背脊板、尾刺
+  for (var ns=0;ns<13;ns++) {
+    var nt=ns/12;
+    cone(g,0.055+ (1-nt)*0.035,0.26+ (1-nt)*0.3,(ns%2?accent:trim),0,2.05+nt*0.8-0.5*nt*nt,-1.55+nt*4.0,0.55-nt*0.12,0,0);
+  }
+  for (var tl=0;tl<6;tl++) {
+    var tz=-2.75-tl*0.25;
+    cone(g,0.045-tl*0.004,0.24-tl*0.02,(tl%2?accent:trim),0,1.08-tl*0.02,tz,0.75,0,0);
+  }
+  // 肩胛/胸骨
+  sph(g,0.26,plate,-0.42,1.75,0.45,1.1,0.65,1.2);
+  sph(g,0.26,plate,0.42,1.75,0.45,1.1,0.65,1.2);
+  box(g,0.13,0.75,1.55,plate,0,1.35,0.1,0.04,0,0);
+  // 翅膀：一张连续曲线膜 + 骨梁
+  for (var di=0;di<2;di++) {
+    var side=di?1:-1;
+    var wingG=new THREE.Group();
+    wingG.position.set(side*0.44,2.05,0.30);
+    wingG.rotation.z=side*0.18;
+    wingG.rotation.y=side*0.48;
+    wingG.rotation.x=0;
+    wingG.scale.x=side;
+    sph(g,0.17,plate,side*0.42,1.96,0.32,1.1,0.9,1.1);
+    g.add(wingG);
+    var shp = new THREE.Shape();
+    shp.moveTo(0,0);
+    shp.bezierCurveTo(1.25,0.72,2.55,0.82,2.95,0.28);
+    shp.bezierCurveTo(2.55,0.10,2.35,0.02,2.18,-0.10);
+    shp.bezierCurveTo(2.02,0.08,1.86,-0.03,1.70,-0.20);
+    shp.bezierCurveTo(1.52,-0.02,1.34,-0.08,1.10,-0.30);
+    shp.bezierCurveTo(0.92,-0.08,0.52,-0.02,0,0);
+    var mem=new THREE.Mesh(new THREE.ExtrudeGeometry(shp,{depth:0.09,bevelEnabled:true,bevelSize:0.025,bevelThickness:0.025,bevelSegments:1,curveSegments:10}),wg);
+    mem.position.set(0,0.18,0.02); mem.receiveShadow=true; wingG.add(mem);
+    var inner=new THREE.Mesh(new THREE.ExtrudeGeometry(shp,{depth:0.025,bevelEnabled:false,curveSegments:8}),wgIn);
+    inner.position.set(0,0.18,0.055); inner.scale.set(0.92,0.92,1); wingG.add(inner);
+    // 前缘粗骨
+    var lead=new THREE.Mesh(new THREE.CylinderGeometry(0.085,0.035,2.75,7),b2);
+    lead.position.set(1.35,0.28,0.04); lead.rotation.z=-1.10; wingG.add(lead);
+    for (var wb=0;wb<4;wb++) {
+      var wbx=0.5+wb*0.75, wbz=0.15-wb*0.24;
+      var bone=cyl(wingG,0.065,0.020,1.55,b2,wbx,0.02,wbz,-1.08+wb*0.06,0.12,0);
+    }
+    cone(g,0.06,0.42,gl,side*3.55,2.02,0.38,0,0,side*-1.35);
+  }
+  // 四肢：连续锥形管，关节球覆盖接缝
+  for (var dl=0;dl<4;dl++) {
+    var side2=dl<2?-1:1, fz=dl%2?0.76:-0.72;
+    var hip=new THREE.Group();
+    hip.position.set(side2*0.48,1.22,fz);
+    hip.rotation.x=dl%2?-0.22:0.12;
+    g.add(hip);
+    sph(hip,0.20,plate,0,0,0,1.2,1,1.2);
+    sph(hip,0.13,trim,0,-0.30,0.04,1.1,1,1.1);
+    sph(hip,0.105,trim,0,-0.58,0.12,1.05,1,1.05);
+    sph(hip,0.085,plate,0,-0.82,0.24,1.1,0.9,1.1);
+    var leg=tapered([new THREE.Vector3(0,0.02,0),new THREE.Vector3(0.02,-0.32,0.08),
+      new THREE.Vector3(0.08,-0.62,0.24),new THREE.Vector3(0.12,-0.86,0.38)],
+      [0.17,0.135,0.095,0.07],18,10,S.bone,S.bone2,0.7);
+    hip.add(leg);
+    for (var cl=0;cl<3;cl++) cone(hip,0.03,0.22,b2,(cl-1)*0.09,-0.91,0.52,1.15,0,0);
+    var foot=sph(hip,0.15,b2,0.08,-0.9,0.44,1.5,0.4,1.6);
+  }
+  // 尾端骨刃
+  cone(g,0.12,0.5,b1,0,1.04,-3.82,-1.35,0,0);
+  // 胸口冷光
+  var charge=new THREE.PointLight(S.glow,1.2,3.2);
+  charge.position.set(0,1.55,0.65); g.add(charge);
+  return g;
+}
+
+var root = buildDragon();
+scene.add(root);
+root.rotation.y = -0.35;
+
+// 静态展示姿态：腿/翼有轻微前后错开，避免排队站桩
+root.position.y = 0.02;
+
+var labelNo=document.getElementById('no'), labelNm=document.getElementById('nm'), labelSub=document.getElementById('sub');
+labelNo.textContent=S.no; labelNm.textContent=S.nm; labelSub.textContent=S.sub;
+
+function resize() {
+  rd.setSize(innerWidth,innerHeight,false);
+  cam.aspect=innerWidth/innerHeight; cam.updateProjectionMatrix();
+}
+addEventListener('resize',resize);
+resize();
+
+var frames=0;
+function loop() {
+  requestAnimationFrame(loop);
+  root.position.y = 0.02 + Math.sin(performance.now()/1100)*0.012;
+  root.rotation.y = -0.35 + Math.sin(performance.now()/2200)*0.012;
+  rd.render(scene,cam);
+  if (++frames===12) window.__ready=true;
+}
+loop();
+})();
+</script>
+</body>
+</html>
+

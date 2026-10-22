@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>玩家皮肤 · 20 款（v2：有体型/性别/轮廓差异）</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0d1016; color: #dfe8f2;
+               font-family: "Microsoft YaHei", system-ui, sans-serif; }
+  #wrap { width: 1500px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 10px 0 2px; color: #ffd83d; letter-spacing: 2px; }
+  .sub { font-size: 12px; color: #8fa3b8; margin-bottom: 6px; }
+  #stage { position: relative; width: 1500px; height: 1360px; }
+  #cv { display: block; width: 1500px; height: 1360px; }
+  #labels { position: absolute; left: 0; top: 0; width: 1500px; height: 1360px; pointer-events: none; }
+  #labels .lb { position: absolute; transform: translate(-50%, 0); text-align: center;
+                white-space: nowrap; text-shadow: 0 1px 3px #000; }
+  #labels .lb b { display: block; font-size: 14px; color: #eaf2fb; letter-spacing: 1px; }
+  #labels .lb i { display: block; font-style: normal; font-size: 10.5px; color: #7f93a8; }
+
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1>玩家皮肤 · 20 款（有体型 / 性别 / 轮廓差异）</h1>
+  <div class="sub">每个人共用一套"动画骨架语义"（肩/髋/手/脚），但身高、四肢长短、肩宽、头身比可以不同 —— 挂点全部按参数算</div>
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="labels"></div>
+  </div>
+</div>
+<script src="../web/lib/three.min.js"></script>
+<script>
+/* ============================================================
+   关键：不再是"只换颜色" ✗
+   每个角色给一份【骨架参数】，所有挂点由参数算出来：
+     hipY    髋关节高度（= 腿长）
+     legW    腿粗          torsoH/W/D  躯干
+     armLen  手臂长        armW        手臂粗
+     armX    肩宽偏移      headW/H/D   头
+     neck    脖子长度
+   于是：高矮 / 胖瘦 / 长短手 / 大头娃娃 —— 全都能不同 ✓
+   动画只转 armL/armR/legL/legR 这些枢轴 → 参数变了动画照样对 ✓
+   ============================================================ */
+
+var DEF = { hipY: 0.86, legW: 0.34, torsoH: 0.98, torsoW: 1.02, torsoD: 0.62,
+            armLen: 0.92, armW: 0.30, armX: 0.66, headW: 1.10, headH: 1.02, headD: 1.02,
+            neck: 0.0 };
+
+function pal(o) {
+  return { skin: o.skin || 0xf0c9a0, hair: o.hair || 0x3e2c1e, shirt: o.shirt || 0x4ebec4,
+           shirtD: o.shirtD || 0x2c8e96, pants: o.pants || 0x4e4eac, boot: o.boot || 0x5e4a38,
+           belt: o.belt || 0x8a6a42, gold: o.gold || 0xe0bc60, collar: o.collar || 0x88d4d8,
+           eye: (o.eye === undefined ? 0x2a2a2a : o.eye), mouth: (o.mouth === undefined ? 0xb0685c : o.mouth) };
+}
+
+/* ---------------- 20 个角色 ---------------- */
+var CHARS = [
+  /* ===== 女 ===== */
+  { n: '青衫女修', sx: '女 · 纤细 · 1.00', sk: { torsoW: 0.88, torsoD: 0.54, armW: 0.24, armX: 0.56,
+      legW: 0.28, headW: 1.02, headH: 0.98, headD: 0.96 },
+    pal: pal({ shirt: 0x59c6c8, shirtD: 0x3a9a9c, pants: 0x4a5a9a, collar: 0xa8e4e6, belt: 0xa88a52 }),
+    hair: 'pony', cloth: 'skirt', skirt: { top: 0.92, bot: 1.18, len: 0.78, c: 0x59c6c8 } },
+
+  { n: '血衣女侠', sx: '女 · 苗条 · 1.03', sk: { hipY: 0.94, torsoH: 1.02, torsoW: 0.86, torsoD: 0.52,
+      armW: 0.23, armX: 0.56, legW: 0.27, headW: 1.00, headH: 0.96 },
+    pal: pal({ hair: 0x2a1414, shirt: 0x8b1f1f, shirtD: 0x5c1414, pants: 0x201c22,
+      collar: 0xb83030, belt: 0x2a2226, boot: 0x1a1618 }),
+    hair: 'ponyhigh', cloth: 'skirt', skirt: { top: 0.88, bot: 1.06, len: 0.66, c: 0x6b1717 },
+    acc: [ { p: 'torso', w: 0.94, h: 0.14, d: 0.58, c: 0xc03030, dy: 0.30 } ] },
+
+  { n: '白袍医仙', sx: '女 · 高挑 · 1.08', sk: { hipY: 1.02, torsoH: 1.02, torsoW: 0.84, torsoD: 0.52,
+      armLen: 0.98, armW: 0.22, armX: 0.56, legW: 0.26, headW: 0.98, headH: 0.94 },
+    pal: pal({ shirt: 0xf0f0ea, shirtD: 0xd8d8d0, pants: 0xe0e0d8, collar: 0xffffff, belt: 0x9ab0c0,
+      hair: 0x1a1a20, skin: 0xf8dcc2 }),
+    hair: 'long', cloth: 'robe', skirt: { top: 0.84, bot: 1.30, len: 1.02, c: 0xf0f0ea },
+    acc: [ { p: 'torso', w: 0.22, h: 0.30, d: 0.14, c: 0x9ab0c0, dx: 0.34, dy: -0.10, dz: 0.34 } ] },
+
+  { n: '狐妖娘', sx: '女 · 娇小 · 0.92', sk: { hipY: 0.74, torsoH: 0.84, torsoW: 0.82, torsoD: 0.52,
+      armLen: 0.78, armW: 0.22, armX: 0.54, legW: 0.26, headW: 1.06, headH: 1.04, headD: 1.00 },
+    pal: pal({ shirt: 0xe0603a, shirtD: 0xb04428, pants: 0xf0e8dc, collar: 0xfff0e0, belt: 0xd8b060,
+      hair: 0xe8b060, skin: 0xfce0cc }),
+    hair: 'long', cloth: 'skirt', skirt: { top: 0.86, bot: 1.10, len: 0.56, c: 0xe0603a },
+    acc: [ { p: 'head', w: 0.20, h: 0.34, d: 0.12, c: 0xe8b060, dx: -0.34, dy: 0.56, dz: 0.02, rotZ: 0.18 },
+           { p: 'head', w: 0.20, h: 0.34, d: 0.12, c: 0xe8b060, dx: 0.34, dy: 0.56, dz: 0.02, rotZ: -0.18 },
+           { p: 'back', w: 0.26, h: 0.90, d: 0.26, c: 0xe8b060, dy: -0.62, dz: -0.36, rotX: 0.5 } ] },
+
+  { n: '冰宫圣女', sx: '女 · 高挑 · 1.06', sk: { hipY: 1.00, torsoH: 1.00, torsoW: 0.84, torsoD: 0.52,
+      armLen: 0.96, armW: 0.22, armX: 0.55, legW: 0.26, headW: 0.98, headH: 0.96 },
+    pal: pal({ shirt: 0x9ad0ee, shirtD: 0x74aed0, pants: 0x88bcd8, collar: 0xe8f8ff, belt: 0xdfefff,
+      hair: 0xdff0ff, skin: 0xf8e8dc }),
+    hair: 'long', cloth: 'robe', skirt: { top: 0.82, bot: 1.26, len: 1.00, c: 0x9ad0ee },
+    acc: [ { p: 'head', w: 0.14, h: 0.14, d: 0.14, c: 0xffffff, dy: 0.66, dz: 0.0 },
+           { p: 'torso', w: 1.10, h: 0.10, d: 0.70, c: 0xe8f8ff, dy: 0.34 } ] },
+
+  /* ===== 男 ===== */
+  { n: '铁塔力士', sx: '男 · 魁梧 · 1.12', sk: { hipY: 0.80, legW: 0.46, torsoH: 1.06, torsoW: 1.34,
+      torsoD: 0.86, armLen: 0.96, armW: 0.44, armX: 0.82, headW: 1.12, headH: 1.00 },
+    pal: pal({ shirt: 0xb08a4a, shirtD: 0x8a6a34, pants: 0x6a5a3a, collar: 0xc09a5a, belt: 0x5a4a2a,
+      hair: 0x2e2218, skin: 0xd8b088 }),
+    acc: [ { p: 'torso', w: 1.44, h: 0.20, d: 0.94, c: 0x8a6a34, dy: 0.42 },
+           { p: 'armL', w: 0.50, h: 0.16, d: 0.50, c: 0x8a6a34, dy: -0.10 },
+           { p: 'armR', w: 0.50, h: 0.16, d: 0.50, c: 0x8a6a34, dy: -0.10 } ] },
+
+  { n: '侏儒炼金师', sx: '男 · 矮小 · 0.72', sk: { hipY: 0.58, legW: 0.30, torsoH: 0.70, torsoW: 0.92,
+      torsoD: 0.62, armLen: 0.66, armW: 0.26, armX: 0.60, headW: 1.28, headH: 1.18, headD: 1.10 },
+    pal: pal({ shirt: 0x6a5a8a, shirtD: 0x4e4268, pants: 0x3a3448, collar: 0x9a8ac0, belt: 0x8a7a4a,
+      hair: 0xc0c0c8, skin: 0xe8c49a }),
+    hair: 'messy',
+    acc: [ { p: 'head', w: 1.20, h: 0.16, d: 0.10, c: 0x2a2a30, dy: 0.06, dz: 0.56 },
+           { p: 'head', w: 0.26, h: 0.20, d: 0.06, c: 0x8ae0ff, dx: -0.24, dy: 0.06, dz: 0.62 },
+           { p: 'head', w: 0.26, h: 0.20, d: 0.06, c: 0x8ae0ff, dx: 0.24, dy: 0.06, dz: 0.62 },
+           { p: 'back', w: 0.70, h: 0.60, d: 0.30, c: 0x5a4a2a, dy: -0.10, dz: -0.48 } ] },
+
+  { n: '竹竿剑客', sx: '男 · 瘦高 · 1.14', sk: { hipY: 1.10, legW: 0.24, torsoH: 1.14, torsoW: 0.78,
+      torsoD: 0.48, armLen: 1.10, armW: 0.20, armX: 0.52, headW: 0.94, headH: 0.92 },
+    pal: pal({ shirt: 0x3a4a6a, shirtD: 0x2a3650, pants: 0x2a3242, collar: 0x8a9ab0, belt: 0xc0c8d8,
+      hair: 0x1a1a20, skin: 0xf0d0b0 }),
+    hair: 'topknot', cloth: 'longcoat',
+    acc: [ { p: 'back', w: 0.10, h: 1.30, d: 0.10, c: 0xbfc7d0, dy: -0.10, dz: -0.36, rotZ: 0.12 } ] },
+
+  { n: '少年侠客', sx: '男 · 少年 · 0.86', sk: { hipY: 0.72, legW: 0.30, torsoH: 0.86, torsoW: 0.94,
+      torsoD: 0.60, armLen: 0.80, armW: 0.26, armX: 0.60, headW: 1.14, headH: 1.10 },
+    pal: pal({ shirt: 0xd8b060, shirtD: 0xb08a3a, pants: 0x8a6a3a, collar: 0xf0d890, belt: 0x6a4a2a,
+      hair: 0x1a1410, skin: 0xf6cfa0 }),
+    hair: 'messy',
+    acc: [ { p: 'torso', w: 0.30, h: 0.24, d: 0.16, c: 0x6a4a2a, dx: 0.42, dy: -0.20, dz: 0.30 } ] },
+
+  { n: '老道士', sx: '男 · 驼背 · 0.98', sk: { hipY: 0.84, legW: 0.30, torsoH: 0.94, torsoW: 0.96,
+      torsoD: 0.60, armLen: 0.94, armW: 0.26, armX: 0.62, headW: 1.04, headH: 1.00 },
+    pal: pal({ shirt: 0xd8d0b8, shirtD: 0xb8b098, pants: 0xb8b098, collar: 0xf0e8d0, belt: 0x8a7a5a,
+      hair: 0xe8e8e8, skin: 0xe0c0a0 }),
+    hair: 'bald', cloth: 'robe', skirt: { top: 0.90, bot: 1.20, len: 0.92, c: 0xd8d0b8 },
+    acc: [ { p: 'head', w: 0.46, h: 0.70, d: 0.20, c: 0xe8e8e8, dy: -0.52, dz: 0.30 },
+           { p: 'torso', w: 0.22, h: 0.30, d: 0.18, c: 0x8a7a4a, dx: -0.52, dy: -0.18, dz: 0.18 } ] },
+
+  { n: '铁甲将军', sx: '男 · 魁梧 · 1.10', sk: { hipY: 0.88, legW: 0.40, torsoH: 1.04, torsoW: 1.24,
+      torsoD: 0.78, armLen: 0.96, armW: 0.38, armX: 0.76, headW: 1.08, headH: 1.00 },
+    pal: pal({ shirt: 0x8a96a4, shirtD: 0x6a7480, pants: 0x5a626c, collar: 0xb8c4d0, belt: 0x3a4048,
+      hair: 0x2a2a30, skin: 0xe0b890 }),
+    acc: [ { p: 'torso', w: 1.20, h: 0.94, d: 0.24, c: 0xc0ccd8, dy: 0.02, dz: 0.42 },
+           { p: 'head', w: 1.20, h: 0.34, d: 1.12, c: 0xa8b4c0, dy: 0.50 },
+           { p: 'head', w: 0.18, h: 0.52, d: 0.60, c: 0xd03030, dy: 0.92, dz: 0.10 },
+           { p: 'back', w: 1.10, h: 1.20, d: 0.10, c: 0x8a2a2a, dy: -0.30, dz: -0.50 } ] },
+
+  { n: '僵尸王', sx: '男 · 驼背长臂 · 1.04', sk: { hipY: 0.80, legW: 0.34, torsoH: 0.96, torsoW: 1.06,
+      torsoD: 0.66, armLen: 1.16, armW: 0.32, armX: 0.70, headW: 1.08, headH: 1.02 },
+    pal: pal({ shirt: 0x6b6a5a, shirtD: 0x4a4a3c, pants: 0x4a4a3c, collar: 0x7a7a68, belt: 0x3a382e,
+      hair: 0x3a3428, skin: 0x9fb08a, eye: 0x8a1a1a, mouth: 0x4a2a2a }),
+    hair: 'messy',
+    acc: [ { p: 'armL', w: 0.38, h: 0.14, d: 0.38, c: 0xe8e2d0, dy: -0.30 },
+           { p: 'armR', w: 0.38, h: 0.14, d: 0.38, c: 0xe8e2d0, dy: -0.30 },
+           { p: 'torso', w: 0.20, h: 0.46, d: 0.10, c: 0x8a2a2a, dx: 0.26, dy: 0.06, dz: 0.36 } ] },
+
+  { n: '白骨法师', sx: '男 · 极瘦 · 0.96', sk: { hipY: 0.92, legW: 0.20, torsoH: 1.00, torsoW: 0.74,
+      torsoD: 0.44, armLen: 1.00, armW: 0.17, armX: 0.50, headW: 1.02, headH: 1.02, headD: 0.96 },
+    pal: pal({ shirt: 0xd8d3c6, shirtD: 0xb8b2a4, pants: 0x9e988a, collar: 0xefece4, belt: 0x7a7468,
+      hair: 0xcfc9bb, skin: 0xe8e4da, eye: 0x080808, mouth: 0x2a2a2a }),
+    hair: 'bald', cloth: 'robe', skirt: { top: 0.78, bot: 1.08, len: 0.90, c: 0x2a2a33 },
+    acc: [ { p: 'head', w: 1.04, h: 0.10, d: 0.06, c: 0x2a2a33, dy: 0.44, dz: 0.52 },
+           { p: 'torso', w: 0.16, h: 0.16, d: 0.16, c: 0x7ae0d0, dx: -0.54, dy: 0.10, dz: 0.20 } ] },
+
+  { n: '赤膊狂战', sx: '男 · 粗壮 · 1.08', sk: { hipY: 0.82, legW: 0.42, torsoH: 1.02, torsoW: 1.28,
+      torsoD: 0.82, armLen: 1.00, armW: 0.42, armX: 0.80, headW: 1.10, headH: 1.02 },
+    pal: pal({ shirt: 0xd9a678, shirtD: 0xc08858, pants: 0x6a4a2a, collar: 0xd9a678, belt: 0x4a2a1a,
+      hair: 0x8a2a1a, skin: 0xd9a678 }),
+    acc: [ { p: 'torso', w: 0.10, h: 0.60, d: 0.72, c: 0x8a2a1a, dx: -0.10, dy: 0.10, dz: 0.30, rotZ: 0.5 },
+           { p: 'head', w: 0.90, h: 0.10, d: 0.10, c: 0x8a2a1a, dy: 0.28, dz: 0.52 } ] },
+
+  { n: '雪山猎人', sx: '男 · 厚实 · 1.06', sk: { hipY: 0.84, legW: 0.38, torsoH: 1.00, torsoW: 1.18,
+      torsoD: 0.78, armLen: 0.94, armW: 0.36, armX: 0.72, headW: 1.06, headH: 1.00 },
+    pal: pal({ shirt: 0x8a7a5a, shirtD: 0x6a5c42, pants: 0x4a4438, collar: 0xe8eef4, belt: 0x4a3a26,
+      hair: 0x8a7a5a, skin: 0xe0b088 }),
+    hair: 'hood',
+    acc: [ { p: 'torso', w: 1.34, h: 0.24, d: 0.96, c: 0xe8eef4, dy: 0.44 },
+           { p: 'back', w: 0.26, h: 0.90, d: 0.26, c: 0x5a4530, dx: 0.34, dy: 0.0, dz: -0.52 } ] },
+
+  { n: '赛博改造', sx: '男 · 左臂加粗 · 1.02', sk: { hipY: 0.90, legW: 0.34, torsoH: 1.00, torsoW: 1.06,
+      torsoD: 0.66, armLen: 0.96, armW: 0.30, armX: 0.68, headW: 1.04, headH: 0.98 },
+    pal: pal({ shirt: 0x22262e, shirtD: 0x171a20, pants: 0x1a1e24, collar: 0x2ea8f0, belt: 0x0ae0e0,
+      hair: 0x14141a, skin: 0xd8b8a0 }),
+    acc: [ { p: 'armR', w: 0.56, h: 0.34, d: 0.56, c: 0x2a2f38, dy: 0.0 },
+           { p: 'armR', w: 0.50, h: 0.16, d: 0.50, c: 0x0ae0e0, dy: -0.22 },
+           { p: 'head', w: 0.94, h: 0.16, d: 0.10, c: 0x0ae0e0, dy: 0.10, dz: 0.52 },
+           { p: 'torso', w: 0.12, h: 0.08, d: 0.10, c: 0xff2fa0, dx: -0.36, dy: 0.16, dz: 0.36 } ] },
+
+  { n: '龙裔', sx: '男 · 高壮 · 1.12', sk: { hipY: 0.98, legW: 0.38, torsoH: 1.06, torsoW: 1.20,
+      torsoD: 0.74, armLen: 1.02, armW: 0.36, armX: 0.74, headW: 1.06, headH: 1.00 },
+    pal: pal({ shirt: 0x3a6a4a, shirtD: 0x2a5038, pants: 0x2a4a34, collar: 0xd8c060, belt: 0xd8c060,
+      hair: 0x1a2a1a, skin: 0x8ab070, eye: 0xe8c040 }),
+    hair: 'messy',
+    acc: [ { p: 'head', w: 0.16, h: 0.46, d: 0.16, c: 0xd8c060, dx: -0.36, dy: 0.60, dz: -0.06, rotZ: 0.30 },
+           { p: 'head', w: 0.16, h: 0.46, d: 0.16, c: 0xd8c060, dx: 0.36, dy: 0.60, dz: -0.06, rotZ: -0.30 },
+           { p: 'back', w: 0.22, h: 1.10, d: 0.22, c: 0x2a5038, dy: -0.70, dz: -0.40, rotX: 0.55 } ] },
+
+  { n: '幽冥判官', sx: '男 · 高瘦 · 1.09', sk: { hipY: 1.02, legW: 0.28, torsoH: 1.06, torsoW: 0.92,
+      torsoD: 0.58, armLen: 1.04, armW: 0.24, armX: 0.60, headW: 1.00, headH: 0.98 },
+    pal: pal({ shirt: 0x1a1a22, shirtD: 0x101016, pants: 0x14141a, collar: 0x2a2a34, belt: 0xc03030,
+      hair: 0x101014, skin: 0xd8c8b8 }),
+    hair: 'bald', cloth: 'robe', skirt: { top: 0.86, bot: 1.16, len: 1.00, c: 0x1a1a22 },
+    acc: [ { p: 'head', w: 1.22, h: 0.64, d: 1.16, c: 0x101016, dy: 0.58 },
+           { p: 'head', w: 1.40, h: 0.10, d: 1.30, c: 0x101016, dy: 0.92 },
+           { p: 'torso', w: 0.10, h: 0.80, d: 0.10, c: 0xc03030, dx: 0.42, dy: 0.0, dz: 0.34 } ] },
+
+  { n: '星辉天师', sx: '男 · 瘦高 · 1.07', sk: { hipY: 0.98, legW: 0.28, torsoH: 1.04, torsoW: 0.90,
+      torsoD: 0.56, armLen: 1.02, armW: 0.24, armX: 0.58, headW: 1.00, headH: 0.98 },
+    pal: pal({ shirt: 0x1a2440, shirtD: 0x121a30, pants: 0x121a30, collar: 0x2a3a60, belt: 0x8a9ac0,
+      hair: 0x101830, skin: 0xf0d0b8 }),
+    hair: 'hood',
+    acc: [ { p: 'back', w: 1.16, h: 1.30, d: 0.10, c: 0x141c34, dy: -0.26, dz: -0.48 },
+           { p: 'back', w: 0.10, h: 0.10, d: 0.06, c: 0xd8e8ff, dx: -0.34, dy: 0.10, dz: -0.54 },
+           { p: 'back', w: 0.08, h: 0.08, d: 0.06, c: 0xd8e8ff, dx: 0.30, dy: -0.30, dz: -0.54 },
+           { p: 'back', w: 0.08, h: 0.08, d: 0.06, c: 0xd8e8ff, dx: 0.02, dy: 0.34, dz: -0.54 } ] },
+
+  { n: '熔岩魔修', sx: '男 · 壮硕 · 1.08', sk: { hipY: 0.86, legW: 0.40, torsoH: 1.02, torsoW: 1.22,
+      torsoD: 0.78, armLen: 0.98, armW: 0.38, armX: 0.76, headW: 1.08, headH: 1.00 },
+    pal: pal({ shirt: 0x2a1a16, shirtD: 0x1a0f0c, pants: 0x20120e, collar: 0x3a2018, belt: 0xff6a20,
+      hair: 0x2a1210, skin: 0x7a3a2a, eye: 0xffa040, mouth: 0xff6a20 }),
+    hair: 'bald',
+    acc: [ { p: 'head', w: 0.16, h: 0.36, d: 0.16, c: 0xff6a20, dx: -0.36, dy: 0.56, dz: 0.06, rotZ: 0.28 },
+           { p: 'head', w: 0.16, h: 0.36, d: 0.16, c: 0xff6a20, dx: 0.36, dy: 0.56, dz: 0.06, rotZ: -0.28 },
+           { p: 'torso', w: 0.60, h: 0.06, d: 0.06, c: 0xffa040, dy: 0.18, dz: 0.36 },
+           { p: 'torso', w: 0.06, h: 0.50, d: 0.06, c: 0xff6a20, dx: 0.30, dy: -0.10, dz: 0.36 } ] }
+];
+
+/* ---------------- 材质缓存 ---------------- */
+var matCache = {};
+function matOf(c) {
+  if (matCache[c]) { return matCache[c]; }
+  matCache[c] = new THREE.MeshLambertMaterial({ color: c });
+  return matCache[c];
+}
+function box(parent, w, h, d, c, x, y, z) {
+  var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matOf(c));
+  m.position.set(x || 0, y || 0, z || 0);
+  parent.add(m);
+  return m;
+}
+/* 方台（袍子下摆 / 裙）：四棱台 = 圆柱 4 段转 45° */
+function taper(parent, wTop, wBot, h, c, x, y, z) {
+  var geo = new THREE.CylinderGeometry(wTop * 0.7071, wBot * 0.7071, h, 4, 1);
+  var m = new THREE.Mesh(geo, matOf(c));
+  m.rotation.y = Math.PI / 4;
+  m.position.set(x || 0, y || 0, z || 0);
+  parent.add(m);
+  return m;
+}
+
+/* ---------------- 搭一个角色（骨架参数化） ---------------- */
+function buildChar(ch) {
+  var g = new THREE.Group();
+  var S = {}; for (var k in DEF) { S[k] = DEF[k]; }
+  for (var k2 in (ch.sk || {})) { S[k2] = ch.sk[k2]; }
+  var P = ch.pal;
+
+  /* ---- 关键：所有挂点由参数算 ---- */
+  var hipY = S.hipY;                                  // 髋 = 腿长（脚在 y=0）
+  var torsoBottom = hipY;
+  var torsoTop = hipY + S.torsoH;
+  var shoulderY = torsoTop - 0.06;
+  var headY = torsoTop + S.neck + S.headH / 2 + 0.06; // 头中心
+  var handY = -S.armLen;                              // 手（=剑挂点）在手臂末端
+
+  /* 腿：盒高 = hipY，中心在 -hipY/2 → 脚底正好在 0 */
+  function limb(x, y, w, h, d, c) {
+    var p = new THREE.Group();
+    p.position.set(x, y, 0);
+    box(p, w, h, d, c, 0, -h / 2, 0);
+    g.add(p);
+    return p;
+  }
+  var legL = limb(-S.legW * 0.78, hipY, S.legW, hipY, S.legW, P.pants);
+  var legR = limb(S.legW * 0.78, hipY, S.legW, hipY, S.legW, P.pants);
+  box(legL, S.legW * 1.2, 0.28, S.legW * 1.5, P.boot, 0, -hipY + 0.14, 0.06);
+  box(legR, S.legW * 1.2, 0.28, S.legW * 1.5, P.boot, 0, -hipY + 0.14, 0.06);
+
+  /* 躯干 */
+  box(g, S.torsoW, S.torsoH, S.torsoD, P.shirt, 0, hipY + S.torsoH / 2, 0);
+  box(g, S.torsoW * 0.42, 0.16, S.torsoD * 1.02, P.collar, 0, torsoTop - 0.06, 0);
+  box(g, S.torsoW * 1.02, 0.20, S.torsoD * 1.04, P.belt, 0, hipY + 0.10, 0);
+  box(g, 0.20, 0.20, 0.09, P.gold, 0, hipY + 0.10, S.torsoD * 0.52);
+
+  /* 手臂：枢轴在肩，手臂长可变，手在末端 */
+  var armL = limb(-S.armX, shoulderY, S.armW, S.armLen, S.armW, P.shirtD);
+  var armR = limb(S.armX, shoulderY, S.armW, S.armLen, S.armW, P.shirt);
+  box(armL, S.armW * 1.05, 0.20, S.armW * 1.05, P.skin, 0, handY + 0.08, 0);
+  box(armR, S.armW * 1.05, 0.20, S.armW * 1.05, P.skin, 0, handY + 0.08, 0);
+
+  /* 头 */
+  var headG = new THREE.Group(); headG.position.set(0, headY, 0); g.add(headG);
+  box(headG, S.headW, S.headH, S.headD, P.skin, 0, 0, 0);
+  var eyeY = S.headH * 0.06, eyeZ = S.headD * 0.52;
+  box(headG, 0.20 * (S.headW / 1.1), 0.20, 0.05, P.eye, -S.headW * 0.20, eyeY, eyeZ);
+  box(headG, 0.20 * (S.headW / 1.1), 0.20, 0.05, P.eye, S.headW * 0.20, eyeY, eyeZ);
+  box(headG, 0.26, 0.07, 0.05, P.mouth, 0, -S.headH * 0.20, eyeZ);
+
+  /* ---- 头发 ---- */
+  var hc = P.hair;
+  if (ch.hair === 'short' || !ch.hair) {
+    box(headG, S.headW * 1.04, 0.26, S.headD * 1.04, hc, 0, S.headH * 0.52, 0);
+  } else if (ch.hair === 'messy') {
+    box(headG, S.headW * 1.08, 0.24, S.headD * 1.06, hc, 0, S.headH * 0.55, 0);
+    box(headG, 0.16, 0.22, 0.16, hc, -S.headW * 0.42, S.headH * 0.66, -0.06);
+    box(headG, 0.14, 0.18, 0.14, hc, S.headW * 0.40, S.headH * 0.70, 0.04);
+  } else if (ch.hair === 'bald') {
+    /* 光头：什么都不加 */
+  } else if (ch.hair === 'topknot') {
+    box(headG, S.headW * 1.02, 0.22, S.headD * 1.02, hc, 0, S.headH * 0.54, 0);
+    box(headG, 0.22, 0.30, 0.22, hc, 0, S.headH * 0.78, -0.06);
+  } else if (ch.hair === 'pony' || ch.hair === 'ponyhigh') {
+    box(headG, S.headW * 1.04, 0.26, S.headD * 1.04, hc, 0, S.headH * 0.52, 0);
+    var py = (ch.hair === 'ponyhigh') ? S.headH * 0.80 : S.headH * 0.36;
+    box(headG, 0.20, 0.20, 0.20, hc, 0, py, -S.headD * 0.55);
+    box(headG, 0.18, S.headH * 0.95, 0.18, hc, 0, py - S.headH * 0.55, -S.headD * 0.62);
+  } else if (ch.hair === 'long') {
+    box(headG, S.headW * 1.06, 0.28, S.headD * 1.06, hc, 0, S.headH * 0.52, 0);
+    box(headG, S.headW * 1.06, S.headH * 1.55, S.headD * 0.34, hc, 0, -S.headH * 0.60, -S.headD * 0.40);
+    box(headG, 0.16, S.headH * 1.0, S.headD * 0.9, hc, -S.headW * 0.54, -S.headH * 0.34, 0);
+    box(headG, 0.16, S.headH * 1.0, S.headD * 0.9, hc, S.headW * 0.54, -S.headH * 0.34, 0);
+  } else if (ch.hair === 'hood') {
+    box(headG, S.headW * 1.16, S.headH * 0.46, S.headD * 1.16, hc, 0, S.headH * 0.46, 0);
+    box(headG, 0.20, S.headH * 0.62, S.headD * 0.96, hc, -S.headW * 0.56, S.headH * 0.10, 0);
+    box(headG, 0.20, S.headH * 0.62, S.headD * 0.96, hc, S.headW * 0.56, S.headH * 0.10, 0);
+  }
+
+  /* ---- 衣服轮廓：裙 / 长袍 / 长外套 ---- */
+  if (ch.cloth === 'skirt' && ch.skirt) {
+    taper(g, ch.skirt.top, ch.skirt.bot, ch.skirt.len, ch.skirt.c, 0, hipY - ch.skirt.len / 2 + 0.22, 0);
+  } else if (ch.cloth === 'robe' && ch.skirt) {
+    taper(g, ch.skirt.top, ch.skirt.bot, ch.skirt.len, ch.skirt.c, 0, hipY - ch.skirt.len / 2 + 0.30, 0);
+  } else if (ch.cloth === 'longcoat') {
+    box(g, S.torsoW * 1.04, 0.90, S.torsoD * 1.06, P.shirtD, 0, hipY - 0.20, 0);
+  }
+
+  /* ---- 配件（相对 head / torso / back / arm / 世界） ---- */
+  var anchor = {
+    head: headG,
+    torso: (function () { var t = new THREE.Group(); t.position.set(0, hipY + S.torsoH / 2, 0); g.add(t); return t; })(),
+    back: (function () { var t = new THREE.Group(); t.position.set(0, hipY + S.torsoH * 0.45, -S.torsoD * 0.5); g.add(t); return t; })(),
+    armL: armL, armR: armR, legL: legL, legR: legR, g: g
+  };
+  var acc = ch.acc || [];
+  for (var i = 0; i < acc.length; i++) {
+    var a = acc[i];
+    var par = anchor[a.p] || g;
+    var m2 = box(par, a.w, a.h, a.d, a.c, a.dx || 0, a.dy || 0, a.dz || 0);
+    if (a.rotZ) { m2.rotation.z = a.rotZ; }
+    if (a.rotX) { m2.rotation.x = a.rotX; }
+  }
+
+  /* 待战姿态（和游戏里一样：手臂微前摆） */
+  armL.rotation.x = 0.10; armR.rotation.x = -0.12;
+  legL.rotation.x = 0.04; legR.rotation.x = -0.04;
+
+  g.userData.h = headY + S.headH / 2;    // 头顶高度（名字/血条要用）
+  return g;
+}
+
+/* ---------------- 场景：5 列 × 4 行，脚踩同一条地面线 ---------------- */
+var cv = document.getElementById('cv');
+var renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+renderer.setPixelRatio(1);
+renderer.setSize(1500, 1360, false);
+renderer.setClearColor(0x0d1016, 1);
+
+var scene = new THREE.Scene();
+var COLS = 5, ROWS = 4, SX = 3.5, SY = 3.8;
+var VIEW_H = ROWS * SY + 1.5;
+var cam = new THREE.OrthographicCamera(-VIEW_H / 2, VIEW_H / 2, VIEW_H / 2, -VIEW_H / 2, 0.1, 200);
+cam.position.set(0, 0, 60); cam.lookAt(0, 0, 0);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 1.25));
+var d1 = new THREE.DirectionalLight(0xffffff, 0.8); d1.position.set(5, 9, 10); scene.add(d1);
+var d2 = new THREE.DirectionalLight(0x99ccff, 0.35); d2.position.set(-9, 4, -6); scene.add(d2);
+
+var heroes = [];
+var PREVIEW_S = 0.80;
+for (var i = 0; i < CHARS.length; i++) {
+  var c2 = i % COLS, r2 = Math.floor(i / COLS);
+  var h = buildChar(CHARS[i]);
+  h.scale.multiplyScalar(PREVIEW_S);
+  /* 脚踩地面：地面线在每格底部 */
+  var groundY = ((ROWS - 1) / 2 - r2) * SY - SY / 2 + 0.45;
+  h.position.set((c2 - (COLS - 1) / 2) * SX, groundY, 0);
+  h.rotation.y = -0.40;
+  scene.add(h);
+  heroes.push(h);
+}
+
+/* ★ 自动取景：按所有角色的实际包围盒算相机 ✗ 不再手调 VIEW_H ✓ */
+var bbox = new THREE.Box3();
+for (var bi = 0; bi < heroes.length; bi++) { bbox.expandByObject(heroes[bi]); }
+bbox.min.y -= 0.85;            /* 底部留一条：放名字 */
+var bsize = bbox.getSize(new THREE.Vector3());
+var bcen = bbox.getCenter(new THREE.Vector3());
+var ASPECT = 1500 / 1360;
+var vh = Math.max(bsize.y, bsize.x / ASPECT) * 1.07;
+cam.left = -vh * ASPECT / 2; cam.right = vh * ASPECT / 2;
+cam.top = vh / 2; cam.bottom = -vh / 2;
+cam.position.set(bcen.x, bcen.y, 60);
+cam.lookAt(bcen.x, bcen.y, 0);
+cam.updateProjectionMatrix();
+
+/* ★ round478：名字挂到【各自脚下】✗ 不再用底部图例 ✓
+   做法：把"脚下那一点"投影成屏幕坐标 → 生成绝对定位的标签 ✓
+   （角色会绕 Y 轴自转，但脚下点不动 → 标签不会跟着晃 ✓）*/
+var labelBox = document.getElementById('labels');
+var _pv = null;
+function placeLabels() {
+  for (var k = 0; k < heroes.length; k++) {
+    var hh = heroes[k];
+    /* 世界坐标：脚底再往下一点点 */
+    var wp = new THREE.Vector3(hh.position.x, hh.position.y - 0.16, 0);
+    if (!_pv) { _pv = new THREE.Vector3(); }
+    _pv.copy(wp).project(cam);
+    var sx = (_pv.x * 0.5 + 0.5) * 1500;
+    var sy = (-_pv.y * 0.5 + 0.5) * 1360;
+    var el = hh.userData.lb;
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'lb';
+      el.innerHTML = '<b>' + CHARS[k].n + '</b><i>' + CHARS[k].sx + '</i>';
+      labelBox.appendChild(el);
+      hh.userData.lb = el;
+    }
+    el.style.left = sx.toFixed(1) + 'px';
+    el.style.top = sy.toFixed(1) + 'px';
+  }
+}
+placeLabels();
+
+var t0 = performance.now();
+function loop() {
+  var t = (performance.now() - t0) / 1000;
+  for (var i2 = 0; i2 < heroes.length; i2++) {
+    heroes[i2].rotation.y = -0.40 + Math.sin(t * 0.5 + i2 * 0.6) * 0.18;
+  }
+  renderer.render(scene, cam);
+  if (!loop._lb || (performance.now() - loop._lb) > 400) { loop._lb = performance.now(); placeLabels(); }
+  requestAnimationFrame(loop);
+}
+loop();
+window.__ready = true;
+</script>
+</body>
+</html>

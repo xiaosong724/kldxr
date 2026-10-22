@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Q 群战报 · 设计稿</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1180px; background: #14120d; color: #dfe8d4;
+         font-family: system-ui, "Microsoft YaHei", "PingFang SC", sans-serif;
+         -webkit-font-smoothing: antialiased; }
+  .wrap { position: relative; padding: 42px 44px 34px;
+    background:
+      radial-gradient(1200px 620px at 50% -8%, #3d3424 0%, #241f16 46%, #14120d 100%),
+      repeating-linear-gradient(0deg, #0000 0 38px, #ffffff06 38px 39px),
+      repeating-linear-gradient(90deg, #0000 0 38px, #ffffff06 38px 39px); }
+  .hd { text-align: center; margin-bottom: 22px; }
+  .hd h1 { font-size: 52px; letter-spacing: 12px; color: #ffd83d;
+           text-shadow: 0 3px 0 #00000077, 0 0 30px #ffd83d44; }
+  .hd .sub { margin-top: 10px; font-size: 17px; color: #b9c2a8; letter-spacing: 2px; }
+  .hd .line { width: 200px; height: 3px; margin: 14px auto 0; border-radius: 2px;
+              background: linear-gradient(90deg, #ffd83d00, #ffd83dbb, #ffd83d00); }
+
+  /* ---------- 前五名 ---------- */
+  .top5 { display: flex; flex-direction: column; gap: 10px; }
+  .row { display: flex; align-items: center; gap: 14px; padding: 12px 16px;
+         border-radius: 14px; border: 1px solid #ffffff16;
+         background: linear-gradient(180deg, #252a2299, #1a1d1899);
+         box-shadow: 0 7px 20px #00000055, inset 0 1px 0 #ffffff10; }
+  .row.r1 { border-color: #ffd83d66; box-shadow: 0 0 0 1px #ffd83d33, 0 7px 22px #00000066; }
+  .row.r2 { border-color: #d7e0ea55; }
+  .row.r3 { border-color: #e3a06a55; }
+  .rk { width: 44px; font-size: 26px; font-weight: 800; text-align: center;
+        font-variant-numeric: tabular-nums; text-shadow: 0 2px 0 #00000066; }
+  .r1 .rk { color: #ffd83d; } .r2 .rk { color: #d7e0ea; }
+  .r3 .rk { color: #e3a06a; } .row .rk { color: #9aa88f; }
+  .who { width: 150px; }
+  .who b { display: block; font-size: 18px; color: #eef4e4; letter-spacing: 1px; }
+  .who i { font-style: normal; font-size: 11.5px; color: #8f9a84; }
+  .num { width: 132px; }
+  .num .k { font-size: 11px; color: #8f9a84; letter-spacing: 1px; }
+  .num .v { font-size: 16px; font-weight: 800; color: #ffd83d; font-variant-numeric: tabular-nums; }
+  .num.coin .v { color: #ffe08a; }
+  .gear { flex: 1 1 auto; display: flex; gap: 7px; align-items: center; flex-wrap: nowrap; }
+  .ic { position: relative; width: 46px; height: 46px; border-radius: 9px;
+        display: flex; align-items: center; justify-content: center;
+        background: #0f1210; border: 1.5px solid; }
+  .ic svg { width: 34px; height: 34px; color: inherit; filter: drop-shadow(0 1px 2px #000a); }
+  .ic .tg { position: absolute; right: -5px; bottom: -5px; min-width: 17px; height: 17px;
+            padding: 0 4px; border-radius: 9px; background: #14120d; border: 1px solid #ffffff33;
+            font-size: 10.5px; font-weight: 800; color: #eef4e4; line-height: 15px;
+            text-align: center; font-variant-numeric: tabular-nums; }
+  .ic .tno { position: absolute; left: 3px; top: 2px; font-size: 9.5px; font-weight: 800;
+             line-height: 1; opacity: .85; text-shadow: 0 1px 2px #000;
+             font-variant-numeric: tabular-nums; }
+  .ic.more { width: 46px; border-style: dashed; border-color: #ffffff2a; color: #8f9a84;
+             font-size: 12px; font-weight: 700; }
+  .gsum { font-size: 11.5px; color: #8f9a84; width: 62px; text-align: right; }
+  .gsum b { color: #c9d3ba; font-size: 15px; }
+
+  /* ---------- 其余玩家：纯文字 ---------- */
+  .restHd { display: flex; align-items: center; gap: 10px; margin: 20px 0 8px; }
+  .restHd .t { font-size: 13px; color: #8f9a84; letter-spacing: 1px; }
+  .restHd .l { flex: 1; height: 1px; background: #ffffff12; }
+  .rest { column-count: 2; column-gap: 22px; }
+  .ln { font-size: 12.5px; color: #98a48c; line-height: 1.95; padding-left: 2px;
+        break-inside: avoid; }
+  .ln b { color: #d9e2cc; font-weight: 700; }
+  .ln s { text-decoration: none; color: #6f7c66; }
+
+  .ft { margin-top: 20px; text-align: center; }
+  .ft .box { border-top: 1px solid #ffffff14; padding-top: 14px; font-size: 12.5px;
+             line-height: 1.9; color: #8f9a84; }
+  .ft .box b { color: #c9d3ba; }
+  .badge { display: inline-block; margin-bottom: 8px; padding: 3px 14px; border-radius: 20px;
+           font-size: 12.5px; letter-spacing: 2px; color: #11170f; background: #8ee0a8;
+           font-weight: 700; }
+</style>
+</head>
+<body>
+<script src="weapon_icons_bundle.js"></script>
+<div class="wrap">
+  <div class="hd">
+    <h1>修 仙 战 报</h1>
+    <div class="sub">2026-10-19 05:30 – 05:45 · 全服统计</div>
+    <div class="line"></div>
+  </div>
+
+  <div class="top5" id="top5"></div>
+
+  <div class="restHd"><span class="t">其他玩家</span><span class="l"></span></div>
+  <div class="rest" id="rest"></div>
+
+  <div class="ft"><div class="box">
+    <div class="badge">每 15 分钟自动播报</div>
+    <div>装备只统计 <b>武器 / 防具</b>（材料不算）· 图标颜色 = 品阶 · 数字 = 这段时间的<b>新增</b></div>
+  </div></div>
+</div>
+
+<script>
+/* 品阶色（和游戏里掉落物一模一样）*/
+var TIER = ['#bfa88a', '#8fd28a', '#8fc4ff', '#c08fff', '#ffd83d', '#ff9a5c',
+            '#ff6a5c', '#ff5cf0', '#5cf0ff', '#ffffff', '#ffe08a', '#ff4a4a'];
+
+/* ★ 图标 = 游戏里【同一份】武器/防具图标（从 core/game.js 抽出来的 ✓）
+   不是另画的线条 ✗ 所以和背包里长得一模一样 ✓ */
+function iconSvg(kind, col, tier) {
+  try {
+    if (kind === 'armor') {
+      return window.WeaponIcons.armor();
+    }
+    return window.WeaponIcons.svg(kind, tier | 0);
+  } catch (e) {
+    return '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12"/></svg>';
+  }
+}
+/* ===== 假数据（真接口按这个结构出就行）=====
+   { name, exp, gold, gear:[{kind,tier,n}] }  gear 已按品阶从高到低排好 */
+var DATA = [
+  { name: '半个六道', exp: 48250, gold: 8400, kills: 312,
+    gear: [{ kind: 'sword', tier: 7, n: 1 }, { kind: 'armor', tier: 6, n: 2 },
+           { kind: 'bow', tier: 5, n: 1 }, { kind: 'saber', tier: 4, n: 3 },
+           { kind: 'spear', tier: 3, n: 2 }], gearTotal: 11 },
+  { name: '林小满', exp: 39120, gold: 12600, kills: 268,
+    gear: [{ kind: 'axe', tier: 6, n: 1 }, { kind: 'armor', tier: 5, n: 1 },
+           { kind: 'dagger', tier: 5, n: 2 }, { kind: 'staff', tier: 2, n: 4 }], gearTotal: 8 },
+  { name: '阿飞', exp: 31500, gold: 5300, kills: 214,
+    gear: [{ kind: 'saber', tier: 5, n: 2 }, { kind: 'hammer', tier: 4, n: 1 },
+           { kind: 'armor', tier: 3, n: 1 }], gearTotal: 4 },
+  { name: '夜行', exp: 27880, gold: 9200, kills: 196,
+    gear: [{ kind: 'bow', tier: 4, n: 1 }, { kind: 'armor', tier: 4, n: 1 },
+           { kind: 'sword', tier: 2, n: 5 }], gearTotal: 7 },
+  { name: '钱五', exp: 21400, gold: 4100, kills: 151,
+    gear: [{ kind: 'spear', tier: 3, n: 2 }, { kind: 'armor', tier: 2, n: 3 }], gearTotal: 5 }
+];
+
+var REST = [
+  ['徒手拆高达', 18900, 3200, 4], ['老张', 15600, 2100, 3], ['小狐', 14300, 6800, 2],
+  ['南山客', 12800, 1500, 5], ['一刀两断', 11200, 900, 1], ['阿七', 9800, 2600, 3],
+  ['铁蛋', 7600, 1200, 2], ['菜刀哥', 6400, 800, 1], ['路人甲', 4200, 300, 0],
+  ['小师妹', 3100, 1500, 1], ['老李', 2400, 200, 0], ['无名氏', 900, 100, 0]
+];
+
+function fmt(n) {
+  n = Math.round(n || 0);
+  if (n >= 10000) { return (n / 10000).toFixed(1).replace('.0', '') + ' 万'; }
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+var MEDAL = ['①', '②', '③', '④', '⑤'];
+var box = document.getElementById('top5');
+DATA.forEach(function (p, i) {
+  var row = document.createElement('div');
+  row.className = 'row r' + (i + 1);
+  var icons = p.gear.slice(0, 5).map(function (g) {
+    var col = (window.WeaponIcons && window.WeaponIcons.tierColor)
+      ? window.WeaponIcons.tierColor(g.tier | 0)
+      : TIER[Math.max(0, Math.min(11, g.tier | 0))];
+    return '<div class="ic" style="border-color:' + col + '66;color:' + col +
+      ';background:radial-gradient(circle at 50% 45%,' + col + '26 0%,#0f1210 72%)' +
+      ';box-shadow:0 0 12px ' + col + '33">' +
+      '<span class="tno" style="color:' + col + '">' + (g.tier + 1) + '</span>' +
+      iconSvg(g.kind, col, g.tier) +
+      (g.n > 1 ? '<span class="tg">×' + g.n + '</span>' : '') + '</div>';
+  }).join('');
+  if (p.gear.length > 5) { icons += '<div class="ic more">+' + (p.gear.length - 5) + '</div>'; }
+  row.innerHTML =
+    '<div class="rk">' + MEDAL[i] + '</div>' +
+    '<div class="who"><b>' + p.name + '</b><i>击杀 ' + (p.kills || 0) + '</i></div>' +
+    '<div class="num"><div class="k">经验</div><div class="v">+' + fmt(p.exp) + '</div></div>' +
+    '<div class="num coin"><div class="k">金币</div><div class="v">+' + fmt(p.gold) + '</div></div>' +
+    '<div class="gear">' + icons + '</div>' +
+    '<div class="gsum">装备<b>' + p.gearTotal + '</b> 件</div>';
+  box.appendChild(row);
+});
+
+var rest = document.getElementById('rest');
+REST.forEach(function (r, i) {
+  var d = document.createElement('div');
+  d.className = 'ln';
+  d.innerHTML = '<s>' + (i + 6) + '.</s> <b>' + r[0] + '</b> · 经验 ' + fmt(r[1]) +
+    ' · 金币 ' + fmt(r[2]) + ' · 装备 ' + r[3] + ' 件';
+  rest.appendChild(d);
+});
+</script>
+</body>
+</html>

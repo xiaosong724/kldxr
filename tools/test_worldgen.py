@@ -38,10 +38,11 @@ ok(0 <= wg.cell_hash(1234, -567) < 1000, 'q 落在 0..999（实测 %d）' % wg.c
 qs = set(wg.cell_hash(i, 7) for i in range(60))
 ok(len(qs) > 40, '不同格子的 q 分布开了（60 个格子出现 %d 个不同值）' % len(qs), len(qs))
 
-s00 = wg.build_chunk(0, 0)
-ok(len(s00) > 0, '第 (0,0) 块算出了碰撞盒（%d 个）' % len(s00), len(s00))
+CI, CJ = 20, 20   # 小镇 (0,0) 周围不生成随机物件，换一块荒野做生成自检
+s00 = wg.build_chunk(CI, CJ)
+ok(len(s00) > 0, '第 (%d,%d) 块算出了碰撞盒（%d 个）' % (CI, CJ, len(s00)), len(s00))
 W = wg.PROP_CHUNK * wg.TS
-bad = [it for it in s00 if not (0 <= it[0] < W and 0 <= it[1] < W)]
+bad = [it for it in s00 if not (CI * W <= it[0] < (CI + 1) * W and CJ * W <= it[1] < (CJ + 1) * W)]
 ok(not bad, '★ 本块的碰撞盒都落在本块范围内（越界 %d 个）' % len(bad), bad[:2])
 ok(all(it[2] > 0 and it[3] > 0 for it in s00), '半宽半深都是正数 ✓')
 

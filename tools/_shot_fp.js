@@ -1,0 +1,29 @@
+const { spawn } = require('child_process');
+const fs = require('fs'), os = require('os'), path = require('path');
+const ORIGIN = 'http://127.0.0.1:8899';
+const ROOT = path.resolve(__dirname, '..');
+const B = ['C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(p => fs.existsSync(p));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+(async () => {
+  const NM = 'F' + Math.random().toString(36).slice(2, 5), PW = 'abc123456';
+  const reg = await fetch(ORIGIN + '/api/register', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:NM,password:PW})}).then(r=>r.json());
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-')), port = 10300 + Math.floor(Math.random()*10);
+  const proc = spawn(B, ['--headless=new','--disable-gpu','--no-sandbox','--no-first-run','--user-data-dir='+dir,'--remote-debugging-port='+port,'--window-size=1600,1000',ORIGIN+'/'],{stdio:'ignore'});
+  let t=null; for(let i=0;i<120&&!t;i++){await sleep(250);try{const l=await(await fetch('http://127.0.0.1:'+port+'/json/list')).json();t=l.find(x=>x.type==='page'&&x.webSocketDebuggerUrl)}catch(e){}}
+  const ws=new WebSocket(t.webSocketDebuggerUrl); await new Promise(r=>ws.onopen=r); let id=0; const w={};
+  ws.onmessage=e=>{const m=JSON.parse(e.data); if(m.id&&w[m.id]){w[m.id](m);delete w[m.id]}};
+  const send=(m,p)=>new Promise(res=>{const i=++id;w[i]=res;ws.send(JSON.stringify({id:i,method:m,params:p||{}}))});
+  const ev=async x=>{const r=await send('Runtime.evaluate',{expression:'(function(){'+x+'})()',returnByValue:true,awaitPromise:true});return r.result&&r.result.result?r.result.result.value:undefined};
+  await send('Runtime.enable',{}); await sleep(800);
+  await ev('localStorage.setItem("token",'+JSON.stringify(reg.token)+'); location.reload(); return 1;'); await sleep(9000);
+  await ev('var bs=document.querySelectorAll("button"); for(var i=0;i<bs.length;i++){if((bs[i].textContent||"").indexOf("知道了")>=0){bs[i].click();}} return 1;');
+  await sleep(500);
+  await ev("CAM_VIEW='first'; CAM_PITCH=1.0; CAM_PITCH_T=1.0; if(typeof fpRefreshWeapon==='function') fpRefreshWeapon(); return CAM_VIEW;");
+  await sleep(1200);
+  console.log('view', await ev('return [CAM_VIEW, !!(FP&&FP.root.visible), FP?FP.root.children.length:-1];'));
+  console.log('bbox', await ev('try{var b=new THREE.Box3().setFromObject(FP.root);var a=[];[[b.min.x,b.min.y,b.min.z],[b.max.x,b.max.y,b.max.z]].forEach(function(p){var v=new THREE.Vector3(p[0],p[1],p[2]).project(cam);a.push([v.x.toFixed(2),v.y.toFixed(2),v.z.toFixed(2)]);});return a;}catch(e){return String(e);}'));
+  const s=await send('Page.captureScreenshot',{format:'png'});
+  fs.writeFileSync(path.join(ROOT,'docs','shots','first-person.png'),Buffer.from(s.result.data,'base64'));
+  try{spawn('taskkill',['/PID',String(proc.pid),'/T','/F'],{stdio:'ignore'})}catch(e){}
+  try{fs.rmSync(dir,{recursive:true,force:true})}catch(e){}
+})();

@@ -36,6 +36,36 @@ MAX_H = 5
 STEP_WALK = 0.35    # 走上去的最大落差（层）
 STEP_JUMP = 1.15    # 跳上去的最大落差（层）
 
+# ★ 日式街角小镇：70×70（半边 35）内地形永远压平 ✗ 不能长方块山 ✓
+TOWN_HALF = 250.0
+TOWN_TRANSITION = 4.0   # 出镇后 3 米内平滑过渡，避免门口直接跳崖
+
+
+def town_cell_distance(gx, gz):
+    """这个地形格到小镇方形的距离（米）；0 = 和小镇相交。"""
+    x0 = gx * LEVEL_H
+    x1 = x0 + LEVEL_H
+    z0 = gz * LEVEL_H
+    z1 = z0 + LEVEL_H
+    if x0 < TOWN_HALF and x1 > -TOWN_HALF and z0 < TOWN_HALF and z1 > -TOWN_HALF:
+        return 0.0
+    cx = (x0 + x1) * 0.5
+    cz = (z0 + z1) * 0.5
+    dx = max(0.0, abs(cx) - TOWN_HALF)
+    dz = max(0.0, abs(cz) - TOWN_HALF)
+    return max(dx, dz)
+
+
+def town_flatten_h(gx, gz, h):
+    """小镇内强制 0；门口 2 米平滑过渡。"""
+    d = town_cell_distance(gx, gz)
+    if d <= 0.0:
+        return 0.0
+    if d < TOWN_TRANSITION:
+        return h * (d / TOWN_TRANSITION)
+    return h
+
+
 _cache_hill = {}
 
 
@@ -169,13 +199,15 @@ def basin(gx, gz):
 def height(gx, gz):
     """这一格的最终高度（层 ✓ 整数 ✓ 平地恒为 0 ✓）"""
     if basin(gx, gz):
-        return -1.0          # ★ 水盆比其他地面低一层 ✓
-    h = hill_h(gx, gz)
+        h = -1.0        # ★ 水盆比其他地面低一层 ✓
+    else:
+        h = hill_h(gx, gz)
     if h < 0:
         h = 0
     if h > MAX_H:
         h = MAX_H
-    return float(h)
+    # ★ 小镇（50×50）内不能生成方块山 / 水坑 ✓
+    return town_flatten_h(gx, gz, float(h))
 
 
 def jitter(gx, gz):
@@ -299,6 +331,8 @@ def fluid_of(gx, gz):
     ★ 只出现在【平地】上 ✗ 山上是没有水的 ✓
     ★ 污水 = 整片沼泽 ✓ 地火 = 城区废墟里零星的几格（废弃工厂熔炉 ✓）
     """
+    if abs(gx * LEVEL_H) <= TOWN_HALF and abs(gz * LEVEL_H) <= TOWN_HALF:
+        return (F_NONE, 0.0)
     if not basin(gx, gz):
         return (F_NONE, 0.0)
     b = biome(gx, gz)

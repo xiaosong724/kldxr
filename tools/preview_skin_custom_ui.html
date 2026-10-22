@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>皮肤自定义 · 界面稿</title>
+<style>
+  html, body { margin: 0; background: #080b10; color: #dfe8f2;
+               font-family: "Microsoft YaHei", system-ui, sans-serif; }
+  #panel { width: 980px; margin: 18px auto; border-radius: 14px;
+           background: linear-gradient(180deg, #1a2230, #121821);
+           border: 1px solid #ffffff14; box-shadow: 0 18px 50px #000a; overflow: hidden; }
+  .hd { display: flex; align-items: center; justify-content: space-between;
+        padding: 12px 16px; border-bottom: 1px solid #ffffff10; }
+  .hd b { font-size: 16px; color: #dfe8f2; letter-spacing: 1px; }
+  .hd span { font-size: 11px; color: #8fa3b8; }
+  .tabs { display: flex; gap: 6px; padding: 10px 16px 0; flex-wrap: wrap; }
+  .tb { padding: 6px 12px; border-radius: 8px; font-size: 12.5px; cursor: pointer;
+        background: #ffffff0d; border: 1px solid #ffffff14; color: #b8c6d6; }
+  .tb.on { background: #ffd83d; border-color: #ffd83d; color: #1a1408; font-weight: 800; }
+  .body { display: flex; gap: 14px; padding: 12px 16px 16px; }
+  .left { width: 360px; flex: 0 0 auto; }
+  .pv { position: relative; width: 360px; height: 250px; border-radius: 12px; overflow: hidden;
+        background: radial-gradient(circle at 50% 36%, #24303f, #0b0f14 74%); }
+  .pv canvas { display: block; width: 360px; height: 250px; }
+  .nm { font-size: 15px; font-weight: 800; margin: 8px 0 2px; color: #eaf2fb; }
+  .st { font-size: 11.5px; color: #7ee08a; }
+  .rank { font-size: 11px; color: #8fa3b8; margin-top: 6px; line-height: 1.6; }
+  .right { flex: 1 1 auto; min-width: 0; }
+  .sec { font-size: 11.5px; color: #8fa3b8; margin: 2px 0 6px; }
+  .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .opt { position: relative; border-radius: 9px; overflow: hidden; cursor: pointer;
+         background: #0f141b; border: 1px solid #ffffff12; }
+  .opt canvas { display: block; width: 100%; height: 74px; }
+  .opt i { display: block; font-style: normal; font-size: 10.5px; text-align: center;
+           padding: 2px 0 4px; color: #9fb0c2; }
+  .opt.on { border-color: #ffd83d; box-shadow: 0 0 0 1px #ffd83d66; }
+  .opt.on i { color: #ffd83d; font-weight: 700; }
+  .opt .tag { position: absolute; right: 4px; top: 4px; font-size: 9px; padding: 1px 4px;
+              border-radius: 6px; background: #ffd83d; color: #1a1408; font-weight: 800; }
+  .colors { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
+  .sw { width: 38px; height: 38px; border-radius: 9px; border: 2px solid #ffffff1a; cursor: pointer; }
+  .sw.on { border-color: #ffd83d; box-shadow: 0 0 0 2px #ffd83d44; }
+  .slide { margin: 8px 0 4px; }
+  .bar { height: 10px; border-radius: 6px; background: linear-gradient(90deg, #000, #888, #fff); }
+  .knob { width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 2px solid #1a2230;
+          margin-left: 44%; margin-top: -13px; }
+  .foot { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+          padding: 10px 16px 14px; border-top: 1px solid #ffffff10; }
+  .cost { font-size: 12px; color: #b8c6d6; line-height: 1.6; }
+  .cost b { color: #ffd83d; }
+  .cost s { color: #ff9a8a; text-decoration: none; }
+  .btns { display: flex; gap: 8px; }
+  .btn { padding: 8px 16px; border-radius: 9px; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .btn.ghost { background: #ffffff0f; border: 1px solid #ffffff1c; color: #b8c6d6; }
+  .btn.ok { background: #ffd83d; color: #1a1408; }
+  .btn.dis { background: #ffffff10; color: #6d7c8c; }
+  #hint { text-align: center; color: #6d7c8c; font-size: 11px; padding-bottom: 12px; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <div class="hd">
+    <b>皮肤 · 自定义</b>
+    <span>预览不消耗 · 确认才扣卡 · 换皮肤各存各的</span>
+  </div>
+  <div class="tabs">
+    <div class="tb on">👁 眼睛</div>
+    <div class="tb">👄 嘴巴</div>
+    <div class="tb">🎨 头发颜色</div>
+    <div class="tb">👕 衣服颜色</div>
+    <div class="tb">🎲 随机一套</div>
+  </div>
+  <div class="body">
+    <div class="left">
+      <div class="pv"><canvas id="pv" width="720" height="500"></canvas></div>
+      <div class="nm">双马尾剑士（f01）</div>
+      <div class="st">已获得 · 可以用 · 已自定义 2 处</div>
+      <div class="rank">现在没人出价 → 所有获得的人都能用<br>我的出价：—</div>
+    </div>
+    <div class="right">
+      <div class="sec">选一个眼睛（点一下右边就变 · 还没扣卡）</div>
+      <div class="grid" id="eyes"></div>
+      <div class="sec" style="margin-top:10px">头发颜色（有帽子的皮肤这里显示「帽子颜色」）</div>
+      <div class="colors" id="sws"></div>
+      <div class="slide"><div class="bar"></div><div class="knob"></div></div>
+    </div>
+  </div>
+  <div class="foot">
+    <div class="cost">
+      本次消耗：<b>双马尾剑士 · 皮肤卡 ×1</b>（你有 <b>2</b> 张）<br>
+      <s>★ 卡扣了不退</s> · 一个部位一张卡 · 只会用【这套皮肤】的重复卡
+    </div>
+    <div class="btns">
+      <div class="btn ghost">取消</div>
+      <div class="btn ok">确认更换</div>
+    </div>
+  </div>
+  <div id="hint">（界面稿：真实页面里左边那格是能转的 3D 模型，右边每一项点一下预览立刻变）</div>
+</div>
+
+<script src="../web/lib/three.min.js"></script>
+<script src="skin_rig_bundle.js"></script>
+<script>
+var _mc = {};
+function matOf(c) { var k = c | 0; if (!_mc[k]) { _mc[k] = new THREE.MeshLambertMaterial({ color: k }); } return _mc[k]; }
+function fillHeldWeapon() { }
+
+function mk(cv, w, h) {
+  var r = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
+  r.setPixelRatio(1);
+  r.setSize(w, h, false);
+  r.shadowMap.enabled = false;
+  var sc = new THREE.Scene();
+  sc.add(new THREE.HemisphereLight(0xd8e4f4, 0x3a3020, 1.05));
+  var d1 = new THREE.DirectionalLight(0xfff3d8, 0.95); d1.position.set(2.2, 3.4, 3.6); sc.add(d1);
+  var d2 = new THREE.DirectionalLight(0x8fb0ff, 0.35); d2.position.set(-2.6, 1.2, -1.6); sc.add(d2);
+  return { r: r, sc: sc };
+}
+
+/* ---- 大预览：f01 ---- */
+(function () {
+  var o = mk(document.getElementById('pv'), 360, 250);
+  var hero = skBuildHero('f01');
+  o.sc.add(hero.g);
+  hero.g.rotation.y = 0.35;
+  hero.armL.rotation.x = 0.06; hero.armR.rotation.x = -0.06;
+  var hy = hero.headY, hh = hero.headH;
+  var wantH = hh * 4.2;
+  var fov = 30, z = wantH / (2 * Math.tan(fov * Math.PI / 360));
+  var cam = new THREE.PerspectiveCamera(fov, 360 / 250, 0.1, 80);
+  cam.position.set(0, hy - hh * 0.35, z);
+  cam.lookAt(0, hy - hh * 0.35, 0);
+  o.r.render(o.sc, cam);
+})();
+
+/* ---- 10 个眼睛小图（照真实构建器画 ✓ 不是画图标）---- */
+var NAMES = ['标准', '圆眼', '细长', '猫眼', '下垂', '半眯', '星眼', '竖瞳', '清冷', '小豆'];
+var grid = document.getElementById('eyes');
+NAMES.forEach(function (nm, i) {
+  var d = document.createElement('div');
+  d.className = 'opt' + (i === 0 ? ' on' : '');
+  d.innerHTML = '<i>' + nm + '</i>' + (i === 0 ? '<span class="tag">当前</span>' : '');
+  var cv = document.createElement('canvas');
+  cv.width = 132; cv.height = 74;
+  d.insertBefore(cv, d.firstChild);      /* ★ 先插画布再写字 ✗ innerHTML 会把画布冲掉 ✓ */
+  grid.appendChild(d);
+
+  var o = mk(cv, 132, 74);
+  var bak = SKIN_DEFS['f01'].eyes;
+  SKIN_DEFS['f01'].eyes = { w: (bak && bak.w) || 0.26, h: (bak && bak.h) || 0.30, st: i + 1, mo: 1 };
+  var hero = skBuildHero('f01');
+  SKIN_DEFS['f01'].eyes = bak;
+  o.sc.add(hero.g);
+  hero.g.rotation.y = 0.12;
+  var hy = hero.headY, hh = hero.headH;
+  var fov = 30, wantH = hh * 0.62;
+  var z = wantH / (2 * Math.tan(fov * Math.PI / 360));
+  var cam = new THREE.PerspectiveCamera(fov, 132 / 74, 0.1, 60);
+  cam.position.set(0, hy + hh * 0.05, z);
+  cam.lookAt(0, hy + hh * 0.05, 0);
+  o.r.render(o.sc, cam);
+  d.appendChild(cv);
+});
+
+/* ---- 色板 ---- */
+var SW = ['#f5f5f5', '#e8dcc8', '#ffd83d', '#ffb03a', '#ff7a5c', '#e2506a',
+          '#c9308e', '#9a5ce0', '#5c7cff', '#3ec6ff', '#2ee0b0', '#7ee08a',
+          '#c8e05c', '#8a6a4a', '#5a5a66', '#2b2b33', '#101018', '#b08968'];
+var sws = document.getElementById('sws');
+SW.forEach(function (c, i) {
+  var d = document.createElement('div');
+  d.className = 'sw' + (i === 3 ? ' on' : '');
+  d.style.background = c;
+  sws.appendChild(d);
+});
+</script>
+</body>
+</html>

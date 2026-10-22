@@ -1,0 +1,10 @@
+# Android Studio 自己生成的，不要提交
+local.properties
+.gradle/
+build/
+app/build/
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/

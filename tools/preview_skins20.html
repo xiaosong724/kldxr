@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>玩家皮肤 · 20 款预览</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0d1016; color: #dfe8f2;
+               font-family: "Microsoft YaHei", system-ui, sans-serif; }
+  #wrap { width: 1500px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 10px 0 2px; color: #ffd83d; letter-spacing: 2px; }
+  .sub { font-size: 12px; color: #8fa3b8; margin-bottom: 6px; }
+  #cv { display: block; width: 1500px; height: 1500px; }
+  #legend { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px 10px;
+            font-size: 12px; color: #b8c6d6; margin-top: 4px; }
+  #legend b { color: #8ee0ff; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1>玩家皮肤 · 20 款预览</h1>
+  <div class="sub">同一套骨架，只换配色 / 配件 / 整体缩放（纯预览，未接入游戏）</div>
+  <canvas id="cv"></canvas>
+  <div id="legend"></div>
+</div>
+<script src="../web/lib/three.min.js"></script>
+<script>
+/* ============================================================
+   20 款皮肤：全部基于现有方块人骨架（同一套枢轴），只改
+     · pal   配色
+     · extra 配件（挂在身上 / 手脚上的额外方块）
+     · s     整体缩放（0.94 ~ 1.06）
+   位置数字和 web/core/game.js 的 hero() 完全一致 → 接进游戏零改动
+   ============================================================ */
+var SKINS = [
+  { n: '青衫弟子', s: 1.00, pal: { skin: 0xf6cfa0, hair: 0x3e2c1e, shirt: 0x4ebec4, shirtD: 0x2c8e96,
+      pants: 0x4e4eac, boot: 0x5e4a38, belt: 0x8a6a42, gold: 0xe0bc60, collar: 0x88d4d8 }, extra: [] },
+
+  { n: '血衣刀客', s: 1.02, pal: { skin: 0xe8b98d, hair: 0x2a1414, shirt: 0x8b1f1f, shirtD: 0x5c1414,
+      pants: 0x1d1d22, boot: 0x2b2320, belt: 0x3a2a22, gold: 0xc9a227, collar: 0xa83030 },
+    extra: [ { p: 'g', w: 1.08, h: 0.20, d: 0.70, c: 0x7a1a1a, x: 0, y: 2.60, z: 0.02 },
+             { p: 'g', w: 0.10, h: 0.52, d: 0.10, c: 0xbfc7d0, x: -0.30, y: 1.75, z: -0.48 } ] },
+
+  { n: '雷纹道袍', s: 1.04, pal: { skin: 0xf0c9a0, hair: 0x1b2340, shirt: 0x27356b, shirtD: 0x1a2450,
+      pants: 0x1a2450, boot: 0x2a2a35, belt: 0xc9a227, gold: 0xe8c860, collar: 0xd8b24a },
+    extra: [ { p: 'armL', w: 0.42, h: 0.16, d: 0.44, c: 0xd8b24a, x: 0, y: -0.12, z: 0 },
+             { p: 'armR', w: 0.42, h: 0.16, d: 0.44, c: 0xd8b24a, x: 0, y: -0.12, z: 0 },
+             { p: 'g', w: 0.26, h: 0.30, d: 0.14, c: 0xe8c860, x: 0.40, y: 1.10, z: 0.36 } ] },
+
+  { n: '白骨行者', s: 0.98, pal: { skin: 0xe6e2d8, hair: 0xcfc9bb, shirt: 0xd8d3c6, shirtD: 0xb8b2a4,
+      pants: 0x9e988a, boot: 0x6b665c, belt: 0x7a7468, gold: 0xd8d3c6, collar: 0xefece4 },
+    extra: [ { p: 'g', w: 0.98, h: 0.60, d: 0.10, c: 0xf2efe8, x: 0, y: 2.44, z: 0.52 },
+             { p: 'g', w: 0.20, h: 0.18, d: 0.05, c: 0x0a0a0a, x: -0.22, y: 2.52, z: 0.58 },
+             { p: 'g', w: 0.20, h: 0.18, d: 0.05, c: 0x0a0a0a, x: 0.22, y: 2.52, z: 0.58 } ] },
+
+  { n: '尸化行者', s: 1.00, pal: { skin: 0x9fb08a, hair: 0x4a4038, shirt: 0x6b6a5a, shirtD: 0x53523f,
+      pants: 0x4a4a3c, boot: 0x3a382e, belt: 0x55503c, gold: 0x8a8660, collar: 0x7a7a68 },
+    extra: [ { p: 'armL', w: 0.36, h: 0.14, d: 0.36, c: 0xe8e2d0, x: 0, y: -0.42, z: 0 },
+             { p: 'armR', w: 0.36, h: 0.14, d: 0.36, c: 0xe8e2d0, x: 0, y: -0.42, z: 0 },
+             { p: 'g', w: 0.12, h: 0.34, d: 0.06, c: 0x5c3a3a, x: 0.18, y: 2.30, z: 0.54 } ] },
+
+  { n: '金身罗汉', s: 1.06, pal: { skin: 0xd8b26a, hair: 0xd8b26a, shirt: 0xb8862a, shirtD: 0x8a6420,
+      pants: 0x8a3a2a, boot: 0x6a4a20, belt: 0xe8c860, gold: 0xffe08a, collar: 0xf0d090 },
+    extra: [ { p: 'g', w: 1.42, h: 0.05, d: 1.42, c: 0xffe08a, x: 0, y: 2.66, z: 0 },
+             { p: 'g', w: 0.80, h: 0.10, d: 0.16, c: 0xffe08a, x: 0, y: 1.80, z: 0.36 } ] },
+
+  { n: '玄水刺客', s: 0.97, pal: { skin: 0xe0bb95, hair: 0x101014, shirt: 0x1b2430, shirtD: 0x121821,
+      pants: 0x121821, boot: 0x0f1216, belt: 0x2a3a4a, gold: 0x6a8aa0, collar: 0x24303e },
+    extra: [ { p: 'g', w: 1.22, h: 0.42, d: 1.10, c: 0x1b2430, x: 0, y: 2.70, z: -0.04 },
+             { p: 'g', w: 0.96, h: 0.26, d: 0.10, c: 0x24303e, x: 0, y: 2.18, z: 0.50 } ] },
+
+  { n: '赤焰武僧', s: 1.00, pal: { skin: 0xd9a678, hair: 0xd9a678, shirt: 0xb4441e, shirtD: 0x8a2f14,
+      pants: 0xb4441e, boot: 0x3a2a1e, belt: 0xe8a030, gold: 0xf0c060, collar: 0xd05a2a },
+    extra: [ { p: 'armL', w: 0.34, h: 0.20, d: 0.34, c: 0xe8e2d0, x: 0, y: -0.80, z: 0 },
+             { p: 'armR', w: 0.34, h: 0.20, d: 0.34, c: 0xe8e2d0, x: 0, y: -0.80, z: 0 },
+             { p: 'g', w: 0.90, h: 0.06, d: 0.66, c: 0xf0a030, x: 0, y: 1.88, z: 0.02 } ] },
+
+  { n: '青木药师', s: 0.99, pal: { skin: 0xf0c9a0, hair: 0x3a2a1e, shirt: 0x4a7a3a, shirtD: 0x355a2a,
+      pants: 0x3f5a34, boot: 0x4a3a28, belt: 0x7a6a3a, gold: 0xc0d080, collar: 0x6a9a4a },
+    extra: [ { p: 'g', w: 1.50, h: 0.08, d: 1.50, c: 0xd8c07a, x: 0, y: 3.02, z: 0 },
+             { p: 'g', w: 0.76, h: 0.12, d: 0.76, c: 0xc8b070, x: 0, y: 3.10, z: 0 },
+             { p: 'g', w: 0.30, h: 0.34, d: 0.16, c: 0x7a6a3a, x: -0.42, y: 1.10, z: 0.34 } ] },
+
+  { n: '紫电剑仙', s: 1.03, pal: { skin: 0xf2d0b0, hair: 0x2a2038, shirt: 0x4a2a6a, shirtD: 0x351e4e,
+      pants: 0x2a1a3e, boot: 0x2a2038, belt: 0xc0c8d8, gold: 0xd0d8e8, collar: 0xa08ad8 },
+    extra: [ { p: 'g', w: 0.30, h: 0.90, d: 0.22, c: 0x2a2038, x: 0, y: 2.30, z: -0.42 },
+             { p: 'g', w: 0.10, h: 1.10, d: 0.10, c: 0xbfc7d0, x: 0.34, y: 1.70, z: -0.50 } ] },
+
+  { n: '黄土力士', s: 1.05, pal: { skin: 0xd8b088, hair: 0x2e2218, shirt: 0xb08a4a, shirtD: 0x8a6a34,
+      pants: 0x6a5a3a, boot: 0x4a3a28, belt: 0x8a6a34, gold: 0xd8c080, collar: 0xc09a5a },
+    extra: [ { p: 'g', w: 1.16, h: 0.26, d: 0.72, c: 0x8a6a34, x: 0, y: 1.82, z: 0 },
+             { p: 'armL', w: 0.38, h: 0.16, d: 0.38, c: 0x8a6a34, x: 0, y: -0.60, z: 0 },
+             { p: 'armR', w: 0.38, h: 0.16, d: 0.38, c: 0x8a6a34, x: 0, y: -0.60, z: 0 } ] },
+
+  { n: '寒霜游侠', s: 1.01, pal: { skin: 0xf0d8c0, hair: 0x8a9ab0, shirt: 0x7aa0c0, shirtD: 0x557a9a,
+      pants: 0x3a4a5e, boot: 0x2e3a48, belt: 0xd8e0e8, gold: 0xc0d8f0, collar: 0xe8f4ff },
+    extra: [ { p: 'g', w: 1.30, h: 0.24, d: 1.16, c: 0xe8f4ff, x: 0, y: 2.02, z: 0 },
+             { p: 'g', w: 1.10, h: 1.10, d: 0.10, c: 0x557a9a, x: 0, y: 1.50, z: -0.44 } ] },
+
+  { n: '血月术士', s: 1.02, pal: { skin: 0xe0c0a8, hair: 0x1a0e1a, shirt: 0x3a1a3a, shirtD: 0x28102a,
+      pants: 0x1e0e20, boot: 0x1a1018, belt: 0x8a2a4a, gold: 0xd04060, collar: 0x6a2a5a },
+    extra: [ { p: 'g', w: 0.92, h: 0.28, d: 0.10, c: 0x1a0e1a, x: 0, y: 2.16, z: 0.50 },
+             { p: 'g', w: 0.24, h: 0.24, d: 0.24, c: 0xd04060, x: -0.56, y: 2.96, z: 0.10 } ] },
+
+  { n: '钢甲兵卒', s: 1.02, pal: { skin: 0xe0b890, hair: 0x2a2a30, shirt: 0x8a96a4, shirtD: 0x6a7480,
+      pants: 0x5a626c, boot: 0x3a4048, belt: 0x4a525c, gold: 0xb0bcc8, collar: 0xa8b4c0 },
+    extra: [ { p: 'g', w: 1.10, h: 1.00, d: 0.20, c: 0xa8b4c0, x: 0, y: 1.46, z: 0.36 },
+             { p: 'g', w: 1.18, h: 0.30, d: 1.10, c: 0x8a96a4, x: 0, y: 2.98, z: 0 },
+             { p: 'g', w: 0.16, h: 0.46, d: 1.02, c: 0xa8b4c0, x: 0, y: 2.80, z: 0.06 } ] },
+
+  { n: '幽冥判官', s: 1.04, pal: { skin: 0xd8c8b8, hair: 0x101014, shirt: 0x1a1a22, shirtD: 0x101016,
+      pants: 0x14141a, boot: 0x0e0e12, belt: 0x8a1a1a, gold: 0xc03030, collar: 0x2a2a34 },
+    extra: [ { p: 'g', w: 1.24, h: 0.62, d: 1.20, c: 0x101016, x: 0, y: 3.16, z: 0 },
+             { p: 'g', w: 0.10, h: 0.90, d: 0.10, c: 0xc03030, x: 0.40, y: 1.60, z: 0.36 } ] },
+
+  { n: '荒野猎人', s: 0.99, pal: { skin: 0xe0b088, hair: 0x4a3320, shirt: 0x6a5236, shirtD: 0x4e3c26,
+      pants: 0x4a3a26, boot: 0x33261a, belt: 0x8a6a44, gold: 0xb08a50, collar: 0x7a5c3c },
+    extra: [ { p: 'g', w: 1.20, h: 0.36, d: 1.14, c: 0x5a4530, x: 0, y: 2.72, z: -0.02 },
+             { p: 'g', w: 0.22, h: 0.80, d: 0.22, c: 0x7a5c3c, x: -0.34, y: 1.70, z: -0.46 } ] },
+
+  { n: '赛博行者', s: 1.00, pal: { skin: 0xd8b8a0, hair: 0x14141a, shirt: 0x22262e, shirtD: 0x171a20,
+      pants: 0x1a1e24, boot: 0x14161a, belt: 0x0ae0e0, gold: 0xff2fa0, collar: 0x2ea8f0 },
+    extra: [ { p: 'g', w: 0.98, h: 0.20, d: 0.10, c: 0x0ae0e0, x: 0, y: 2.54, z: 0.54 },
+             { p: 'g', w: 0.16, h: 0.16, d: 0.10, c: 0xff2fa0, x: -0.40, y: 1.60, z: 0.34 },
+             { p: 'g', w: 0.10, h: 0.60, d: 0.10, c: 0x2ea8f0, x: 0.46, y: 1.80, z: -0.30 } ] },
+
+  { n: '雪原萨满', s: 1.03, pal: { skin: 0xe8c8a8, hair: 0xd8d8e0, shirt: 0xa8b8d0, shirtD: 0x8090a8,
+      pants: 0x6a7a90, boot: 0x4a5464, belt: 0xd8c890, gold: 0xf0e8c0, collar: 0xc8d8e8 },
+    extra: [ { p: 'g', w: 1.40, h: 0.08, d: 1.30, c: 0xd8c890, x: 0, y: 3.06, z: 0 },
+             { p: 'g', w: 0.10, h: 0.55, d: 0.10, c: 0xf0e8c0, x: -0.44, y: 3.16, z: 0 },
+             { p: 'g', w: 0.10, h: 0.55, d: 0.10, c: 0xf0e8c0, x: 0.44, y: 3.16, z: 0 } ] },
+
+  { n: '熔岩魔修', s: 1.04, pal: { skin: 0x7a3a2a, hair: 0x2a1210, shirt: 0x2a1a16, shirtD: 0x1a0f0c,
+      pants: 0x20120e, boot: 0x1a0f0c, belt: 0xff6a20, gold: 0xffa040, collar: 0x3a2018 },
+    extra: [ { p: 'g', w: 0.14, h: 0.34, d: 0.14, c: 0xff6a20, x: -0.34, y: 2.94, z: 0.10 },
+             { p: 'g', w: 0.14, h: 0.34, d: 0.14, c: 0xff6a20, x: 0.34, y: 2.94, z: 0.10 },
+             { p: 'g', w: 0.56, h: 0.06, d: 0.06, c: 0xffa040, x: 0.10, y: 1.70, z: 0.34 } ] },
+
+  { n: '星辉天师', s: 1.02, pal: { skin: 0xf0d0b8, hair: 0x101830, shirt: 0x1a2440, shirtD: 0x121a30,
+      pants: 0x121a30, boot: 0x0e1424, belt: 0x8a9ac0, gold: 0xd8e8ff, collar: 0x2a3a60 },
+    extra: [ { p: 'g', w: 1.26, h: 0.44, d: 1.20, c: 0x1a2440, x: 0, y: 2.72, z: -0.02 },
+             { p: 'g', w: 0.10, h: 0.10, d: 0.06, c: 0xd8e8ff, x: -0.30, y: 1.70, z: 0.34 },
+             { p: 'g', w: 0.08, h: 0.08, d: 0.06, c: 0xd8e8ff, x: 0.20, y: 1.30, z: 0.34 },
+             { p: 'g', w: 0.06, h: 0.06, d: 0.06, c: 0xd8e8ff, x: 0.44, y: 1.94, z: 0.30 } ] }
+];
+
+/* ---------------- 搭一个人（同一套骨架，位置和 hero() 一致） ---------------- */
+var matCache = {};
+function matOf(c) {
+  if (matCache[c]) { return matCache[c]; }
+  var m = new THREE.MeshLambertMaterial({ color: c });
+  matCache[c] = m;
+  return m;
+}
+function buildHero(spec) {
+  var g = new THREE.Group();
+  var P = spec.pal;
+  function put(w, h, d, c, x, y, z, parent) {
+    var b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matOf(c));
+    b.position.set(x, y, z);
+    (parent || g).add(b);
+    return b;
+  }
+  put(1.10, 1.02, 1.02, P.skin, 0, 2.46, 0);
+  put(1.14, 0.34, 1.06, P.hair, 0, 2.86, 0);
+  put(0.13, 0.40, 0.26, P.hair, -0.53, 2.66, 0.40);
+  put(0.13, 0.40, 0.26, P.hair, 0.53, 2.66, 0.40);
+  put(0.22, 0.22, 0.06, 0x2a2a2a, -0.23, 2.46, 0.53);
+  put(0.22, 0.22, 0.06, 0x2a2a2a, 0.23, 2.46, 0.53);
+  put(0.26, 0.06, 0.06, P.hair, -0.23, 2.64, 0.53);
+  put(0.26, 0.06, 0.06, P.hair, 0.23, 2.64, 0.53);
+  put(0.30, 0.08, 0.06, P.mouth || 0xb0685c, 0, 2.26, 0.53);
+  put(1.02, 0.98, 0.62, P.shirt, 0, 1.42, 0);
+  put(0.30, 0.16, 0.64, P.collar, 0, 1.86, 0);
+  put(1.06, 0.22, 0.66, P.belt, 0, 0.98, 0);
+  put(0.22, 0.22, 0.10, P.gold, 0, 0.98, 0.36);
+  function limb(c, w, h, d, x, y) {
+    var p = new THREE.Group();
+    p.position.set(x, y, 0);
+    var b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matOf(c));
+    b.position.y = -h / 2;
+    p.add(b); g.add(p); return p;
+  }
+  var armL = limb(P.shirtD, 0.30, 0.92, 0.30, -0.66, 1.82);
+  var armR = limb(P.shirt, 0.30, 0.92, 0.30, 0.66, 1.82);
+  var legL = limb(P.pants, 0.34, 0.92, 0.34, -0.26, 0.86);
+  var legR = limb(P.pants, 0.34, 0.92, 0.34, 0.26, 0.86);
+  put(0.40, 0.30, 0.52, P.boot, 0, -1.0, 0, legL);
+  put(0.40, 0.30, 0.52, P.boot, 0, -1.0, 0, legR);
+  put(0.32, 0.22, 0.32, P.skin, 0, -0.98, 0, armL);
+  put(0.32, 0.22, 0.32, P.skin, 0, -0.98, 0, armR);
+  var map = { g: g, armL: armL, armR: armR, legL: legL, legR: legR };
+  for (var i = 0; i < (spec.extra || []).length; i++) {
+    var e = spec.extra[i];
+    put(e.w, e.h, e.d, e.c, e.x || 0, e.y || 0, e.z || 0, map[e.p] || g);
+  }
+  g.scale.setScalar(spec.s || 1);
+  armL.rotation.x = 0.10; armR.rotation.x = -0.12;
+  legL.rotation.x = 0.04; legR.rotation.x = -0.04;
+  return g;
+}
+
+/* ---------------- 场景（5 列 × 4 行，正方形画布 → 像素不被拉宽） ---------------- */
+var cv = document.getElementById('cv');
+var renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+renderer.setPixelRatio(1);
+renderer.setSize(1500, 1500, false);
+renderer.setClearColor(0x0d1016, 1);
+
+var scene = new THREE.Scene();
+var COLS = 5, ROWS = 4, SX = 3.5, SY = 3.95, VIEW = 17.8;
+var cam = new THREE.OrthographicCamera(-VIEW / 2, VIEW / 2, VIEW / 2, -VIEW / 2, 0.1, 200);
+cam.position.set(0, 0, 60);
+cam.lookAt(0, 0, 0);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 1.2));
+var d1 = new THREE.DirectionalLight(0xffffff, 0.85); d1.position.set(4, 8, 10); scene.add(d1);
+var d2 = new THREE.DirectionalLight(0x99ccff, 0.35); d2.position.set(-8, 4, -6); scene.add(d2);
+
+/* 地面圆盘：去掉（纯色背景更干净） */
+
+
+var heroes = [];
+var PREVIEW_S = 0.88;     /* 预览用缩放：让 4 行都放得下（不改变皮肤本身的 s 比较） */
+for (var i = 0; i < SKINS.length; i++) {
+  var c2 = i % COLS, r2 = Math.floor(i / COLS);
+  var h = buildHero(SKINS[i]);
+  h.scale.multiplyScalar(PREVIEW_S);
+  h.position.set((c2 - (COLS - 1) / 2) * SX, ((ROWS - 1) / 2 - r2) * SY - 1.75, 0);
+  h.rotation.y = -0.42;
+  scene.add(h);
+  heroes.push(h);
+}
+
+var lg = document.getElementById('legend');
+var html = '';
+for (var k = 0; k < SKINS.length; k++) {
+  html += '<div><b>' + (k + 1) + '</b> ' + SKINS[k].n + '</div>';
+}
+lg.innerHTML = html;
+
+var t0 = performance.now();
+function loop() {
+  var t = (performance.now() - t0) / 1000;
+  for (var i2 = 0; i2 < heroes.length; i2++) {
+    heroes[i2].rotation.y = -0.42 + Math.sin(t * 0.55 + i2 * 0.7) * 0.20;
+  }
+  renderer.render(scene, cam);
+  requestAnimationFrame(loop);
+}
+loop();
+window.__ready = true;
+</script>
+</body>
+</html>

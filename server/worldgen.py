@@ -18,6 +18,7 @@
 """
 
 import math
+import town
 
 # ★ 这些值全部和 web/core/game.js 的 G / PROP_* 对应，改一边就得改另一边 ✗
 TS = 0.62                 # 逻辑格边长（G.TS）
@@ -27,7 +28,7 @@ PROP_HALO = 8             # 光环（PROP_HALO）
 #   ★ 这是【每多少格出一个】✗ 34 → 68 = 数量正好减半 ✓
 #   ★ 必须和 game.js 的 G.PROP_DENSITY 完全一致 ✗ 不一致会两边对不上 ✓
 PROP_DENSITY = 68         # 密度（G.PROP_DENSITY）
-SPAWN_SAFE = 17.0         # 出生点附近不生成（G.SPAWN_SAFE）
+SPAWN_SAFE = 250.0        # 500×500 小镇：镇内不生成随机物件
 PROP_SCALE = 0.48         # 物件缩放（G.PROP_SCALE）
 HOUSE_CELLS = 7           # markHouseCells 的 ±7
 TREE_CELLS = 3            # markTreeCells 的 ±3
@@ -128,6 +129,8 @@ def build_chunk(ci, cj):
 
     for i in range(x0 - H, x0 + PROP_CHUNK + H):
         for j in range(z0 - H, z0 + PROP_CHUNK + H):
+            if town.in_town(i * TS, j * TS):
+                continue
             if math.hypot(i * TS, j * TS) < SPAWN_SAFE:
                 continue
             q = cell_hash(i, j)
@@ -141,6 +144,8 @@ def build_chunk(ci, cj):
     out = []
     for i in range(x0 - H, x0 + PROP_CHUNK + H):
         for j in range(z0 - H, z0 + PROP_CHUNK + H):
+            if town.in_town(i * TS, j * TS):
+                continue
             if math.hypot(i * TS, j * TS) < SPAWN_SAFE:
                 continue
             q = cell_hash(i, j)
@@ -189,6 +194,12 @@ def solids_near(x, z, r=3.0):
 
 def blocked(x, z, hw, hd, r=3.0):
     """这个矩形和建筑撞上了吗（和客户端 blocked() 的静态部分同一套 AABB 判定 ✓）"""
+    # 小镇墙体/柜台/喷泉（不在随机物件的块缓存里，单独查）
+    for (sx, sz, shw, shd) in town.solid_boxes():
+        if abs(sx - x) > shw + r + hw or abs(sz - z) > shd + r + hd:
+            continue
+        if x + hw > sx - shw and x - hw < sx + shw and z + hd > sz - shd and z - hd < sz + shd:
+            return True
     for (sx, sz, shw, shd) in solids_near(x, z, r):
         if x + hw > sx - shw and x - hw < sx + shw and z + hd > sz - shd and z - hd < sz + shd:
             return True

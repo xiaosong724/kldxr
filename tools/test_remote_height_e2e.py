@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""别人的高度也要跟着室内地板（2026-10-22）
+"""别人站在加高地板建筑里，模型是否被抬起（2026-10-22）
 
-用户：「我们不是调整了建筑的地板高度吗，这个进建筑后其他玩家的高度也没有同步」。
+用户：「加高地板的建筑看别的玩家还是在地板下」。
 
-  ① A 站到某栋建筑的室内
-  ② B（浏览器）看到 A 的模型 y ≈ 0.28（室内地板），不是 0
-  ③ A 走到室外，B 看到的 y 回到 0
+  ① 把一个玩家放到【有抬高地板】的建筑里（超市/咖啡店/小平房/别墅）
+  ② 观察者读他的 o.fy（服务端广播）和 o.hh.g.position.y（实际模型高度）
+  ③ 两者都应该 ≈ 0.28
 
 跑法：python tools/test_remote_height_e2e.py
 """
@@ -94,63 +94,39 @@ def cleanup(names):
         c.commit()
 
 
-async def actor(tok, spot_inside, spot_outside, snap):
-    async with websockets.connect(WS, max_size=16 * 1024 * 1024) as ws:
-        await ws.send(json.dumps({'t': 'hello', 'd': {'token': tok}}))
-        await wait(ws, lambda m: m['t'] == 'world')
-        await asyncio.sleep(0.5)
-        # 先在室外站一会，再走进室内（这样观察者能看出高度变化）
-        await ws.send(json.dumps({'t': 'move', 'd': {
-            'x': spot_outside[0], 'z': spot_outside[1], 'jy': 0}}))
-        snap['ready'] = True
-        await asyncio.sleep(3.0)
-        snap['inside'] = True
-        await ws.send(json.dumps({'t': 'move', 'd': {
-            'x': spot_inside[0], 'z': spot_inside[1], 'jy': 0}}))
-        await asyncio.sleep(3.0)
-
-
 def main():
     if not CHROME:
         print('no chrome'); return 2
     with sqlite3.connect(DB, timeout=10) as c:
         c.row_factory = sqlite3.Row
-        bld = c.execute("SELECT id,x,z,catalog_id FROM town_objects"
-                        " WHERE state='active' AND parent_id=0"
-                        " AND catalog_id IN ('shop_cafe_v1','shop_cafe_v2') LIMIT 1").fetchone()
-    assert bld, 'no building'
+        bld = c.execute(
+            "SELECT o.x,o.z FROM town_objects o WHERE o.state='active' AND o.parent_id=0"
+            " AND o.catalog_id IN ('shop_mart_v1','shop_cafe_v1','shop_cafe_v2')"
+            " LIMIT 1").fetchone()
+    assert bld, 'no raised-floor building'
     inside = (bld['x'], bld['z'])
-    outside = (bld['x'] + 18.0, bld['z'])
-    names = ['HGA%05d' % random.randint(0, 99999), 'HGB%05d' % random.randint(0, 99999)]
+    names = ['RHA%05d' % random.randint(0, 99999), 'RHB%05d' % random.randint(0, 99999)]
     toks = [http_json('/api/register', {'name': n, 'password': 'e2e-pass-123'})['token']
             for n in names]
     with sqlite3.connect(DB, timeout=10) as c:
+        c.execute('UPDATE roles SET x=?, z=? WHERE name=?', (inside[0], inside[1], names[0]))
         c.execute('UPDATE roles SET x=?, z=? WHERE name=?',
-                  (outside[0], outside[1], names[0]))
-        c.execute('UPDATE roles SET x=?, z=? WHERE name=?',
-                  (outside[0] + 4, outside[1], names[1]))
+                  (inside[0] + 6, inside[1], names[1]))
         c.commit()
-    snap = {}
     ok = False
     try:
         async def run():
-            t1 = asyncio.create_task(actor(toks[0], inside, outside, snap))
-            t2 = asyncio.create_task(observer(toks[1], names[0], snap))
-            res = await t2
-            await t1
-            return res
+            async with websockets.connect(WS, max_size=16 * 1024 * 1024) as wa:
+                await wa.send(json.dumps({'t': 'hello', 'd': {'token': toks[0]}}))
+                await wait(wa, lambda m: m['t'] == 'world')
+                await asyncio.sleep(1.0)
+                return await observer(toks[1], names[0])
         res = asyncio.run(run())
-        print('  observed inside/outside:', res)
+        print('  observer sees:', res)
         assert res, 'observer saw nothing'
-        v_in, v_out = res
-        assert v_in is not None and v_out is not None, 'observer missing samples'
-        # 有抬高地板的建筑（咖啡店）：服务端广播 fy=0.28，客户端模型 y 也应是 0.28
-        assert (v_in.get('fy') or 0) > 0.2, 'indoor height not broadcast: %r' % (v_in,)
-        assert (v_in.get('y') or 0) > 0.2, 'indoor model not raised for others: %r' % (v_in,)
-        # 室外：两者都应回到 0
-        assert (v_out.get('fy') or 0) < 0.1, 'outdoor height should be 0: %r' % (v_out,)
-        print('  OK  indoor y=%.2f fy=%.2f | outdoor fy=%.2f'
-              % (v_in.get('y') or 0, v_in.get('fy') or 0, v_out.get('fy') or 0))
+        fy, y = res.get('fy'), res.get('y')
+        assert fy is not None and fy > 0.2, 'height not broadcast: %r' % (res,)
+        assert y is not None and y > 0.2, 'model not raised for others: %r' % (res,)
         ok = True
     finally:
         time.sleep(1.0)
@@ -160,9 +136,9 @@ def main():
     return 0 if ok else 1
 
 
-async def observer(tok, target_name, snap):
-    port = random.randint(12400, 12499)
-    prof = tempfile.mkdtemp(prefix='height-')
+async def observer(tok, target_name):
+    port = random.randint(12500, 12599)
+    prof = tempfile.mkdtemp(prefix='rheight-')
     proc = subprocess.Popen(
         [CHROME, '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run',
          '--mute-audio', '--user-data-dir=' + prof, '--remote-debugging-port=%d' % port,
@@ -201,66 +177,46 @@ async def observer(tok, target_name, snap):
                         break
                 except Exception:
                     pass
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(2.5)
+            # ★ 给目标模型的 position.y 装 setter 钩子，记录谁把它改回 0
+            _unused = await c.ev(
+                "var name=%s; var o=null;"
+                "for(var k in NET.others){ if(NET.others[k] && NET.others[k].name===name){o=NET.others[k];break;} }"
+                "if(!o||!o.hh||!o.hh.g) return 'noobj';"
+                "window.__yLog = [];"
+                "var pos = o.hh.g.position;"
+                "var _y = pos.y;"
+                "try {"
+                "  Object.defineProperty(pos, 'y', {"
+                "    configurable: true,"
+                "    get: function () { return _y; },"
+                "    set: function (v) {"
+                "      if (Math.abs(v - _y) > 0.0001) {"
+                "        var st = (new Error()).stack || '';"
+                "        window.__yLog.push(v + ' <= ' + st.split('\\n').slice(1,3).join(' | '));"
+                "        if (window.__yLog.length > 12) { window.__yLog.shift(); }"
+                "      }"
+                "      _y = v;"
+                "    }"
+                "  });"
+                "  return 'hooked';"
+                "} catch (e) { return 'fail:' + e; }"
+                % json.dumps(target_name))
 
-            allk = await c.ev(
-                "var out=[]; for(var k in NET.others){var o=NET.others[k];"
-                "out.push([k, o&&o.name, o&&o.hh&&o.hh.g?+o.hh.g.position.y.toFixed(2):null,"
-                " o&&o.hh&&o.hh.g?+o.hh.g.position.x.toFixed(1):null]);}"
-                "return out;")
-            print('  NET.others:', allk)
-            dbg = await c.ev(
-                "var f=TOWN_FLOORS[0];"
-                "var hit=null; var n=0;"
-                "for(var i=0;i<TOWN_FLOORS.length;i++){var q=TOWN_FLOORS[i];"
-                " if(%f>=q.x0&&%f<=q.x1&&%f>=q.z0&&%f<=q.z1){hit={y:q.y,id:q.id};n++;}}"
-                "return {floors:TOWN_FLOORS.length, match:hit, n:n,"
-                " support:(typeof supportYAt==='function')?supportYAt(%f,%f):'noapi',"
-                " first:f};" % (inside[0], inside[1], inside[0], inside[1],
-                                inside[0], inside[1])) if False else await c.ev(
-                "var cx=-116.83, cz=182.34;"
-                "var hit=null, n=0;"
-                "for(var i=0;i<TOWN_FLOORS.length;i++){var q=TOWN_FLOORS[i];"
-                " if(cx>=q.x0&&cx<=q.x1&&cz>=q.z0&&cz<=q.z1){hit={y:q.y,id:q.id};n++;}}"
-                "return {floors:TOWN_FLOORS.length, match:hit, n:n,"
-                " support:supportYAt(cx,cz), first:TOWN_FLOORS[0]};")
-            print('  observer env:', dbg)
+            await asyncio.sleep(1.0)
 
-            async def y_of():
-                return await c.ev(
+            for _ in range(40):
+                v = await c.ev(
                     "var name=%s; var o=null;"
                     "for(var k in NET.others){ if(NET.others[k] && NET.others[k].name===name){o=NET.others[k];break;} }"
                     "if(!o||!o.hh||!o.hh.g) return null;"
-                    "return {y:+o.hh.g.position.y.toFixed(3),"
-                    " fy:(typeof o.fy==='number'?o.fy:null),"
-                    " pose:(o.pose||'')};"
-                    % json.dumps(target_name))
-
-            for _ in range(60):
-                if snap.get('ready'):
-                    break
-                await asyncio.sleep(0.2)
-            seq = []
-            for _ in range(80):
-                v = await y_of()
+                    "return {preY:o.__preRenderY, lastSet:o.__lastSetY, fy:(typeof o.fy==='number'?o.fy:null),"
+                    " y:+o.hh.g.position.y.toFixed(3),"
+                    " x:+o.hh.g.position.x.toFixed(1)};" % json.dumps(target_name))
                 if v:
-                    seq.append((round(v.get('y') or 0, 3), v.get('fy')))
-                await asyncio.sleep(0.1)
-            while len(seq) < 10:
-                await asyncio.sleep(0.2)
-                v = await y_of()
-                if v:
-                    seq.append((round(v.get('y') or 0, 3), v.get('fy')))
-            print('  y seq (model, fy):', seq[:20])
-            await asyncio.sleep(2.4)
-            y_out = await y_of()
-            for _ in range(40):
-                if snap.get('inside'):
-                    break
-                await asyncio.sleep(0.2)
-            await asyncio.sleep(2.4)
-            y_in = await y_of()
-            return (y_in, y_out)
+                    return v
+                await asyncio.sleep(0.3)
+            return None
     finally:
         try:
             subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'],

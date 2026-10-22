@@ -22,6 +22,7 @@ import asyncio
 import base64
 import hashlib
 import struct
+import time
 
 WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 
@@ -130,7 +131,8 @@ class WSConn(object):
 
     __slots__ = ('reader', 'writer', 'peer', 'path', 'headers', 'cid',
                  'closed', 'close_code', 'close_reason', 'user',
-                 '_outq', '_pump_task', 'dropped')
+                 '_outq', '_pump_task', 'dropped',
+                 'last_seen')   # ★ round463c：保活扫描用（必须在 slots 里 ✗ 不然赋值会抛异常 ✓）
 
     def __init__(self, reader, writer, path, headers, cid, outq_size=64):
         self.reader = reader
@@ -145,6 +147,7 @@ class WSConn(object):
         self.dropped = 0                       # 因队列满丢掉的帧数（排查卡顿用）
         self._outq = asyncio.Queue(maxsize=outq_size)
         self._pump_task = None
+        self.last_seen = time.time()   # ★ round463c：上一次收到消息的时间 ✓
         try:
             p = writer.get_extra_info('peername')
             self.peer = '%s:%s' % (p[0], p[1]) if p else '?'
@@ -318,6 +321,9 @@ class WSServer(object):
         self.port = port
         self.path = path
         self.max_size = max_size
+        # ★ round463c：保活扫描（清理半死连接 ✓）
+        self._sweeper = None
+        self.idle_kill = 90.0          # 多久没消息就当死连接（客户端 1 秒一次 ping ✓）
         self.on_open = on_open
         self.on_message = on_message
         self.on_close = on_close
@@ -385,6 +391,7 @@ class WSServer(object):
                 text = await conn.recv(self.max_size)
                 if text is None:              # 对端正常关闭
                     break
+                conn.last_seen = time.time()  # ★ round463c：活跃标记（保活扫描用 ✓）
                 if self.on_message:
                     r = self.on_message(conn, text)
                     if asyncio.iscoroutine(r):
@@ -419,7 +426,36 @@ class WSServer(object):
 
     async def start(self):
         self._server = await asyncio.start_server(self.handle, self.host, self.port)
+        # ★★ round463c：每 30 秒扫一遍半死连接 ✗
+        #   不扫的话：手机锁屏后的连接会一直占着账号，
+        #   玩家重连时还要先踢一个死的 → 偶尔会出现"刚进来就掉"✗✗
+        self._sweeper = asyncio.ensure_future(self._sweep_loop())
         return self._server
+
+    async def _sweep_loop(self):
+        import time as _t
+        while True:
+            await asyncio.sleep(30)
+            now = _t.time()
+            for cid, c in list(self.conns.items()):
+                last = getattr(c, 'last_seen', None)
+                if last is None:
+                    continue
+                if now - last > self.idle_kill:
+                    print('  [ws] 连接 %s 久无消息（%.0f 秒）→ 关掉' % (cid, now - last))
+                    c.closed = True
+                    try:
+                        c.writer.close()
+                    except Exception:
+                        pass
+                    self.conns.pop(cid, None)
+                    if self.on_close:
+                        try:
+                            r = self.on_close(c, 'idle')
+                            if asyncio.iscoroutine(r):
+                                await r
+                        except Exception:
+                            pass
 
     async def broadcast(self, text, skip=None):
         """全服广播。★ 同步 push，不 await —— 慢客户端影响不到别人"""

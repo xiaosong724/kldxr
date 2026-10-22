@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>改比例前后对比</title>
+<style>
+  html, body { margin: 0; overflow: hidden; background: #0d1015; color: #dfe8f2;
+               font-family: "Microsoft YaHei", system-ui, sans-serif; }
+  #hd { padding: 10px 16px 2px; font-size: 17px; font-weight: 800; color: #ffd83d; letter-spacing: 2px; }
+  #hd i { font-style: normal; font-size: 12px; color: #8fa3b8; letter-spacing: 0; margin-left: 10px; font-weight: 400; }
+  #wrap { display: grid; grid-template-columns: repeat(4, 280px); gap: 4px 10px; padding: 4px 16px 8px; }
+  .cell { position: relative; width: 280px; }
+  .cell canvas { display: block; width: 280px; height: 300px; border-radius: 10px;
+                 background: radial-gradient(circle at 50% 30%, #232e3c, #0a0e13 76%); }
+  .cap { text-align: center; font-size: 12px; color: #cbd6e2; margin-top: 2px; line-height: 1.5; }
+  .cap b { color: #ffd83d; }
+  .cap s { color: #8fa3b8; text-decoration: none; font-size: 10.5px; }
+  .same { position: absolute; left: 0; right: 0; border-top: 1px dashed #ffd83d88; }
+  .same span { position: absolute; right: 4px; top: -13px; font-size: 9px; color: #ffd83d99; }
+</style>
+</head>
+<body>
+<div id="hd">—</div>
+<div id="wrap"></div>
+<script src="../web/lib/three.min.js"></script>
+<script src="skin_rig_bundle.js"></script>
+<script>
+var _mc = {};
+function matOf(c) { var k = c | 0; if (!_mc[k]) { _mc[k] = new THREE.MeshLambertMaterial({ color: k }); } return _mc[k]; }
+function fillHeldWeapon() { }
+
+var q = (location.search || '').replace('?', '');
+var KIND = (q.split('&')[0] || 'k=female').split('=')[1] || 'female';
+var SKINS = (KIND === 'male') ? ['m06', 'm01'] : ['f01', 'f06'];
+var TITLE = (KIND === 'male') ? '男生 · 腿加长 0.12（总高不变）' : '女生 · 头 ×0.94 + 腿加长 0.12（总高不变）';
+document.getElementById('hd').innerHTML = TITLE +
+  '<i>（金虚线 = 头顶 · 每格下面写了腿 / 上身 / 头 / 总高）</i>';
+
+var wrap = document.getElementById('wrap');
+SKINS.forEach(function (k) {
+  [0, 1].forEach(function (isNew) {
+    var cell = document.createElement('div');
+    cell.className = 'cell';
+    var cv = document.createElement('canvas');
+    cv.width = 280 * 2; cv.height = 300 * 2;
+    cell.appendChild(cv);
+    var cap = document.createElement('div');
+    cap.className = 'cap';
+    cell.appendChild(cap);
+    wrap.appendChild(cell);
+
+    var r = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
+    r.setPixelRatio(2);
+    r.setSize(280, 300, false);
+    r.shadowMap.enabled = false;
+    var sc = new THREE.Scene();
+    sc.add(new THREE.HemisphereLight(0xd8e4f4, 0x3a3020, 1.05));
+    var d1 = new THREE.DirectionalLight(0xfff3d8, 0.95); d1.position.set(2.2, 3.4, 3.6); sc.add(d1);
+    var d2 = new THREE.DirectionalLight(0x8fb0ff, 0.38); d2.position.set(-2.6, 1.2, -1.6); sc.add(d2);
+
+    SK_PROP_ADJUST = isNew ? 1 : 0;         /* ★ 关键：0 = 旧比例 ✓ */
+    var hero = skBuildHero(k);
+    SK_PROP_ADJUST = 1;
+
+    sc.add(hero.g);
+    hero.g.rotation.y = 0.32;
+    hero.armL.rotation.x = 0.06; hero.armR.rotation.x = -0.06;
+
+    var S = hero.S || {};
+    var hh = hero.h;
+    var leg = S.hipY, up = S.torsoH, hdH = S.headH;
+    cap.innerHTML = (isNew ? '<b>改后</b>' : '<b>改前</b>') +
+      '<br><s>腿 ' + (leg || 0).toFixed(2) + ' · 上身 ' + (up || 0).toFixed(2) +
+      ' · 头高 ' + (hdH || 0).toFixed(2) + ' · 总高 ' + hh.toFixed(2) + '</s>';
+
+    var pxPerUnit = 300 / (hh * 1.5);
+    var camMid = hh * 0.5;
+    var cam = new THREE.PerspectiveCamera(30, 280 / 300, 0.1, 80);
+    cam.position.set(0, camMid, (hh * 1.5) / (2 * Math.tan(15 * Math.PI / 180)));
+    cam.lookAt(0, camMid, 0);
+    r.render(sc, cam);
+
+    var ln = document.createElement('div');
+    ln.className = 'same';
+    ln.style.top = Math.round(150 - (hh - camMid) * pxPerUnit) + 'px';
+    if (isNew) { ln.innerHTML = '<span>头顶（同高）</span>'; }
+    cell.appendChild(ln);
+  });
+});
+</script>
+</body>
+</html>

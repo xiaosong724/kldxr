@@ -1,0 +1,9443 @@
+# -*- coding: utf-8 -*-
+"""世界：世界状态 + tick 线程（P0-6）
+
+★★ 线程纪律 —— 这是整个架构的地基（方案 §13.5）★★
+
+    世界状态（玩家 / 以后的怪物 / 掉落 / 弹道…）**只允许 tick 线程读写**
+    网络线程只做两件事：
+      ① 把玩家意图丢进 inbox 队列（线程安全的 queue.Queue）
+      ② 从 fanout 批量把快照交给各自的连接（走 loop.call_soon_threadsafe）
+
+    → 天生没有锁竞争，也不用给世界状态加任何锁 ✓
+    → tick 再慢（以后加僵尸 AI）也不会让人收不到 / 发不出消息 ✓
+
+    DB 读写同样不在 tick 线程里（一次磁盘 IO 就能把整个世界卡住），
+    统一丢进 saves 队列，由存档线程慢慢落盘。
+
+数据流：
+    网络线程 ──post_*──▶ inbox/saves ──▶ tick线程(step) ──fanout──▶ 网络线程 ──▶ socket
+"""
+
+import json
+import math
+import queue
+import random
+import threading
+import time
+import types
+
+import affixes
+import armor as armormod
+try:
+    import battlereport_run as rptmod   # ★ round502：Q 群战报统计
+except Exception:                       # ★ 没装 Pillow / 文件缺 → 退化成空实现（游戏照跑 ✓）
+    class _RptNull(object):
+        def add_exp(self, *a, **k):
+            pass
+        def add_gold(self, *a, **k):
+            pass
+        def add_kill(self, *a, **k):
+            pass
+        def add_gear(self, *a, **k):
+            pass
+    rptmod = _RptNull()
+import skins as skinsmod   # ★ round485：皮肤目录/竞价数值
+import db as dbmod      # round304b: 存档线程要用 dbmod.now_ms() / dbmod.db()
+                        #   ★ 之前 world.py 里全是【函数内】import db as dbmod ✗
+                        #     模块级没有这个名字 ✗ 我新写的落库代码直接用 now_ms()
+                        #     → NameError ✗ 被 run_saver 的 except 吞掉 ✓
+                        #     自测一条一条抓出来的（第 3 个同类错误 ✗ 都长一个样 ✓）
+import drops
+import market as mkmod  # ★ round304b：交易所规则中心（纯函数 ✗ 可离线测 ✓）
+import mobs
+import mob_ranks
+import mob_affixes
+import pve_combat
+import boss_skills
+import mq as mqmod      # ★ 第 149 轮：魔气规则中心 ✓
+import rankboard        # ★ round424：排行榜定义（头顶称号文本也在那里 ✓）
+import value as valuemod  # ★ round304b：价格/上限（和卖系统同一份 ✓）
+import weapons
+import worldgen
+import terrain as termod   # ★ round306：僵尸也要认地形高度 ✓
+import protocol as P
+
+TICK_HZ = 30
+TICK_DT = 1.0 / TICK_HZ
+VIEW = 100.0                     # round 244: user wants players visible at 100m (was 60)
+MAX_DRAIN = 4000                # 单个 tick 最多处理多少条意图（防止一条洪水把 tick 打饿）
+MAX_INTENT_PER_TICK = 90        # 单连接每 tick 的意图上限（30Hz 正常也就 30 条，3 倍冗余）
+SPAWN_SAFE = 20.0               # 出生点/安全区半径：这里不刷怪（方案 §2.1 末日堡垒）
+
+
+REVIVE_INVULN = 1.5
+
+# ★★ 第 81 轮：组队（用户确认版）★★
+PARTY_MAX = 5                     # round 244: user wants 5 (was 3)
+PARTY_SHARE = 0.10            # 队友分到的经验比例（该僵尸经验的 10% ✓）
+# ★★ 第 118 轮（用户："基础减伤不能低于实际受到伤害的 10%，改成 30%"）★★
+#   含义：不管减伤堆多高，最后至少要挨【原来伤害的 30%】✗
+#   → 也就是减伤最多只能减掉 70% ✓（原来是 90% ✗ 太狠了 ✓）
+#   为什么抽成常量：原来这个 0.10 在两处各写了一遍 ✗（防具一处 / 天赋一处 ✓）
+#     改一个漏一个的坑等着呢 ✗ —— 现在只有这一个地方定义 ✓
+DMG_FLOOR = 0.30
+# ★★ 第 186 轮修的 bug：这个常量上一轮【根本没插进去】✗
+#   而 safetp 分支里用了它 → NameError → 被意图派发的 try 吞掉 → 静默失效 ✓
+#   表现：点传送没反应、界面上也不出读条 ✓（因为客户端永远收不到 tpcast ✓）
+TELEPORT_CAST = 6.0            # 传送回安全区的读条秒数               # 减伤地板：至少吃原来伤害的 30%（第 118 轮 ✓）
+PARTY_SHARE_DIST = 9999999.0   # round 241: user wants NO distance limit for party exp
+PARTY_INVITE_DIST = 9999999.0   # round259: user wants NO party distance limit at all (was 20)
+PARTY_INVITE_TTL = 60.0       # ★ 第 82 轮用户改：10 秒 → 1 分钟 ✓
+                              #   （原因：弹窗没看到就没了 ✗
+                              #    现在界面里也有待处理列表 ✓ 给一分钟才够用 ✓）
+PARTY_INVITE_RATE = 3         # 10 秒最多发 3 次邀请 ✓
+AUTO_SAVE_INTERVAL = 15.0   # ★ 第 109 轮：定时存盘（防崩溃/重启丢状态 ✗）
+# ★★ round304b：交易所（方案 v3 §9 —— 货架在内存里 ✗ 绝不查库 ✓）★★
+MKT_SWEEP_INTERVAL = 5.0    # 过期检查间隔（秒 ✗ 只动内存 + 投一条 UPDATE ✓）
+#   ★ 为什么 5 秒而不是"每次浏览时顺手扫"：人不在线时过期的东西也得退回去 ✗
+#     挂在 tick 上才不依赖"有没有人在看"✓
+MKT_BAG_MAX = 2000          # 背包行数上限（防背包无限涨 ✗ 不是玩法限制 ✓）
+#   ★★ round304t：用户报"用另一个号购买显示背包满了"★★
+#     根因：这里原来是 500 ✗ 而【整个项目没有别的地方限制背包行数】✓
+#       （客户端没有格数上限 ✗ 捡东西 / 买系统 / 退回也都不看行数 ✓）
+#       → 于是这 500 就是唯一的、而且玩家看不见的"背包上限"✓
+#     活证据：真库里角色 fangou 有 775 行（材料都堆叠了 ✗ 装备一件一行 ✓）
+#       → 他一买东西就被这句话挡住 ✗ 而界面上看不出哪里"满"了 ✓
+#   ★ 这个数的本意是"别让内存/库无限涨"✗ 该按这个本意取值 ✓
+#     500 行对一个刷了很久的号太容易到 ✗ 2000 才是"明显异常"的量级 ✓
+#   ★ 判据为什么用【行数】而不是"总件数"：
+#     材料合堆后一件一行已经很省 ✓ 装备本来就该一件一行 ✓
+#     行数才是内存/查询的真实开销 ✓
+MKT_ROW_MAX = 4000          # 内存行数硬上限（超过就不让再上架 ✗ 保护 tick ✓）
+
+# ★★★ round305：余额的写法（"值 + 代号"）✗ 收成一个函数 ★★★
+#   为什么需要代号：gold 是【内存权威】✗ 而存档是【半秒攒一批】的 ✓
+#     排队那一刻的值随时可能过期 ✓
+#     真 bug（用户脚本踩出来的）：新号离线卖东西 → 马上登录 →
+#       登录排的存档里 gold=0 ✗ 同一拍 tick 把 pending 入账 535 ✓
+#       存档线程随后把 0 写回库 ✗ 钱就没了 ✓
+#   做法：每次钱变 → 序号 +1 ✗ 并把 (值, 序号) 排进队列 ✓
+#     存档时比一下序号 ✗ 对不上就【作废这一笔】✓（新的那笔一定会跟着来 ✓）
+#   ★ 收成函数是因为【离线测试会自己跑一遍队列】✗
+#     它们要是各写一份 ✗ 迟早和我这里不一致 ✓（这次就是这么炸的 ✓）
+GOLD_SQL_PREFIX = 'GOLD:'
+
+
+def gold_sql(seq, role_id, gold):
+    """排一笔"带代号的余额写入"（★ 全项目只有这一个地方拼这条 ✗ 别在别处手写 ✓）"""
+    return (GOLD_SQL_PREFIX + str(int(seq)), (int(role_id), int(gold)))
+
+
+def gold_sql_split(sql):
+    """'GOLD:<seq>' → seq ✗ 不是这种写法就返回 None ✓（给存档线程和测试共用 ✓）"""
+    if isinstance(sql, str) and sql.startswith(GOLD_SQL_PREFIX):
+        try:
+            return int(sql[len(GOLD_SQL_PREFIX):] or 0)
+        except Exception:
+            return 0
+    return None
+
+
+# ★★ round302：金币的"内存权威"要给重连让路 ★★
+#   问题：刷新页面时【新会话】在登录那一步就把 roles.gold 读进来了 ✗
+#     而旧会话（幽灵）的金币要先落库 ✗ 落库又是异步的 ✓
+#     → 新会话读到的还是旧值 ✗ 表现就是"卖完刷新一下钱没了"✓（实测 141 → 0 ✓）
+#   修：模块级 _live_gold 记住【每个角色最后一次的内存余额】✗
+#     进世界时它比库里的新 ✗ 就用它 ✓ 落库照旧（不丢数据 ✓）
+_live_gold = {}
+PARTY_PUSH_INTERVAL = 1.0     # roster 每秒补推一次（血条要动 ✓）
+# ★ 第 82 轮：大厅（独立页 ✓ 队长邀请 + 玩家申请 两条路 ✓）
+PARTY_APPLY_TTL = 60.0        # ★ 第 82 轮用户改：30 秒 → 1 分钟 ✓（和邀请一致 ✓）
+PARTY_APPLY_RATE = 3          # 每人 10 秒最多 3 次申请 ✓
+LOBBY_INTERVAL = 1.0          # 大厅名单发布频率 ✓
+
+# ★★ 第 69 轮：箭（弓的投射物）★★
+ARROW_SPEED = 14.0        # 米/秒（比僵尸快得多，但不至于一帧穿过一片 ✓）
+
+# ★★★ 第 227 轮：反作弊（用户点名的三条，这是第 1 条：位移校验）★★★
+#   为什么要它：服务器原来直接采信客户端报的坐标 ✗
+#     p.x = _f(d.get('x'), p.x)     ← 一点校验都没有 ✓
+#   → 改个包就能【瞬移】✗ 于是能：贴脸砍人 / 一帧逃命 / 抢刷新点 /
+#     站边界外一毫米瞬移进安全区砍人 / 配合透视补刀抢魔气 ✓✓
+#   ★ 做法照 Grim Anticheat 那套思路（服务器自己算"你最多能走多远"✗
+#     超了就【不采纳】+ 给客户端回推一个纠正位置 ✓）
+#   ★★ 阈值只在这个文件里 ✗ 一个字都不发客户端 ✓
+#      （发过去等于告诉外挂"卡在 X-1 走就行"✓）
+PLAYER_SPEED = 4.4        # 必须和客户端 web/core/game.js 的 G.SPEED 一致 ✓
+MOVE_TOL = 2.4            # 容差倍数：网络抖动时客户端会一次报一大步 ✓
+MOVE_SLACK = 1.6          # 再加固定余量（米）：连接卡一下再恢复 ✓
+MOVE_CORRECT_AT = 4.0     # 超过程度达到这个倍数才回推纠正（免得正常抖动被拉回 ✗）
+ARROW_HIT_R = 0.75        # 命中半径（僵尸体积约 0.5 + 一点余量 ✓）
+# ★ round410：滚动通知最多几个字
+#   ★ 原来 22 字 ✗ "A 夺取了 B 的 500 点经验、【青锋剑】" 直接被砍掉尾巴 ✓
+#   ★ 48 字够放真实文案（最长的是拾取/夺取那条，约 30~40 字 ✓）
+# ★ round410（用户："到期的留在交易所显示已过期，点下架才回背包"）
+#   ★ 过期后【先留着】等本人取回 ✓ 超过这么多天才自动退回背包（防内存无限涨 ✓）
+MKT_EXPIRED_KEEP = 30
+TICKER_MAX_CHARS = 48
+ARROW_MAX = 60            # 同时在飞的箭上限（防刷 ✗）        # ★ 复活无敌时长（秒）—— 用户指定 ✓
+# ★ round407（交接文档第四节 ④）：玩家被挑到空中的高度
+#   ★ 6 格 × 0.62 米/格 = 3.72（★ 必须和客户端 web/platform/web.js 里
+#     怪的 flyH = 6 * 0.62 用同一个数 ✓ 不然本地看 3.7 米、别人看 2 米 ✓）
+#   ★ 落地范围伤害的半径（米）—— 和怪的落地（_fly_tick）一致 ✓
+FLY_H = 3.72
+FLY_LAND_R = 2.0
+
+
+def cd_human(sec):
+    """秒 → 人话（★ round409 用户："夺取的 CD 管理里改了，文案还写死 10 分钟"）
+
+    ★ 规则：文案里【任何】跟冷却有关的数字都必须走这里 ✗ 不许再写死 ✓
+      （管理页里改多少，弹出来的提示就显示多少 ✓）
+    """
+    try:
+        s = float(sec)
+    except Exception:
+        s = 0.0
+    if s <= 0:
+        return '不冷却'
+    if s < 60:
+        return '%d 秒' % int(round(s))
+    m = s / 60.0
+    if abs(m - round(m)) < 0.05:
+        return '%d 分钟' % int(round(m))
+    return '%.1f 分钟' % m
+
+
+def tier_no(t):
+    """★ 第 57 轮：品阶【显示】用 1~12（内部数据仍是 0~11 ✓ 用户要求）
+
+    ★ 为什么不在数据层就改成 1~12：
+      数组下标、LOOT_COL、TIER_BASE、TIER_NAME 全是按 0 起的 ✓
+      动了数据层要改的地方一大片，还容易越界 ✗
+      → 只在【显示】时 +1 ✓ 数据层一律不动 ✓
+    """
+    return int(t or 0) + 1
+
+
+def now_s():
+    return time.time()
+
+
+class _MktRollback(Exception):
+    """交易所事务里"业务性失败"（东西被买走了 / 物品不在背包 ✓）
+
+    ★ 为什么不用普通 Exception：存档线程要区分两种情况 ✗
+        · _MktRollback  = 这笔本来就不该成 ✗ 回滚 + 告诉 tick 退钱 ✓（不用打日志 ✗ 不是故障 ✓）
+        · 其它异常      = 数据库/代码出问题 ✗ 回滚 + 打日志 + 退钱 ✓
+      （方案 §6："每条落库都要带回滚"✓）
+    """
+
+
+class Player(object):
+    """一个已进入世界的玩家。★ 只有 tick 线程碰"""
+    __slots__ = ('cid', 'role', 'x', 'z', 'yaw', 'ct', 'hp', 'qi', 'atk',
+                 'intents', 'joined', 'name', 'role_id', 'warned', 'atkT', 'lastMe',
+                 'weapon', 'weaponItemId',
+                 'invulnT',
+                 'wDur', 'wDurMax', 'wDurDirty',
+                 'atkSeq',
+                 'armor', 'armorItemId',
+                 'aDur', 'aDurMax', 'aDurDirty',
+                 'tal', 'talRaw', 'talEff', 'talDirty', 'resetT',
+                 'mq', 'mqAt',
+                 'ghostAt', 'tpEnd',
+                 # ★ round528：皮肤自定义（登录时装进来 ✓ 别人看得到）
+                 'skCustom', 'skCustomBySkin', 'skCd', 'skLoad', 'skBuff', 'skBT', 'skTA',
+                 'skTankBase', 'skTankHp', 'skSize', 'skTankN', 'tankAt', 'tankReset',
+                 'skShield', 'skShieldT', 'freezeT', 'slowT', 'slowMul',
+                 'plagueOn', 'plagueAcc', 'qiT', 'plagueMoveT',
+                 'plagueX', 'plagueZ', 'galeGhostT', 'galeGX', 'galeGZ',
+                 'bersGhostT', 'bersGX', 'bersGZ',
+                 'lastTgt', 'downT',
+                 'qiMaxC', 'omniC',
+                 'skProfTick', 'skProf',
+                 'skCloneN', 'skCd', 'skLoad', 'qi',
+                 # ★ 第 227 轮：反作弊（位移校验用 ✓）
+                 #   ★ 加字段一定要记得加到这里 ✗ 不然 __init__ 里赋值就报
+                 #     AttributeError: 'Player' object has no attribute 'moveT' ✓
+                 #     （这个坑我踩过两次了：Player 一次、Mob 一次 ✓）
+                 # round293: gold. Memory is authoritative (docs v3 section 1);
+                 #   goldDirty = client has not seen it; goldLog = ring buffer.
+                 'gold', 'goldDirty', 'goldLog',
+                 'moveT', 'moveBad', 'suspect',
+                 # ★ round330（用户："看不到其他玩家的跳跃动作"）
+                 #   jy = 离地高度（跳起来那一段 ✗ 0 = 站在地上 ✓）
+                 'jy',
+                 # ★★ round424（排行榜）：四个计数器 + 称号选择
+                 #   ★ 必须进 __slots__ ✗ 不然 __init__ 赋值就报 AttributeError ✓
+                 'st_kills', 'st_deaths', 'st_pvp', 'st_play', 'st_play0',
+                 'titleBoard')
+
+    def __init__(self, cid, role):
+        self.cid = cid
+        self.role = role
+        # round302: gold lives in memory while playing, so it MUST be seeded from the
+        # db on the way in - otherwise _gain_gold()'s getattr fallback starts every
+        # session at 0 and a reload silently wipes the balance (verified: 159 -> 0).
+        self.gold = int(role.get('gold') or 0)
+        self.goldDirty = False
+        self.goldLog = []
+        self.name = role.get('name') or '?'
+        self.role_id = role.get('id')
+        # ★ 第 227 轮：反作弊用的三个字段（位移校验 ✓）
+        self.moveT = 0.0        # 上一个【被采纳】的移动包时刻
+        self.moveBad = 0        # 连续被拦次数
+        self.suspect = 0        # 累计可疑次数（管理页看 ✓）
+        self.x = float(role.get('x') or 0.0)
+        self.z = float(role.get('z') or 0.0)
+        self.yaw = float(role.get('yaw') or 0.0)
+        self.ct = 0.0
+        # ★★ 第 62 轮修的真 bug：这里以前直接写 role.hp ✗
+        #   DB 的约定是【hp = 0 表示按公式满值】（见 db.py 的列注释 ✓）
+        #   但 0 传进来就是 0 → 服务器当他是个死人 ✗
+        #   → 僵尸的活人过滤（hp>0）把他排除 → 不打他 ✗（用户报的"假死"✓）
+        #   ★ 第 57 轮我去掉"客户端上报 hp"之后才暴露：
+        #     以前客户端每个移动包都把 200 推上来，正好盖住了这个 0 ✓
+        _raw_hp = int(role.get('hp') or 0)
+        self.hp = int(role.get('hp') or 0)
+        if self.hp <= 0:
+            # ★ 第 225 轮：先用等级血占位（真正的上限由 _hp_max 在进世界时算 ✓）
+            import mobs as _mobs0
+            self.hp = int(_mobs0.level_hp(role.get('level') or 1))
+        self.qi = int(role.get('qi') or 0)
+        # ★★ round577：坦克引擎持久化（方案 §3 B2：死亡 / 离线 1 小时恢复）
+        #   ★ 只恢复"上次在线 ≤1 小时"的层数 ✓
+        #   ★ 登录时就是尸体（hp<=0）也重置 ✓
+        _thp = int(role.get('sk_tank_hp') or 0)
+        _tbase = int(role.get('sk_tank_base') or 0)
+        _tsz = float(role.get('sk_tank_size') or 1.0)
+        _tn = int(role.get('sk_tank_n') or 0)
+        _tat = int(role.get('sk_tank_at') or 0)
+        self.tankAt = _tat
+        self.tankReset = False
+        if _thp > 0 and _tat > 0 and _raw_hp > 0 and (now_s() - _tat) <= 3600:
+            self.skTankHp = _thp
+            self.skTankBase = max(1, _tbase)
+            self.skSize = max(1.0, min(10.0, _tsz))
+            self.skTankN = max(0, _tn)
+        else:
+            self.skTankHp = 0
+            self.skTankBase = 0
+            self.skSize = 1.0
+            self.skTankN = 0
+            self.tankReset = (_thp > 0 or _tn > 0)
+        # ★ round580：新主动/被动的状态位
+        self.skShield = 0.0       # 灵能护盾剩余吸收量
+        self.skShieldT = 0.0      # 护盾剩余秒
+        self.freezeT = 0.0        # 冻结剩余秒（不能移动）
+        self.slowT = 0.0          # 减速剩余秒
+        self.slowMul = 1.0        # 减速倍率（0.3 = 70% 减速）
+        self.plagueOn = False     # 病毒扩散开关
+        self.plagueAcc = 0.0      # 毒云生成计时
+        self.plagueMoveT = 0.0    # 移动留毒计时
+        self.plagueX = 0.0        # 上一次留毒位置
+        self.plagueZ = 0.0
+        self.galeGhostT = 0.0     # ★ round590：疾风步残影广播计时
+        self.galeGX = 0.0
+        self.galeGZ = 0.0
+        self.bersGhostT = 0.0
+        self.bersGX = 0.0
+        self.bersGZ = 0.0
+        self.qiT = 0.0            # 灵气回复推送节流
+        self.lastTgt = None       # ★ round582：主人最近打的目标（分身优先打它）
+        self.downT = 0.0          # ★ round582：击倒/倒地剩余秒
+        self.qiMaxC = 0           # ★ 性能：灵气上限缓存
+        self.omniC = None         # ★ 性能：全能吸血缓存
+        self.skProfTick = -1      # ★ 性能：本 tick 技能伤害快照
+        self.skProf = None
+        self.atk = 0
+        # ★★ 第 66 轮：挥砍序号 ★★
+        #   客户端一直拿快照里的 'atk' 当"他挥了几刀"的计数器 ✓
+        #   但服务器发的一直是 o.atk（攻击力，而且从没赋过值 → 永远是 0 ✗）
+        #   → 客户端那句 wk > o.atkSeq 永远不成立
+        #   → 别人【永远看不到挥砍动作】✗（用户报的"攻击动画没有"✓）
+        self.atkSeq = 0
+        # ★ 第 67 轮：防具（穿着的那件 ✓）
+        self.armor = role.get('armor') or None
+        self.armorItemId = role.get('armorItemId')
+        # ★ 第 114 轮：天赋（登录时由 net.py 装载进 role ✓ 这里只读内存 ✗）
+        import talents as _tal2
+        self.tal = dict(role.get('talents') or {})
+        self.talRaw = _tal2.raw_of(self.tal)
+        self.talEff = _tal2.effective(self.talRaw)
+        self.talDirty = False
+        self.resetT = 0.0
+        # ★ 第 149 轮：魔气值（登录时已经算过自然衰减了 ✓）
+        self.mq = int(role.get('mq') or 0)
+        self.mqAt = int(role.get('mqAt') or 0)
+        self.ghostAt = None
+        self.moveT = 0.0        # 第 227 轮：上一个被采纳的移动包时刻
+        self.moveBad = 0
+        self.suspect = 0
+        self.tpEnd = 0.0        # 第 173 轮（用户 #6）：传送读条（0 = 没在读）     # ★ 第 168 轮：不是 None 就表示“断线幽灵”✓
+        _ar0 = self.armor or {}
+        self.aDur = int(_ar0.get('dur') or 0)
+        self.aDurMax = int(_ar0.get('durMax') or 0)
+        self.aDurDirty = 0
+        self.atkT = 0.0          # ★ 挥刀冷却（服务器自己也算一份，防连点刷伤害）
+        self.lastMe = None       # ★ 上次推给他的 exp/等级（变了才推，省带宽）
+        self.intents = 0
+        self.joined = now_s()
+        self.warned = set()      # 已经提示过"还没实现"的消息类型（别刷屏）
+        # ★★ 手上那把武器（第 47 轮）★★
+        #   由 net.py 在登录时查出来放进 role['weapon'] ✓
+        #   查不到就发一把【默认单手剑】—— 数值正好等于以前写死的 2.4/1.05/0.62，
+        #   所以"还没有武器"的老角色手感一点没变 ✓ 不会让人觉得改坏了 ✓
+        # ★ 第 58 轮：兜底从"0 阶单手剑"改成【空手】（弱基线 ✓ 见 weapons.FIST）
+        self.weapon = role.get('weapon') or dict(weapons.FIST)
+        self.weaponItemId = role.get('weaponItemId')     # 背包里的那件（默认武器是 None ✓）
+        # ★ 第 56 轮：复活无敌（秒）—— 无敌期间僵尸咬不动 ✓ 客户端也会穿怪 ✓
+        self.invulnT = 0.0
+        # ★★ 第 59 轮：手上武器的耐久 ★★
+        #   为什么放内存里、不每次挥砍写库：一次挥砍一次写盘 = 磁盘要炸 ✗
+        #   → 内存里扣，攒够了（或卸下/下线时）再落一次库 ✓
+        _w = self.weapon or {}
+        self.wDur = int(_w.get('dur') or 0)
+        self.wDurMax = int(_w.get('durMax') or 0)
+        self.wDurDirty = 0        # 攒了多少次没落库
+
+        # ★★ round424：排行榜的四个计数器（登录时 net.py 从 role_stats 读好塞进 role['stats'] ✓）
+        _st = (role.get('stats') or {}) if isinstance(role, dict) else {}
+        self.st_kills = int(_st.get('kills') or 0)
+        self.st_deaths = int(_st.get('deaths') or 0)
+        self.st_pvp = int(_st.get('pvp') or 0)
+        self.st_play = float(_st.get('sec') or 0)     # 在线秒数（小数 ✗ 落库取整 ✓）
+        self.st_play0 = int(self.st_play)             # 上次落库的整数（变了才排存档 ✓）
+        # ★ 头顶称号选哪个榜（'' = 不显示）✗ 和背包上锁一样持久化 ✓
+        self.titleBoard = str(role.get('titleBoard') or '') if isinstance(role, dict) else ''
+
+
+class World(object):
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.loop = None
+        self.running = False
+
+        # ---- 跨线程队列 ----
+        self.inbox = queue.Queue()      # 网络线程 → tick 线程
+        self.saves = queue.Queue()      # 任何线程 → 存档线程
+        self._joinq = queue.Queue()     # 认证通过的人（网络线程放，tick 消费）
+        # ★ round304b：上线时读好的货架（网络线程读 ✓ tick 只往内存里放 ✓）
+        self._joinq2 = queue.Queue()
+
+        # ---- 世界状态（★ 只有 tick 线程读写）----
+        self.players = {}               # cid -> Player
+        # ★★ round424：排行榜的只读快照（网络/刷新线程写 ✗ tick 只读 ✓）
+        #   rank_map  = {role_id: {'level': 3, ...}}  ← 头顶称号
+        #   rank_rows = {'level': [row, ...]}          ← /api/rank
+        #   ★ 一次性赋值换掉旧字典 ✗ 绝不原地改 ✓ → tick 读到的永远是完整的一份 ✓
+        self.rank_map = {}
+        self.rank_rows = {}
+        self.rank_at = 0
+        # ★★ round417（用户："把滚动消息转发到 QQ 群 + 玩家上线"）
+        #   ★ 这里只存一个「队列对象」✗ 真正的 HTTP 在另一个线程 ✓
+        #     （tick 线程【绝不能】发网络 ✗ 一卡就是整帧✓）
+        #   ★ app.py 启动时把 QqBridge 实例挂上来 ✗ 没挂就是 None（不发✓）
+        self.qq = None
+        # ★★ round418（用户："这个转发可以在管理页面开/关"）
+        #   None = 跟 config.json 的 qq.enabled ✗ True/False = 管理页设过了（优先级更高）✓
+        #   ★ 和 pvp_all 一个套路：存进 meta 的 admin_tune 里 ✗ 重启自动恢复 ✓
+        self.qq_on = None
+        self.mobs = {}
+        self._mob_zones = []
+        # ★ 第 69 轮：在飞的箭（只在 tick 线程动 ✓）
+        self.arrows = {}
+        # ★ 第 81 轮：组队状态（全在 tick 线程 ✓ 纯内存 ✓ 不加锁 ✓ 不入库 ✓）
+        self.parties = {}         # pid -> {'id','leader'(role_id),'members':[role_id...]}
+        self.party_of = {}        # role_id -> pid（反查 ✓）
+        self.party_inv = {}       # role_id -> [(from_role_id, ts), ...]
+        self.party_rate = {}      # role_id -> [ts, ...]（邀请限流 ✓）
+        self._party_seq = 0
+        self._party_acc = 0.0
+        # ★ 第 82 轮：申请入队 + 招募开关 + 大厅名单
+        self.party_apply = {}     # pid -> [(role_id, ts)...]
+        self.party_open = {}      # pid -> 是否出现在招募列表里
+        self.lobby_stat = {'players': [], 'parties': []}   # tick 发布 ✓ HTTP 只读 ✓
+        self._lobby_acc = 0.0
+        self._save_acc = 0.0   # ★ 第 109 轮：定时存盘用 ✓
+        # ★★ round304b：交易所（内存货架 ✗ 只有 tick 线程碰 ✓）★★
+        #   ★ 为什么用 mkmod.new_mkt() 而不是在这里写死结构：
+        #     结构和 market.py 的增删逻辑必须一致 ✗ 一处定义 ✓
+        self.mkt = mkmod.new_mkt()
+        #   上架请求在【落库成功之前】物品还在背包里（saver 是异步的 ✗）
+        #   → 这段时间里同一件东西还能被再点一次上架 ✗
+        #   → 记一张"正在上架"的表 ✗ 落库回执清掉 ✓（防重复上架 ✓）
+        self.mkt_locking = set()      # {(role_id, iid), ...}
+        #   同一个 sid 正在处理哪一件（防连点 ✗ 只留最近几十条 ✓）
+        self.mkt_sids = {}
+        #   ★ 落库失败要回滚（买家扣的钱 / 上架费 ✗ 都在内存里 ✓）
+        #     失败只可能是"别人先动了这件东西"✗ 或者数据库出错 ✓
+        #     两种都必须把钱退回去 ✗ 绝不能出现"扣了钱没拿到货"✓（方案 §6 ✓）
+        self.mkt_failq = queue.Queue()
+        self._mkt_acc = 0.0
+        self.talent_rate = {}   # ★ 第 116 轮：加点限流（长按会刷屏 ✗）
+        # ★★ 第 133 轮（用户："在管理里可以调整单人上限的功能"）★★
+        #   为什么不直接改 mobs.MOB_PER_PLAYER ✗
+        #     那是模块常量 ✗ 改了全进程生效、重启就没、而且没办法单独给某个人调 ✗
+        #   → 放在 World 里存一份【全局值】✓ + 一张【单人覆盖表】✓
+        #     全局值默认取 mobs.MOB_PER_PLAYER（8 ✓）→ 没改过时行为和之前完全一样 ✓
+        self.mob_per_player = int(mobs.MOB_PER_PLAYER)
+        self.mob_cap = int(mobs.MOB_CAP)
+        self.spawn_interval = float(mobs.SPAWN_INTERVAL)
+        self.mob_cap_of = {}      # {role_id: 该人的上限} ✓ 没记录就用全局值
+        self._tune_sig = None     # 第 216 轮：管理员设置的指纹（变了就存 ✓）
+        self.pvp_pair = {}        # ★ 第 150 轮：{(killer,victim): 上次算数时刻} —— 同一对 10 分钟只算一次 ✓
+        self.pvp_pair_steal = {}  # ★ 第 167 轮：夺取自己一张表（默认 1 分钟 ✓）
+        self.ghost_grace = 6.0     # ★ 第 168 轮（用户 #5）：离线宽限（秒）
+        # ★★ 第 134 轮（用户要求）：两组开关（全人 / 单人）★★
+        #   PVP：开了才能互相打 ✓（现在是【闸门】：PvP 功能还没做 ✗
+        #         但状态已经存下来了 ✓ 将来那段代码直接读 _pvp_on() 就行 ✓）
+        #   妖兽伤害：关了妖兽就不会咬人 ✓（这个立刻真实生效 ✓）
+        #   ★ 默认值：PVP 关 ✗（朋友之间玩，默认不互相打 ✓）
+        #               妖兽伤害 开 ✓（原来就会咬 ✓ 不改现有体验 ✓）
+        self.pvp_all = False
+        self.pvp_of = {}          # {role_id: True/False} 单人覆盖 ✓
+        self.mob_atk_all = True
+        self.mob_atk_of = {}
+        self._arrow_id = 0                  # mid -> mobs.Mob（P2：僵尸也归 tick 线程独占 ✓）
+        self.mob_seq = 0
+        self.loot = {}                  # lid -> {'x','z','item','ttl'}（P2 第二刀：地上掉的 ✓）
+        # ★ round440：服务器启动号（客户端用它判断"服务器重启过没" ✓）
+        self.boot_ts = int(time.time())
+        self.loot_seq = 0
+        self.role_seq = 0               # 给"公共妖兽"发号用（也用 mob_seq，这里只做语义区分）
+        self._spawn_acc = 0.0           # 刷怪节流
+        self._boss_next_at = now_s() + random.uniform(1200.0, 2400.0)
+        self._boss_mid = ''
+        self._mark_acc = 0.0
+        self._special_seq = 0
+        self.pvp = False                # ★ PvP 总开关（服务器权威；客户端只是请求开/关 ✓）
+        self._pend = {}                 # cid -> {'hurts': [...], 'mhits': [...], 'me': {...}}
+        # ★ round382：延迟结算（单手剑连刺的第二段 ✓ 看起来才像两下）
+        self._later = []                # [(到期时刻, cid, mid, 伤害)]
+        # ★ round391：待发射的投射物（匕首投掷要延后出手 ✓）
+        self._later_arrow = []
+        self._later_skill = []          # 延迟的技能伤害
+        # ★ round580：多段技能（万剑/箭雨/烈焰/雷霆）[(due,cid,x,z,mult,rad,can_crit)]
+        self._later_hits = []
+        self._pulls = []                # 吸力（黑洞等）
+        # ★ round581（A15 病毒扩散）：毒云 [{x,z,until,dmg,t}]
+        self._poisons = []
+        self._earth_dots = []           # ★ 地裂持续伤害
+        self.clones = {}                # ★ 分身：{id: {...}}（round564）
+        self._clone_seq = 0
+        # ★ round574：这一刀"真的打中了"才触发普攻类被动
+        #   {cid: atkSeq} —— 同一刀只触发一次（近战/飞刀/箭都可能来调 ✓）
+        self._skAtkHitSeq = {}
+        # ★ round407（交接文档第四节 ④）：被挑飞在空中的玩家 → 到点落地砸范围伤害 ✓
+        #   [(落地时刻, 攻击者 cid, 受害者 cid, 落地伤害)]
+        #   ★ 为什么放在 World 而不是 Player 上：
+        #     Player 有 __slots__ ✗ 为一个特效加两个字段=以后每加一次都在赌"有没有同步"
+        #     （交接文档第五节第 2 条踩过 4 次 ✓ 而且漏了是【静默】失效 ✓）
+        #     落地这件事本来就只有世界需要记 ✓
+        self._flyq = []
+        # ★ round408：延迟结算的【玩家】伤害（连刺第二段 / 连砍后续刀 ✓）
+        #   [(到期时刻, 攻击者 cid, 受害者 cid, 伤害)]
+        #   ★ 和 _later（打怪）同一个思路 ✗ 但怪和人的键不一样（怪是 mid ✓ 人是 cid ✓）
+        #   ★ 加了这个队列，_later_tick 最前面那个早退条件也要一起看它 ✓
+        #     （交接文档第五节第 4 条：早退条件挡住后面的逻辑，踩过 ✓）
+        self._later_pl = []
+        # ★ round305：余额的"代号"（role_id -> 递增序号 ✗ 每改一次钱 +1 ✓）
+        #   存档线程拿它判断"这一笔排队之后钱有没有又被改过"✓
+        #   （过期的写入直接作废 ✗ 不给它把新值盖回去的机会 ✓）
+        self._gold_seq = {}
+        # ★★★ round310（P1 破坏）★★★
+        #   ter_over ：被破坏的格子 → 新高度（覆盖 terrain.height 的纯函数值 ✓）
+        #   ter_hp   ：打到一半的格子 → 剩余耐久（没碎就不用覆盖地形 ✓）
+        #   ★ 为什么"破坏"要一张覆盖表：地形是纯函数（种子算出来的 ✗ 改不了 ✓）
+        #     破坏 = 在纯函数之上【记一笔覆盖】✗ 客户端收到同一份覆盖 ✓
+        #   ★ 自愈：每格记一个时刻 ✗ 超过 REGEN_MS 就删掉覆盖 ✓ 地形自己回来 ✓
+        self.ter_over = {}
+        self.ter_hp = {}
+        # ★★★ round318（F1 流水）★★★
+        #   fluid_ov  ：和生成值不同的格子 → (kind, level) ✓
+        #   fluid_act ：【活跃集合】✗ 只有这里面的格子会被更新 ✓
+        #   ★ 这是 F1 的性能命门：全世界 100 万格 ✗ 平时这里只有几十个 ✓
+        self.fluid_ov = {}
+        self.fluid_act = set()
+        self.FLUID_MAXLV = {2: 7, 3: 3}  # 水铺 7 格 ✗ 地火只铺 3 格 ✓
+        self.FLUID_BC = []               # 本 tick 要广播的流体变化
+        self.TER_REGEN_MS = 20 * 60 * 1000     # 20 分钟完全恢复（方案 §5.7 ✓）
+        self._ter_bc = []                      # 本 tick 要广播的破坏事件
+        # ★ round329：树/石的破坏（和地形同一套思路 ✗ 只存"和生成值不同"的 ✓）
+        self.prop_hp = {}
+        self.prop_dead = set()
+        self._prop_bc = []
+        self._ter_load()                       # ★ 启动时读一次（这是 boot ✗ 不是 tick ✓）
+        self._fluid_load()                     # ★ round347：流体也要读回来 ✓
+        self._ticker_last = {}          # 第 247 轮：同类弹幕最后发送时间（1 秒合并）
+        self._ticker_dup = {}           # 被合并掉了几条
+        # ★ 本 tick 的治疗事件（第 46 轮）：[[医生x, 医生z, 目标x, 目标z, 回了多少], ...]
+        #   医生一多，玩家必须能看出【谁给谁回了多少】✗ → 所以发事件、客户端画连线+数字 ✓
+        self.heals = []
+        # ★★ 第 48 轮：后台管理 ★★
+        #   admin_stat = 给管理页看的【只读快照】，每隔十几 tick 换一个新 dict
+        #   （HTTP 线程读它：读一次引用是安全的 ✓ 绝不让 HTTP 线程直接遍历世界状态 ✗）
+        self.admin_stat = {'tick': 0, 'online': 0, 'mobs': 0, 'loot': 0, 'players': []}
+        self._admin_acc = 0
+        self.srv_conns = {}             # ★ 由 net.Net 填：连接表（只在 asyncio 循环里访问）
+        self.tick_count = 0
+        self.tick_ms = 0.0              # 上一帧耗时
+        self.tick_max_ms = 0.0          # 历史峰值（排查卡顿）
+        self.dropped_intents = 0
+
+        self._th = None
+        self._saver = None
+
+    # ============================================================ 网络线程调用
+
+    def _drop_ghosts_of(self, role_id, role=None):
+        """★ 第 168 轮：同一个角色的幽灵先清掉 ✗
+
+        为什么：6 秒宽限里他又登进来 →
+          幽灵（6 秒后落库）会把新会话的存档覆盖掉 ✗✓
+        ★ round577：顺手把幽灵身上的【坦克层数】带回新会话 ✓
+          （刷新时 role 是从库里读的 ✗ 比幽灵内存旧 ✓ 不搬就会丢层数 ✓）
+        """
+        for cid, q in list(self.players.items()):
+            if getattr(q, 'role_id', None) == role_id and getattr(q, 'ghostAt', None) is not None:
+                # round302: 先落一次档 ✗ 再删 ✓
+                #   为什么：幽灵身上可能有【还没落库的内存金币】✓
+                #   （卖东西刚入账 ✗ 玩家就刷新了 ✗ 定时存盘还没轮到 ✓）
+                #   直接 pop 掉 = 那笔钱凭空消失 ✗（实测：卖了 141 ✗ 刷新后变 0 ✓）
+                try:
+                    self._save_player(q)
+                except Exception:
+                    pass
+                if isinstance(role, dict):
+                    try:
+                        role['sk_tank_hp'] = int(getattr(q, 'skTankHp', 0) or 0)
+                        role['sk_tank_base'] = int(getattr(q, 'skTankBase', 0) or 0)
+                        role['sk_tank_size'] = float(getattr(q, 'skSize', 1.0) or 1.0)
+                        role['sk_tank_n'] = int(getattr(q, 'skTankN', 0) or 0)
+                        role['sk_tank_at'] = int(getattr(q, 'tankAt', 0) or 0)
+                    except Exception:
+                        pass
+                self.players.pop(cid, None)
+
+    def _apply_skc(self, p):
+        """把登录时读到的自定义装到玩家对象上（tick 线程只碰内存 ✓）"""
+        try:
+            m = (p.role or {}).get('skcMap') or {}
+            p.skCustomBySkin = m if isinstance(m, dict) else {}
+            p.skCustom = p.skCustomBySkin.get((p.role or {}).get('skin') or '')
+        except Exception:
+            p.skCustomBySkin = {}
+            p.skCustom = None
+
+    def post_join(self, conn, role):
+        """认证通过：入队，等 tick 线程把他放进世界"""
+        self._joinq.put((conn, role))
+
+    def post_leave(self, cid):
+        self.inbox.put(('leave', cid, None))
+
+    def post_intent(self, cid, t, d):
+        self.inbox.put(('intent', cid, (t, d)))
+
+    def post_admin(self, act, payload=None):
+        """HTTP 线程（管理页）→ tick 线程 的管理操作
+
+        ★ 和玩家意图走同一个 inbox ✓ 所以照样是【只有 tick 线程改世界状态】✓
+        """
+        self.inbox.put(('admin', None, (act, payload or {})))
+
+    def _tp_break(self, p):
+        # 第 173 轮（用户 #6）：打断传送读条（受伤就断）
+        if float(getattr(p, 'tpEnd', 0) or 0) > 0:
+            p.tpEnd = 0.0
+            self._send_cid(p.cid, P.pack('tpcast', t=0))     # 告诉客户端收掉进度条 ✓
+            self._send_cid(p.cid, P.pack('notice', text='受到攻击，传送被中断'))
+
+    def _tp_tick(self):
+        # 第 173 轮（用户 #6）：传送读条 —— 时间到就真的把人挪进安全区
+        #   ★ 打断不在这里判 ✗ 在受伤那两处判（_mob_bite / _pvp_hit）✓
+        now = now_s()
+        for cid, p in list(self.players.items()):
+            e = float(getattr(p, 'tpEnd', 0) or 0)
+            if e <= 0 or now < e:
+                continue
+            p.tpEnd = 0.0
+            # 挪到安全区中心附近（±3 随机一点，免得所有人叠在一起）
+            p.x = round(random.uniform(-3, 3), 2)
+            p.z = round(random.uniform(-3, 3), 2)
+            p.invulnT = max(float(getattr(p, 'invulnT', 0) or 0), 1.5)   # 落地给 1.5 秒无敌 ✓
+            self._send_cid(p.cid, P.pack('tp', x=p.x, z=p.z))
+            self._send_cid(p.cid, P.pack('notice', text='已传送回安全区'))
+
+    def _ghost_tick(self):
+        """★ 第 168 轮（用户 #5）：收回超时的幽灵玩家
+
+        离线后先保留 ghost_grace 秒 ✓ 超时才真删 + 落库 ✓
+        """
+        now = now_s()
+        for cid, p in list(self.players.items()):
+            ga = getattr(p, 'ghostAt', None)
+            if ga is None:
+                continue
+            if now - ga >= self.ghost_grace:
+                self.players.pop(cid, None)
+                try:
+                    self._save_player(p)
+                except Exception:
+                    pass
+                # round302: 幽灵真走了 ✗ 这条"内存余额"记录就没用了 ✓
+                #   留着只会让人以为还有旧会话活着 ✓（落库已经在上面做了 ✓）
+                try:
+                    _live_gold.pop(int(getattr(p, 'role_id', 0)), None)
+                except Exception:
+                    pass
+
+    def _publish_admin(self):
+        """每十几 tick 发布一次给管理页看的快照（只读 ✓）
+
+        ★ 为什么是"发布"而不是"直接查"：世界状态只有 tick 线程能碰 ✗
+          HTTP 线程直接遍历 players/mobs 就是数据竞争 ✗
+          这里换一个新 dict，HTTP 那边读引用 —— 安全又便宜 ✓
+        """
+        ps = []
+        for q in self.players.values():
+            ps.append({'name': q.name, 'level': int(q.role.get('level') or 1),
+                       'hp': int(q.hp), 'x': round(q.x, 1), 'z': round(q.z, 1),
+                       'weapon': ((q.weapon or {}).get('name') or '（默认单手剑）')})
+        self.admin_stat = {
+            'tick': self.tick_count, 'online': len(self.players),
+            'mobs': len(self.mobs), 'loot': len(self.loot),
+            'tickMs': round(self.tick_ms, 3), 'tickMaxMs': round(self.tick_max_ms, 3),
+            'dropped': self.dropped_intents, 'pendingSave': self.saves.qsize(),
+            'players': ps,
+        }
+
+    def post_save(self, sql, params=()):
+        self.saves.put((sql, params))
+
+    # ============================================================ tick 线程
+
+    def start(self, loop):
+        """启动 tick 线程 + 存档线程"""
+        self.loop = loop
+        self.running = True
+        self._th = threading.Thread(target=self._run, name='world-tick', daemon=True)
+        self._th.start()
+        self._saver = threading.Thread(target=self._run_saver, name='world-saver', daemon=True)
+        self._saver.start()
+        return self._th
+
+    def stop(self):
+        self.running = False
+
+    def _run(self):
+        next_t = time.perf_counter()
+        while self.running:
+            t0 = time.perf_counter()
+            try:
+                self._step()
+            except Exception as e:
+                print('  [tick] 出错：%r' % e)
+            dt = (time.perf_counter() - t0) * 1000.0
+            self.tick_ms = dt
+            if dt > self.tick_max_ms:
+                self.tick_max_ms = dt
+            # 固定步长：落后了就重置基准，不追帧（追帧会让延迟越积越大）
+            next_t += TICK_DT
+            slp = next_t - time.perf_counter()
+            if slp > 0:
+                time.sleep(slp)
+            else:
+                next_t = time.perf_counter()
+
+    def _step(self):
+        # ⓪ 皮肤卡用掉的结果（saver 写库 → 这里发网络 ✓）
+        try:
+            self._skin_drain()
+        except Exception as _sde:
+            print('[skin] drain failed: %r' % (_sde,))
+        # ① 新人入世
+        while True:
+            try:
+                conn, role = self._joinq.get_nowait()
+            except queue.Empty:
+                break
+            # ★★ 第 168 轮（用户 #5）：先清掉同角色的【幽灵】★★
+            #   为什么：6 秒离线宽限里他又登进来 →
+            #     幽灵 6 秒后落库 → 把新会话的存档覆盖掉 ✗✓
+            #   ★ 放在 Player() 之前 ✗ 保证新会话不会被旧的清掉 ✓
+            try:
+                self._drop_ghosts_of(role.get('id'), role)
+            except Exception:
+                pass
+            # round302: 上一个会话（刚被清掉的幽灵）的内存余额比库里新 ✗ 用它 ✓
+            #   网络线程那边是【异步投递】的 ✗ 所以这一句要放在它后面 ✓
+            #   ★ 顺序很重要：先拿到旧会话的余额 ✗ 再建新会话 ✓
+            try:
+                _lg = _live_gold.get(int(role.get('id')))
+                if _lg is not None and int(_lg) >= int(role.get('gold') or 0):
+                    role['gold'] = int(_lg)
+            except Exception:
+                pass
+            _np = Player(conn.cid, role)
+            # ★★★ round320 修的真 bug（自测挖不动方块才发现）★★★
+            #   根因：服务端记着"这几格已经被挖过"（内存 + 库）✗
+            #         但客户端【登录时从来没收到过】这份状态 ✓
+            #         → 玩家看到原始地形 ✗ 挖的时候服务端说"已经到底了"✗ 拒绝 ✓
+            #         → 表现："这块地我明明没挖过，却挖不动"✓
+            #   修：进世界时把当前的破坏 + 流体覆盖【全量】发一次 ✓
+            #   ★ 为什么可以全量：只存"和生成值不同"的格子 ✗ 平时是空的 ✓
+            try:
+                if self._ter_bc is not None and False:
+                    pass
+                _to = [[k[0], k[1], v[0]] for k, v in self.ter_over.items()]
+                if _to:
+                    self._send_cid(conn.cid, P.pack('teredit', cells=_to))
+                _fo = self._flux()
+                if _fo:
+                    self._send_cid(conn.cid, P.pack('fluedit', cells=_fo))
+            except Exception as _ov:
+                print('[ter] initial override send failed: %r' % (_ov,))
+            # round304b: 上线时读好的货架（网络线程读 ✓ 这里只入内存 ✓）
+            #   ★ 为什么不走 intent：那一整行货架有十几 KB ✗
+            #     走 intent 会占限流额度 ✗ 而且和玩家操作抢 tick ✓
+            #   → 单独一条队列 ✗ _mkt_tick 里消费 ✓（本拍就入内存 ✓）
+            try:
+                _mr = role.get('mktRows') or []
+                if _mr:
+                    self._joinq2.put((role.get('id'), _mr))
+            except Exception as _mre:
+                print('[mkt] join load failed: %r' % (_mre,))
+            # round302: 离线期间的入账（网络线程已经读好了 ✗ 这里只入账 ✓）
+            #   ★ 走 _gain_gold ✗ 所以上限/黄金转换/流水 全都照常生效 ✓
+            #   ★ done=1 交给存档线程（tick 线程不碰磁盘 ✓）
+            try:
+                for _pg in (role.get('pendingGold') or []):
+                    _amt = int(_pg.get('amount') or 0)
+                    if _amt:
+                        self._gain_gold(_np, _amt, str(_pg.get('why') or 'pending'))
+                    self.post_save('UPDATE pending_gold SET done=1 WHERE id=?',
+                                   (int(_pg.get('id') or 0),))
+            except Exception as _pge:
+                print('[gold] pending drain failed: %r' % (_pge,))
+            # ★★ 第 192 轮（用户）：刷新一下血量不回满 ★★
+            #   用户原话："如果玩家死亡后，不是点的复活，而是刷新复活的血量不会恢复满"
+            #
+            #   根因：数据库里的 hp=0 有两种来源 ✗
+            #     ① 新角色的默认值（本来就没血 ✓）
+            #     ② 上次死在世界里、临下线/掉线时被存档写下去的 0 ✓
+            #   而登录时 Player.hp 直接读这个 0 ✗ → 一进游戏就是尸体 ✓
+            #   → 僵尸不打你（它们跳过 hp<=0 的）→ 也点不到复活按钮 ✓
+            #     刷新一百次还是尸体 ✓✓ 一字不差地解释了他的现象 ✓
+            #
+            #   修：进世界那一刻，血量 <= 0 的【一律按满血算】✓
+            #   ★ 用 _hp_max（含防具 + 天赋加成 ✓）不是写死的 200 ✓
+            #   ★ 等于把"重新登录"当成一次复活 ✗ 这正是玩家期望的行为 ✓
+            if int(_np.hp or 0) <= 0:
+                _np.hp = int(self._hp_max(_np))
+                _np.invulnT = max(float(getattr(_np, 'invulnT', 0) or 0), 1.5)   # 落地保护 ✓
+            self._apply_skc(_np)
+            # ★ round550：进世界先告诉他当前灵气（技能栏要按灵气变灰 ✓）
+            try:
+                self._send_cid(_np.cid, P.pack('qi', q=int(_np.qi or 0)))
+            except Exception:
+                pass
+            # ★ round549：技能装配（登录时 role 里带了 skLoad ✓）
+            try:
+                _sl = (_np.role or {}).get('skLoad') or {}
+                _np.skLoad = {'A': list(_sl.get('A') or []),
+                              'B': list(_sl.get('B') or []),
+                              'C': list(_sl.get('C') or [])}
+                for _k in ('A', 'B', 'C'):
+                    while len(_np.skLoad[_k]) < 5:
+                        _np.skLoad[_k].append(None)
+                _np.skCd = {}
+                # ★ round552：被动加成（C 类）→ {key: tier}
+                _learn = (_np.role or {}).get('skLearn') or {}
+                _buff = {}
+                for _ck in (_np.skLoad.get('C') or []):
+                    if not _ck:
+                        continue
+                    _tv = 1
+                    try:
+                        _raw = _learn.get(_ck)
+                        # ★ skLearn 是 {key: tier}（int）✗ 个别地方是 {key: {tier}} ✓ 两种都认
+                        if isinstance(_raw, dict):
+                            _tv = int(_raw.get('tier') or 1)
+                        elif _raw is not None:
+                            _tv = int(_raw)
+                    except Exception:
+                        _tv = 1
+                    _buff[_ck] = max(1, min(5, _tv))
+                _np.skBuff = _buff
+                _np.skBT = {}          # 被动触发冷却 {key: 剩余秒}
+                _np.skTA = {}          # 临时增益 {key: 剩余秒}
+            except Exception:
+                _np.skLoad = {'A': [None] * 5, 'B': [None] * 5, 'C': [None] * 5}
+                _np.skCd = {}      # ★ round528：把皮肤自定义装进来（别人也能看见）
+            self.players[conn.cid] = _np
+            # ★ round577：坦克层数被重置（死亡/离线>1h）后，血量不能超过新上限 ✓
+            try:
+                _np.hp = min(int(_np.hp or 0), self._hp_max(_np))
+            except Exception:
+                pass
+            # ★ 第 63 轮：上线也让附近的人"看得见"✓（不是凭空冒出来 ✗）
+            # ★★ 第 102 轮：进世界时主动告诉他【穿着的防具 + 有效血量上限】★★
+            #   不然客户端登录后不知道上限（它那边原来是写死的 200 ✗）
+            #   → 表现就是"穿了防具血量没变化"✓
+            try:
+                self._tal_send(_np)      # ★ 第 116 轮：进世界先把天赋状态告诉他 ✓
+            except Exception:
+                pass
+            try:
+                if getattr(_np, 'armor', None):
+                    self._send_cid(conn.cid, P.pack('armor', a=_np.armor,
+                                                    hpm=self._hp_max(_np)))
+                else:
+                    self._send_cid(conn.cid, P.pack('armor', a=None, hpm=self._hp_max(_np)))
+            except Exception:
+                pass
+            self._evt_near(_np.x, _np.z, 'evt',
+                           {'kind': 'join', 'id': _np.role_id,
+                            'name': _np.name, 'x': round(_np.x, 2),
+                            'z': round(_np.z, 2)}, exclude=conn.cid)
+            # ★★ round417（用户："再额外增加一个玩家上线的转发"）★★
+            #   ★ 放在【真正进世界之后】✗ 不是连上就发 ✓
+            #     （连上但认证失败 / 重连不算上线 ✓）
+            #   ★ 上线也要给一点【活跃度】✗ 带上当前在线人数 ✓
+            self._qq_join(_np)
+
+        # ①·5 无敌时间递减（第 56 轮）
+        for _q in self.players.values():
+            if _q.invulnT > 0:
+                _q.invulnT = max(0.0, _q.invulnT - (1.0 / max(1, TICK_HZ)))
+            # ★★ round424：在线时长榜（每帧加 dt ✗ 整秒变了才算脏 ✓）
+            #   ★ 挂机也算（用户确认 ✓）—— 只要人还在世界里 ✓
+            try:
+                _q.st_play = float(getattr(_q, 'st_play', 0.0) or 0.0) + TICK_DT
+                if int(_q.st_play) != int(getattr(_q, 'st_play0', -1) or 0):
+                    pass          # 整秒变了 → 下一次 _save_player 会写库（那边自己比较 ✓）
+            except Exception:
+                pass
+
+        # ② 处理意图（有上限，防一条连接把 tick 打饿）
+        n = 0
+        while n < MAX_DRAIN:
+            try:
+                kind, cid, payload = self.inbox.get_nowait()
+            except queue.Empty:
+                break
+            n += 1
+            if kind == 'admin':
+                # ★ 管理操作（第 48 轮）：没有 cid，走单独一支 ✓
+                try:
+                    self._handle_admin(payload[0], payload[1])
+                except Exception:
+                    pass
+                continue
+            if kind == 'gain':
+                # round296: HTTP (selling / trading) asks the tick thread to credit
+                #   gold. Memory is authoritative, so ONLY the tick thread may touch
+                #   it - the HTTP layer just posts here.
+                #   payload = (role_id, amount, why)
+                try:
+                    _gr = int(payload[0])
+                    _ga = int(payload[1])
+                    _gw = str(payload[2])[:24]
+                    _gt = None
+                    for _gc, _gq in self.players.items():
+                        if (getattr(_gq, 'role_id', None) == _gr
+                                and getattr(_gq, 'ghostAt', None) is None):
+                            _gt = _gq
+                            break
+                    if _gt is not None:
+                        self._gain_gold(_gt, _ga, _gw)
+                    else:
+                        # offline -> leave it in pending_gold, credited on next login
+                        import db as _dbmod
+                        self.post_save(
+                            'INSERT INTO pending_gold(role, amount, why, ts, done)'
+                            ' VALUES(?,?,?,?,0)',
+                            (_gr, _ga, _gw, _dbmod.now_ms()))
+                except Exception as _ge:
+                    print('[gold] gain intent failed: %r' % (_ge,))
+                continue
+
+            if kind == 'leave':
+                # ★★ 第 168 轮（用户 #5）：离线先保留 6 秒 ★★
+                #   用户原话："玩家离开或离线后服务器让他保留 6 秒
+                #             再算真离开，防止打不过直接退游戏"
+                #   ★ 血还没空 → 变成"幽灵"先留着 ✓ 怪物还能把他打死 ✓
+                #     血已经空了 → 直接删 ✗（都死了就不用留了 ✓）
+                p = self.players.get(cid)
+                if p is None:
+                    continue
+                if int(p.hp or 0) > 0:
+                    p.ghostAt = now_s()
+                else:
+                    self.players.pop(cid, None)
+                    self._save_player(p)
+            else:
+                p = self.players.get(cid)
+                if p is None:
+                    continue
+                p.intents += 1
+                if p.intents > MAX_INTENT_PER_TICK:
+                    self.dropped_intents += 1
+                    continue
+                self._handle_intent(p, payload[0], payload[1])
+
+        # ②·5 交易所的非玩家消息（载入货架 / 落库失败回滚 / 过期回收 ✓）
+        #   ★ 为什么单独一支：它们没有 cid ✗ 走不到上面那个 players 查找 ✓
+        try:
+            self._mkt_tick()
+        except Exception as _mke:
+            print('[mkt] tick failed: %r' % (_mke,))
+
+        # ★★★ round312（用户："破坏延迟高了一点点"）★★★
+        #   根因：我把破坏广播塞进了"一秒一次"的节流里 ✗
+        #         → 打碎之后最多要等 1 秒客户端才看到 ✓
+        #   拆成两件事：
+        #     ① 广播【每帧都发】✗ 破坏是低频操作（一次几格 ✓ 不刷屏 ✓）
+        #     ② 自愈清扫还是【一秒一次】✗ 它没必要那么勤 ✓
+        # ★ F1 流水：每 tick 跑一小批（★ 有预算 ✗ 平时活跃集合是空的 ✓）
+        try:
+            pass
+        except Exception as _fe:
+            print('[fluid] tick failed: %r' % (_fe,))
+        try:
+            self._ter_flush(0)
+            self._prop_flush(0)
+        except Exception as _te:
+            print('[ter] flush failed: %r' % (_te,))
+        self._ter_acc = getattr(self, '_ter_acc', 0.0) + TICK_DT
+        if self._ter_acc >= 1.0:
+            self._ter_acc = 0.0
+            try:
+                self._ter_sweep(dbmod.now_ms())
+            except Exception as _te2:
+                print('[ter] sweep failed: %r' % (_te2,))
+
+        # ③ 僵尸：刷怪 / 回收 / AI（P2 第一刀）
+        #    ★ 和玩家一样【只在 tick 线程跑】→ 一张快照发出去时，世界是"冻结"的 ✓
+        # ★★ 第 109 轮（用户要求：血量/坐标要保存）★★
+        #   查下来：存档只发生在【离开世界】那一刻 ✗ 没有定时存盘 ✗
+        #   → 服务器崩溃 / 重启 / 被强杀 → 状态回到上次离开时 ✗
+        #   （我这几轮 taskkill 重启了很多次 ✗ 所以用户每次都感觉"没保存"✓）
+        #   → 每 15 秒给所有在线玩家排一次存档 ✓ 最多丢 15 秒 ✓
+        self._save_acc += TICK_DT
+        if self._save_acc >= AUTO_SAVE_INTERVAL:
+            self._save_acc = 0.0
+            for _q9 in self.players.values():
+                try:
+                    self._save_player(_q9)
+                except Exception:
+                    pass
+            # round302: 顺手刷新"内存余额"表 ✓
+            #   为什么需要：_gain_gold 只在【钱变了】的时候记 ✗
+            #   长时间不掉钱的人 ✗ 这张表里可能还是很早以前的值 ✓
+            #   刷新一次才敢保证"比库里的新"✓
+            for _q9 in self.players.values():
+                try:
+                    _live_gold[int(getattr(_q9, 'role_id', 0))] = int(getattr(_q9, 'gold', 0) or 0)
+                except Exception:
+                    pass
+
+        # ★ 第 82 轮：大厅名单（每秒发布一次 ✓ HTTP 只读 ✓ 不加锁 ✓）
+        self._lobby_acc += TICK_DT
+        if self._lobby_acc >= LOBBY_INTERVAL:
+            self._lobby_acc = 0.0
+            _lp = []
+            for _q in self.players.values():
+                _w = _q.weapon or {}
+                _hm = max(1, self._hp_max(_q))
+                _qm = self._qi_max(_q)
+                _lp.append({'id': _q.role_id, 'name': _q.name,
+                            'lv': int((_q.role or {}).get('level') or 1),
+                            'look': _w.get('look') or 'sword',
+                            'tier': int(_w.get('tier') or 0),
+                            'hp': int(round(100.0 * max(0, int(_q.hp or 0)) / _hm)),
+                            'qi': int(round(100.0 * max(0, int(_q.qi or 0)) / _qm)),
+                            'x': round(_q.x, 1), 'z': round(_q.z, 1),
+                            'party': (self.party_of.get(_q.role_id) is not None)})
+            _lq = []
+            for _pid, _pt in self.parties.items():
+                if not self.party_open.get(_pid, True):
+                    continue
+                if len(_pt['members']) >= PARTY_MAX:
+                    continue
+                _nm, _ld = [], ''
+                for _q2 in self._party_members(_pid):
+                    _nm.append(_q2.name)
+                    if _q2.role_id == _pt['leader']:
+                        _ld = _q2.name
+                _lq.append({'pid': _pid, 'leader': _ld, 'n': len(_pt['members']),
+                            'max': PARTY_MAX, 'names': _nm})
+            # ★ 整对象替换（读的人拿到旧的也没事 ✓ 不会读到半个 ✗）
+            self.lobby_stat = {'players': _lp, 'parties': _lq}
+            # ★★ 第 82 轮：待处理列表每秒补推一次 ★★
+            #   用户要求："不仅有弹窗，界面里也应该有可以同意拒绝的地方"
+            #   → 弹窗是一次性的 ✗ 没看到就没了 ✗
+            #   → 现在每秒把【谁邀请了我】和【谁申请了我的队】都推一遍 ✓
+            #     客户端拿到就能在面板里列出来 ✓ 刷新也不丢 ✓
+            _now2 = now_s()
+            for _rid3, _lst3 in list(self.party_inv.items()):
+                _ok3 = [x for x in _lst3 if _now2 - x[1] < PARTY_INVITE_TTL]
+                self.party_inv[_rid3] = _ok3
+                if not _ok3:
+                    continue
+                for _q3 in self.players.values():
+                    if getattr(_q3, 'role_id', None) == _rid3:
+                        _out3 = []
+                        for _f3, _ts3 in _ok3:
+                            for _q4 in self.players.values():
+                                if getattr(_q4, 'role_id', None) == _f3:
+                                    # ★ 第 84 轮：给【绝对到期时刻】✗ 不给剩余秒数
+                                    #   （剩余秒数靠每秒补推算 → 推送一丢就卡住 ✗
+                                    #    绝对时刻 + 客户端本地时钟 → 一定在动 ✓）
+                                    _out3.append([_f3, _q4.name, round(_ts3 + PARTY_INVITE_TTL, 2)])
+                                    break
+                        self._send_cid(_q3.cid, P.pack('partyinv', list=_out3))
+                        break
+            for _pid4, _pt4 in list(self.parties.items()):
+                _ap4 = [x for x in self.party_apply.get(_pid4, [])
+                        if _now2 - x[1] < PARTY_APPLY_TTL]
+                self.party_apply[_pid4] = _ap4
+                if not _ap4:
+                    continue
+                for _q5 in self._party_members(_pid4):
+                    if _q5.role_id != _pt4['leader']:
+                        continue
+                    _out4 = []
+                    for _r4, _ts4 in _ap4:
+                        for _q6 in self.players.values():
+                            if getattr(_q6, 'role_id', None) == _r4:
+                                _out4.append([_r4, _q6.name, round(_ts4 + PARTY_APPLY_TTL, 2)])
+                                break
+                    self._send_cid(_q5.cid, P.pack('partyapply', pid=_pid4, list=_out4))
+                    break
+
+        self._party_acc += TICK_DT
+        if self._party_acc >= PARTY_PUSH_INTERVAL:
+            self._party_acc = 0.0
+            for pid in list(self.parties.keys()):
+                self._party_push(pid)        # ★ 每秒补推一次（血条要动 ✓）
+        self._mob_tick(TICK_DT)
+        self._mob_zone_tick(TICK_DT)
+        self._boss_tick(TICK_DT)
+        self._mobmarks_tick(TICK_DT)
+        self._later_tick()
+        self._later_skill_tick()
+        self._later_hits_tick()
+        self._earth_dot_tick()
+        self._clone_tick(TICK_DT)
+        self._pull_tick(TICK_DT)      # ★ 放在 clone 之后：吸力最后生效 ✗ 不会被 AI 移动抵消 ✓
+        self._poison_tick(TICK_DT)
+        self._fly_tick()
+        self._arrow_tick(TICK_DT)   # ★ 第 69 轮：箭（要在僵尸移动之后算 ✓）
+        self._loot_tick(TICK_DT)          # ★ 地上掉的也归 tick 线程管 ✓
+        for p in self.players.values():
+            if p.atkT > 0:
+                p.atkT -= TICK_DT
+            # ★ round549：技能冷却递减（到点删掉 ✓ 不越攒越多）
+            try:
+                self._sk_b_tick(p, TICK_DT)
+            except Exception as e:
+                print('[skill] B tick 失败：%r' % (e,))
+            try:
+                self._gale_ghost_tick(p, TICK_DT)
+                self._berserk_ghost_tick(p, TICK_DT)
+            except Exception:
+                pass
+            if getattr(p, 'skCd', None):
+                _dead = []
+                for _k in p.skCd:
+                    p.skCd[_k] -= TICK_DT
+                    if p.skCd[_k] <= 0:
+                        _dead.append(_k)
+                for _k in _dead:
+                    del p.skCd[_k]
+
+        # ④ 生成快照并批量交给网络线程（一次跨线程调用，不是每个玩家一次）
+        if self.players:
+            batch = []
+            for p in self.players.values():
+                d = {'ts': round(now_s(), 3), 'players': self._snapshot_for(p)}
+                ms = self._mobs_for(p)
+                if ms:
+                    d['mobs'] = ms
+                # ★ 第 69 轮：在飞的箭（[id,x,z,yaw] ✓ 只发附近的 ✓）
+                if self.arrows:
+                    _ar = []
+                    for _a in self.arrows.values():
+                        if (_a['x'] - p.x) ** 2 + (_a['z'] - p.z) ** 2 > VIEW * VIEW:
+                            continue
+                        _ar.append([_a['id'], round(_a['x'], 2), round(_a['z'], 2),
+                                    round(_a['yaw'], 2),
+                                    1 if _a.get('kind') == 'dagger' else 0])
+                    if _ar:
+                        d['ar'] = _ar
+                lt = self._loot_for(p)          # ★ 地上掉的（第 38 轮）
+                if lt:
+                    d['loot'] = lt
+                # ★ 本 tick 攒的反馈：hurts=我挨的打，mhits=我打中僵尸（弹伤害数字用）✓
+                pend = self._pend.get(p.cid)
+                # ★★★ 第 239 轮：每帧都把"我自己的血量"带上 ★★★
+                #   为什么：客户端原来那份血量是【本地算的】✗
+                #     服务器打它多少 ✗ 它不知道 ✓
+                #     → 血条不跟着掉 ✓ 一直到服务器判死 ✗ 客户端才突然变尸体 ✓
+                #     → 这就是用户报的"假死"（别人看你死了 ✗ 你看自己活着 ✓）
+                #   ★ 为什么现在可以【每帧直接赋值】而不是插值：
+                #     服务器 30Hz 推 ✓ 客户端 60Hz 画 ✓
+                #     30 次/秒的更新已经足够平滑 ✗ 不会抖 ✓
+                #     （第 140 轮那次抖 ✗ 是因为只发"变化时"✗ 间隔不均匀 ✓）
+                if pend is None:
+                    pend = self._pend[p.cid] = {}
+                _me0 = pend.get('me')
+                if _me0 is None:
+                    _me0 = pend['me'] = {}
+                _me0['hp'] = int(p.hp or 0)
+                _me0['hpm'] = int(self._hp_max(p))
+                # ★ round576：坦克引擎的体型（客户端按它缩放自己的模型 ✓）
+                _me0['sz'] = round(float(getattr(p, 'skSize', 1.0) or 1.0), 4)
+                # ★ round576/580：临时增益倍率（嗜血/暴走/疾风步）
+                _taM = getattr(p, 'skTA', {}) or {}
+                _aspd = 1.0
+                _mspd = 1.0
+                if float(_taM.get('bloodthirst', 0) or 0) > 0:
+                    _aspd *= 1.2
+                    _mspd *= 1.1
+                if float(_taM.get('berserk', 0) or 0) > 0:
+                    _aspd *= 1.5
+                if float(_taM.get('gale', 0) or 0) > 0:
+                    _mspd *= 1.8
+                _me0['atkSpd'] = round(_aspd, 3)
+                _me0['moveSpd'] = round(_mspd, 3)
+                # ★ round581：冻结/减速
+                _me0['frz'] = 1 if float(getattr(p, 'freezeT', 0) or 0) > 0 else 0
+                _me0['downT'] = round(float(getattr(p, 'downT', 0) or 0), 2)
+                _me0['shield'] = (int(p.skShield) if float(getattr(p, 'skShieldT', 0) or 0) > 0
+                                  else 0)
+                _me0['shieldT'] = round(float(getattr(p, 'skShieldT', 0) or 0), 2)
+                _me0['galeT'] = round(float((getattr(p, 'skTA', {}) or {}).get('gale', 0) or 0), 2)
+                _me0['berserkT'] = round(float((getattr(p, 'skTA', {}) or {}).get('berserk', 0) or 0), 2)
+                _me0['bloodrageT'] = round(float((getattr(p, 'skTA', {}) or {}).get('bloodrage', 0) or 0), 2)
+                _me0['bloodthirstT'] = round(float((getattr(p, 'skTA', {}) or {}).get('bloodthirst', 0) or 0), 2)
+                _me0['skdur'] = round(1.0 + self._sk_val(p, 'skdur'), 4)
+                _me0['plague'] = 1 if bool(getattr(p, 'plagueOn', False)) else 0
+                _me0['qimax'] = int(self._qi_max(p))
+                _me0['slow'] = (round(float(getattr(p, 'slowMul', 1.0) or 1.0), 3)
+                                if float(getattr(p, 'slowT', 0) or 0) > 0 else 1.0)
+                # round294: gold goes out with `me` (one extra int, no new message).
+                #   The client adopts it field-wise, so a missing value never zeroes it.
+                _me0['gold'] = int(getattr(p, 'gold', 0) or 0)
+                # ★ round424：自己的头顶称号（用户："自己也看得见"）
+                _tt_me, _tm_me = self._title_of(p)
+                _me0['tt'] = _tt_me
+                _me0['tm'] = _tm_me
+                # ★★★ round349 修的真 bug（用户："没有听到逃跑音效"）★★★
+                #   根因：这里【只认 hurts / mhits】✗ 别的事件被静默丢掉 ✓
+                #         我加的 'flee' 走 _add_pend 上来 ✗ 到这里就被扔了 ✓
+                #   ★ 改成【通用拷贝】：除了 'me'（单独处理）其它 key 一律带上 ✓
+                #     以后再加事件（逃跑/播报/特效）不用改这里 ✓
+                if pend:
+                    for _pk, _pv in pend.items():
+                        if _pk == 'me' or not _pv:
+                            continue
+                        d[_pk] = _pv
+                if pend and pend.get('me'):
+                    d['me'] = pend['me']          # 升级/涨经验了才带 ✓
+                # ★ 治疗事件（第 46 轮）：只发这个玩家看得见的（别把全图的都塞给他 ✗）
+                if self.heals:
+                    hv = []
+                    v2 = mobs.MOB_VIEW * mobs.MOB_VIEW
+                    for he in self.heals:
+                        if (he[2] - p.x) ** 2 + (he[3] - p.z) ** 2 <= v2:
+                            hv.append(he)
+                    if hv:
+                        d['heals'] = hv
+                batch.append((p.cid, P.pack_str('world', d)))
+            self._to_net(self._fanout, batch)
+        self._pend = {}
+        self.heals = []                       # ★ 治疗事件每 tick 清空（第 46 轮）
+
+        # ⑤ 重置每 tick 的计数
+        for p in self.players.values():
+            p.intents = 0
+        self.tick_count += 1
+        # ★ 第 48 轮：每 15 tick 发一次管理页快照（15 × 33ms ≈ 半秒，够实时了 ✓）
+        self._admin_acc += 1
+        if self._admin_acc >= 15:
+            self._admin_acc = 0
+            self._publish_admin()
+            self._ghost_tick()
+            self._admin_tune_check()   # ★ 第 168 轮（用户 #5）：收回超时的幽灵 ✓
+            self._tp_tick()      # 第 173 轮（用户 #6）：推进传送读条 ✓
+
+    def _talent_op(self, p, d):
+        """天赋加点 / 洗点（方案 §7.1 · 第 116 轮）
+
+        ★ 三个校验缺一不可（方案 §7 明写 ✓）：
+            ① stat 白名单   防刷不存在的属性
+            ② n 范围 1~50   防一次刷爆
+            ③ n ≤ 免费点数  防刷成负数
+        ★ 限流 80 次 / 10 秒：允许快速连点，但不允许脚本刷爆 tick
+        ★ 落库用 post_save（saver 线程写 ✓）tick 线程不碰 DB ✓（铁律 ✓）
+        """
+        import talents as _tal
+        now = now_s()
+        op = str(d.get('op') or '')
+
+        # ---- 限流 ----
+        lst = self.talent_rate.get(p.role_id) or []
+        lst = [x for x in lst if now - x < 10.0]
+        if len(lst) >= 80:
+            self._send_cid(p.cid, P.pack('notice', text='点太快了，歇一下再点 ✓'))
+            return
+        lst.append(now)
+        self.talent_rate[p.role_id] = lst
+
+        lv = int((p.role or {}).get('level') or 1)
+
+        if op == 'reset':
+            # ---- 洗点（v1 免费 + 5 分钟冷却 ✓ 方案 §3.4）----
+            left = 300.0 - (now - float(p.resetT or 0.0))
+            if p.resetT and left > 0:
+                self._send_cid(p.cid, P.pack(
+                    'notice', text='洗点冷却中，还得等 %d 秒' % int(left + 0.9)))
+                return
+            p.resetT = now
+            p.tal = {}
+            p.talDirty = True
+            self.post_save('DELETE FROM talents WHERE role_id=?', (p.role_id,))
+            self._tal_send(p)
+            self._send_cid(p.cid, P.pack('notice', text='已洗点，天赋点全部返还 ✓'))
+            return
+
+        if op != 'add':
+            return
+
+        # ---- 加点 ----
+        stat = str(d.get('stat') or '')
+        if stat not in _tal.KEYS:                 # ① 白名单
+            return
+        try:
+            n = int(d.get('n') or 1)
+        except Exception:
+            n = 1
+        # ★★★ 第 255 轮修的真 bug（用户："天赋加点玩家点减号也是增加"）★★★
+        #   病根：原来这里写的是 n = max(1, min(50, n)) ✗
+        #     → 客户端点"减号"发的 n = -1 ✗ 被这句【夹成了 +1】✓✓
+        #     → 所以减号反而加点 ✓ 用户报的一字不差 ✓
+        #     （客户端那边其实是对的 ✓ 它算出来的 n 就是 -1 ✓
+        #       坏在服务器这一句"保护性夹取"✗ 把符号吃了 ✓）
+        #   ★ 修：正数照旧夹到 1~50 ✗ 负数单独夹到 -50~-1 ✓
+        if n < 0:
+            n = max(-50, min(-1, n))              # ② 负范围：减点
+        else:
+            n = max(1, min(50, n))                # ② 正范围：加点
+        free = _tal.free_points(lv, p.tal)
+        if n > 0 and n > free:                    # ③ 加点才检查剩余点数
+            self._send_cid(p.cid, P.pack('notice', text='天赋点不够了 ✓'))
+            return
+        if n < 0 and int(p.tal.get(stat) or 0) + n < 0:   # ③' 减点不能减成负数
+            self._send_cid(p.cid, P.pack('notice', text='这项已经清零了 ✓'))
+            return
+
+        p.tal[stat] = int(p.tal.get(stat) or 0) + n
+        p.talDirty = True
+        cur = p.tal[stat]
+        self.post_save('INSERT INTO talents(role_id, stat, points) VALUES(?,?,?) '
+                       'ON CONFLICT(role_id, stat) DO UPDATE SET points=excluded.points',
+                       (p.role_id, stat, cur))
+        self._tal_send(p)
+
+    def _tal_send(self, p):
+        """把天赋状态推给客户端（加点/洗点/升级/进世界 都要发 ✓ 方案 §7.2）"""
+        import talents as _tal
+        lv = int((p.role or {}).get('level') or 1)
+        st = _tal.pack_state(lv, p.tal)
+        p.talRaw = _tal.raw_of(p.tal)
+        p.talEff = _tal.effective(p.talRaw)
+        self._invalidate_stats(p)
+        # ★ 第 117 轮：血量天赋会改生命上限 → 必须一起带上 ✓
+        #   不然加完血量，界面上的血量上限不动 ✗（用户一定会问"生效了吗"✗）
+        st['hpm'] = self._hp_max(p)
+        # ★ round474：移速词条（防具）客户端走路要用 ✗ 不然词条只有数字没效果 ✓
+        try:
+            st['speedGear'] = round(self._aff(p, 'speed_pct'), 2)
+        except Exception:
+            st['speedGear'] = 0.0
+        # ★ round411：属性总览（人物本身 + 装备 + 天赋 + 上限）一起发 ✗ 客户端不再自己算 ✓
+        try:
+            st['stats'] = self._stat_sheet(p)
+        except Exception as _e:
+            st['stats'] = []
+            print('[talent] stat sheet failed: %r' % (_e,))
+        self._send_cid(p.cid, P.pack('talents', **st))
+
+    def _handle_intent(self, p, t, d):
+        if t == 'move':
+            # ★ round330：收下"离地高度"✗ 夹在 0..3 格（≈1.9 米）✓
+            try:
+                _jy = float(d.get('jy') or 0)
+            except Exception:
+                _jy = 0.0
+            if _jy < 0:
+                _jy = 0.0
+            elif _jy > 3.0:
+                _jy = 3.0
+            p.jy = _jy
+            # ★ 用 World 上的集合 ✗ 不能存在 Player 上（__slots__ 会报错 ✓）
+            if _jy > 0.2:
+                if not hasattr(self, '_jy_logged'):
+                    self._jy_logged = set()
+                if p.cid not in self._jy_logged:
+                    self._jy_logged.add(p.cid)
+                    print('[jy] %s 发来跳跃高度 %.2f（服务端收到了 ✓）' % (p.name, _jy))
+            # ★★★ 第 227 轮：位移校验（反瞬移 / 反加速）★★★
+            #   思路（照 Grim Anticheat）：服务器自己算"这么久最多能走多远"
+            #   超出了就不采纳这次位置 ✓ 超得离谱还回推一个纠正 ✓
+            #   ★ 为什么不"一刀切拒绝"：网络抖动 / 切后台回来，
+            #     客户端会一次报一大步 ✗ 拒绝的话正常玩家会被卡住 ✓
+            #     → 所以给了 MOVE_TOL 倍容差 + MOVE_SLACK 米余量 ✓
+            _nx = _f(d.get('x'), p.x)
+            _nz = _f(d.get('z'), p.z)
+            _now = now_s()
+            _last = float(getattr(p, 'moveT', 0) or 0)
+            _dt = _now - _last if _last > 0 else 0.05
+            if _dt < 0.02:
+                _dt = 0.02
+            elif _dt > 3.0:
+                _dt = 3.0                    # ★ 隔太久（切后台/卡顿）按最多 3 秒算 ✓
+                #   ★ 为什么从 1 秒放宽到 3 秒（第 227 轮实测改的）：
+                #     手机切后台 5 秒再回来 ✗ 客户端会一次报 20 米 ✓
+                #     按 1 秒算只允许 12 米 → 正常玩家被误拦 ✗（体感：走不动 ✓）
+                #     按 3 秒算允许 33 米 ✓ 不误伤 ✗ 而瞬移 1000 米照样拦得住 ✓
+                #   ★ 代价：作弊者可以「等 3 秒跳 33 米」✗ 但那只是快走 ✓ 可接受 ✓
+            _dist = ((_nx - p.x) ** 2 + (_nz - p.z) ** 2) ** 0.5
+            _allow = PLAYER_SPEED * _dt * MOVE_TOL + MOVE_SLACK
+            # ★★★ 第 280 轮（用户要求：先把移动速度的作弊检测关了看看）★★★
+            #   ★ 开关：False = 完全关闭位移检测（用来排查"移速飞快"✓）
+            #     想开回来改成 True 就行 ✓ 代码全留着 ✗ 只是不执行 ✓
+            #   ★ 第 277 轮已经去掉了"把玩家拉回"✗ 按理服务器不会再改位置 ✓
+            #     但用户实测问题还在 ✗ 所以先整个关掉 ✗ 一刀切干净 ✓
+            #     —— 关掉之后如果【还是飞快】✗ 那就和这个检测完全无关 ✓
+            #        嫌疑就转到【客户端插值】那边 ✓（我改的 120ms 缓冲 ✓）
+            _MOVE_CHECK_ON = False
+            if _MOVE_CHECK_ON and _dist > _allow:
+                # round277 fix (user: other players fly around, the mover sees himself fine)
+                #   OLD: reject the position AND send a 'tp' correction when way over.
+                #   WHY IT BROKE: position is client-authoritative; at 30Hz with jitter the
+                #     move packets bunch up, so dt is tiny while the displacement is large
+                #     -> false positive -> server yanks the player back -> everyone else
+                #     sees a jump. The mover never notices because his client is the boss.
+                #   NEW: always accept the position, but still count it as suspicious
+                #     (log + suspect counter -> admin page can ban the real cheaters).
+                p.moveT = _now
+                p.moveBad = int(getattr(p, 'moveBad', 0)) + 1
+                p.suspect = int(getattr(p, 'suspect', 0)) + 1
+                if p.moveBad == 1 or p.moveBad % 20 == 0:
+                    print('[ac] move over limit (record only, never yank back): %s reported %.1f m / allowed %.1f m (x%d)'
+                          % (p.name, _dist, _allow, p.moveBad))
+            p.x = _nx
+            p.z = _nz
+            p.moveT = _now
+            if _dist <= _allow:
+                p.moveBad = 0
+            p.yaw = _f(d.get('yaw'), p.yaw)
+            p.ct = _f(d.get('t'), p.ct)
+            # ★★ 第 57 轮：客户端上报的 hp / qi 【不再采信】★★
+            #   和上面 atk 那条一个道理 —— 改个包就能报 hp=999999 变成不死身 ✗
+            #   （方案 §5：伤害/死亡/血量归服务器权威，客户端只有【位置】是权威的 ✓）
+            #
+            #   踩到的真 bug：管理页把某个玩家治好（hp=200）✓
+            #   但那个玩家的客户端本地 hp 还是 0 → 每个移动包又把 0 覆盖回来 ✗
+            #   → 管理员治疗/复活【永远不生效】✗
+            #
+            #   ★ 客户端照旧发这两个字段，服务器只是不理它 ✓（省得改协议 ✗）
+            # ★★ 第 39 轮：客户端上报的 atk 【不再采信】★★
+            #    攻击力由服务器按角色等级自己算（mobs.player_atk，方案 §4.5）——
+            #    以前直接存客户端的值，改个包就能一刀秒天秒地 ✗
+            #    （客户端那边照旧发这个字段，服务器只是不理它了 ✓）
+        elif t == 'ping':
+            self._send_cid(p.cid, P.pack('pong', t=d.get('t'), st=round(now_s(), 3)))
+        if t == 'safetp':            # 第 173 轮（用户 #6）：请求传送回安全区
+            #   ★ 服务器说了算：只是【开始读条】✗ 6 秒后才真挪人 ✓
+            #   ★ 已经在安全区里就不用传了 ✓ 读条中也不重复开 ✓
+            _in_safe = (abs(p.x) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(p.z) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF))
+            if _in_safe:
+                self._send_cid(p.cid, P.pack('notice', text='你已经在安全区里了'))
+            elif float(getattr(p, 'tpEnd', 0) or 0) > now_s():
+                pass                                   # 正在读条，忽略重复请求 ✓
+            else:
+                p.tpEnd = now_s() + float(TELEPORT_CAST)
+                self._send_cid(p.cid, P.pack('tpcast', t=TELEPORT_CAST))
+                self._send_cid(p.cid, P.pack(
+                    'notice', text='开始传送回安全区（%.0f 秒，期间受伤会中断）' % TELEPORT_CAST))
+        elif t == 'ranktitle':
+            # ★★ round424：用户选「头顶显示哪个榜」（'' = 关 ✓）
+            #   ★ 写库在 net.py（网络线程 ✗ tick 不碰磁盘 ✓）
+            #   ★ 这里只改内存 → 下一帧快照就带上新称号 ✓
+            _b = str((d or {}).get('board') or '')
+            if _b and _b not in rankboard.KEYS:
+                return
+            p.titleBoard = _b
+            try:
+                if isinstance(p.role, dict):
+                    p.role['titleBoard'] = _b
+            except Exception:
+                pass
+        elif t == 'chat':
+            txt = str(d.get('text') or '')[:200]
+            if txt:
+                self._to_net(self._broadcast, P.pack_str(
+                    'chat', {'from': p.name, 'text': txt, 'ch': d.get('ch') or 'world'}))
+        elif t == 'talent':
+            self._talent_op(p, d)          # ★ 第 116 轮：天赋加点 ✓
+        elif t == 'autosell':
+            # ★ round466：设置自动出售阈值（0 = 关 ✗ 1~12 = 低于这么多阶就卖）✓
+            try:
+                _n = int(d.get('tier') or 0)
+            except Exception:
+                _n = 0
+            _n = max(0, min(12, _n))
+            p.role['autosell'] = _n
+            # ★★★ round468（用户："自动出售要保存，重启服务器也要保存"）★★★
+            #   ★真的 bug：这里原来用了 dbmod.now_ms() ✗
+            #     而 _handle_intent 函数体里后面有一句【局部】import db as dbmod ✗
+            #     → Python 把 dbmod 当成【局部变量】✗ 我这一行又在那句 import 之前 ✗
+            #     → UnboundLocalError ✗ 而它被上层 try/except 吞了 → 设置根本没落库 ✗✗
+            #     （表现：当场能用 ✗ 重启服务器就变回 0 ✗）
+            #   ★ 修：用模块顶部已经 import 好的 now_s() 算毫秒 ✓ 不再靠局部名字 ✓
+            self.post_save('UPDATE roles SET autosell=?, updated_at=? WHERE id=?',
+                           (_n, int(now_s() * 1000), p.role_id))
+            self._send_cid(p.cid, P.pack(
+                'notice',
+                text=('自动出售已开启：低于 %d 阶的装备拾取就卖' % _n)
+                     if _n > 0 else '自动出售已关闭'))
+        elif t == 'annread':
+            # ★ round496：记到 roles.announce_seen（只增不减 ✓ 防客户端写大数跳过以后）
+            try:
+                _aid = int(d.get('id') or 0)
+            except Exception:
+                _aid = 0
+            _cur = int((p.role or {}).get('announce_seen') or 0)
+            if _aid > _cur:
+                p.role['announce_seen'] = _aid
+                self.post_save('UPDATE roles SET announce_seen=? WHERE id=?',
+                               (_aid, p.role_id))
+        elif t == 'setskin':
+            self._skin_set(p, str(d.get('key') or ''))
+        elif t == 'customset':
+            # ★ round510：网络线程已经把库写好了（扣卡 + skin_custom）✗ 这里只更新内存 ✓
+            _sk = str(d.get('skin') or '')
+            _raw = d.get('data') or {}
+            try:
+                import skin_custom as scm2
+                import skins as sk2
+                _cv = scm2.to_client(_raw, sk2.GENDER.get(_sk, 'f'))
+            except Exception:
+                _cv = None
+            if not hasattr(p, 'skCustomBySkin') or p.skCustomBySkin is None:
+                p.skCustomBySkin = {}
+            p.skCustomBySkin[_sk] = _cv
+            if (p.role or {}).get('skin') == _sk:
+                p.skCustom = _cv
+                self._send_cid(p.cid, P.pack('skin', key=_sk, c=_cv))
+            self._skin_page_send(p)
+            self._send_cid(p.cid, P.pack('notice', text='已保存自定义外观 ✓'))
+        elif t == 'skillcast':
+            self._skill_cast(p, d or {})
+        elif t == 'skillsync':
+            # ★ net 层改完装配 → 推给这里（tick 线程只碰内存 ✓）
+            _sl2 = (d or {}).get('load') or {}
+            try:
+                p.skLoad = {'A': list(_sl2.get('A') or []),
+                            'B': list(_sl2.get('B') or []),
+                            'C': list(_sl2.get('C') or [])}
+                for _k2 in ('A', 'B', 'C'):
+                    while len(p.skLoad[_k2]) < 5:
+                        p.skLoad[_k2].append(None)
+                # ★ round578：C 类被动加成同步（否则装配后要刷新才生效 ✓）
+                _bf2 = (d or {}).get('buff')
+                if isinstance(_bf2, dict):
+                    p.skBuff = {}
+                    for _bk2, _bv2 in _bf2.items():
+                        try:
+                            p.skBuff[str(_bk2)] = max(1, min(5, int(_bv2 or 1)))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            self._invalidate_stats(p)
+        elif t in ('skillearned', 'skillloaded'):
+            # ★ round538：学习/装配成功 → 先只回一句提示（技能效果在 P2 才接）
+            import skills as _skm
+            _k = str((d or {}).get('key') or '')
+            _n = _skm.NAME.get(_k, _k)
+            if t == 'skillearned':
+                self._send_cid(p.cid, P.pack('notice', text='学会了技能：' + _n))
+            else:
+                self._send_cid(p.cid, P.pack('notice', text='已装配技能：' + _n))
+        elif t == 'skinask':
+            self._skin_page_send(p)
+        elif t == 'useskin':
+            # ★ round487：用背包里的皮肤卡（真正解锁在存档线程做 ✗ tick 不碰库 ✓）
+            try:
+                _iid = int(d.get('iid') or 0)
+            except Exception:
+                _iid = 0
+            _key = str(d.get('key') or '')
+            if _iid > 0 and skinsmod.valid(_key):
+                self.post_save('USE_SKIN', (p.role_id, _iid, _key))
+        elif t == 'skinbid':
+            self._skin_bid(p, str(d.get('key') or ''), d.get('amount'))
+        elif t == 'statask':
+            # ★ round465：打开属性页 → 立即要一份最新的属性表 ✓
+            self._tal_send(p)
+        elif t == 'atk':
+            self._intent_atk(p, d)
+        elif t == 'pick':
+            self._intent_pick(p, d)           # ★ 捡东西（第 38 轮）
+        elif t == 'spawn':
+            # ★★ 第 48 轮：这个能力【搬到管理页】了 ✗ ★★
+            #   以前任何玩家发一个 spawn 就能自己刷一堆怪（还能指定职业/等级/清场）✗
+            #   要临时给玩家用，只能改 config 的 allow_player_debug=true（本地调试用 ✓）
+            if not (self.cfg or {}).get('allow_player_debug'):
+                if 'spawn' not in p.warned:
+                    p.warned.add('spawn')
+                    self._send_cid(p.cid, P.pack('error', msg='刷怪已移到管理页（/admin）'))
+                return
+            self._debug_spawn(p, int(_f(d.get('n'), 5)), bool(d.get('clear')),
+                              d.get('kind') or None,
+                              d.get('lv'))
+        elif t == 'giveweapon':
+            # ★ 同上：发武器也搬到管理页了 ✗（玩家端默认不给 ✓）
+            if not (self.cfg or {}).get('allow_player_debug'):
+                if 'giveweapon' not in p.warned:
+                    p.warned.add('giveweapon')
+                    self._send_cid(p.cid, P.pack('error', msg='发武器已移到管理页（/admin）'))
+                return
+            # ★ 调试：直接往背包里塞一件武器（打开背包就能穿）★
+            #   为什么要这个：装备栏还没做的时候，玩家/测试【没法验证武器手感】✗
+            #   有了它，双击一下就能立刻试"匕首快 / 斧头慢" ✓
+            import json
+            import db as dbmod
+            lv = max(1, int(p.role.get('level') or 1))
+            w = weapons.roll_weapon(lv + 6, lv)
+            # ★ 第 56 轮：不再强制 reqLevel=1（保留真实建议等级 ✓ 反正不拦穿戴）
+            self.post_save(
+                'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
+                ' VALUES(?,0,-1,1,?,?)',
+                (p.role_id, json.dumps(w, ensure_ascii=False), dbmod.now_ms()))
+            self._send_cid(p.cid, P.pack('notice',
+                                         text='调试：背包里多了一件【%s】—— 打开背包就能穿上 ✓' % w['name']))
+        elif t == 'party':
+            self._party_op(p, d)          # ★ 第 81 轮：组队 ✓
+        elif t == 'mktopen':
+            # round304c：网络线程刚读了库（全服在售 + 我此刻的背包 ✓）
+            self._mkt_open_fresh(p, d)
+        elif t in ('lists', 'mylists', 'mklist', 'buyitem', 'unlist', 'listclaim'):
+            self._mkt_do(p, t, d)         # ★ round304b：交易所（纯内存 ✓）
+        elif t == 'armorset':
+            # ★ 第 67 轮：穿/脱防具（网络线程已经查库校验完了 ✓）
+            self._flush_adur(p)                     # ★ 换防具前先把旧的落库 ✓
+            p.armor = d.get('armor') or None
+            p.armorItemId = d.get('itemId')
+            _ar = p.armor or {}
+            p.aDurMax = int(_ar.get('durMax') or 0)
+            p.aDur = int(_ar.get('dur') or p.aDurMax)
+            p.aDurDirty = 0
+            self._invalidate_stats(p)
+            nm = (p.armor or {}).get('name')
+            self._send_cid(p.cid, P.pack('notice',
+                                         text=('穿上：%s' % nm) if nm else '脱下防具'))
+            self._send_cid(p.cid, P.pack('armor', a=p.armor or None,
+                                         hpm=self._hp_max(p), iid=p.armorItemId))
+            # ★ round465：换了防具 → 属性面板要刷新 ✓
+            try: self._tal_send(p)
+            except Exception: pass
+        elif t == 'mineprop':
+            self._prop_mine(p, d)
+        elif t == 'mine':
+            self._ter_mine(p, d)
+        elif t == 'falldmg':
+            # ★ round306（地形）：掉落伤害
+            #   ★ 客户端算落差 ✗ 服务端【夹住】✓ 不能让它改包自杀/刷血 ✓
+            #     （完整防作弊在 P3：服务端按 terrain.py 自己算落差 ✓）
+            try:
+                _fd = int((d or {}).get('d') or 0)
+            except Exception:
+                _fd = 0
+            if 0 < _fd <= 60 and int(p.hp or 0) > 0:
+                self._tp_break(p)
+                p.hp = max(0, int(p.hp) - _fd)
+                self._add_pend(p.cid, 'hurts',
+                               {'dmg': _fd, 'x': round(p.x, 2), 'z': round(p.z, 2),
+                                'by': '摔落', 'kind': 'fall', 'crit': False})
+                # 摔死也要掉魔气（和被打死同一条规矩 ✓ 第 166 轮）
+                if int(p.hp or 0) <= 0 and int(p.mq or 0) > 0:
+                    import mq as _mqf
+                    _lost = min(int(p.mq or 0), int(_mqf.cfg('killed_loss', _mqf.KILLED_LOSS)))
+                    p.mq = max(0, int(p.mq or 0) - _lost)
+                    self._mq_save(p)
+                    self._send_cid(p.cid, P.pack(
+                        'notice', text='你摔死了，魔气 −%d（现在 %d）' % (_lost, int(p.mq or 0))))
+        elif t == 'baglock':
+            # ★★★ round410（用户："背包物品加个锁：锁住不能卖、不能交易、不能被批量出售，
+            #                要再点一次解锁才可以"）★★★
+            #   ★ 锁写在 item_json 的 locked 字段上 ✓
+            #     卖系统（auth.sell_item）/ 挂交易所（_mkt_list）/ 批量出售
+            #     都已经在查 locked / locked_by ✓ 这里只要把标记写进去 ✓
+            #   ★ tick 线程不能查库 ✗ 所以校验用登录时装好的背包快照 ✓
+            #     （和交易所 _mkt_list 用的是同一份 ✓）
+            try:
+                _iidL = int((d or {}).get('iid'))
+            except Exception:
+                _iidL = 0
+            if _iidL <= 0:
+                self._send_cid(p.cid, P.pack('notice', text='参数不对'))
+                return
+            _recL = None
+            for _x in (p.role.get('bag') or []):
+                try:
+                    if int(_x.get('id')) == _iidL:
+                        _recL = _x
+                        break
+                except Exception:
+                    continue
+            if _recL is None:
+                self._send_cid(p.cid, P.pack(
+                    'notice', text='背包里没有这件东西（刷新一下再看看）'))
+                return
+            _itL = _recL.get('item')
+            if not isinstance(_itL, dict):
+                self._send_cid(p.cid, P.pack('notice', text='这件东西不能上锁'))
+                return
+            if _itL.get('locked_by'):
+                self._send_cid(p.cid, P.pack('notice', text='这件正在上架中，不能动锁'))
+                return
+            _want = bool((d or {}).get('lock'))
+            if _want:
+                _itL['locked'] = 1
+            else:
+                _itL.pop('locked', None)
+            # ★★★ round414（用户："上锁两个装备，重启后锁没了"）★★★
+            #   ★ 第一个病根在 db.startup_unlock_items（启动时把 locked 也清了 ✗ 已修）
+            #   ★ 第二个病根在这里：装备【穿在身上】时，内存里有【两份」副本 ✗
+            #     · p.role['bag'] 里那份（本函数改的就是它 ✓）
+            #     · p.weapon / p.armor（装备上去的那份 ✓）
+            #     而耐久每 50 次就会把 p.weapon / p.armor 整份写回库 ✗
+            #     → 那份没有 locked 的旧副本把锁盖掉 ✗（不重启也会丢 ✓）
+            #   ★ 修：两份副本同步 ✗ 写库时哪份在后面都对 ✓
+            if p.weaponItemId and int(p.weaponItemId) == _iidL and isinstance(p.weapon, dict):
+                if _want:
+                    p.weapon['locked'] = 1
+                else:
+                    p.weapon.pop('locked', None)
+            if p.armorItemId and int(p.armorItemId) == _iidL and isinstance(p.armor, dict):
+                if _want:
+                    p.armor['locked'] = 1
+                else:
+                    p.armor.pop('locked', None)
+            # ★ 这里必须现导入 ✗ _handle_intent 里后面有 `import json` 的局部分支，
+            #   函数内一旦出现 import json，json 就变成【局部名】✗
+            #   在上面直接用它 = UnboundLocalError ✓（自测第一次就撞上了 ✓）
+            import json as _json
+            self.post_save('UPDATE items SET item_json=? WHERE id=? AND role_id=?',
+                           (_json.dumps(_itL, ensure_ascii=False), _iidL, p.role_id))
+            self._send_cid(p.cid, P.pack(
+                'notice',
+                text=('已上锁：%s（不能卖、不能挂交易所、不会被批量出售）'
+                      % (_itL.get('name') or '物品')) if _want
+                     else ('已解锁：%s' % (_itL.get('name') or '物品'))))
+            # ★★★ round412（用户："上锁后不能马上看到图标，得刷新才能看到"）★★★
+            #   病根：这里原来发的是 bagrefresh → 客户端去拉 /api/bag ✗
+            #     而那条落库是 post_save【排队】交给 saver 线程的 ✓
+            #     → 客户端读库的时机大概率还没写进去 ✗
+            #     → 拿回来的是【旧数据】✗ 图标当然不变 ✓
+            #   ★ 修法：不再让他去拉库 ✗ 直接把【新状态】发过去 ✓
+            #     客户端只改这一格的 locked 字段 + 重画 ✗ 零延迟 ✓
+            #     （库还是照常写 ✗ 但不再拿它当刷新信号 ✓）
+            self._send_cid(p.cid, P.pack('baglockok', iid=_iidL, lock=1 if _want else 0,
+                                         name=(_itL.get('name') or '')))
+        elif t == 'equipset':
+            #   （tick 线程不许碰磁盘 ✗ 所以查库那步在 net.py 做）
+            w = d.get('weapon')
+            self._flush_dur(p)                       # ★ 换武器前先把旧的耐久落库 ✓
+            # ★★★ round380（用户："文案记得改"）★★★
+            #   ★ 根因：武器特性 fx 是【生成物品时】写进物品数据的 ✗
+            #     所以旧剑存的还是"招架" ✗ 不只是文案旧 ✗
+            #     **实际战斗也走旧特性**（_weapon_fx 读的是物品里的 fx ✓）
+            #   ★ 修：装备时【按 look+tier 重算一次】✗ 不信任存档里的 ✓
+            #     → 所有旧装备立刻跟随最新的武器表 ✓ 不用跑数据迁移 ✓
+            if w:
+                try:
+                    w['fx'] = weapons.fx_of(w.get('look'), int(w.get('tier') or 0))
+                except Exception:
+                    pass
+            p.weapon = w or dict(weapons.FIST)   # ★ 第 58 轮：空手 ✓
+            self._invalidate_stats(p)
+            p.weaponItemId = d.get('itemId')
+            # ★★ 第 59 轮：读出手上这把的耐久（没记录就从上限开始 ✓）
+            p.wDurMax = int((w or {}).get('durMax') or 0)
+            p.wDur = int((w or {}).get('dur') or p.wDurMax)
+            p.wDurDirty = 0
+            bb = (w or {}).get('base') or {}
+            self._send_cid(p.cid, P.pack('notice', text=(
+                '装上：%s（%d 阶）攻速 ×%.2f 射程 %.1f 米'
+                % (w.get('name'), tier_no(w.get('tier')), bb.get('atkSpeed') or 1.0,
+                   bb.get('reach') or 2.4)) if w else '卸下武器（换回默认单手剑）'))
+            # ★ 把新的武器告诉客户端 —— 客户端的挥刀冷却/射程预测要跟着换 ✓
+            #   ★ 第 59 轮：顺带把耐久带上（不然换完武器条子就空了 ✗）
+            ww = dict(w) if w else None
+            if ww:
+                ww['dur'] = p.wDur
+                ww['durMax'] = p.wDurMax
+            # ★ round507：带上 iid ✗ 客户端拿它把那一格标成"已装备"✓
+            #   （不带的话客户端只能整包重拉 ✗ 那就是 647KB 的来源 ✓）
+            self._send_cid(p.cid, P.pack('weapon', w=ww, iid=p.weaponItemId))
+            # ★ round465：换了武器 → 攻击力/攻速/吸血/寻宝 全变了
+            #   → 属性面板必须刷新（不然看到的还是旧数值 ✗）✓
+            try: self._tal_send(p)
+            except Exception: pass
+        elif t == 'pvp':
+            # ★★★ 第 243 轮修的真 bug（用户："我测试了开了pvp好像还是无法攻击玩家"）★★★
+            #   病根：这里原来写的是 self.pvp = ... ✗
+            #     而 self 是【World 世界对象】✗ 不是这个玩家 ✓
+            #     → 玩家点开关只改了世界身上一个没人读的字段 ✓
+            #     → 玩家自己的 PVP 状态从来没被设上 ✓✓
+            #   而判定能不能打人的 _pvp_on(q) 读的是：
+            #     · pvp_of[role_id]（单人覆盖 ✓）
+            #     · pvp_all（管理页的全局开关 ✓）
+            #     → 玩家自己那个开关跟这两个都没关系 ✓✓
+            #   → 结果：你开了 PVP ✗ 服务器眼里你还是没开 → 打不到人 ✓
+            #   ★ 修法：把玩家自己的开关写进 pvp_of（单人覆盖 ✓）
+            #     → 三层关系变成：
+            #         单人覆盖 > 全局开关 ✓（管理页那两层照旧有效 ✓）
+            _pv_on = bool(d.get('on')) if 'on' in d else not self._pvp_on(p)
+            self.pvp_of[getattr(p, 'role_id', None)] = _pv_on
+            self._send_cid(p.cid, P.pack('notice', text='PvP 已%s' % ('开' if _pv_on else '关')))
+            # ★ 顺便告诉客户端一声 ✓ 让界面上的开关状态跟服务器一致 ✓
+            self._send_cid(p.cid, P.pack('pvp', on=1 if _pv_on else 0))
+        elif t == 'revive':
+            # ★★ 第 56 轮：复活真正实装 ★★
+            #   以前这是纯客户端行为 ✗ —— 服务器不知道 → 也就给不了无敌 ✓
+            #   现在：补满血 + 1.5 秒无敌（§用户要求）✓
+            # ★ 血量上限：和管理页"治疗"用同一口径（role.hpMax，兜底 200 ✓）
+            #   P1 阶段玩家血量还没有按等级成长（§4.5 的成长曲线是 P3 的事 ✓）
+            hpmax = self._hp_max(p)     # ★ 第 67 轮：含防具加成 ✓
+            p.hp = hpmax
+            p.invulnT = REVIVE_INVULN
+            p.role['hp'] = p.hp
+            self._send_cid(p.cid, P.pack('revived', invuln=REVIVE_INVULN, hp=p.hp, hpMax=hpmax))
+            self._send_cid(p.cid, P.pack('notice',
+                                         text='复活成功 —— %.1f 秒无敌，快跑！' % REVIVE_INVULN))
+            # ★★ 第 63 轮：让【附近的人】看出他是复活了 ★★
+            #   不然在队友眼里他就是"凭空站起来了"✗（用户原话）
+            self._evt_near(p.x, p.z, 'evt',
+                           {'kind': 'revive', 'id': p.role_id,
+                            'name': p.name, 'x': round(p.x, 2),
+                            'z': round(p.z, 2), 'inv': REVIVE_INVULN},
+                           exclude=p.cid)
+        elif t in ('skill', 'team', 'dead', 'respawn'):
+            # 这些要等 P3/P4 的世界规则。
+            # ★ 只提示一次（不然每挥一刀都弹一句，把玩家烦死）
+            if t not in p.warned:
+                p.warned.add(t)
+                self._send_cid(p.cid, P.pack('error', msg='%s 还没实现' % t))
+
+    # ============================================================ 地形破坏（P1）
+    #  ★ 硬度表（方案 §5.2）✗ 和材质一一对应 ✓
+    # ★★★ round313（用户："最少 2 次才能破坏，不能攻击一次就破坏了"）★★★
+    #   原来草/土/泥是 1 ✗ 一刀就没 → 手感像"擦一下就没了"✓
+    #   现在【最低 2】✗ 第一刀一定只出裂纹 ✓ 第二刀才碎 ✓
+    #   材质差靠 2 / 4 / 6 拉开（草 2 · 砖 4 · 石 6 ✓）
+    TER_HARD = {'grass': 2, 'dirt': 2, 'ice': 2, 'swamp': 2,
+                'brick': 4, 'stone': 6}
+    #  ★ 能打多远的格子（格 ✗ 玩家离格子的距离上限 ✓）
+    TER_REACH = 3
+
+    # ------------------------------------------------ 流体（★ 不模拟 ✗ 只"灌一格" ✓）
+    # ★★★ round321（用户 2026-10-18）★★★
+    #   用户："水流动也不做了，直接挖了，就在旁边加一格水，这样简单性能也好，
+    #         岩浆也是一样" + "水+火变成石头没必要做，没有用"
+    #   → 活跃集合 / 每帧预算 / 平衡规则 / 水+火=石头【全部删掉】✓
+    #   ★ 换来：挖一格只查 4 个邻居 ✗ 零模拟开销 ✓ 不会震荡 ✓ 不会失控扩散 ✓
+    #   ★ 失去：挖一条 3 格的沟只有贴着水那一格有水 ✓（用户接受 ✓）
+
+    def fstate(self, gx, gz):
+        """这一格有没有流体 → (kind, level) ✗ level −1 = 没有 ✓"""
+        ov = self.fluid_ov.get((gx, gz))
+        if ov is not None:
+            return ov
+        k, _d = termod.fluid_of(gx, gz)
+        if k:
+            return (k, 0)
+        return (0, -1)
+
+    def ffill_around(self, gx, gz):
+        """这一格刚被挖空 ✗ 看四邻有没有水/地火 ✗ 有就灌进来（只灌这一格 ✓）
+
+        ★ 为什么这样就够：玩家挖坑就是为了"挖到水"✓
+          灌进来之后它自己就是一个新水源 ✗ 再挖旁边又会被灌 ✓
+          → 连挖几格就是一条水渠 ✓ 观感和流水几乎一样 ✗ 但没有模拟开销 ✓
+        """
+        nk = 0
+        for (dx, dz) in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            k, _l = self.fstate(gx + dx, gz + dz)
+            if k:
+                nk = k
+                break
+        if not nk:
+            return
+        self.fluid_ov[(gx, gz)] = (nk, 0)
+        self._fluid_save(gx, gz, nk, 0)      # ★ round347：落库（重启后还在 ✓）
+        msg = [[gx, gz, nk, 0]]
+        for p in self.players.values():
+            ddx = gx * termod.LEVEL_H - p.x
+            ddz = gz * termod.LEVEL_H - p.z
+            if ddx * ddx + ddz * ddz <= 3600:
+                try:
+                    self._send_cid(p.cid, P.pack('fluedit', cells=msg))
+                except Exception:
+                    pass
+
+    def _flux(self):
+        """当前所有"和生成值不同"的流体格（登录时全量发一次 ✓）"""
+        return [[k[0], k[1], v[0], v[1]] for k, v in self.fluid_ov.items()]
+
+    def ter_h_at(self, gx, gz):
+        """这一格【当前】的高度（含破坏覆盖 ✓ 和客户端的 terH 等价 ✓）"""
+        ov = self.ter_over.get((gx, gz))
+        if ov is not None:
+            return ov[0]
+        return termod.height(gx, gz)
+
+    def _ter_load(self):
+        """启动时把上次的破坏读回内存（★ 只读一次 ✗ 不进 tick ✓）"""
+        try:
+            with dbmod.db(self.cfg) as c:
+                rows = c.execute(
+                    'SELECT x, z, h, ts FROM terrain_damage').fetchall()
+        except Exception:
+            return
+        now = dbmod.now_ms()
+        n = 0
+        for x, z, h, ts in rows:
+            # ★ 已经过期的不读（启动时就把它清掉 ✓ 免得白占内存）
+            if now - int(ts) >= self.TER_REGEN_MS:
+                try:
+                    with dbmod.db(self.cfg) as c:
+                        c.execute('DELETE FROM terrain_damage WHERE x=? AND z=?',
+                                  (int(x), int(z)))
+                except Exception:
+                    pass
+                continue
+            self.ter_over[(int(x), int(z))] = [float(h), int(ts)]
+            n += 1
+        if n:
+            print('[ter] 读回 %d 格破坏记录' % n)
+
+    def _fluid_load(self):
+        """启动时把上次的水/地火读回内存（★ 只读一次 ✗ 不进 tick ✓）"""
+        try:
+            with dbmod.db(self.cfg) as c:
+                rows = c.execute(
+                    'SELECT x, z, kind, level FROM terrain_fluid').fetchall()
+        except Exception:
+            return
+        n = 0
+        for x, z, kind, level in rows:
+            try:
+                self.fluid_ov[(int(x), int(z))] = (int(kind), int(level))
+                n += 1
+            except Exception:
+                pass
+        if n:
+            print('[fluid] 读回 %d 格流体记录' % n)
+
+    def _fluid_save(self, gx, gz, kind, level):
+        """写一格流体（★ 只在【变化时】写 ✗ 不是每帧 ✓）"""
+        try:
+            self.post_save('INSERT OR REPLACE INTO terrain_fluid(x, z, kind, level, ts)'
+                           ' VALUES(?,?,?,?,?)',
+                           (int(gx), int(gz), int(kind), int(level), dbmod.now_ms()))
+        except Exception as _fe:
+            print('[fluid] save failed: %r' % (_fe,))
+
+    def _ter_sweep(self, now):
+        """自愈：过期的破坏全部撤销（★ 惰性 ✗ 不在每格上跑定时器 ✓）
+
+        ★ 为什么这样做：100 万格被破坏也只是字典里 100 万条
+          每次扫一遍字典 ✗ 太贵 ✓ → 所以【每秒最多扫一次】✗ 而且只扫到期的 ✓
+          （实测：破坏是低频操作 ✗ 字典通常只有几十条 ✓ 扫一遍是微秒级 ✓）
+        """
+        if not self.ter_over:
+            return
+        dead = []
+        for k, v in self.ter_over.items():
+            if now - v[1] >= self.TER_REGEN_MS:
+                dead.append(k)
+        for k in dead:
+            self.ter_over.pop(k, None)
+            self.post_save('DELETE FROM terrain_damage WHERE x=? AND z=?',
+                           (int(k[0]), int(k[1])))
+            self._ter_bc.append([k[0], k[1], -999])   # -999 = 恢复了（客户端删覆盖 ✓）
+
+    def _prop_mine(self, p, d):
+        """砍一棵树 / 砸一块石头（★ round329 ✓ 方案 §5.4）
+
+        ★ 服务端怎么知道"这一格真的长着树"：
+          worldgen.kind_at(哈希) 是纯函数 ✗ 和服务端生成用的是同一套 ✓
+          所以它自己算一遍就知道 ✗ 不用信客户端 ✓
+        """
+        try:
+            gx = int((d or {}).get('gx'))
+            gz = int((d or {}).get('gz'))
+        except Exception:
+            return
+        px, pz = termod.cell_of_world(p.x, p.z)
+        if max(abs(gx - px), abs(gz - pz)) > self.TER_REACH:
+            return
+        if abs(p.x) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(p.z) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+            return
+        # ★ 让 worldgen 算一遍"这一格是什么"（和客户端同一个哈希 ✓）
+        try:
+            kind = worldgen.kind_of_cell(gx, gz)
+        except Exception:
+            kind = None
+        if not kind:
+            return
+        # ★ round339：每种物件砍几下 + 掉什么（用户：树掉木材 / 石掉石块 / 房掉砖头）
+        if kind.startswith('tree') or kind == 'dead':
+            need, drop = 2, '木材'
+        elif kind.startswith('fence'):
+            need, drop = 2, '木材'
+        elif kind.startswith('rock') or kind == 'rubble':
+            need, drop = 3, '石块'
+        elif kind.startswith('house') or kind == 'ruin':
+            # ★ round344（用户发图指明："我说的这个围墙" = 断墙 ruin）
+            #   它之前【两边都没列进可破坏】✗ 所以完全打不动 ✓
+            need, drop = 4, '砖头'        # ★ 房子/断墙最硬（砖结构 ✓）
+        else:
+            return                         # 车 / 桶：这一轮不做
+        key = (gx, gz)
+        got = self.prop_hp.get(key, 0) + 1
+        if got < need:
+            self.prop_hp[key] = got
+            self._prop_bc.append([gx, gz, 0, got, need])
+            return
+        self.prop_hp.pop(key, None)
+        self.prop_dead.add(key)
+        # ★ round346：把【种类】也广播出去 ✗ 别人的客户端拿它倒正确的模型 ✓
+        self._prop_bc.append([gx, gz, 1, 0, 0, kind])
+        # ★ 掉建材（直接往地上放 ✗ 复用现成的 loot 表 ✓ 客户端会自动捡 ✓）
+        try:
+            _wx = (gx + 0.5) * termod.LEVEL_H
+            _wz = (gz + 0.5) * termod.LEVEL_H
+            self.loot_seq += 1
+            self.loot[str(self.loot_seq)] = {
+                'x': _wx, 'z': _wz, 'ttl': drops.DROP_TTL,
+                # ★ round340（用户："这个也有做掉落的随机品阶吗"）
+                #   原来固定 0 阶 ✗ 现在随机 0~2 ✗ 10% 出 3 阶（稀有一点 ✓）
+                'item': {'name': drop,
+                         'tier': (3 if random.random() < 0.10 else random.randint(0, 2)),
+                         'kind': 'material'}}
+            for _p4 in self.players.values():
+                _dx4 = _wx - _p4.x
+                _dz4 = _wz - _p4.z
+                if _dx4 * _dx4 + _dz4 * _dz4 <= 900:
+                    self._add_pend(_p4.cid, 'notice',
+                                   {'text': '掉落：%s 走过去自动捡 ✓' % drop})
+        except Exception as _de:
+            print('[prop] drop failed: %r' % (_de,))
+
+    def _prop_flush(self, now):
+        if not self._prop_bc:
+            return
+        batch = self._prop_bc
+        self._prop_bc = []
+        for p in self.players.values():
+            near = []
+            for c in batch:
+                ddx = c[0] * termod.LEVEL_H - p.x
+                ddz = c[1] * termod.LEVEL_H - p.z
+                if ddx * ddx + ddz * ddz <= 3600:
+                    near.append(c)
+            if near:
+                try:
+                    self._send_cid(p.cid, P.pack('propedit', cells=near))
+                except Exception:
+                    pass
+
+    def _ter_mine(self, p, d):
+        """打一格地形（★ 服务端权威 ✗ 客户端只是"请求"✓）"""
+        try:
+            gx = int((d or {}).get('gx'))
+            gz = int((d or {}).get('gz'))
+        except Exception:
+            return
+        # ① 够不够得着（防作弊：不能隔半个地图拆地形 ✓）
+        px, pz = termod.cell_of_world(p.x, p.z)
+        if max(abs(gx - px), abs(gz - pz)) > self.TER_REACH:
+            return
+        # ② 安全区不许拆
+        if abs(p.x) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(p.z) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+            return
+        key = (gx, gz)
+        cur = self.ter_h_at(gx, gz)
+        # ★ 用户："可以往下破坏，但是只能破坏一层"（2026-10-17）
+        #   往下最多挖到 −1（一个坑 ✓）✗ 再挖就到底了 ✓
+        if cur <= -1.0:
+            return
+        mat = termod.material(gx, gz)
+        need = self.TER_HARD.get(mat, 1)
+        got = self.ter_hp.get(key, 0) + 1
+        if got < need:
+            self.ter_hp[key] = got
+            # ★ 广播裂纹进度（方案 §5.6 第③层：让玩家看得出还要几刀 ✓）
+            self._ter_bc.append([gx, gz, None, got, need])
+            return
+        # ③ 碎了：高度 −1（用户：往下只能破坏一层 ✓ 从 0 到 −1 就到底）
+        self.ter_hp.pop(key, None)
+        nh = cur - 1.0
+        if nh < -1.0:
+            nh = -1.0
+        _ts = dbmod.now_ms()
+        self.ter_over[key] = [nh, _ts]
+        # ★ 落库（只存被打过的格子 ✗ 平时这张表是空的 ✓）
+        self.post_save('INSERT OR REPLACE INTO terrain_damage(x, z, h, ts)'
+                       ' VALUES(?,?,?,?)', (int(gx), int(gz), float(nh), int(_ts)))
+        # ★★★ round319 修的真 bug（用户："水和岩浆都不会流动"）★★★
+        #   round321：改成"挖空之后看四邻有没有水 ✗ 有就灌一格" ✓
+        self.ffill_around(gx, gz)
+        # ★ 广播给附近的人（★ 用 _evt_near ✗ 和现有的特效/音效同一套 ✓）
+        self._ter_bc.append([gx, gz, nh])
+        # ★ 掉东西（P1 先不掉 ✗ 等背包/掉落接进来 ✓ 方案 §5.2 写着 ✓）
+        self._send_cid(p.cid, P.pack('notice', text='这一格碎了（%s）' % mat))
+
+    def _flux(self):
+        """把 fluid_ov 里"和生成值不同"的格子整理成要广播的样子"""
+        return [[k[0], k[1], v[0], v[1]] for k, v in self.fluid_ov.items()
+                if v[1] >= 0 or v[0]]
+
+    def _fluid_flush(self, now):
+        """把流体变化发给附近的人（★ 一秒最多 4 次 ✗ 流体不用每帧同步 ✓）
+
+        ★ 为什么不每帧发：水的流动是"慢慢铺"的 ✗ 每帧发一次的话
+          每秒 30 条 ✗ 手机上真没必要 ✓ 4 次看起来已经连续了 ✓
+        """
+        self._fl_acc = getattr(self, '_fl_acc', 0.0) + TICK_DT
+        if self._fl_acc < 0.25:
+            return
+        self._fl_acc = 0.0
+        if not self.fluid_ov:
+            return
+        cells = self._flux()
+        if not cells:
+            return
+        for p in self.players.values():
+            try:
+                self._send_cid(p.cid, P.pack('fluedit', cells=cells))
+            except Exception:
+                pass
+
+    def _ter_flush(self, now):
+        """把本 tick 的破坏广播出去（★ 一秒最多一次 ✗ 别刷屏 ✓）"""
+        if not self._ter_bc:
+            return
+        _ = now
+        batch = self._ter_bc
+        self._ter_bc = []
+        # ★ round319（用户："我破坏方块为什么离得远的玩家也能听到"）
+        #   根因：这里【发给了所有人】✗ 客户端收到就播破坏音 ✓
+        #   修：只发给【附近】的人（方案 §13 兴趣管理 ✓）
+        #   ★ 为什么按 60 格：比一个画面略大 ✓ 保证画面里的人都收得到 ✓
+        for p in self.players.values():
+            near = []
+            for c in batch:
+                ddx = c[0] * termod.LEVEL_H - p.x
+                ddz = c[1] * termod.LEVEL_H - p.z
+                if ddx * ddx + ddz * ddz <= 3600:      # 60 格
+                    near.append(c)
+            if not near:
+                continue
+            try:
+                self._send_cid(p.cid, P.pack('teredit', cells=near))
+            except Exception:
+                pass
+
+    # ============================================================ 僵尸（P2 第一刀）
+
+    def _arrow_tick(self, dt):
+        """箭的推进与命中（第 69 轮 ✓ 只在 tick 线程跑）
+
+        ★ 命中判定用【线段】扫过（起点 → 终点）✗ 不是看终点一个点
+          箭一 tick 走 26×0.033 = 0.86 米，僵尸半径 0.5 米
+          只看终点的话高速箭会【穿过】僵尸 ✗（实测过：打不中 ✓）
+        """
+        if not self.arrows:
+            return
+        step = ARROW_SPEED * dt
+        hr2 = ARROW_HIT_R * ARROW_HIT_R
+        for a in list(self.arrows.values()):
+            x0, z0 = a['x'], a['z']
+            a['x'] = x0 + a['dx'] * step
+            a['z'] = z0 + a['dz'] * step
+            a['life'] -= dt
+            hit = None
+            for m in self.mobs.values():
+                if m.hp <= 0:
+                    continue
+                # 点到线段的距离（箭这一段轨迹 ✓）
+                vx, vz = a['x'] - x0, a['z'] - z0
+                wx, wz = m.x - x0, m.z - z0
+                L2 = vx * vx + vz * vz
+                u = 0.0 if L2 <= 1e-9 else max(0.0, min(1.0, (wx * vx + wz * vz) / L2))
+                cx, cz = x0 + vx * u, z0 + vz * u
+                if (m.x - cx) ** 2 + (m.z - cz) ** 2 <= hr2:
+                    hit = m
+                    break
+            # ★★★ round407（交接文档第四节 ③）：投掷物 / 箭也要打到玩家 ★★★
+            #   病根：这里原来【只遍历 self.mobs】✗ 玩家站在箭前面完全不掉血 ✓
+            #   ★ 匕首的飞刀和弓的箭共用这个函数 → 两边一起生效 ✓
+            #   ★ 怪的优先级不变（上面先判 ✓ 没打到怪才判人 ✓）
+            #   ★ 别打自己 ✗ 别打 PvP 关着的 / 队友 / 安全区里的人 ✓（_pvp_ok 同一套）
+            hitp = None
+            if hit is None:
+                shooter0 = self.players.get(a['by'])
+                for q in self.players.values():
+                    if q.cid == a['by'] or int(q.hp or 0) <= 0:
+                        continue
+                    if shooter0 is None or not self._pvp_ok(shooter0, q)[0]:
+                        continue
+                    vx, vz = a['x'] - x0, a['z'] - z0
+                    wx, wz = q.x - x0, q.z - z0
+                    L2 = vx * vx + vz * vz
+                    u = 0.0 if L2 <= 1e-9 else max(0.0, min(1.0, (wx * vx + wz * vz) / L2))
+                    cx, cz = x0 + vx * u, z0 + vz * u
+                    if (q.x - cx) ** 2 + (q.z - cz) ** 2 <= hr2:
+                        hitp = q
+                        break
+            if hitp is not None:
+                _q = hitp
+                shooter0 = self.players.get(a['by'])
+                dv = int(a['dmg'])
+                dv = self._on_player_hurt(_q, dv, shooter0)
+                if dv <= 0:
+                    self.arrows.pop(str(a['id']), None)
+                    continue
+                _q.hp = max(0, int(_q.hp) - dv)
+                _h_ar = self._lifesteal(shooter0, dv, _q.x, _q.z) if shooter0 else 0
+                self._add_pend(_q.cid, 'hurts', {'dmg': dv, 'x': round(_q.x, 2),
+                                                 'z': round(_q.z, 2),
+                                                 'by': (shooter0.name if shooter0 else '?'),
+                                                 'pvp': 1})
+                if shooter0 is not None:
+                    self._add_pend(shooter0.cid, 'mhits',
+                                   {'mid': 'p:' + str(_q.cid), 'dmg': dv,
+                                    'crit': bool(a['crit']), 'arrow': True,
+                                    'heal': _h_ar,
+                                    'x': round(_q.x, 2), 'z': round(_q.z, 2)})
+                    self._sk_b_attack_hit(shooter0, a.get('seq'))   # ★ 命中才掷被动
+                if int(_q.hp) <= 0 and shooter0 is not None:
+                    self._pvp_killed(shooter0, _q)
+                self.arrows.pop(str(a['id']), None)
+                continue
+            if hit is not None:
+                shooter = self.players.get(a['by'])
+                dv = int(a['dmg'])
+                if shooter is not None:
+                    dv = self._mob_defense(shooter, hit, dv, True)
+                    if dv <= 0:
+                        self.arrows.pop(str(a['id']), None)
+                        continue
+                self._record_mob_damage(hit, shooter, dv)
+                hit.hp -= dv
+                if shooter is not None:
+                    self._report_hit(shooter, hit.mid, dv, a['crit'], hit.x, hit.z,
+                                     {'arrow': True})
+                    self._sk_b_attack_hit(shooter, a.get('seq'))   # ★ 命中才掷被动
+                else:
+                    self._add_pend(None, 'mhits',
+                                   {'mid': hit.mid, 'dmg': dv, 'crit': bool(a['crit']),
+                                    'arrow': True,
+                                    'x': round(hit.x, 2), 'z': round(hit.z, 2)})
+                if hit.hp <= 0:
+                    hit.hp = 0
+                    if shooter is not None:
+                        self._mob_died(shooter, hit)
+                self.arrows.pop(a['id'] and str(a['id']), None)
+                continue
+            if a['life'] <= 0:
+                self.arrows.pop(str(a['id']), None)
+
+    def _aoe_players(self, p, x, z, radius, dmg, push=None, cone=None, src=None,
+                     skip=None, is_skill=False):
+        """范围伤害/控制也要作用到玩家身上（★ round406 / round407）
+
+        ★ push = 击退距离（米）✗ None = 只伤害不推 ✓
+        ★ 玩家位置是客户端权威 ✗ 所以【推】只能发事件让客户端自己执行 ✓
+        ★ cone = (朝向, cos 下限) ✗ None = 圆形（旋击 ✓）
+                 给了就只打正前方锥形里的人（横扫那条直线 ✓ round407）
+                 ★ 为什么加参数而不是在横扫分支里另写一遍：
+                   玩家受伤/击退/判死/发 hurts 这些"最后一公里"必须只有一份 ✓
+                   （上一轮的教训：同一个形状写两遍，改一处漏一处 ✓）
+        ★ p 允许是 None（"落地砸地"这种没有具体施法者的伤害 ✓ round407）
+        ★ skip = 不打的那个 cid（★ round408：这次挥砍的【主目标】已经吃过 dv 了 ✓
+                 打怪那边就是 `o is m` 那句 ✓ 玩家这边靠这个 cid 排除 ✓
+                 不排除的话：长棍打中的那个人会吃"直击 + 横扫"两份 ✓）
+        ★ 打不打得动某个人，一律走 _pvp_ok（开关/队友/安全区/等级差 ✓）
+        """
+        r2 = radius * radius
+        _tot = 0
+        _sx = _sz = 0.0
+        _cmin = -1.0
+        if cone:
+            _cy, _cmin = cone
+            _sx, _sz = math.sin(_cy), math.cos(_cy)
+        # ★★ round574 修的真 bug（用户："技能攻击不到其他玩家"）★★
+        #   病根：调用方传的是 src='skill'（一个字符串）✗
+        #         而这里把它当【攻击者对象】喂给 _pvp_ok ✓
+        #         → _pvp_ok 里 a_.role 直接 AttributeError ✓
+        #         → 被 _skill_damage 外层的 except 吞掉 → 玩家一滴血都不掉 ✓
+        #   修：src 必须是"有 role 的玩家对象"才用 ✗ 否则回退到施法者 p ✓
+        _src = src if (src is not None and hasattr(src, 'role')) else p
+        _by = getattr(p, 'name', None) or '落地'
+        for q in self.players.values():
+            if p is not None and q is p:
+                continue
+            if skip is not None and q.cid == skip:
+                continue
+            if int(q.hp or 0) <= 0:
+                continue
+            _dx = q.x - x
+            _dz = q.z - z
+            _ln2 = _dx * _dx + _dz * _dz
+            if _ln2 > r2:
+                continue
+            if cone:
+                _ln = math.sqrt(_ln2)
+                if _ln < 0.01:
+                    continue              # ★ 正好站在脚下不算"正前方"✓
+                if (_dx * _sx + _dz * _sz) / _ln < _cmin:
+                    continue
+            # ★ PvP 门禁：和 _pvp_hit 同一套规则（不然关了 PvP 也能被斧头溅射打死 ✓）
+            if _src is not None:
+                if not self._pvp_ok(_src, q)[0]:
+                    continue
+            elif not self._pvp_on(q):
+                continue
+            d = max(1, int(dmg))
+            # ★ round580（C6 技能韧性）：只减【技能】伤害 ✓
+            if is_skill:
+                d = max(1, int(round(d * (1.0 - self._sk_val(q, 'skillten')))))
+            d = self._on_player_hurt(
+                q, d, _src if hasattr(_src, 'cid') else None, is_skill)
+            _was_q = int(q.hp or 0) > 0
+            q.hp = max(0, int(q.hp) - d)
+            _tot += d
+            # ★ round586：技能/AOE 打玩家也吃全能吸血
+            self._lifesteal(p, d, q.x, q.z, show=True)
+            if _was_q and int(q.hp or 0) <= 0:
+                self._tank_reset(q)      # ★ AOE 击杀也要清空坦克层数
+            self._add_pend(q.cid, 'hurts', {'dmg': d, 'x': round(x, 2),
+                                            'z': round(z, 2), 'by': _by, 'pvp': 1,
+                                            'sk': 1 if is_skill else 0})
+            if push and p is not None:
+                self._kb_player(p, q, push)
+            if int(q.hp) <= 0:
+                q.hp = 0
+                self._send_cid(q.cid, P.pack('dead', by=_by))
+                # ★ round574：AOE/技能击杀也要算 PvP 击杀（之前只发 dead ✓ 不结算）
+                if _src is not None:
+                    try:
+                        self._pvp_killed(_src, q)
+                    except Exception as e:
+                        print('[pvp] aoe 击杀结算失败：%r' % (e,))
+
+        # ★ round575：AOE / 技能也能打到【分身】（它现在有血 ✓）
+        for _c in list(self.clones.values()):
+            if int(_c.get('hp') or 0) <= 0:
+                continue
+            _co = self.players.get(_c['owner'])
+            if _co is None:
+                continue
+            if abs(_c['x']) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(_c['z']) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+                continue
+            if _src is not None:
+                if not self._pvp_ok(_src, _co)[0]:
+                    continue
+            elif not self._pvp_on(_co):
+                continue
+            _dx = _c['x'] - x
+            _dz = _c['z'] - z
+            _ln2 = _dx * _dx + _dz * _dz
+            if _ln2 > r2:
+                continue
+            if cone:
+                _ln = math.sqrt(_ln2)
+                if _ln < 0.01:
+                    continue
+                if (_dx * _sx + _dz * _sz) / _ln < _cmin:
+                    continue
+            _cdmg = max(1, int(dmg))
+            _tot += _cdmg
+            self._clone_damage(_c, _cdmg,
+                               _src if hasattr(_src, 'cid') else None, False)
+        return _tot
+
+    def _kb_player(self, p, q, dist):
+        """把玩家沿"攻击者 → 他"的方向推开 dist 米（★ round409）
+
+        ★ 玩家位置是客户端权威 ✗ 服务端推坐标下一帧就被覆盖 ✓
+          → 只能发一条 kb 事件让客户端自己走（moveWithCollision ✓ 撞墙不穿 ✓）
+        ★ 从 _aoe_players 里抽出来的 ✗ 因为现在【直击的主目标】也要被推 ✓
+          （用户："长棍在打的那个目标不击退" → 主目标也要推 ✓）
+        """
+        dx = q.x - p.x
+        dz = q.z - p.z
+        ln = (dx * dx + dz * dz) ** 0.5
+        if ln < 0.01:
+            dx, dz, ln = math.sin(p.yaw), math.cos(p.yaw), 1.0
+        try:
+            self._send_cid(q.cid, P.pack('fx', kind='kb',
+                                         dx=round(dx / ln * dist, 2),
+                                         dz=round(dz / ln * dist, 2)))
+        except Exception:
+            pass
+
+    def _omni_pct(self, p):
+        """★ round586：全能吸血 = C3 被动 + 武器/防具【全能吸血】词条"""
+        try:
+            if getattr(p, 'omniC', None) is not None:
+                return float(p.omniC)
+        except Exception:
+            pass
+        try:
+            _v = (float(self._sk_val(p, 'omnivamp') or 0.0)
+                  + float(self._aff(p, 'vamp_all') or 0.0) / 100.0
+                  + float(self._aff(p, 'lifesteal') or 0.0) / 100.0)
+            try:
+                p.omniC = _v
+            except Exception:
+                pass
+            return _v
+        except Exception:
+            return 0.0
+
+    def _lifesteal(self, p, dmg, x=None, z=None, show=False):
+        """★ round586：只要造成伤害就按全能吸血回血（0 不显示 +0）"""
+        try:
+            if p is None or int(dmg) <= 0:
+                return 0
+            pct = self._omni_pct(p)
+            if pct <= 0:
+                return 0
+            heal = int(round(float(dmg) * pct))
+            if heal <= 0:
+                return 0
+            p.hp = min(self._hp_max(p), int(p.hp or 0) + heal)
+            if show:
+                self._send_cid(p.cid, P.pack('fx', kind='heal', v=heal,
+                                             x=round(p.x, 2), z=round(p.z, 2)))
+            return heal
+        except Exception:
+            return 0
+
+    def _report_hit(self, p, mid, dmg, crit, x, z, extra=None):
+        """打中反馈：给我 mhits + 广播给周围的人（★ round402）
+
+        ★ 为什么要有这个函数：原来【只有主近战】那一处广播了伤害 ✓
+          箭 / 溅射 / 横扫 / 旋击 / 延迟伤害 都只发给了攻击者 ✗
+          → 别人看不到"我在打多少"✓
+        ★ 统一成一个入口 ✗ 以后再加伤害来源就不会漏 ✓
+        """
+        item = {'mid': mid, 'dmg': int(dmg), 'crit': bool(crit),
+                'x': round(x, 2), 'z': round(z, 2)}
+        if extra:
+            item.update(extra)
+        if p is not None:
+            item['heal'] = self._lifesteal(p, dmg, x, z)
+        # ★ round583：附近的玩家也能听到命中（按距离衰减）
+        self._snd_near(x, z, 'crit' if crit else 'hit', 0.8,
+                       exclude=(p.cid if p is not None else None))
+        if p is not None:
+            self._add_pend(p.cid, 'mhits', item)
+        if p is not None:
+            _skf = 1 if (extra and extra.get('sk')) else 0
+            self._fx_broadcast(p, {'kind': 'dmg', 'v': int(dmg),
+                                   'crit': 1 if crit else 0, 'sk': _skf,
+                                   'x': round(x, 2), 'z': round(z, 2),
+                                   '_skip': p.cid})
+        else:
+            # 没有攻击者（比如怪自己触发）→ 广播给所有人（不 skip）
+            _skf = 1 if (extra and extra.get('sk')) else 0
+            for _q in self.players.values():
+                self._send_cid(_q.cid, P.pack('fx', kind='dmg', v=int(dmg),
+                                              crit=1 if crit else 0, sk=_skf,
+                                              x=round(x, 2), z=round(z, 2)))
+
+    def _fx_broadcast(self, p, payload):
+        """把特效事件广播给【周围】的人（★ round398：不然别人看不到连砍/转圈/长棍变大）
+
+        ★ 40 米够了 ✗ 比视野略大 ✓ 再远也看不清 ✓
+        """
+        payload = dict(payload)
+        # ★★★ round400 修的真 bug（用户："都没有"）★★★
+        #   ★ 原来发的是 p.cid（连接 id）✗
+        #     而客户端认玩家用的是【role_id】（NET.others 的 key ✓）
+        #     → 永远匹配不到 → 什么都不播 ✓
+        payload['by'] = p.role_id
+        v2 = 40.0 * 40.0
+        _skip = payload.pop('_skip', None)
+        for _q in self.players.values():
+            if _skip and _q.cid == _skip:
+                continue                 # ★ 攻击者自己有 mhits 了 ✗ 别重复弹 ✓
+            if (_q.x - p.x) ** 2 + (_q.z - p.z) ** 2 <= v2:
+                try:
+                    self._send_cid(_q.cid, P.pack('fx', **payload))
+                except Exception:
+                    pass
+
+    def _fly_tick(self):
+        """被挑飞的怪：1.5 秒后落地 ✗ 落地砸出范围伤害（round404）"""
+        for m in list(self.mobs.values()):
+            if getattr(m, 'flyT', 0) <= 0:
+                continue
+            m.flyT -= TICK_DT
+            if m.flyT > 0:
+                continue
+            # ★ 落地：周围 2 米内所有怪吃一份伤害（包括它自己 ✓）
+            _d = int(getattr(m, 'latDmg', 0) or 10)
+            _r2 = 2.0 * 2.0
+            for o in list(self.mobs.values()):
+                if o.hp <= 0:
+                    continue
+                if (o.x - m.x) ** 2 + (o.z - m.z) ** 2 > _r2:
+                    continue
+                o.hp -= _d
+                self._report_hit(None, o.mid, _d, False, o.x, o.z, {'splash': True})
+                if o.hp <= 0:
+                    o.hp = 0
+            # ★ 广播落地（客户端放落地音效 ✓）
+            for _q in self.players.values():
+                if (_q.x - m.x) ** 2 + (_q.z - m.z) ** 2 <= 1600:
+                    try:
+                        self._send_cid(_q.cid, P.pack('fx', kind='land',
+                                                      x=round(m.x, 2), z=round(m.z, 2)))
+                    except Exception:
+                        pass
+            m.flyT = 0.0
+        # ★★★ round407（交接文档第四节 ④）：被挑飞的【玩家】落地 ★★★
+        #   ★ 和上面那段怪完全同一个规则：到点 → 砸 2 米范围伤害 + 播落地特效 ✓
+        #   ★ 落点用【受害者最后上报的坐标】✗ 服务端本来就没有更准的位置 ✓
+        #     （升空期间客户端锁了移动 → 落点 ≈ 起跳点 ✓）
+        #   ★ 伤害走 _aoe_players（p=None = 没有具体施法者 ✓）
+        #     src = 原攻击者 ✗ 所以仍然守 PvP 开关 / 队友 / 安全区 ✓
+        if getattr(self, '_flyq', None):
+            _now = now_s()
+            _keep = []
+            for (_due, _ac, _vc, _dmg) in self._flyq:
+                if _now < _due:
+                    _keep.append((_due, _ac, _vc, _dmg))
+                    continue
+                _victim = self.players.get(_vc)
+                _atk = self.players.get(_ac)
+                if _victim is None:
+                    continue                      # 半路下线了 ✓ 不砸了
+                _vx, _vz = float(_victim.x), float(_victim.z)
+                self._aoe_players(None, _vx, _vz, FLY_LAND_R, _dmg, src=_atk)
+                # ★ 落地特效（音效 + 尘土 —— 和怪的 land 同一个 kind ✓）
+                for _q in self.players.values():
+                    if (_q.x - _vx) ** 2 + (_q.z - _vz) ** 2 <= 1600:
+                        try:
+                            self._send_cid(_q.cid, P.pack('fx', kind='land',
+                                                          x=round(_vx, 2),
+                                                          z=round(_vz, 2)))
+                        except Exception:
+                            pass
+            self._flyq = _keep
+
+    def _later_tick(self):
+        """到点结算的延迟【伤害】和延迟【发射】（round382 / 391 ✓）
+
+        ★★ 自测踩到（用户："飞刀没有了"）★★
+           这里原来是 `if not self._later: return` ✗
+           而【投掷队列】的处理写在这个 return 之后 ✓
+           → 只要没有待结算的伤害 ✗ 投掷就永远不会被发射 ✓
+           ★ 教训：一个函数管两件事时，早退条件必须同时看两个队列 ✓
+        """
+        if not self._later and not self._later_arrow and not self._later_pl:
+            return
+        _now = now_s()
+        _keep = []
+        for _it in self._later:
+            due, cid, mid, dmg = _it[0], _it[1], _it[2], _it[3]
+            opt = _it[4] if len(_it) > 4 else None
+            if _now < due:
+                _keep.append(_it)
+                continue
+            m = self.mobs.get(mid)
+            if not m or m.hp <= 0:
+                continue
+            _p0 = self.players.get(cid)
+            dmg = self._mob_defense(_p0, m, dmg, False)
+            if dmg <= 0:
+                continue
+            self._record_mob_damage(m, _p0, dmg)
+            m.hp -= dmg
+            m.freezeT = 0.0          # ★ round584：受伤破冰
+            self._report_hit(self.players.get(cid), mid, dmg, False, m.x, m.z,
+                             {'back': False, 'mb': None, 'heal': 0})
+            # ★ round395：连砍的"前进 + 击退"
+            if opt:
+                p2 = self.players.get(cid)
+                if p2:
+                    p2.x += math.sin(p2.yaw) * opt.get('step', 0)
+                    p2.z += math.cos(p2.yaw) * opt.get('step', 0)
+                m.x += math.sin(p2.yaw if p2 else 0) * opt.get('push', 0)
+                m.z += math.cos(p2.yaw if p2 else 0) * opt.get('push', 0)
+            if m.hp <= 0:
+                m.hp = 0
+                p2 = self.players.get(cid)
+                if p2:
+                    self._mob_died(p2, m)
+        self._later = _keep
+        # ★★★ round408：到点结算【打玩家】的延迟伤害（连刺第二段 / 连砍后续刀）★★★
+        #   病根（用户实测）：直接打玩家只走 _pvp_hit ✗ 连刺/连砍从来没触发过 ✓
+        #   现在压在这个队列里 ✗ 到点由这里结算 ✓
+        #   ★ 结算前【重新】过一遍 _pvp_ok：这 0.18 秒里对方可能关了 PvP /
+        #     进了安全区 / 被打死 / 下线 ✓（和"打怪那条会先查怪还活着"同一个意思 ✓）
+        if getattr(self, '_later_pl', None):
+            _kp = []
+            for (_dp, _acp, _vcp, _dmp) in self._later_pl:
+                if _now < _dp:
+                    _kp.append((_dp, _acp, _vcp, _dmp))
+                    continue
+                _a3 = self.players.get(_acp)
+                _v3 = self.players.get(_vcp)
+                if _a3 is None or _v3 is None or int(_v3.hp or 0) <= 0:
+                    continue
+                if not self._pvp_ok(_a3, _v3)[0]:
+                    continue
+                _dm3 = max(1, int(_dmp))
+                _v3.hp = max(0, int(_v3.hp) - _dm3)
+                self._add_pend(_v3.cid, 'hurts', {'dmg': _dm3,
+                                                  'x': round(_a3.x, 2),
+                                                  'z': round(_a3.z, 2),
+                                                  'by': _a3.name, 'pvp': 1})
+                self._add_pend(_a3.cid, 'mhits', {'mid': 'p:' + str(_v3.cid),
+                                                  'dmg': _dm3, 'crit': False,
+                                                  'x': round(_v3.x, 2),
+                                                  'z': round(_v3.z, 2)})
+                self._fx_broadcast(_a3, {'kind': 'dmg', 'v': _dm3, 'crit': 0,
+                                         'x': round(_v3.x, 2), 'z': round(_v3.z, 2),
+                                         '_skip': _a3.cid})
+                if int(_v3.hp) <= 0:
+                    _v3.hp = 0
+                    self._pvp_killed(_a3, _v3)
+            self._later_pl = _kp
+        # ★ 到点发射投掷物（round391 ✓）
+        if getattr(self, '_later_arrow', None):
+            _ka = []
+            for (_due2, _cid2, _dmg2, _crit2, _isdag, _seq2) in self._later_arrow:
+                if _now < _due2:
+                    _ka.append((_due2, _cid2, _dmg2, _crit2, _isdag, _seq2))
+                    continue
+                pp = self.players.get(_cid2)
+                if not pp or len(self.arrows) >= ARROW_MAX:
+                    continue
+                self._arrow_id += 1
+                self.arrows[str(self._arrow_id)] = {
+                    'id': self._arrow_id,
+                    'x': pp.x, 'z': pp.z, 'yaw': pp.yaw,
+                    'dx': math.sin(pp.yaw), 'dz': math.cos(pp.yaw),
+                    'dmg': _dmg2, 'crit': bool(_crit2),
+                    'kind': 'dagger' if _isdag else 'arrow',
+                    'life': (14.0 if _isdag else 8.0) / ARROW_SPEED,
+                    'by': pp.cid,
+                    'seq': _seq2,
+                }
+            self._later_arrow = _ka
+
+    def _mob_tick(self, dt):
+        """刷怪 / 回收 / 追击 / 咬人 —— ★ 只在 tick 线程里跑"""
+        if not self.players:
+            # 普通怪没人就清掉；精英/Boss 留着自己的消失宽限
+            for _mid0, _m0 in list(self.mobs.items()):
+                if int(getattr(_m0, 'rank', 0) or 0) == 0:
+                    self.mobs.pop(_mid0, None)
+            if not self.mobs:
+                return
+        ps = list(self.players.values())
+
+        # ---- ① 刷怪（节流 + 上限）----
+        self._spawn_acc += dt
+        if ps and self._spawn_acc >= self.spawn_interval:
+            self._spawn_acc = 0.0
+            for _ in range(mobs.SPAWN_PER_TRY):
+                _normal_n = sum(1 for _mm in self.mobs.values()
+                                if int(getattr(_mm, 'rank', 0) or 0) == 0)
+                if _normal_n >= self.mob_cap and not self._evict_far():
+                    break
+                self._spawn_one(ps)
+
+        # ---- ② 每只僵尸：找最近的【活着的】玩家 → 追 / 咬；没目标就漫无目的地散开 ----
+        #   ★★ 死掉的玩家不算目标（第 37 轮，用户反馈"玩家死后僵尸还在攻击"）★★
+        #      hp<=0 就当他不存在 → 僵尸立刻失去目标，转去漫游散开 ✓
+        #      但"消失计时"仍然用【所有】玩家算距离（尸体旁边也算有人，怪不该凭空消失 ✓）
+        # 第 174 轮（用户）：★ 在安全区里的玩家【不算目标】
+        #   效果就是"玩家一进安全区，僵尸立刻丢失目标"（②）
+        #   ★ 只影响【选目标】✗ "消失计时"那边仍然用所有玩家算距离 ✓
+        #     （不然站在安全区里的人旁边，怪会凭空消失 ✓）
+        live = [q for q in ps
+                if int(q.hp or 0) > 0
+                and not (abs(q.x) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(q.z) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF))]
+        # ★ round575：分身也算僵尸目标（用户："分身 AI 可以被攻击"）
+        #   ★ 用一个轻量对象喂给现有的"找最近目标"逻辑 ✗ 不改那段 ✓
+        #   ★ 安全区里的分身不算（和玩家同一条规则 ✓）
+        for _c in getattr(self, 'clones', {}).values():
+            if int(_c.get('hp') or 0) <= 0:
+                continue
+            if abs(_c['x']) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(_c['z']) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+                continue
+            _co = self.players.get(_c.get('owner'))
+            if _co is None or int(getattr(_co, 'hp', 0) or 0) <= 0:
+                continue
+            live.append(types.SimpleNamespace(
+                clone=True, id=_c['id'], cid='clone:' + _c['id'],
+                x=_c['x'], z=_c['z'], hp=_c['hp'], owner=_co))
+        away2 = mobs.AWAY_DIST * mobs.AWAY_DIST
+        agg2 = mobs.AGGRO * mobs.AGGRO
+        for m in list(self.mobs.values()):
+            # ★★★ round322（用户："僵尸进岩浆不会掉血，僵尸也要掉血"）★★★
+            #   地火对僵尸一视同仁 ✗ 每 0.5 秒 5 点（和玩家一个量）✓
+            #   ★ 为什么要它：僵尸不会躲地火 ✗ 走进去就该被烧死 ✓
+            #     这是"引怪入火"这个战术能成立的前提 ✓
+            if int(getattr(m, 'hp', 0)) > 0:
+                _mcx, _mcz = termod.cell_of_world(m.x, m.z)
+                _ov = self.fluid_ov.get((_mcx, _mcz))
+                _fk = _ov[0] if _ov is not None else termod.fluid_of(_mcx, _mcz)[0]
+                if _fk == 3:
+                    m.lavaT = getattr(m, 'lavaT', 0.0) - dt
+                    if m.lavaT <= 0:
+                        m.lavaT = 0.5
+                        m.hp = int(m.hp) - 5
+                        # ★ round323（用户："僵尸进岩浆也要飘字和受伤音效"）
+                        #   走 mhits 这条现成的路 ✓ 客户端会弹伤害数字 + 出打击音效 ✓
+                        #   只发给【附近】的人（30 格）✗ 远处的人不用知道 ✓
+                        for _p3 in self.players.values():
+                            _dx3 = m.x - _p3.x
+                            _dz3 = m.z - _p3.z
+                            if _dx3 * _dx3 + _dz3 * _dz3 <= 900:
+                                # ★ round324（用户："僵尸进岩浆受伤，为什么我的屏幕也会抖动"）
+                                #   根因：mhits 默认是"我砍中了"✗ 会触发震屏 + 顿帧 ✓
+                                #   修：加 env=1 标记 ✗ 客户端看到就不震屏（只飘字+音效）✓
+                                self._add_pend(_p3.cid, 'mhits',
+                                               {'dmg': 5, 'x': round(m.x, 2),
+                                                'z': round(m.z, 2), 'mid': m.mid,
+                                                'env': 1})
+            # ★ 第 59 轮：武器机制的状态衰减（先衰减再判断行为 ✓）
+            if m.stunImmune > 0:
+                m.stunImmune = max(0.0, m.stunImmune - dt)
+            if m.knockImmune > 0:
+                m.knockImmune = max(0.0, m.knockImmune - dt)
+            if m.bleedT > 0:
+                # 流血：每秒扣一次（按 dt 连续扣 ✓ 结算到整数就用累加器 ✗ 太绕 → 直接浮点扣 ✓）
+                m.bleedT = max(0.0, m.bleedT - dt)
+                m.hp -= m.bleedDmg * dt
+                if m.hp <= 0:
+                    m.hp = 0
+                    self._mob_died(m.bleedFrom or ps[0] if ps else None, m)
+                    continue
+            if m.hp <= 0:
+                m.deadT += dt
+                if m.deadT >= mobs.MOB_KEEP_DEAD:
+                    self.mobs.pop(m.mid, None)
+                continue
+            # ★ round581：冰封（不能移动/攻击）/ 减速
+            if float(getattr(m, 'freezeT', 0) or 0) > 0:
+                m.freezeT = max(0.0, float(m.freezeT) - dt)
+                m.windT = 0.0
+                m.atkAnim = -1.0
+                continue
+            if float(getattr(m, 'slowT', 0) or 0) > 0:
+                m.slowT = max(0.0, float(m.slowT) - dt)
+                if m.slowT <= 0:
+                    m.slowMul = 1.0
+            near, nd2 = None, None
+            for q in live:
+                dx = q.x - m.x
+                dz = q.z - m.z
+                d2 = dx * dx + dz * dz
+                if nd2 is None or d2 < nd2:
+                    nd2 = d2
+                    near = q
+            # ★ 消失计时（用户要求）：离所有玩家都超过 20 米 → 开始计时；
+            #   连续 60 秒都这样 → 自然消失 ✓（有人靠近就清零 ✓）
+            allnd2 = None
+            for q in ps:
+                d2 = (q.x - m.x) ** 2 + (q.z - m.z) ** 2
+                if allnd2 is None or d2 < allnd2:
+                    allnd2 = d2
+            if allnd2 is None or allnd2 > away2:
+                m.awayT += dt
+            else:
+                m.awayT = 0.0
+            _away_lim = mobs.AWAY_GRACE
+            if int(getattr(m, 'rank', 0) or 0) > 0:
+                _rc = mob_ranks.cfg(m.rank)
+                _ar = float(_rc.get('despawn_range', mobs.AWAY_DIST))
+                _away_lim = float(_rc.get('despawn_grace', 60.0))
+                if allnd2 is None or allnd2 > _ar * _ar:
+                    pass
+                else:
+                    m.awayT = 0.0
+            if m.awayT >= _away_lim:
+                self.mobs.pop(m.mid, None)
+                continue
+            if m.atkT > 0:
+                m.atkT -= dt
+            # ★ 挥爪动画：衰减到 -1（没在攻击时必须是 -1，不然客户端会一直摆攻击姿势 ✗）
+            if m.atkAnim >= 0:
+                m.atkAnim -= dt
+                if m.atkAnim < 0:
+                    m.atkAnim = -1.0
+            if m.healCd > 0:                 # ★ 被治疗冷却（第 46 轮）—— 衰减到 0 才能再被治 ✓
+                m.healCd -= dt
+            # ★★ 第 59 轮：被锤砸【晕住】了 —— 不能动、不能咬、也不蓄力 ✓
+            #   拦在"有目标"判断之前 ✓ 晕着就是彻底停下（这才叫眩晕 ✓）
+            if m.stunT > 0:
+                m.stunT = max(0.0, m.stunT - dt)
+                m.windT = 0.0
+                continue
+            # ★ round600：精英/Boss 拴绳，不能被风筝到半张地图
+            if int(getattr(m, 'rank', 0) or 0) > 0 and not m.castT:
+                _leash = 50.0 if int(m.rank) == 1 else 80.0
+                _hx, _hz = float(getattr(m, 'homeX', m.x)), float(getattr(m, 'homeZ', m.z))
+                if (m.x - _hx) ** 2 + (m.z - _hz) ** 2 > _leash * _leash:
+                    m.yaw = math.atan2(_hx - m.x, _hz - m.z)
+                    _ls = float(m.spd) * dt
+                    self._move_mob(m, math.sin(m.yaw) * _ls, math.cos(m.yaw) * _ls)
+                    m.castPhase = ''
+                    m.castKey = ''
+                    m.castT = 0.0
+                    continue
+            if near is not None and nd2 <= agg2:
+                # ---- 有目标：先跑精英/Boss技能，再普通追击/咬 ----
+                if int(getattr(m, 'rank', 0) or 0) > 0:
+                    try:
+                        if self._mob_skill_ai(m, near, dt):
+                            continue
+                    except Exception as _se:
+                        print('[mob] skill ai failed: %r' % (_se,))
+                # ---- 有目标：追 / 咬（外卖残血时改成逃，见下）----
+                m.tgt = near.cid
+                d = math.sqrt(nd2) if nd2 > 0 else 0.0
+                # ★ 外卖骑手：残血就逃（方案 §3.3"移速最快，会逃跑"）
+                if m.kind == '外卖' and m.fleeT <= 0 and m.hp < m.mhp * mobs.FLEE_HP:
+                    m.fleeT = mobs.FLEE_TIME
+                    # ★ round348（用户："外卖僵尸逃跑时播放逃跑音效"）
+                    #   只发给 30 格内的人 ✓ 太远听不到也没意义 ✓
+                    # ★ round350（用户："旁边还有一个满血外卖僵尸，打一下就会播放一次"）
+                    #   根因：fleeT 减到 0 之后条件又成立 ✗ 每 2.5 秒重播一次 ✓
+                    #   修：一只僵尸【只播一次】（fleeSnd 标记 ✓ __slots__ 里加了 ✓）
+                    if not m.fleeSnd:
+                        m.fleeSnd = True
+                        for _pf in self.players.values():
+                            _dxf = m.x - _pf.x
+                            _dzf = m.z - _pf.z
+                            if _dxf * _dxf + _dzf * _dzf <= 900:
+                                self._add_pend(_pf.cid, 'flee', {'mid': m.mid})
+                _mspd = float(m.spd) * (float(getattr(m, 'slowMul', 1.0) or 1.0)
+                                        if float(getattr(m, 'slowT', 0) or 0) > 0 else 1.0)
+                if m.fleeT > 0:
+                    m.fleeT -= dt
+                    m.yaw = math.atan2(m.x - near.x, m.z - near.z)   # 背对着人 ✓
+                    step = _mspd * dt
+                    self._move_mob(m, math.sin(m.yaw) * step, math.cos(m.yaw) * step)
+                    continue
+                m.yaw = math.atan2(near.x - m.x, near.z - m.z)
+                # ★ round601：精英/Boss 与程序员会停在射程内发射普通远程弹
+                _rr = self._mob_ranged_range(m)
+                _contact = self._mob_contact_dist(m)
+                if _rr > 0 and d > _contact and d <= _rr:
+                    if m.atkT <= 0 and m.windT <= 0:
+                        m.windT = mobs.windup_of(m.kind)
+                        m.atkAnim = mobs.ATK_ANIM
+                    if m.windT > 0:
+                        m.windT -= dt
+                        if m.windT <= 0:
+                            m.windT = 0.0
+                            m.atkT = mobs.RECOVER
+                            self._mob_bite(m, near)
+                    continue
+                if d > _contact:
+                    step = _mspd * dt
+                    if step > d - _contact:
+                        step = max(0.0, d - _contact)
+                    self._move_mob(m, math.sin(m.yaw) * step, math.cos(m.yaw) * step)
+                    m.windT = 0.0            # ★ 走开了就取消蓄力（重新贴身要重新起手 ✓）
+                else:
+                    # ★★ 僵尸的起手（第 41 轮，方案 §5.1）★★
+                    #   用户反馈"贴近了就算直接打，应该慢一点点" ✓
+                    #   现在是：贴到身前 → 蓄力 WINDUP 秒 → 咬 → 收招 RECOVER 秒
+                    #   客户端从"开始蓄力"这一刻就抬手（atkAnim 给满）→ 有前摇可看 ✓
+                    if m.atkT <= 0 and m.windT <= 0:
+                        m.windT = mobs.windup_of(m.kind)
+                        m.atkAnim = mobs.ATK_ANIM
+                    if m.windT > 0:
+                        m.windT -= dt
+                        if m.windT <= 0:
+                            m.windT = 0.0
+                            m.atkT = mobs.RECOVER      # 咬完收招，之后才能重新起手 ✓
+                            self._mob_bite(m, near)
+            else:
+                # ---- 没目标：漫无目的地散开（用户要求）----
+                #      ★ 玩家死后没有目标时，僵尸就散开了 ✓
+                m.tgt = None
+                self._mob_wander(m, dt)
+
+        # ---- ③ 僵尸之间不要堆在一起（用户要求）----
+        self._mob_separate(dt)
+
+        # ---- ④ 职业行为（第 40 轮，方案 §3.3）----
+        self._mob_heal(dt)          # 医生给周围僵尸回血 ✓
+
+    def _mob_heal(self, dt):
+        """医生：定期把周围僵尸的血拉回来（方案 §3.3"给周围僵尸回血"）
+
+        ★ 第 46 轮重写（用户反馈"治疗效果看不出关联 + 医生一多就打不动僵尸"）：
+          ① 一只僵尸【同一个周期内只会被治疗一次】（m.healCd ✓）——
+             所以医生多只是"能同时救更多不同的僵尸"，不是"同一只被奶更多次" ✓
+             （原来是每个医生各自结算 → 线性叠加 ✗ 几个医生就能把僵尸奶成不死 ✗）
+          ② 每次治疗都记一条事件发下去 → 客户端能画出"医生 → 僵尸"的连线和数字 ✓
+             原来只在服务器内部改血量 ✗ 玩家完全看不出来谁给谁回了多少 ✗
+        ★ 只在 tick 线程跑 ✓ 量很小 ✓
+        """
+        medics = [m for m in self.mobs.values() if m.hp > 0 and m.kind == '医生']
+        if not medics:
+            return
+        r2 = mobs.HEAL_R * mobs.HEAL_R
+        for doc in medics:
+            doc.healT -= dt
+            if doc.healT > 0:
+                continue
+            doc.healT = mobs.HEAL_PERIOD * (0.85 + random.random() * 0.3)   # 别整齐划一 ✓
+            hurt = []
+            for m in self.mobs.values():
+                if m.hp <= 0 or m is doc:
+                    continue
+                if m.hp >= m.mhp * mobs.HEAL_MAX_HP:
+                    continue                    # 血还很足的不奶（别浪费 ✓）
+                if m.healCd > 0:
+                    continue                    # ★★ 关键：这只刚被治过，别的医生也插不上 ✓★
+                if (m.x - doc.x) ** 2 + (m.z - doc.z) ** 2 > r2:
+                    continue
+                hurt.append(m)
+            if not hurt:
+                continue
+            hurt.sort(key=lambda m: m.hp / float(m.mhp or 1))   # 先奶最惨的 ✓
+            for m in hurt[:mobs.HEAL_MAX_TARGETS]:
+                add = max(1, int(round(m.mhp * mobs.HEAL_PCT)))
+                before = m.hp
+                m.hp = min(m.mhp, m.hp + add)
+                real = m.hp - before
+                if real <= 0:
+                    continue
+                m.healCd = mobs.HEAL_PERIOD     # ★ 这一只下个周期前不再被任何人治 ✓
+                # ★ 治疗事件：[医生x, 医生z, 目标x, 目标z, 回了多少] → 客户端画连线+数字 ✓
+                self.heals.append([round(doc.x, 2), round(doc.z, 2),
+                                   round(m.x, 2), round(m.z, 2), real])
+
+    def _mob_blocked(self, x, z, hw):
+        """僵尸的碰撞（★ round351：只忽略【已经被砍掉】的物件 ✓）
+
+        ★★ 自测踩到两次：
+           ① 第一版没改 → 砍掉的物件还挡僵尸（用户报"僵尸过不来"）
+           ② 第二版写"这格没东西就放行" → 太宽松 ✗
+              **连站着的物件也被无视了**（用户报"我都还没砍掉就穿过去了"）
+           ★ 现在逐盒判定：
+             盒子中心 = (i*TS, j*TS) ✗ 反推格子 ✓
+             那一格在 prop_dead 里 → 跳过这个盒子（不挡 ✓）
+             否则 → 挡 ✓
+        """
+        try:
+            boxes = worldgen.solids_near(x, z, 3.0)
+        except Exception:
+            boxes = ()
+        for (sx, sz, shw, shd) in boxes:
+            if not (x + hw > sx - shw and x - hw < sx + shw and
+                    z + hw > sz - shd and z - hw < sz + shd):
+                continue
+            try:
+                i = int(round(sx / termod.LEVEL_H))
+                j = int(round(sz / termod.LEVEL_H))
+            except Exception:
+                return True
+            if (i, j) in self.prop_dead:
+                continue          # ★ 这件已经被砍掉了 → 不挡 ✓
+            return True           # ★ 站着的物件 → 照常挡 ✓
+        return False
+
+    def _move_mob(self, m, dx, dz):
+        """僵尸移动 —— ★ 会被建筑挡住（第 41 轮，用户要求"僵尸不应该穿墙"）
+
+        · 分轴尝试（和客户端 blocked() 一个思路）：能走 x 就走 x、能走 z 就走 z
+          → 贴着墙【滑】过去 ✓ 不会一头顶死在那里 ✗
+        · **工人可以穿过去** —— 用户明确说了"建筑工除外" ✓（能钻废墟抄近路，算个职业特色）
+        ★ 判定用的是【服务端自己算的】建筑（worldgen），不是客户端上传的 ✗
+          所以改包说"我这边没有墙"没用 ✓
+        """
+        # round256 fix (user: mobs must not enter the safe zone)
+        #   BUG: this safe-zone check used to live INSIDE the worker branch,
+        #        so only workers were stopped and all other kinds walked in.
+        #   FIX: check the safe zone FIRST for every kind, then split by kind.
+        _nx = m.x + dx
+        _nz = m.z + dz
+        _outside = not (abs(m.x) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(m.z) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF))
+        _would_in = (abs(_nx) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(_nz) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF))
+        if _outside and _would_in:
+            return                      # stop at the gate (do not push out - that jitters)
+        if m.kind == '工人':
+            # workers may pass through buildings (user request) and may walk OUT
+            # of the zone if they somehow got in (old save / knockback).
+            m.x, m.z = _nx, _nz
+            return
+        # ★★★ round306 修的真 bug（用户："僵尸怎么无视方块可以直接穿模了"）★★★
+        #   根因：这里原来【只查 worldgen.blocked】（也就是树/房子那些 2D 盒子）
+        #         完全没查【地形高度】✗
+        #         而第 306 轮给玩家加了地形判定（terrainStepOk）✗ 僵尸没加 ✓
+        #         → 玩家爬不上去的墙，僵尸直接走上去 ✓ 看着就是"穿模" ✓
+        #   ★ 现在僵尸和玩家【用同一套规矩】✗ 只差各自的跳跃高度 ✓
+        #     落差 ≤ STEP_JUMP(1.15) → 跳上去 ✓
+        #     更大 → 过不去 ✗ 要绕路 ✓（这就是"峭壁挡僵尸"✓）
+        #   ★ 改这个文件的时候注意：地形是【纯函数】✗ 不查库 ✓ 直接算 ✓
+        hw = mobs.MOB_BODY / 2.0
+        # ★ round316（P2 收尾）：僵尸也受地貌影响 ✓
+        #   冰原 ×1.45（它们也会滑过头 ✗ 很好笑 ✓）
+        #   沼泽 ×0.58（陷在泥里 ✓ 玩家会拿沼泽当退路 ✓ 这是玩法 ✓）
+        _bcell = termod.cell_of_world(m.x, m.z)
+        _bsp = termod.BIOME_SPEED.get(termod.biome(_bcell[0], _bcell[1]), 1.0)
+        if _bsp != 1.0:
+            dx *= _bsp
+            dz *= _bsp
+        _cur = termod.height(*termod.cell_of_world(m.x, m.z))
+        nx = m.x + dx
+        if not self._mob_blocked(nx, m.z, hw):
+            _nh = termod.height(*termod.cell_of_world(nx, m.z))
+            if _nh - _cur <= termod.STEP_JUMP:
+                m.x = nx
+                _cur = _nh
+        nz = m.z + dz
+        if not self._mob_blocked(m.x, nz, hw):
+            _nh2 = termod.height(*termod.cell_of_world(m.x, nz))
+            if _nh2 - _cur <= termod.STEP_JUMP:
+                m.z = nz
+
+    def _mob_wander(self, m, dt):
+        """没目标时的漫游：过一会儿换个方向，慢慢挪 ✓"""
+        m.wT -= dt
+        if m.wT <= 0:
+            m.wT = mobs.WANDER_EVERY * (0.6 + random.random() * 0.8)   # 别整齐划一 ✓
+            a = random.random() * math.pi * 2
+            m.wx = math.sin(a)
+            m.wz = math.cos(a)
+        sp = m.spd * (m.slowMul if float(getattr(m, 'slowT', 0) or 0) > 0 else 1.0) * mobs.WANDER_SPEED * dt
+        self._move_mob(m, m.wx * sp, m.wz * sp)
+        m.yaw = math.atan2(m.wx, m.wz)
+
+    def _mob_separate(self, dt):
+        """两只僵尸靠太近就慢慢推开 —— ★ 渐进推，不是瞬移（瞬移会看得一抖 ✗）
+
+        60 只 → 1770 对/帧，30Hz 下也就几万次乘法，可以忽略 ✓
+        （真到几百只再上空间网格，方案 §13.2 有现成的 SGrid 思路 ✓）
+        """
+        ms = [m for m in self.mobs.values() if m.hp > 0]
+        sep = mobs.SEP_DIST
+        sep2 = sep * sep
+        lim = mobs.SEP_SPEED * dt
+        for i in range(len(ms)):
+            a = ms[i]
+            for j in range(i + 1, len(ms)):
+                b = ms[j]
+                dx = b.x - a.x
+                dz = b.z - a.z
+                d2 = dx * dx + dz * dz
+                if d2 >= sep2 or d2 < 1e-9:
+                    continue
+                d = math.sqrt(d2)
+                push = min((sep - d) * 0.5, lim)
+                if push <= 0:
+                    continue
+                ux = dx / d
+                uz = dz / d
+                a.x -= ux * push
+                a.z -= uz * push
+                b.x += ux * push
+                b.z += uz * push
+
+    def _evict_far(self):
+        """僵尸满了 → 把"离所有玩家最远"的那只收掉，腾一个位置出来 ✓
+
+        ★ 为什么需要这个（第 35 轮踩的坑）：
+          原来的规则是"离所有玩家都超过 140 米才回收"。
+          于是老玩家附近刷满 60 只之后，**新来的玩家周围一只都刷不出来** ✗
+          （僵尸都堆在别人那边不动，上限却已经占满了）
+          现在改成"满了就淘汰最远的" → 人口永远跟着玩家跑 ✓
+        """
+        if not self.players:
+            return False
+        worst, wd = None, -1.0
+        for m in self.mobs.values():
+            if m.hp <= 0 or int(getattr(m, 'rank', 0) or 0) > 0:
+                continue
+            try:
+                dmin = min((q.x - m.x) ** 2 + (q.z - m.z) ** 2 for q in self.players.values())
+            except ValueError:
+                return False
+            if dmin > wd:
+                wd = dmin
+                worst = m
+        if worst is None:
+            return False
+        self.mobs.pop(worst.mid, None)
+        return True
+
+    def _near_count(self, x, z, r):
+        """这个点周围 r 米内有多少只活僵尸（每人上限 8 只要用 ✓）"""
+        r2 = r * r
+        n = 0
+        for m in self.mobs.values():
+            if (m.hp > 0 and int(getattr(m, 'rank', 0) or 0) == 0
+                    and (m.x - x) ** 2 + (m.z - z) ** 2 <= r2):
+                n += 1
+        return n
+
+    def _spawn_one(self, ps):
+        """在一个随机玩家周围刷一只（等级按方案 §3.1 抽）
+
+        ★ 每人上限（用户要求）：只在"周围还没到 8 只"的玩家附近刷 ✓
+        """
+        # ★★★ 第 131 轮修的真 bug（用户："每人 8 只上限，但多个玩家时还是 8 只"）★★★
+        #   病根：原来是"数他 60 米内有几只"✗
+        #         两个人站得近时，两个 60 米圈【几乎完全重叠】✗
+        #         → A 周围 8 只，B 周围也是这 8 只 ✗
+        #         → 结果两个人加起来还是 8 只 ✓✓ 用户描述一字不差 ✓
+        #   修：改成【按归属算】—— 一只僵尸算谁的就看它离谁最近 ✓
+        #       （两个人站一起 → 各分一半 ✓ 于是每人能各刷到 8 ✓ 总共 16 ✓）
+        cand = [q for q in ps
+                if self._owned_count(q) < self._cap_of(q)]   # ★ 第 133 轮：可调上限 ✓
+        if not cand:
+            return
+        p = random.choice(cand)
+        ang = random.random() * math.pi * 2
+        dist = mobs.SPAWN_MIN + random.random() * (mobs.SPAWN_MAX - mobs.SPAWN_MIN)
+        x = p.x + math.sin(ang) * dist
+        z = p.z + math.cos(ang) * dist
+        if x * x + z * z < SPAWN_SAFE * SPAWN_SAFE:
+            return                       # 安全区里不刷（方案 §2.1 末日堡垒）✓
+        # 组队时：以刷新点 SPAWN_TEAM_R 内【随机一个】队员的等级为准（§3.1）✓
+        near = [q for q in ps if (q.x - x) ** 2 + (q.z - z) ** 2 <= mobs.SPAWN_TEAM_R ** 2]
+        base = (random.choice(near) if near else p).role.get('level', 1) or 1
+        self.mob_seq += 1
+        _rank = 0
+        _skin = ''
+        _lv = mobs.roll_level(base)
+        try:
+            _elites = sum(1 for _x in self.mobs.values()
+                          if int(getattr(_x, 'rank', 0) or 0) == 1)
+            if _elites < int(mob_ranks.cfg(1).get('max_alive', 3)) and random.random() < 0.03:
+                _rank = 1
+                _skin = random.choice(mob_ranks.ELITE_SKINS)
+                _lv = max(1, int(base) + random.randint(1, 3))
+        except Exception:
+            _rank, _skin = 0, ''
+        _m = mobs.Mob(self.mob_seq, _lv, x, z, rank=_rank, skin=_skin,
+                      name=(mob_ranks.name_of(_skin, _rank) if _rank else None))
+        # ★ 第 132 轮：打上【替谁刷的】标记 ✓（硬配额的依据 ✓）
+        _m.owner = getattr(p, 'role_id', None)
+        self.mobs[str(self.mob_seq)] = _m
+        if _rank:
+            self._special_spawn_send(_m)
+
+    def _special_spawn_send(self, m):
+        """精英/Boss 出生包（名字/词条/技能）；方向标记另走 mobmarks。"""
+        try:
+            aff = []
+            for k, v in (getattr(m, 'aff', {}) or {}).items():
+                nm = mob_affixes.BY_KEY.get(k, (k,))[0]
+                aff.append({'k': k, 'n': nm, 'v': round(float(v), 1)})
+            data = {
+                'mid': m.mid, 'rank': int(m.rank), 'skin': m.skin,
+                'name': m.name, 'lv': int(m.lv), 'hpMax': int(m.mhp),
+                'affixes': aff,
+                'skills': [s.get('key') for s in boss_skills.skills_for(m.skin, m.bossPhase)] if m.rank >= 2 else [],
+            }
+            _rng = 1000.0 if int(m.rank) >= 2 else 100.0
+            for q in self.players.values():
+                if (q.x - m.x) ** 2 + (q.z - m.z) ** 2 <= _rng * _rng:
+                    self._send_cid(q.cid, P.pack('mobspawn', **data))
+        except Exception as e:
+            print('[mob] spawn packet failed: %r' % (e,))
+
+    def _boss_tick(self, dt):
+        """Boss 计时/刷新；普通怪不参与。"""
+        try:
+            old = self.mobs.get(self._boss_mid) if self._boss_mid else None
+            if self._boss_mid and (old is None or old.rank != 2 or old.hp <= 0):
+                self._boss_mid = ''
+                self._boss_next_at = now_s() + random.uniform(1200.0, 2400.0)
+            if self._boss_mid:
+                return
+            if now_s() < self._boss_next_at or not self.players:
+                return
+            ps = list(self.players.values())
+            p = random.choice(ps)
+            ang = random.random() * math.pi * 2
+            dist = random.uniform(40.0, 70.0)
+            x = p.x + math.sin(ang) * dist
+            z = p.z + math.cos(ang) * dist
+            if x * x + z * z < SPAWN_SAFE * SPAWN_SAFE:
+                self._boss_next_at = now_s() + 60.0
+                return
+            self.mob_seq += 1
+            skin = random.choice(mob_ranks.BOSS_SKINS)
+            m = mobs.Mob(self.mob_seq, max(1, int(p.role.get('level') or 1) + 5),
+                         x, z, rank=2, skin=skin, name=mob_ranks.name_of(skin, 2))
+            self.mobs[str(self.mob_seq)] = m
+            self._boss_mid = m.mid
+            self._special_spawn_send(m)
+            self._broadcast(P.pack('ticker',
+                                   text='[BOSS] %s 已出现，1000 米内可见方向' % m.name,
+                                   kind='boss'))
+            self._add_pend(None, 'notice', {'text': '[BOSS] %s 已出现' % m.name})
+        except Exception as e:
+            print('[boss] spawn failed: %r' % (e,))
+
+    def _mobmarks_tick(self, dt):
+        """每 1 秒给玩家发精英/Boss 方向标记（不依赖 100 米快照）。"""
+        self._mark_acc += dt
+        if self._mark_acc < 1.0:
+            return
+        self._mark_acc = 0.0
+        try:
+            for q in self.players.values():
+                arr = []
+                for m in self.mobs.values():
+                    r = int(getattr(m, 'rank', 0) or 0)
+                    if r <= 0 or m.hp <= 0:
+                        continue
+                    rng = 1000.0 if r >= 2 else 100.0
+                    if (q.x - m.x) ** 2 + (q.z - m.z) ** 2 > rng * rng:
+                        continue
+                    arr.append({'mid': m.mid, 'rank': r, 'skin': m.skin,
+                                'name': m.name, 'x': round(m.x, 2), 'z': round(m.z, 2),
+                                'hpPct': int(round(100.0 * m.hp / max(1, m.mhp))),
+                                'alive': 1})
+                self._send_cid(q.cid, P.pack('mobmarks', list=arr))
+        except Exception as e:
+            print('[mob] marks failed: %r' % (e,))
+
+    def _mob_evt(self, m, kind, rng=None):
+        try:
+            data = {'mid': m.mid, 'kind': str(kind), 'x': round(m.x, 2),
+                    'z': round(m.z, 2), 'yaw': round(m.yaw, 3)}
+            _r = float(rng if rng is not None else (1000.0 if int(m.rank) >= 2 else 100.0))
+            for q in self.players.values():
+                if (q.x - m.x) ** 2 + (q.z - m.z) ** 2 <= _r * _r:
+                    self._send_cid(q.cid, P.pack('mobevt', **data))
+        except Exception:
+            pass
+
+    def _mob_shot_send(self, m, p):
+        """远程怪的一次可见弹道：伤害仍由服务器即时结算，客户端补飞行表现。"""
+        try:
+            data = {'mid': m.mid, 'rank': int(m.rank),
+                    'kind': str(getattr(m, 'kind', '') or ''),
+                    'x': round(m.x, 2), 'z': round(m.z, 2),
+                    'tx': round(p.x, 2), 'tz': round(p.z, 2),
+                    'dur': 0.18}
+            for q in self.players.values():
+                if (q.x - m.x) ** 2 + (q.z - m.z) ** 2 <= 100.0 * 100.0:
+                    self._send_cid(q.cid, P.pack('mobshot', **data))
+        except Exception:
+            pass
+
+    def _mob_skill_send(self, m, sk, phase):
+        try:
+            _tx, _tz = m.castX, m.castZ
+            if str(sk.get('kind') or '') != 'self':
+                _tgt = self.players.get(str(getattr(m, 'castTarget', '') or ''))
+                if _tgt is not None:
+                    _tx, _tz = _tgt.x, _tgt.z
+            data = {'mid': m.mid, 'key': m.castKey, 'name': m.castName,
+                    'rank': int(m.rank),
+                    'phase': phase, 'x': round(m.castX, 2), 'z': round(m.castZ, 2),
+                    'tx': round(_tx, 2), 'tz': round(_tz, 2),
+                    'yaw': round(m.castYaw, 3), 'radius': float(sk.get('radius') or 0),
+                    'shape': str(sk.get('kind') or 'aoe'),
+                    'cone': float(sk.get('cone') or 0),
+                    'vfx': str(sk.get('vfx') or ''),
+                    'sfx': str(sk.get('sfx') or ''),
+                    'cast_time': float(sk.get('cast') or 0),
+                    'strike_at': float(sk.get('cast') or 0),
+                    'dur': float(sk.get('cast') or 0) + 0.6}
+            _r = 1000.0 if int(m.rank) >= 2 else 100.0
+            for q in self.players.values():
+                if (q.x - m.x) ** 2 + (q.z - m.z) ** 2 <= _r * _r:
+                    self._send_cid(q.cid, P.pack('mobskill', **data))
+        except Exception:
+            pass
+
+    def _mob_contact_dist(self, m):
+        """普通近战接触距离；精英/Boss 稍远一点，避免大模型贴脸。"""
+        rk = int(getattr(m, 'rank', 0) or 0)
+        return float(mobs.CONTACT) + (0.55 if rk >= 2 else (0.25 if rk == 1 else 0.0))
+
+    def _mob_ranged_range(self, m):
+        """普通远程攻击射程；精英/Boss 全部近战，只有部分普通怪保留远程。"""
+        if int(getattr(m, 'rank', 0) or 0) > 0:
+            return 0.0
+        if str(getattr(m, 'kind', '') or '') == '程序员':
+            return 8.0
+        return 0.0
+
+    def _mob_skill_ai(self, m, near, dt):
+        """rank>0 的技能状态机；返回 True 表示本 tick 不执行普通追击。"""
+        if int(getattr(m, 'rank', 0) or 0) <= 0 or near is None:
+            return False
+        if float(getattr(m, 'freezeT', 0) or 0) > 0 or m.stunT > 0:
+            return False
+        if m.castT > 0:
+            m.castT -= dt
+            if m.castPhase == 'windup' and m.castT <= 0:
+                self._mob_skill_apply(m)
+                m.castPhase = 'recover'
+                m.castT = 0.35
+                try:
+                    for _sk0 in boss_skills.skills_for(m.skin, m.bossPhase):
+                        if _sk0.get('key') == m.castKey:
+                            self._mob_skill_send(m, _sk0, 'strike')
+                            break
+                except Exception:
+                    pass
+            elif m.castPhase == 'recover' and m.castT <= 0:
+                m.castPhase = ''
+                m.castKey = ''
+                m.castName = ''
+                m.castT = 0.0
+            return True
+        # 二阶段
+        if int(getattr(m, 'rank', 0) or 0) >= 2 and m.bossPhase == 1 and m.hp <= m.mhp * 0.5:
+            m.bossPhase = 2
+            self._mob_evt(m, 'phase2')
+        now = now_s()
+        dist = math.hypot(near.x - m.x, near.z - m.z)
+        for sk in boss_skills.skills_for(m.skin, m.bossPhase):
+            key = sk.get('key')
+            if m.skillCd.get(key, 0.0) > now:
+                continue
+            rng = float(sk.get('rng') or 0.0)
+            if rng > 0 and dist > rng:
+                continue
+            m.castKey = key
+            m.castName = sk.get('name') or key
+            m.castPhase = 'windup'
+            m.castT = float(sk.get('cast') or 1.0)
+            _kind = str(sk.get('kind') or 'aoe')
+            if _kind == 'self':
+                m.castX, m.castZ = float(m.x), float(m.z)
+            else:
+                m.castX, m.castZ = float(near.x), float(near.z)
+            m.castFromX, m.castFromZ = float(m.x), float(m.z)
+            m.castYaw = math.atan2(near.x - m.x, near.z - m.z)
+            m.yaw = m.castYaw
+            m.castTarget = getattr(near, 'cid', None)
+            m.skillCd[key] = now + float(sk.get('cd') or 8.0)
+            m.animState = 'cast'
+            self._mob_skill_send(m, sk, 'windup')
+            return True
+        return False
+
+    def _mob_skill_apply(self, m):
+        sk = None
+        for x in boss_skills.skills_for(m.skin, m.bossPhase):
+            if x.get('key') == m.castKey:
+                sk = x
+                break
+        if sk is None:
+            return
+        kind = sk.get('kind') or 'aoe'
+        if kind == 'summon':
+            self._mob_summon(m, 2 + (1 if m.bossPhase >= 2 else 0))
+            return
+        _r = float(sk.get('radius') or 0.0)
+        if kind in ('cone', 'line', 'dash'):
+            _r = max(_r, 1.0)
+        if kind == 'zone':
+            self._mob_zone_create(m, sk, _r)
+            return
+        if kind == 'dash':
+            _fx, _fz = float(getattr(m, 'castFromX', m.x)), float(getattr(m, 'castFromZ', m.z))
+            _tx, _tz = float(m.castX), float(m.castZ)
+            _dx, _dz = _tx - _fx, _tz - _fz
+            _dd = math.hypot(_dx, _dz)
+            if _dd > 0.001:
+                _steps = max(1, int(_dd / 0.45))
+                for _si in range(_steps):
+                    self._move_mob(m, _dx / _steps, _dz / _steps)
+            self._mob_skill_hit_area(m, sk, _r, 'aoe')
+            return
+        if kind in ('aoe', 'cone', 'self'):
+            self._mob_skill_hit_area(m, sk, _r, 'aoe' if kind == 'self' else kind)
+        elif kind == 'line':
+            self._mob_skill_hit_area(m, sk, _r, 'line')
+
+    def _mob_zone_create(self, m, sk, radius):
+        try:
+            now = now_s()
+            zone = {'x': float(m.castX), 'z': float(m.castZ), 'r': float(radius),
+                    'until': now + 6.0, 'next': now + 0.45,
+                    'atk': float(m.atk), 'name': m.name, 'rank': int(m.rank),
+                    'pen': float(getattr(m, 'pen_pt', 0.0) or 0.0),
+                    'sk': dict(sk)}
+            self._mob_zones.append(zone)
+            data = {'x': round(zone['x'], 2), 'z': round(zone['z'], 2),
+                    'r': zone['r'], 'dur': 6.0, 'rank': zone['rank']}
+            for q in self.players.values():
+                if (q.x - zone['x']) ** 2 + (q.z - zone['z']) ** 2 <= 1000.0 * 1000.0:
+                    self._send_cid(q.cid, P.pack('mobzone', **data))
+        except Exception:
+            pass
+
+    def _mob_zone_tick(self, dt):
+        if not getattr(self, '_mob_zones', None):
+            return
+        now = now_s()
+        self._mob_zones = [z for z in self._mob_zones if z['until'] > now]
+        for z in self._mob_zones:
+            if now < z['next']:
+                continue
+            z['next'] = now + 0.65
+            fake = types.SimpleNamespace(
+                castX=z['x'], castZ=z['z'], castYaw=0.0, atk=z['atk'],
+                name=z['name'], rank=z['rank'], pen_pt=z['pen'],
+                x=z['x'], z=z['z'])
+            self._mob_skill_hit_area(fake, z['sk'], z['r'], 'aoe')
+
+    def _mob_summon(self, m, n):
+        cap = 6
+        have = sum(1 for x in self.mobs.values()
+                   if getattr(x, 'summoner', None) == m.mid)
+        n = max(0, min(n, cap - have))
+        for _ in range(n):
+            self.mob_seq += 1
+            ang = random.random() * math.pi * 2
+            d = random.uniform(1.5, 3.5)
+            x = m.x + math.sin(ang) * d
+            z = m.z + math.cos(ang) * d
+            add = mobs.Mob(self.mob_seq, max(1, m.lv - 2), x, z)
+            add.owner = None
+            add.summoner = m.mid
+            self.mobs[str(self.mob_seq)] = add
+
+    def _mob_skill_inside(self, m, x, z, radius, shape, sk):
+        """技能落点判定：aoe 看锁定点，cone/line 从施法者原点发出。"""
+        if shape == 'line':
+            x0 = float(getattr(m, 'castFromX', m.x))
+            z0 = float(getattr(m, 'castFromZ', m.z))
+            x1, z1 = float(m.castX), float(m.castZ)
+            vx, vz = x1 - x0, z1 - z0
+            vv = vx * vx + vz * vz
+            if vv <= 0.0001:
+                return False
+            t = max(0.0, min(1.0, ((x - x0) * vx + (z - z0) * vz) / vv))
+            px, pz = x0 + vx * t, z0 + vz * t
+            _w = max(1.0, float(radius))
+            return (x - px) ** 2 + (z - pz) ** 2 <= _w * _w
+        if shape == 'cone':
+            x0 = float(getattr(m, 'castFromX', m.x))
+            z0 = float(getattr(m, 'castFromZ', m.z))
+            dx, dz = x - x0, z - z0
+            if dx * dx + dz * dz > radius * radius:
+                return False
+            _a = math.atan2(dx, dz) - m.castYaw
+            while _a > math.pi: _a -= math.pi * 2
+            while _a < -math.pi: _a += math.pi * 2
+            _cone = float(sk.get('cone') or 150.0)
+            return abs(_a) <= math.radians(max(10.0, _cone * 0.5))
+        dx, dz = x - m.castX, z - m.castZ
+        return dx * dx + dz * dz <= radius * radius
+
+    def _mob_skill_hit_area(self, m, sk, radius, shape):
+        for q in list(self.players.values()):
+            if q is None or int(q.hp or 0) <= 0:
+                continue
+            if abs(q.x) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(q.z) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+                continue
+            if not self._mob_skill_inside(m, q.x, q.z, radius, shape, sk):
+                continue
+            raw = max(1, int(round(float(m.atk) * float(sk.get('dmg') or 1.0))))
+            raw = min(raw, max(1, int(self._hp_max(q) * 0.45)))
+            _pdr = max(0.0, self._tal(q, 'dr') + self._aff(q, 'dr_pct')
+                       - float(getattr(m, 'pen_pt', 0.0) or 0.0))
+            _flat = self._aff(q, 'dr_flat')
+            try:
+                _lvq = (q.role or {}).get('level') or 1
+                _flat += armormod.stats_of(q.armor, weapons.mastery_of(q.armor, _lvq), level=_lvq)['dr']
+            except Exception:
+                pass
+            raw = pve_combat.mitigate(raw, _pdr, _flat)
+            d = self._on_player_hurt(q, raw, None, True)
+            q.hp = max(0, int(q.hp) - d)
+            if str(sk.get('control') or '') == 'slow':
+                q.slowT = max(float(getattr(q, 'slowT', 0) or 0), 3.0)
+                q.slowMul = 0.7
+            elif str(sk.get('control') or '') == 'stun':
+                q.downT = max(float(getattr(q, 'downT', 0) or 0), 0.8)
+            self._add_pend(q.cid, 'hurts', {'dmg': d, 'x': round(q.x, 2),
+                                            'z': round(q.z, 2), 'by': m.name,
+                                            'kind': 'mob', 'crit': False})
+            if int(q.hp) <= 0:
+                self._tank_reset(q)
+        for c in list(self.clones.values()):
+            if int(c.get('hp') or 0) <= 0:
+                continue
+            if not self._mob_skill_inside(m, c['x'], c['z'], radius, shape, sk):
+                continue
+            raw = max(1, int(round(float(m.atk) * float(sk.get('dmg') or 1.0))))
+            self._clone_damage(c, raw, None, False)
+
+    def _cap_of(self, q):
+        """这个玩家的僵尸上限（第 133 轮）—— 单人覆盖优先，否则用全局值 ✓"""
+        rid = getattr(q, 'role_id', None)
+        v = self.mob_cap_of.get(rid)
+        return int(v) if v is not None else int(self.mob_per_player)
+
+    def _pvp_on(self, q):
+        """这个人现在能不能参与 PVP（第 134 轮）—— 单人覆盖优先 ✓"""
+        rid = getattr(q, 'role_id', None)
+        v = self.pvp_of.get(rid)
+        return bool(v) if v is not None else bool(self.pvp_all)
+
+    # ══════════════════════════════════════════════════════════════
+    #  技能释放（round549 · P2）
+    #  ★ 服务端权威：CD / 灵气 / 距离 / 伤害 全在这算 ✗ 客户端只喊"我要放"
+    # ══════════════════════════════════════════════════════════════
+    # ---- 被动加成取值（round552）：按品阶在区间里线性取 ----
+    SK_BUFF_RANGE = {
+        'cdcut':      (0.30, 0.50),   # 冷却缩减
+        'skilldmg':   (0.20, 0.40),   # 技能增伤
+        'omnivamp':   (0.08, 0.15),   # 全能吸血
+        'skillten':   (0.15, 0.30),   # 技能韧性（受技能伤害 -）
+        'qiflow':     (0.20, 0.40),   # 灵气上限 +
+        'thrifty':    (0.15, 0.35),   # 灵气消耗 -
+        'skrange':    (0.10, 0.30),   # 技能范围 +
+        'skdur':      (0.15, 0.35),   # 技能持续 +
+        'masterA':    (0.10, 0.25),   # 主动伤害 +
+        'masterB':    (0.20, 0.50),   # ★ round583：被动触发率 ×1.2~1.5
+        'chain':      (0.15, 0.30),   # ★ round583：技能击杀 CD 缩减
+        'extra_crit': (0.10, 0.30),   # 技能额外暴击率
+        'skillcrit':  (1.00, 1.00),   # 让不能暴击的技能也能暴击
+    }
+
+    def _sk_val(self, p, key):
+        """{key: tier} → 数值（没装 = 0）"""
+        b = getattr(p, 'skBuff', None) or {}
+        t = b.get(key)
+        if not t:
+            return 0.0
+        r = self.SK_BUFF_RANGE.get(key)
+        if not r:
+            return 0.0
+        lo, hi = r
+        if hi <= lo:
+            return lo
+        k = (int(t) - 1) / 4.0
+        return lo + (hi - lo) * k
+
+    def _skill_cast(self, p, d):
+        import skills as skm
+        key = str(d.get('key') or '')
+        if not skm.valid(key) or skm.KIND.get(key) != 'A':
+            return
+        # ★ round583：冰封期间不能放技能
+        if float(getattr(p, 'freezeT', 0) or 0) > 0:
+            self._send_cid(p.cid, P.pack('notice', text='被冰封：不能攻击'))
+            return
+        defn = skm.BY_KEY[key]
+        # 装在第一排（A 类 5 槽）里才能放
+        if key not in (getattr(p, 'skLoad', {}) or {}).get('A', []):
+            self._send_cid(p.cid, P.pack('notice', text='先把它装配到技能栏'))
+            return
+        # 冷却
+        cd_left = float((getattr(p, 'skCd', {}) or {}).get(key) or 0)
+        if cd_left > 0.05:
+            self._send_cid(p.cid, P.pack('notice', text='技能冷却中（%.1f 秒）' % cd_left))
+            return
+        # 灵气
+        qi_cost = int(defn.get('qi') or 0)
+        if int(p.qi or 0) < qi_cost:
+            self._send_cid(p.cid, P.pack('notice', text='灵气不够（要 %d）' % qi_cost))
+            return
+
+        # ★ round559b：半径/持续时间先算出来（安全区那段要用）
+        radius = float(defn.get('radius') or 0) * (1.0 + self._sk_val(p, 'skrange'))
+        dur_fx = float(defn.get('dur') or 1.0) * (1.0 + self._sk_val(p, 'skdur'))
+        _dmul = 1.0 + self._sk_val(p, 'skdur')
+
+        # 落点：客户端传了就校验距离 ✗ 没传就自动选最近的怪 ✓
+        rng = float(defn.get('range') or 0)
+        x = d.get('x'); z = d.get('z')
+        tgt = None
+        if x is None or z is None:
+            best, bd = None, 1e9
+            lim = (rng if rng > 0 else 12.0) ** 2
+            for m in self.mobs.values():
+                if m.hp <= 0:
+                    continue
+                dd = (m.x - p.x) ** 2 + (m.z - p.z) ** 2
+                if dd < bd and dd <= lim:
+                    bd, best = dd, m
+            # ★ round574（用户："技能也要能打到非队友玩家"）
+            #   ★ 只在【附近没有怪】时才看玩家 ✓（有怪优先打怪 ✓ 和用户确认一致）
+            #   ★ 能不能打走 _pvp_ok：PvP 开关 / 队友 / 安全区 / 等级差 全部同一套 ✓
+            if best is None:
+                for _q in self.players.values():
+                    if _q is p or int(_q.hp or 0) <= 0:
+                        continue
+                    if not self._pvp_ok(p, _q)[0]:
+                        continue
+                    dd = (_q.x - p.x) ** 2 + (_q.z - p.z) ** 2
+                    if dd < bd and dd <= lim:
+                        bd, best = dd, _q
+            # ★ round575：没怪、也没可打的玩家时，再看【敌方分身】
+            if best is None:
+                _bd2 = bd
+                for _c in self.clones.values():
+                    _co = self.players.get(_c.get('owner'))
+                    if _co is None or int(_c.get('hp') or 0) <= 0:
+                        continue
+                    if abs(_c['x']) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(_c['z']) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+                        continue
+                    if not self._pvp_ok(p, _co)[0]:
+                        continue
+                    dd = (_c['x'] - p.x) ** 2 + (_c['z'] - p.z) ** 2
+                    if dd < _bd2 and dd <= lim:
+                        _bd2, best = dd, _c
+            if best is None:
+                x, z = p.x, p.z          # 没目标 → 以自己为中心
+            elif isinstance(best, dict):
+                x, z = best['x'], best['z']
+                tgt = best
+            else:
+                x, z = best.x, best.z
+                tgt = best
+        else:
+            x, z = float(x), float(z)
+            if rng > 0:
+                dx, dz = x - p.x, z - p.z
+                dist = math.hypot(dx, dz)
+                if dist > rng:          # ★ 防改包丢远处：夹到射程边界
+                    x = p.x + dx / dist * rng
+                    z = p.z + dz / dist * rng
+
+        # ★ round583：自身 buff/开关类技能不选落点（否则会被“最近目标在安全区”卡住）
+        if key in ('bloodrage', 'gale', 'shield', 'plague', 'bloodslash'):
+            x, z = p.x, p.z
+            tgt = None
+
+        # ★★★ round562（用户："安全区内不能放技能，也不可以把技能放到安全区内"）
+        #   → 站城里放：拒绝；落点在城里：拒绝（不再偷偷推到区外 ✓）
+        if abs(p.x) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(p.z) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+            self._send_cid(p.cid, P.pack('notice', text='安全区内不能放技能'))
+            return
+        if abs(x) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(z) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+            self._send_cid(p.cid, P.pack('notice', text='不能把技能放进安全区'))
+            return
+
+        # ★ round552：被动加成（C 类）在这里生效
+        qi_cost = int(round(qi_cost * (1.0 - self._sk_val(p, 'thrifty'))))
+        cd_cut = min(0.6, self._sk_val(p, 'cdcut'))          # 乘算，总上限 60%
+        cd_final = max(1.5, float(defn.get('cd') or 0) * (1.0 - cd_cut))
+        # 扣灵气 + CD
+        p.qi = max(0, int(p.qi or 0) - qi_cost)
+        p.skCd[key] = cd_final
+        self._send_cid(p.cid, P.pack('qi', q=int(p.qi)))
+        self._send_cid(p.cid, P.pack('skillcd', cd=dict((k, round(v, 2)) for k, v in p.skCd.items())))
+
+        # 特效广播（自己和别人都看同一套 ✓）
+        # ★ 特效广播：同屏所有人都收到【同一条 skillfx】（含自己 ✓）
+        #   ★ seed 一起发 ✗ 每个人粒子/落点一致 ✓
+        _fx = dict(k=defn.get('vfx') or 'none', x=round(x, 2), z=round(z, 2),
+                   r=round(radius, 2), yaw=round(p.yaw, 3), dur=round(dur_fx, 2),
+                   seed=random.randint(1, 999999), by=p.role_id)
+        if key == 'swordrain':
+            _fx['n'] = 12       # ★ round585：万剑 12 把（视觉同步）
+        if key != 'thunder':
+            for _q in self.players.values():
+                if (_q.x - p.x) ** 2 + (_q.z - p.z) ** 2 <= 1600.0:
+                    self._send_cid(_q.cid, P.pack('skillfx', **_fx))
+
+        # ★ round583：技能音效也按距离同步（客户端 sfxAt 再衰减）
+        try:
+            _snd_map = {'blackhole': 'strong', 'judgement': 'strong',
+                        'thunder': 'thunder', 'icefield': 'thunder',
+                        'timestop': 'strong', 'firestorm': 'strong',
+                        'swordrain': 'swing', 'arrowrain': 'swing',
+                        'earthsplit': 'swing', 'bloodslash': 'swing',
+                        'blink': 'strong', 'plague': 'strong'}
+            self._snd_near(x, z, _snd_map.get(key, 'strong'), 0.85)
+        except Exception:
+            pass
+
+        # ★ round580：自身 buff / 护盾类主动（不吃伤害，只挂状态）
+        if key == 'bloodrage':
+            _bd = 15.0 * _dmul
+            p.skTA['bloodrage'] = _bd
+            p.skProfTick = -1
+            self._send_cid(p.cid, P.pack('notice', text='血怒：攻击 +40%%、受伤 +20%%（%d 秒）' % round(_bd)))
+            return
+        if key == 'gale':
+            _gd = 20.0 * _dmul
+            p.skTA['gale'] = _gd
+            self._send_cid(p.cid, P.pack('notice', text='疾风步：移速 +80%%、闪避 +30%%（%d 秒）' % round(_gd)))
+            return
+        if key == 'plague':
+            p.plagueOn = not bool(getattr(p, 'plagueOn', False))
+            p.plagueAcc = 0.0
+            p.plagueMoveT = 0.0
+            p.plagueX = p.x
+            p.plagueZ = p.z
+            self._send_cid(p.cid, P.pack(
+                'notice', text='病毒扩散：已开启' if p.plagueOn else '病毒扩散：已关闭'))
+            return
+        if key == 'shield':
+            p.skShield = max(1.0, float(self._atk_of(p)) * 5.0)
+            _sd = 30.0 * _dmul
+            p.skShieldT = _sd
+            self._send_cid(p.cid, P.pack('notice',
+                                         text='灵能护盾：吸收 %d 点伤害（%d 秒）' % (int(p.skShield), round(_sd))))
+            return
+        # ★ round581：地裂（直线 + 击退）、燃血斩（扇形 + 吸血）
+        if key == 'earthsplit':
+            self._line_skill(p, x, z, 8.0, 3.5, 1.50, knock=3.0)
+            return
+        if key == 'bloodslash':
+            _dmg_total = self._cone_skill(p, 4.0, 90.0, 1.80)
+            if _dmg_total > 0:
+                _heal = max(1, int(round(_dmg_total * 0.50)))
+                p.hp = min(self._hp_max(p), int(p.hp or 0) + _heal)
+                self._send_cid(p.cid, P.pack('notice', text='燃血斩吸血 +%d' % _heal))
+            return
+        # ★ round580：多段主动（每段独立结算/独立暴击）
+        _now0 = now_s()
+        if key == 'swordrain':
+            _n = max(1, int(round(12 * _dmul)))
+            for _i in range(_n):
+                _a = random.random() * math.pi * 2
+                _rr = math.sqrt(random.random()) * 6.0
+                self._later_hits.append(
+                    (_now0 + 0.15 + _i * 0.24,
+                     p.cid, x + math.sin(_a) * _rr, z + math.cos(_a) * _rr,
+                     0.60, 2.0, True, 'swordrain'))
+            return
+        if key == 'arrowrain':
+            _n = max(1, int(round(12 * _dmul)))
+            for _i in range(_n):
+                _a = random.random() * math.pi * 2
+                _rr = math.sqrt(random.random()) * 10.0
+                self._later_hits.append(
+                    (_now0 + 0.60 + _i * (2.0 / 12.0),
+                     p.cid, x + math.sin(_a) * _rr, z + math.cos(_a) * _rr,
+                     0.70, 2.0, True, 'arrowrain'))
+            return
+        if key == 'firestorm':
+            _n = max(1, int(round(8 * _dmul)))
+            for _i in range(_n):
+                self._later_hits.append(
+                    (_now0 + 0.5 + _i * 0.5, p.cid, x, z, 0.40, 5.0, True, 'firestorm'))
+            return
+        if key == 'thunder':
+            _pts = []
+            for _m in self.mobs.values():
+                if _m.hp > 0 and (_m.x - p.x) ** 2 + (_m.z - p.z) ** 2 <= 225.0:
+                    _pts.append((_m.x, _m.z))
+            for _q in self.players.values():
+                if _q is p or int(_q.hp or 0) <= 0:
+                    continue
+                if not self._pvp_ok(p, _q)[0]:
+                    continue
+                if (_q.x - p.x) ** 2 + (_q.z - p.z) ** 2 <= 225.0:
+                    _pts.append((_q.x, _q.z))
+            for _c in self.clones.values():
+                _co = self.players.get(_c.get('owner'))
+                if _co is None or not self._pvp_ok(p, _co)[0]:
+                    continue
+                if (_c['x'] - p.x) ** 2 + (_c['z'] - p.z) ** 2 <= 225.0:
+                    _pts.append((_c['x'], _c['z']))
+            if _pts:
+                _n = max(1, int(round(5 * _dmul)))
+                for _i in range(_n):
+                    _pp = random.choice(_pts)
+                    _hx = _pp[0] + random.uniform(-0.6, 0.6)
+                    _hz = _pp[1] + random.uniform(-0.6, 0.6)
+                    # ★ round584（用户）：每道雷落在被选中目标的脚下，而不是全挤在中心
+                    _tf = dict(k='thunder', x=round(_hx, 2), z=round(_hz, 2),
+                               r=0, yaw=0, dur=0.35, n=1,
+                               seed=random.randint(1, 999999), by=p.role_id)
+                    for _q in self.players.values():
+                        if (_q.x - _hx) ** 2 + (_q.z - _hz) ** 2 <= 1600.0:
+                            self._send_cid(_q.cid, P.pack('skillfx', **_tf))
+                    self._later_hits.append(
+                        (_now0 + 0.4 + _i * 0.30, p.cid, _hx, _hz,
+                         1.20, 2.5, True, 'thunder'))
+            else:
+                # 没目标 → 退回灵气/CD（不然白白空放）
+                p.qi = min(self._qi_max(p), int(p.qi or 0) + qi_cost)
+                p.skCd.pop(key, None)
+                self._send_cid(p.cid, P.pack('qi', q=int(p.qi)))
+                self._send_cid(p.cid, P.pack(
+                    'skillcd', cd=dict((k, round(v, 2)) for k, v in p.skCd.items())))
+                self._send_cid(p.cid, P.pack('notice', text='雷霆万钧：15 米内没有目标'))
+            return
+
+        # ★ round580（A14 空间跳跃）：真正把人挪到落点（客户端权威 → 发 tp ✓）
+        if key == 'blink':
+            p.x, p.z = float(x), float(z)
+            self._send_cid(p.cid, P.pack('tp', x=round(p.x, 2), z=round(p.z, 2)))
+
+        # ★★ round561（用户："黑洞应该播完动画再造成伤害"）
+        #   → 伤害压进队列 ✗ 到点再结算 ✓（delay 由 skills.py 的 delay 字段给）
+        try:
+            _delay = float(defn.get('delay') or 0.0)
+        except Exception:
+            _delay = 0.0
+        if _delay > 0.01:
+            self._later_skill.append((now_s() + _delay, p.cid, key, x, z))
+            # ★ round562：吸力（黑洞）+ 其它"拉人"技能
+            # ★★ round563（用户："黑洞要在这 1 秒里就吸过来，1 秒后才炸"）
+            #   → 吸力从【施法瞬间】开始 ✓ 到【伤害生效那一刻】结束 ✓
+            _pull = float(defn.get('pull') or 0.0)
+            if _pull > 0:
+                _now = now_s()
+                self._pulls.append({'due': _now, 'until': _now + _delay,
+                                    'x': x, 'z': z, 'r': radius, 'str': _pull,
+                                    'by': p.cid})
+            return
+
+        # 伤害
+        mult = float(defn.get('dmg') or 0.0)
+        if mult > 0 and radius > 0:
+            base, _mul, can_crit, _crit_pt, _crit_dmg = self._skill_profile(p)
+            n_hit = 0
+            for m in list(self.mobs.values()):
+                if m.hp <= 0:
+                    continue
+                if (m.x - x) ** 2 + (m.z - z) ** 2 > radius * radius:
+                    continue
+                dmg = base * mult
+                crit = False
+                if can_crit:
+                    dv, crit = mobs.roll_damage(
+                        base, crit_pt=_crit_pt, crit_dmg=_crit_dmg)
+                    dmg = max(1, int(round(dv * mult * _mul)))
+                else:
+                    dmg = max(1, int(round(dmg * _mul)))
+                if m.kind == '保安' and random.random() < mobs.BLOCK_CHANCE:
+                    dmg = max(1, int(round(dmg * mobs.BLOCK_MUL)))
+                dmg = self._mob_defense(p, m, dmg, False)
+                if dmg <= 0:
+                    continue
+                self._record_mob_damage(m, p, dmg)
+                m.hp -= dmg
+                m.freezeT = 0.0          # ★ round584：受伤破冰
+                n_hit += 1
+                self._report_hit(p, m.mid, dmg, crit, m.x, m.z,
+                                 {'back': False, 'mb': None, 'heal': 0, 'sk': 1})
+                if m.hp <= 0:
+                    m.hp = 0
+                    self._mob_died(p, m)
+                    self._sk_chain_kill(p)
+            if n_hit == 0 and tgt is None:
+                pass
+        # 打玩家（PvP 全额 ✓ 用户定）
+        if mult > 0 and radius > 0:
+            try:
+                base2 = self._atk_of(p)
+                dv2 = max(1, int(round(base2 * mult)))
+                self._aoe_players(p, x, z, radius, dv2, src='skill', is_skill=True)
+            except Exception as e:
+                print('[skill] pvp 失败：%r' % (e,))
+
+    # ---- 技能的伤害结算（可延迟调用）----
+    def _skill_profile(self, p):
+        """★ 性能：同一 tick 内多次技能伤害共用一份攻击/增伤/暴击快照"""
+        _tk = int(getattr(self, 'tick_count', 0) or 0)
+        if int(getattr(p, 'skProfTick', -1) or -1) == _tk and p.skProf is not None:
+            return p.skProf
+        base = self._atk_of(p)
+        mul = 1.0 + self._sk_val(p, 'skilldmg') + self._sk_val(p, 'masterA')
+        can_crit = (self._sk_val(p, 'skillcrit') > 0)
+        _t = affixes.totals((p.weapon or {}).get('affixes'))
+        prof = (base, mul, can_crit,
+                _t.get('crit_pt', 0.0) + self._tal(p, 'crit') + self._sk_val(p, 'extra_crit'),
+                _t.get('crit_dmg', 0.0) + self._tal(p, 'critdmg'))
+        p.skProf = prof
+        p.skProfTick = _tk
+        return prof
+
+    def _skill_damage(self, p, defn, x, z, radius):
+        import skills as skm
+        mult = float(defn.get('dmg') or 0.0)
+        if mult <= 0 or radius <= 0:
+            return 0
+        _tot = 0
+        base, _mul, can_crit, _crit_pt, _crit_dmg = self._skill_profile(p)
+        for m in list(self.mobs.values()):
+            if m.hp <= 0:
+                continue
+            if (m.x - x) ** 2 + (m.z - z) ** 2 > radius * radius:
+                continue
+            dmg = base * mult
+            crit = False
+            if can_crit:
+                dv, crit = mobs.roll_damage(
+                    base, crit_pt=_crit_pt, crit_dmg=_crit_dmg)
+                dmg = max(1, int(round(dv * mult * _mul)))
+            else:
+                dmg = max(1, int(round(dmg * _mul)))
+            if m.kind == '保安' and random.random() < mobs.BLOCK_CHANCE:
+                dmg = max(1, int(round(dmg * mobs.BLOCK_MUL)))
+            dmg = self._mob_defense(p, m, dmg, False)
+            if dmg <= 0:
+                continue
+            self._record_mob_damage(m, p, dmg)
+            m.hp -= dmg
+            _tot += dmg
+            m.freezeT = 0.0          # ★ round584：受伤破冰
+            self._report_hit(p, m.mid, dmg, crit, m.x, m.z,
+                             {'back': False, 'mb': None, 'heal': 0, 'sk': 1})
+            if m.hp <= 0:
+                m.hp = 0
+                self._mob_died(p, m)
+                self._sk_chain_kill(p)
+        # 打玩家（PvP 全额）
+        try:
+            dv2 = max(1, int(round(self._atk_of(p) * mult * _mul)))
+            _tot += self._aoe_players(p, x, z, radius, dv2, src='skill', is_skill=True)
+        except Exception as e:
+            print('[skill] pvp 失败：%r' % (e,))
+        return _tot
+
+    def _line_skill(self, p, tx, tz, length, width, mult, knock=0.0):
+        """★ round581（A3 地裂）：从自己朝落点方向的一条直线伤害"""
+        _dmul = 1.0 + self._sk_val(p, 'skdur')
+        dx, dz = tx - p.x, tz - p.z
+        d = math.hypot(dx, dz)
+        if d < 0.01:
+            dx, dz, d = math.sin(p.yaw), math.cos(p.yaw), 1.0
+        ux, uz = dx / d, dz / d
+        hits = []
+        for m in list(self.mobs.values()):
+            if m.hp <= 0:
+                continue
+            rx, rz = m.x - p.x, m.z - p.z
+            fwd = rx * ux + rz * uz
+            lat = abs(rx * uz - rz * ux)
+            if 0 <= fwd <= length and lat <= width * 0.5:
+                hits.append(('m', m))
+        for q in list(self.players.values()):
+            if q is p or int(q.hp or 0) <= 0:
+                continue
+            if not self._pvp_ok(p, q)[0]:
+                continue
+            rx, rz = q.x - p.x, q.z - p.z
+            fwd = rx * ux + rz * uz
+            lat = abs(rx * uz - rz * ux)
+            if 0 <= fwd <= length and lat <= width * 0.5:
+                hits.append(('p', q))
+        for c in list(self.clones.values()):
+            if int(c.get('hp') or 0) <= 0:
+                continue
+            _co = self.players.get(c.get('owner'))
+            if _co is None or not self._pvp_ok(p, _co)[0]:
+                continue
+            rx, rz = c['x'] - p.x, c['z'] - p.z
+            fwd = rx * ux + rz * uz
+            lat = abs(rx * uz - rz * ux)
+            if 0 <= fwd <= length and lat <= width * 0.5:
+                hits.append(('c', c))
+        dmg = dict(dmg=float(mult), can_crit=True, radius=0.1)
+        for kind, obj in hits:
+            _ox = obj['x'] if kind == 'c' else obj.x
+            _oz = obj['z'] if kind == 'c' else obj.z
+            self._skill_damage(p, dmg, _ox, _oz, 0.1)
+            # ★ 地裂：每秒 5% 目标最大生命，持续 5 秒
+            try:
+                if kind == 'm':
+                    _mhp = int(getattr(obj, 'mhp', 0) or 0)
+                elif kind == 'p':
+                    _mhp = int(self._hp_max(obj))
+                else:
+                    _mhp = int(obj.get('hpMax') or obj.get('hp') or 1)
+                _dot = max(1, int(round(_mhp * 0.05)))
+                self._earth_dots.append({
+                    'kind': kind, 'obj': obj, 'by': p.cid, 'dmg': _dot,
+                    'next': now_s() + 1.0, 'until': now_s() + 5.01 * _dmul})
+            except Exception:
+                pass
+            if knock > 0:
+                if kind == 'm':
+                    _km = self._mob_control_mul(obj)
+                    obj.x += ux * knock * _km
+                    obj.z += uz * knock * _km
+                elif kind == 'c':
+                    obj['x'] += ux * knock
+                    obj['z'] += uz * knock
+                else:
+                    self._send_cid(obj.cid, P.pack('fx', kind='kb',
+                                                  dx=round(ux * knock, 2),
+                                                  dz=round(uz * knock, 2)))
+
+    def _cone_skill(self, p, radius, half_deg, mult):
+        """★ round581（A10 燃血斩）：面朝扇形伤害，返回实际总伤害（吸血用）"""
+        _cos = math.cos(math.radians(half_deg))
+        _fx, _fz = math.sin(p.yaw), math.cos(p.yaw)
+        hits = []
+        for m in list(self.mobs.values()):
+            if m.hp <= 0:
+                continue
+            rx, rz = m.x - p.x, m.z - p.z
+            dd = math.hypot(rx, rz)
+            if dd > radius or dd < 0.01:
+                continue
+            if (rx * _fx + rz * _fz) / dd >= _cos:
+                hits.append(('m', m))
+        for q in list(self.players.values()):
+            if q is p or int(q.hp or 0) <= 0:
+                continue
+            if not self._pvp_ok(p, q)[0]:
+                continue
+            rx, rz = q.x - p.x, q.z - p.z
+            dd = math.hypot(rx, rz)
+            if dd > radius or dd < 0.01:
+                continue
+            if (rx * _fx + rz * _fz) / dd >= _cos:
+                hits.append(('p', q))
+        for c in list(self.clones.values()):
+            if int(c.get('hp') or 0) <= 0:
+                continue
+            _co = self.players.get(c.get('owner'))
+            if _co is None or not self._pvp_ok(p, _co)[0]:
+                continue
+            rx, rz = c['x'] - p.x, c['z'] - p.z
+            dd = math.hypot(rx, rz)
+            if dd > radius or dd < 0.01:
+                continue
+            if (rx * _fx + rz * _fz) / dd >= _cos:
+                hits.append(('c', c))
+        dmg = dict(dmg=float(mult), can_crit=True, radius=0.1)
+        _tot = 0
+        for kind, obj in hits:
+            _ox = obj['x'] if kind == 'c' else obj.x
+            _oz = obj['z'] if kind == 'c' else obj.z
+            _tot += (self._skill_damage(p, dmg, _ox, _oz, 0.1) or 0)
+        return _tot
+
+    def _pull_tick(self, dt):
+        """★ round575：吸力 —— 怪 + 玩家 + AI 分身都往中心拉
+
+        ★ 玩家的位置是【客户端权威】✗ 服务端只发 dx/dz 让客户端 moveWithCollision ✓
+          （和击退同一个套路 ✗ 但用 kind='pull' → 客户端不震屏 ✓）
+        ★ 分身是服务端权威 → 直接改坐标 ✓
+        ★ 门禁和伤害一致：施法者/目标都过 _pvp_ok（队友、PvP 关、安全区不拉 ✓）
+        """
+        if not getattr(self, '_pulls', None):
+            return
+        _now = now_s()
+        keep = []
+        for pu in self._pulls:
+            if _now < pu['due']:
+                keep.append(pu)
+                continue
+            if _now > pu['until']:
+                continue
+            _left = max(0.15, pu['until'] - _now)
+            caster = self.players.get(pu.get('by')) if pu.get('by') else None
+            # ---- 怪 ----
+            for m in list(self.mobs.values()):
+                if m.hp <= 0:
+                    continue
+                _cm = self._mob_control_mul(m)
+                if _cm <= 0:
+                    continue
+                dx = pu['x'] - m.x
+                dz = pu['z'] - m.z
+                d2 = dx * dx + dz * dz
+                if d2 > pu['r'] * pu['r'] or d2 < 0.04:
+                    continue
+                d = math.sqrt(d2)
+                step = min(d, max(d * (dt / _left) * 1.25, pu['str'] * dt * 2.0)) * _cm
+                m.x += dx / d * step
+                m.z += dz / d * step
+            # ---- 玩家（客户端权威 → 发 pull 事件）----
+            for q in list(self.players.values()):
+                if caster is not None and q is caster:
+                    continue
+                if int(q.hp or 0) <= 0:
+                    continue
+                if abs(q.x) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(q.z) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+                    continue
+                if caster is not None:
+                    if not self._pvp_ok(caster, q)[0]:
+                        continue
+                elif not self._pvp_on(q):
+                    continue
+                dx = pu['x'] - q.x
+                dz = pu['z'] - q.z
+                d2 = dx * dx + dz * dz
+                if d2 > pu['r'] * pu['r'] or d2 < 0.04:
+                    continue
+                d = math.sqrt(d2)
+                step = min(d, max(d * (dt / _left) * 1.25, pu['str'] * dt * 2.0))
+                try:
+                    self._send_cid(q.cid, P.pack('fx', kind='pull',
+                                                 dx=round(dx / d * step, 3),
+                                                 dz=round(dz / d * step, 3)))
+                except Exception:
+                    pass
+            # ---- AI 分身（服务端权威 → 直接拉）----
+            for c in list(self.clones.values()):
+                if int(c.get('hp') or 0) <= 0:
+                    continue
+                _co = self.players.get(c.get('owner'))
+                if _co is None:
+                    continue
+                if abs(c['x']) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(c['z']) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+                    continue
+                if caster is not None:
+                    if not self._pvp_ok(caster, _co)[0]:
+                        continue
+                elif not self._pvp_on(_co):
+                    continue
+                dx = pu['x'] - c['x']
+                dz = pu['z'] - c['z']
+                d2 = dx * dx + dz * dz
+                if d2 > pu['r'] * pu['r'] or d2 < 0.04:
+                    continue
+                d = math.sqrt(d2)
+                step = min(d, max(d * (dt / _left) * 1.25, pu['str'] * dt * 2.0))
+                c['x'] += dx / d * step
+                c['z'] += dz / d * step
+            keep.append(pu)
+        self._pulls = keep
+
+    def _poison_tick(self, dt):
+        """★ round581（A15 病毒扩散）：玩家身边留毒云，每 0.5 秒 10% 当前血量"""
+        if not getattr(self, '_poisons', None):
+            return
+        _now = now_s()
+        keep = []
+        for pu in self._poisons:
+            if _now >= pu['until']:
+                continue
+            pu['t'] -= dt
+            if pu['t'] <= 0:
+                pu['t'] = 0.5
+                _x, _z, _d = pu['x'], pu['z'], int(pu['dmg'])
+                for m in list(self.mobs.values()):
+                    if m.hp > 0 and (m.x - _x) ** 2 + (m.z - _z) ** 2 <= 6.25:
+                        self._record_mob_damage(m, self.players.get(pu['by']), _d)
+                        m.hp -= _d
+                        m.freezeT = 0.0
+                        self._report_hit(self.players.get(pu['by']), m.mid, _d, False,
+                                         m.x, m.z, {'back': False, 'mb': None, 'heal': 0, 'sk': 1})
+                        if m.hp <= 0:
+                            m.hp = 0
+                            _pp = self.players.get(pu['by'])
+                            if _pp is not None:
+                                self._mob_died(_pp, m)
+                _pp = self.players.get(pu['by'])
+                if _pp is not None:
+                    self._aoe_players(_pp, _x, _z, 2.5, _d, src='skill', is_skill=True)
+            keep.append(pu)
+        self._poisons = keep
+
+    def _icefield(self, p, x, z, rad):
+        """★ round581（A4 冰封领域）：50% 冻结 5 秒；没冻住的吃 120%"""
+        _atk = dict(dmg=1.20, can_crit=True, radius=0.1)
+        _r2 = rad * rad
+        for m in list(self.mobs.values()):
+            if m.hp <= 0 or (m.x - x) ** 2 + (m.z - z) ** 2 > _r2:
+                continue
+            _cm = self._mob_control_mul(m)
+            if _cm > 0 and random.random() < 0.5:
+                m.freezeT = 5.0 * _cm
+            else:
+                self._skill_damage(p, _atk, m.x, m.z, 0.1)
+        for q in list(self.players.values()):
+            if q is p or int(q.hp or 0) <= 0:
+                continue
+            if not self._pvp_ok(p, q)[0]:
+                continue
+            if (q.x - x) ** 2 + (q.z - z) ** 2 > _r2:
+                continue
+            if random.random() < 0.5:
+                q.freezeT = 5.0
+                self._send_cid(q.cid, P.pack('notice', text='被冰封：5 秒不能移动'))
+            else:
+                self._aoe_players(p, q.x, q.z, 0.1, int(self._atk_of(p) * 1.2),
+                                  src='skill', is_skill=True)
+        for c in list(self.clones.values()):
+            if int(c.get('hp') or 0) <= 0:
+                continue
+            _co = self.players.get(c.get('owner'))
+            if _co is None or not self._pvp_ok(p, _co)[0]:
+                continue
+            if (c['x'] - x) ** 2 + (c['z'] - z) ** 2 > _r2:
+                continue
+            if random.random() < 0.5:
+                c['freezeT'] = 5.0
+            else:
+                self._clone_damage(c, int(self._atk_of(p) * 1.2), p, False)
+
+    def _timestop(self, p, x, z, rad, dur=6.0):
+        """★ round587（A9 时间凝滞）：10 米内减速 70% 6 秒 + 10% 伤害"""
+        _r2 = rad * rad
+        for m in list(self.mobs.values()):
+            if m.hp > 0 and (m.x - x) ** 2 + (m.z - z) ** 2 <= _r2:
+                _mcm = self._mob_control_mul(m)
+                if _mcm > 0:
+                    m.slowT = dur * _mcm
+                    m.slowMul = 0.3
+        for q in list(self.players.values()):
+            if q is p or int(q.hp or 0) <= 0:
+                continue
+            if not self._pvp_ok(p, q)[0]:
+                continue
+            if (q.x - x) ** 2 + (q.z - z) ** 2 <= _r2:
+                q.slowT = dur
+                q.slowMul = 0.3
+        for c in list(self.clones.values()):
+            if int(c.get('hp') or 0) <= 0:
+                continue
+            _co = self.players.get(c.get('owner'))
+            if _co is None or not self._pvp_ok(p, _co)[0]:
+                continue
+            if (c['x'] - x) ** 2 + (c['z'] - z) ** 2 <= _r2:
+                c['slowT'] = dur
+                c['slowMul'] = 0.3
+        self._skill_damage(p, dict(dmg=0.10, can_crit=False, radius=rad), x, z, rad)
+
+    def _later_skill_tick(self):
+        """到点的技能伤害（tick 每帧跑一次 ✓）"""
+        if not getattr(self, '_later_skill', None):
+            return
+        _now = now_s()
+        keep = []
+        for it in self._later_skill:
+            due, cid, key, x, z = it
+            if _now < due:
+                keep.append(it)
+                continue
+            p = self.players.get(cid)
+            if p is None:
+                continue
+            try:
+                import skills as skm
+                d = skm.BY_KEY.get(key)
+                if not d:
+                    continue
+                rad = float(d.get('radius') or 0) * (1.0 + self._sk_val(p, 'skrange'))
+                if key == 'icefield':
+                    self._icefield(p, x, z, rad)
+                    continue
+                if key == 'timestop':
+                    self._timestop(p, x, z, rad, 6.0 * _dmul)
+                    continue
+                self._skill_damage(p, d, x, z, rad)
+                # ★ round582（A11 天罚）：8 米内击倒 1 秒
+                if key == 'judgement':
+                    _r2j = rad * rad
+                    for _m in self.mobs.values():
+                        if _m.hp > 0 and (_m.x - x) ** 2 + (_m.z - z) ** 2 <= _r2j:
+                            _cmj = self._mob_control_mul(_m)
+                            if _cmj > 0:
+                                _m.stunT = max(float(getattr(_m, 'stunT', 0) or 0), 1.0 * _cmj)
+                    for _q in self.players.values():
+                        if _q is p or int(_q.hp or 0) <= 0:
+                            continue
+                        if (_q.x - x) ** 2 + (_q.z - z) ** 2 <= _r2j:
+                            _q.downT = 1.0
+                    for _c in self.clones.values():
+                        if int(_c.get('hp') or 0) > 0 and (_c['x'] - x) ** 2 + (_c['z'] - z) ** 2 <= _r2j:
+                            _c['freezeT'] = max(float(_c.get('freezeT') or 0), 1.0)
+            except Exception as e:
+                print('[skill] 延迟伤害失败：%r' % (e,))
+        self._later_skill = keep
+
+    def _earth_dot_tick(self):
+        """★ 地裂：每秒 5% 目标最大生命，持续 5 秒"""
+        if not getattr(self, '_earth_dots', None):
+            return
+        _now = now_s()
+        keep = []
+        for it in self._earth_dots:
+            if _now >= it['until']:
+                continue
+            if _now < it['next']:
+                keep.append(it)
+                continue
+            it['next'] += 1.0
+            p = self.players.get(it['by'])
+            if p is None:
+                continue
+            kind, obj = it['kind'], it['obj']
+            dmg = max(1, int(it['dmg']))
+            try:
+                if kind == 'm':
+                    m = obj
+                    if m.hp <= 0:
+                        continue
+                    _ed = self._mob_defense(p, m, dmg, False)
+                    if _ed <= 0:
+                        continue
+                    self._record_mob_damage(m, p, _ed)
+                    m.hp -= _ed
+                    self._report_hit(p, m.mid, dmg, False, m.x, m.z,
+                                     {'back': False, 'mb': None, 'heal': 0,
+                                      'sk': 1, 'earth': 1})
+                    if m.hp <= 0:
+                        m.hp = 0
+                        self._mob_died(p, m)
+                        self._sk_chain_kill(p)
+                elif kind == 'p':
+                    q = obj
+                    if q is p or int(q.hp or 0) <= 0:
+                        continue
+                    self._aoe_players(p, q.x, q.z, 0.12, dmg,
+                                      src='skill', is_skill=True)
+                elif kind == 'c':
+                    c = obj
+                    if c not in self.clones.values() or int(c.get('hp') or 0) <= 0:
+                        continue
+                    self._clone_damage(c, dmg, p, False)
+            except Exception as e:
+                print('[skill] 地裂持续伤害失败：%r' % (e,))
+            keep.append(it)
+        self._earth_dots = keep
+
+    def _later_hits_tick(self):
+        """★ round580：多段技能的每一段（万剑/箭雨/烈焰/雷霆）"""
+        if not getattr(self, '_later_hits', None):
+            return
+        _now = now_s()
+        keep = []
+        for it in self._later_hits:
+            due, cid, x, z, mult, rad, can_crit, vkey = (list(it) + [''])[:8]
+            if _now < due:
+                keep.append(it)
+                continue
+            p = self.players.get(cid)
+            if p is None:
+                continue
+            try:
+                if vkey in ('swordrain', 'arrowrain', 'firestorm'):
+                    _if = dict(k='impact', x=round(x, 2), z=round(z, 2),
+                               r=1.2, yaw=0, dur=0.32,
+                               seed=random.randint(1, 999999), by=p.role_id)
+                    for _q in self.players.values():
+                        if (_q.x - x) ** 2 + (_q.z - z) ** 2 <= 1600.0:
+                            self._send_cid(_q.cid, P.pack('skillfx', **_if))
+                d = dict(dmg=float(mult), can_crit=bool(can_crit),
+                         radius=float(rad))
+                self._skill_damage(p, d, x, z, float(rad))
+            except Exception as e:
+                print('[skill] 多段伤害失败：%r' % (e,))
+        self._later_hits = keep
+
+    # ══════════════════════════════════════════════════════════════
+    #  被动释放（B 类）框架 round563
+    #  ★ 触发点只有三个：普攻 / 击杀 / 每帧（CD 触发）
+    #  ★ 数值也在 _sk_val 那张表里（和 C 类共用 ✓）
+    # ══════════════════════════════════════════════════════════════
+    def _sk_chain_kill(self, p):
+        """★ round580（C7 连锁反应）：技能击杀 → 主动 CD 立刻 -15%~30%"""
+        try:
+            _ch = self._sk_val(p, 'chain')
+            if _ch > 0 and getattr(p, 'skCd', None):
+                for _k in list(p.skCd.keys()):
+                    p.skCd[_k] = max(0.0, float(p.skCd[_k] or 0) * (1.0 - _ch))
+                # ★ round590：把缩减后的 CD 立刻推给客户端（不然图标还显示旧秒数）
+                self._send_cid(p.cid, P.pack(
+                    'skillcd', cd=dict((k, round(v, 2)) for k, v in p.skCd.items())))
+        except Exception:
+            pass
+
+    def _sk_b_list(self, p):
+        sl = (getattr(p, 'skLoad', {}) or {}).get('B') or []
+        return [k for k in sl if k]
+
+    def _has_b(self, p, key):
+        try:
+            return key in self._sk_b_list(p)
+        except Exception:
+            return False
+
+    def _sk_b_canfire(self, p, key, cd):
+        t = getattr(p, 'skBT', None)
+        if t is None:
+            p.skBT = {}
+            t = p.skBT
+        # ★ round578：0 CD 的技能（嗜血/坦克）不能被残留的 skBT 卡住 ✓
+        if cd > 0:
+            if t.get(key, 0) > 0:
+                return False
+            t[key] = cd
+        else:
+            t.pop(key, None)
+        return True
+
+    def _sk_b_fx(self, p, key, x=None, z=None):
+        """广播被动特效 + 点亮格子"""
+        import skills as skm
+        d = skm.BY_KEY.get(key) or {}
+        _x = p.x if x is None else x
+        _z = p.z if z is None else z
+        _f = dict(k=d.get('vfx') or 'none', x=round(_x, 2), z=round(_z, 2),
+                  r=float(d.get('radius') or 0), yaw=round(p.yaw, 3),
+                  dur=float(d.get('dur') or 1.0), seed=random.randint(1, 999999),
+                  by=p.role_id, trig=key)
+        for _q in self.players.values():
+            if (_q.x - p.x) ** 2 + (_q.z - p.z) ** 2 <= 1600.0:
+                self._send_cid(_q.cid, P.pack('skillfx', **_f))
+
+    def _sk_b_attack_hit(self, p, seq=None):
+        """★ round574（用户："打空不能掷骰"）—— 普攻类被动只在【真打中】时掷
+        · 近战打中怪 / 打中玩家 → 调这里 ✓
+        · 弓/飞刀命中（_arrow_tick）→ 也调这里 ✓
+        · 同一刀可能"近战 + 飞刀"都命中 ✗ 用 atkSeq 去重，一刀只掷一次 ✓
+        """
+        if p is None:
+            return
+        try:
+            _seq = int(seq if seq is not None else (getattr(p, 'atkSeq', 0) or 0))
+            if self._skAtkHitSeq.get(p.cid) == _seq:
+                return
+            self._skAtkHitSeq[p.cid] = _seq
+            self._sk_b_on_attack(p)
+        except Exception as e:
+            print('[skill] 普攻触发失败：%r' % (e,))
+
+    def _sk_shadowstep(self, p):
+        """★ round581（B3 影袭）：闪到目标背后背刺 80%"""
+        if self._in_safe(p):
+            return
+        best, bd = None, 64.0
+        for m in self.mobs.values():
+            if m.hp > 0:
+                dd = (m.x - p.x) ** 2 + (m.z - p.z) ** 2
+                if dd < bd:
+                    bd, best = dd, m
+        for q in self.players.values():
+            if q is p or int(q.hp or 0) <= 0:
+                continue
+            if not self._pvp_ok(p, q)[0]:
+                continue
+            dd = (q.x - p.x) ** 2 + (q.z - p.z) ** 2
+            if dd < bd:
+                bd, best = dd, q
+        for c in self.clones.values():
+            if int(c.get('hp') or 0) <= 0:
+                continue
+            _co = self.players.get(c.get('owner'))
+            if _co is None or not self._pvp_ok(p, _co)[0]:
+                continue
+            dd = (c['x'] - p.x) ** 2 + (c['z'] - p.z) ** 2
+            if dd < bd:
+                bd, best = dd, c
+        if best is None:
+            return
+        if isinstance(best, dict):
+            tx, tz = best['x'], best['z']
+        else:
+            tx, tz = best.x, best.z
+        dx, dz = tx - p.x, tz - p.z
+        d = math.hypot(dx, dz) or 1.0
+        bx, bz = tx + dx / d * 1.2, tz + dz / d * 1.2
+        if abs(bx) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(bz) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+            return
+        p.x, p.z = bx, bz
+        p.yaw = math.atan2(-dx, -dz)
+        self._send_cid(p.cid, P.pack('tp', x=round(bx, 2), z=round(bz, 2)))
+        self._sk_b_fx(p, 'shadowstep', tx, tz)
+        self._skill_damage(p, dict(dmg=1.50, can_crit=True, radius=0.4),
+                           tx, tz, 0.4)
+
+    def _sk_b_on_attack(self, p, ignore_safe=False):
+        """普攻时掷骰子（AI 分身 / 影袭 / 分裂箭）"""
+        import skills as skm
+        if not ignore_safe and self._in_safe(p):
+            return
+        for key in self._sk_b_list(p):
+            d = skm.BY_KEY.get(key)
+            if not d or d.get('trigger') != 'attack':
+                continue
+            ch = float(d.get('chance') or 0)
+            ch *= (1.0 + self._sk_val(p, 'masterB'))   # ★ round580（C9 专精·被动）
+            if random.random() >= ch:
+                continue
+            if (p.qi or 0) < int(d.get('qi') or 0):
+                continue
+            if not self._sk_b_canfire(p, key, float(d.get('cd') or 0)):
+                continue
+            p.qi = max(0, int(p.qi or 0) - int(d.get('qi') or 0))
+            self._send_cid(p.cid, P.pack('qi', q=int(p.qi)))
+            # ★ round591：分裂箭不再播紫色扇形动画（本身已有箭）
+            if key != 'splitarrow':
+                self._sk_b_fx(p, key)
+            # ---- AI 分身：造一个"打手"（30 秒 ✓ 60% 伤害 ✓）----
+            if key == 'clone':
+                try:
+                    # ★ round578（用户决定）：分身最多 10 个（方案写 3，但按用户为准）
+                    if int(getattr(p, 'skCloneN', 0) or 0) >= 10:
+                        pass                      # 最多 10 个 ✓
+                    else:
+                        self._clone_seq += 1
+                        cid2 = 'c%d_%d' % (p.cid, self._clone_seq)
+                        # ★ round577（方案 §3 B1）：分身的血量 = 主人【当前血量】的 30%
+                        #   ★ 之前写的是 60% 上限 → 和方案不一致 ✓（坦克堆高后当前血也会涨 ✓）
+                        _chp = max(1, int(round(int(p.hp or 0) * 0.30)))
+                        self.clones[cid2] = {
+                            'id': cid2, 'owner': p.cid, 'role_id': p.role_id,
+                            'x': p.x + random.uniform(-1.2, 1.2),
+                            'z': p.z + random.uniform(-1.2, 1.2),
+                            'hp': _chp, 'hpMax': _chp,
+                            'ttl': 30.0, 'atkT': 0.0, 'syncT': 0.0,
+                            'dmg': max(1, int(round(self._atk_of(p) * 0.6))),
+                        }
+                        p.skCloneN = int(getattr(p, 'skCloneN', 0) or 0) + 1
+                        _cc = self.clones[cid2]
+                        for _q in self.players.values():
+                            if (_q.x - _cc['x']) ** 2 + (_q.z - _cc['z']) ** 2 <= 1600.0:
+                                self._send_cid(_q.cid, P.pack(
+                                    'skillfx', k='clone', x=round(_cc['x'], 2),
+                                    z=round(_cc['z'], 2), r=0, dur=30.0, seed=0,
+                                    spawn=1, cid=cid2, owner=p.role_id, by=p.role_id,
+                                    sk=(p.role or {}).get('skin') or 'f01',
+                                    skc=getattr(p, 'skCustom', None) or {},
+                                    hp=int(_cc['hp']), hpm=int(_cc['hpMax']),
+                                    nm=p.name))
+                except Exception as e:
+                    print('[skill] 分身召唤失败：%r' % (e,))
+            elif key == 'shadowstep':
+                self._sk_shadowstep(p)
+
+    def _tank_reset(self, p, save=True):
+        """★ round577：坦克引擎重置（方案 §3 B2：死亡或离线 1 小时完全恢复）"""
+        try:
+            _had = int(getattr(p, 'skTankN', 0) or 0) > 0 or int(getattr(p, 'skTankHp', 0) or 0) > 0
+            p.skTankHp = 0
+            p.skTankBase = 0
+            p.skSize = 1.0
+            p.skTankN = 0
+            p.tankAt = 0
+            if hasattr(p, 'plagueOn'):
+                p.plagueOn = False
+            if _had and save:
+                self.post_save(
+                    'UPDATE roles SET sk_tank_hp=0, sk_tank_base=0, sk_tank_size=1.0, '
+                    'sk_tank_n=0, sk_tank_at=0 WHERE id=?', (int(p.role_id),))
+                self._send_cid(p.cid, P.pack(
+                    'notice', text='坦克引擎层数已清空（死亡重置）'))
+        except Exception as e:
+            print('[skill] 坦克重置失败：%r' % (e,))
+
+    def _in_safe(self, p):
+        """★ round579：安全区内不触发被动（用户实测灼烧/雷引在城里也会打）"""
+        try:
+            return (abs(p.x) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(p.z) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF))
+        except Exception:
+            return False
+
+    def _sk_b_on_kill(self, p, m):
+        """击杀触发（坦克引擎 / 嗜血）"""
+        import skills as skm
+        if self._in_safe(p):
+            return
+        for key in self._sk_b_list(p):
+            d = skm.BY_KEY.get(key)
+            if not d or d.get('trigger') != 'kill':
+                continue
+            if not self._sk_b_canfire(p, key, float(d.get('cd') or 0)):
+                continue
+            self._sk_b_fx(p, key)
+            if key == 'tank':
+                # ★ 坦克引擎：生命上限 +1%（复利）、体型 +1%，上限 500%
+                try:
+                    base = int(getattr(p, 'skTankBase', 0) or 0)
+                    if base <= 0:
+                        base = self._hp_max(p)
+                        p.skTankBase = base
+                    cur = max(int(getattr(p, 'skTankHp', 0) or 0), base, self._hp_max(p))
+                    nxt = int(round(cur * 1.01))
+                    if nxt > base * 5:
+                        nxt = base * 5
+                    p.skTankHp = nxt
+                    p.hp = min(nxt, int(p.hp or 0) + (nxt - cur))
+                    p.skSize = min(10.0, float(getattr(p, 'skSize', 1.0) or 1.0) * 1.01)
+                    p.skTankN = int(getattr(p, 'skTankN', 0) or 0) + 1
+                    p.tankAt = int(now_s())
+                    # ★ 立刻落库：刷新/断线重连不丢层数（方案：离线 1 小时内保留）
+                    try:
+                        self.post_save(
+                            'UPDATE roles SET sk_tank_hp=?, sk_tank_base=?, '
+                            'sk_tank_size=?, sk_tank_n=?, sk_tank_at=? WHERE id=?',
+                            (int(p.skTankHp), int(p.skTankBase),
+                             round(float(p.skSize), 6), int(p.skTankN),
+                             int(p.tankAt), int(p.role_id)))
+                    except Exception:
+                        pass
+                    # ★ 弹一次"当前层数 + 图标"（客户端 skTankNotice ✓）
+                    self._send_cid(p.cid, P.pack(
+                        'tank', n=int(p.skTankN), hp=int(p.skTankHp),
+                        hpm=int(self._hp_max(p)), sz=round(float(p.skSize), 4),
+                        add=int(nxt - cur), bonus=int(nxt - int(p.skTankBase))))
+                except Exception as e:
+                    print('[skill] 坦克引擎失败：%r' % (e,))
+            elif key == 'bloodthirst':
+                p.skTA['bloodthirst'] = 8.0 * (1.0 + self._sk_val(p, 'skdur'))
+
+    def _gale_ghost_tick(self, p, dt):
+        """★ round590：疾风步残影服务端广播（别的玩家一定看得到）"""
+        _gt = float((getattr(p, 'skTA', {}) or {}).get('gale', 0) or 0)
+        if _gt <= 0:
+            p.galeGhostT = 0.0
+            p.galeGX = p.x
+            p.galeGZ = p.z
+            return
+        p.galeGhostT = float(getattr(p, 'galeGhostT', 0) or 0) + dt
+        if p.galeGhostT < 0.08:
+            return
+        _dx = p.x - float(getattr(p, 'galeGX', p.x) or p.x)
+        _dz = p.z - float(getattr(p, 'galeGZ', p.z) or p.z)
+        if _dx * _dx + _dz * _dz <= 0.0012:
+            return
+        p.galeGhostT = 0.0
+        p.galeGX = p.x
+        p.galeGZ = p.z
+        _f = dict(kind='ghost', x=round(p.x, 2), z=round(p.z, 2),
+                  yaw=round(p.yaw, 3))
+        for _q in self.players.values():
+            if _q is p:
+                continue
+            if (_q.x - p.x) ** 2 + (_q.z - p.z) ** 2 <= 1600.0:
+                self._send_cid(_q.cid, P.pack('fx', **_f))
+
+    def _berserk_ghost_tick(self, p, dt):
+        """★ round592：暴走残影服务端广播（红色）"""
+        _gt = float((getattr(p, 'skTA', {}) or {}).get('berserk', 0) or 0)
+        if _gt <= 0:
+            p.bersGhostT = 0.0
+            p.bersGX = p.x
+            p.bersGZ = p.z
+            return
+        p.bersGhostT = float(getattr(p, 'bersGhostT', 0) or 0) + dt
+        if p.bersGhostT < 0.08:
+            return
+        _dx = p.x - float(getattr(p, 'bersGX', p.x) or p.x)
+        _dz = p.z - float(getattr(p, 'bersGZ', p.z) or p.z)
+        if _dx * _dx + _dz * _dz <= 0.0012:
+            return
+        p.bersGhostT = 0.0
+        p.bersGX = p.x
+        p.bersGZ = p.z
+        _f = dict(kind='ghost', x=round(p.x, 2), z=round(p.z, 2),
+                  yaw=round(p.yaw, 3), color=0xff5a3a)
+        for _q in self.players.values():
+            if _q is p:
+                continue
+            if (_q.x - p.x) ** 2 + (_q.z - p.z) ** 2 <= 1600.0:
+                self._send_cid(_q.cid, P.pack('fx', **_f))
+
+    def _sk_b_tick(self, p, dt):
+        """每帧：CD 触发类 + 临时增益倒计时"""
+        import skills as skm
+        # ★ round577：任何原因倒下（岩浆/坠落/没走上面两条伤害路径）→ 兜底清坦克
+        if int(getattr(p, 'hp', 0) or 0) <= 0 and (
+                int(getattr(p, 'skTankHp', 0) or 0) > 0 or int(getattr(p, 'skTankN', 0) or 0) > 0):
+            self._tank_reset(p)
+        # 增益倒计时
+        if getattr(p, 'skTA', None):
+            for k in list(p.skTA.keys()):
+                p.skTA[k] -= dt
+                if p.skTA[k] <= 0:
+                    del p.skTA[k]
+        # ★ round578（用户："灼烧/雷引只触发一次就不触发了"）
+        #   病根：_sk_b_canfire 把 CD 写进 skBT ✗ 但全服没有一处递减 ✓
+        #   → 第一次触发后 CD 永远 >0 → 之后再也放不出来 ✓
+        if getattr(p, 'skBT', None):
+            for _bk in list(p.skBT.keys()):
+                p.skBT[_bk] = float(p.skBT[_bk] or 0) - dt
+                if p.skBT[_bk] <= 0:
+                    del p.skBT[_bk]
+        # ★ round585：灵气基础自动恢复 2.0/秒（C5 灵气涌动再额外 0.5~1.5/秒）
+        try:
+            _qf = self._sk_val(p, 'qiflow')
+            _rate = 2.0
+            if _qf > 0.01:
+                _rate += 0.5 + max(0.0, min(1.0, (_qf - 0.20) / 0.20)) * 1.0
+            _qmx = self._qi_max(p)
+            if float(p.qi or 0) < _qmx:
+                p.qi = min(_qmx, float(p.qi or 0) + _rate * dt)
+            p.qiT = float(getattr(p, 'qiT', 0) or 0) + dt
+            if p.qiT >= 0.5:
+                p.qiT = 0.0
+                self._send_cid(p.cid, P.pack('qi', q=int(p.qi)))
+        except Exception:
+            pass
+        # ★ round580：护盾计时 + 暴走（血量<30%）
+        try:
+            if float(getattr(p, 'skShieldT', 0) or 0) > 0:
+                p.skShieldT = max(0.0, float(p.skShieldT) - dt)
+                if p.skShieldT <= 0:
+                    p.skShield = 0.0
+            # ★ round581：冻结/减速计时
+            if float(getattr(p, 'freezeT', 0) or 0) > 0:
+                p.freezeT = max(0.0, float(p.freezeT) - dt)
+            if float(getattr(p, 'downT', 0) or 0) > 0:
+                p.downT = max(0.0, float(p.downT) - dt)
+            if float(getattr(p, 'slowT', 0) or 0) > 0:
+                p.slowT = max(0.0, float(p.slowT) - dt)
+                if p.slowT <= 0:
+                    p.slowMul = 1.0
+            if (int(p.hp or 0) > 0 and self._has_b(p, 'berserk')
+                    and int(p.hp or 0) < int(self._hp_max(p) * 0.30)
+                    and 'berserk' not in (getattr(p, 'skTA', {}) or {})
+                    and self._sk_b_canfire(p, 'berserk', 30.0)):
+                if getattr(p, 'skTA', None) is None:
+                    p.skTA = {}
+                p.skTA['berserk'] = 15.0 * (1.0 + self._sk_val(p, 'skdur'))
+                p.skProfTick = -1
+                self._sk_b_fx(p, 'berserk')
+                self._send_cid(p.cid, P.pack('notice', text='暴走：攻速 +50%、伤害 +20%'))
+        except Exception:
+            pass
+        # ★ round581/589（A15 病毒扩散）：每秒 -1 灵气、移动时每 2 秒留毒云
+        try:
+            if getattr(p, 'plagueOn', False):
+                if self._in_safe(p):
+                    p.plagueOn = False
+                    self._send_cid(p.cid, P.pack('notice', text='病毒扩散：进入安全区，已关闭'))
+                else:
+                    p.plagueMoveT = float(getattr(p, 'plagueMoveT', 0) or 0) + dt
+                    if p.plagueMoveT >= 1.0:
+                        p.plagueMoveT = 0.0
+                        p.qi = max(0, int(p.qi or 0) - 1)
+                        self._send_cid(p.cid, P.pack('qi', q=int(p.qi)))
+                        if int(p.qi or 0) <= 0:
+                            p.plagueOn = False
+                            self._send_cid(p.cid, P.pack('notice', text='病毒扩散：灵气耗尽，已关闭'))
+                    p.plagueAcc = float(getattr(p, 'plagueAcc', 0) or 0) + dt
+                    _mdx = p.x - float(getattr(p, 'plagueX', p.x) or p.x)
+                    _mdz = p.z - float(getattr(p, 'plagueZ', p.z) or p.z)
+                    if p.plagueAcc >= 2.0 and (_mdx * _mdx + _mdz * _mdz) > 0.09:
+                        p.plagueAcc = 0.0
+                        p.plagueX = p.x
+                        p.plagueZ = p.z
+                        self._poisons.append({
+                            'x': p.x, 'z': p.z, 'until': now_s() + 3.0,
+                            'dmg': max(1, int(round(int(p.hp or 0) * 0.10))),
+                            't': 0.5, 'by': p.cid})
+                        _pf = dict(k='plague', x=round(p.x, 2), z=round(p.z, 2),
+                                   r=2.5, yaw=round(p.yaw, 3), dur=3.0,
+                                   seed=random.randint(1, 999999), by=p.role_id)
+                        for _q in self.players.values():
+                            if (_q.x - p.x) ** 2 + (_q.z - p.z) ** 2 <= 1600.0:
+                                self._send_cid(_q.cid, P.pack('skillfx', **_pf))
+        except Exception:
+            pass
+        # ★ round579：安全区内不触发被动（冷却/增益倒计时照常走 ✓）
+        if self._in_safe(p):
+            return
+        for key in self._sk_b_list(p):
+            d = skm.BY_KEY.get(key)
+            if not d or d.get('trigger') != 'tick':
+                continue
+            # ★★ round576（用户复查）：灼烧 —— 先看有没有目标 ✗ 再决定要不要进 CD/扣灵气
+            #   旧版：canfire 先扣 CD；有目标才烧；但灵气从来没扣过 ✓
+            if key == 'burn':
+                _r = float(d.get('radius') or 3.0)
+                _pct = 0.02 if int(getattr(p, 'skTankN', 0) or 0) > 0 else 0.10
+                _dmg = max(1, int(round(int(p.hp or 0) * _pct)))
+                _tg = []
+                for m in list(self.mobs.values()):
+                    if m.hp > 0 and (m.x - p.x) ** 2 + (m.z - p.z) ** 2 <= _r * _r:
+                        _tg.append(('m', m))
+                for q in list(self.players.values()):
+                    if q is p or int(q.hp or 0) <= 0:
+                        continue
+                    if (q.x - p.x) ** 2 + (q.z - p.z) ** 2 > _r * _r:
+                        continue
+                    if not self._pvp_ok(p, q)[0]:
+                        continue
+                    _tg.append(('p', q))
+                for c in list(self.clones.values()):
+                    if int(c.get('hp') or 0) <= 0:
+                        continue
+                    _co = self.players.get(c.get('owner'))
+                    if _co is None:
+                        continue
+                    if (c['x'] - p.x) ** 2 + (c['z'] - p.z) ** 2 > _r * _r:
+                        continue
+                    if not self._pvp_ok(p, _co)[0]:
+                        continue
+                    _tg.append(('c', c))
+                if not _tg:
+                    continue                    # ★ 身边没人没怪 → 不进 CD、不扣灵气 ✓
+                if not self._sk_b_canfire(p, key, float(d.get('cd') or 1.0)):
+                    continue
+                if (p.qi or 0) < int(d.get('qi') or 0):
+                    continue
+                p.qi = max(0, int(p.qi or 0) - int(d.get('qi') or 0))
+                self._send_cid(p.cid, P.pack('qi', q=int(p.qi)))
+                for _tk, _tv in _tg:
+                    if _tk == 'm':
+                        _tv.hp -= _dmg
+                        self._report_hit(p, _tv.mid, _dmg, False, _tv.x, _tv.z,
+                                         {'back': False, 'mb': None, 'heal': 0, 'sk': 1})
+                        if _tv.hp <= 0:
+                            _tv.hp = 0
+                            self._mob_died(p, _tv)
+                    elif _tk == 'p':
+                        _tv.hp = max(0, int(_tv.hp) - _dmg)
+                        self._add_pend(_tv.cid, 'hurts',
+                                       {'dmg': _dmg, 'x': round(_tv.x, 2),
+                                        'z': round(_tv.z, 2), 'by': p.name, 'pvp': 1})
+                        if int(_tv.hp) <= 0:
+                            self._pvp_killed(p, _tv)
+                    else:
+                        self._clone_damage(_tv, _dmg, p, False)
+                self._sk_b_fx(p, key)
+                continue
+            # ---- 其它 tick 类（雷引）：最近目标 = 怪 / 玩家 / 分身 ----
+            best, bd, bkind = None, 1e9, None
+            rng = float(d.get('range') or 12.0)
+            for m in self.mobs.values():
+                if m.hp <= 0:
+                    continue
+                dd = (m.x - p.x) ** 2 + (m.z - p.z) ** 2
+                if dd < bd and dd <= rng * rng:
+                    bd, best, bkind = dd, m, 'm'
+            for q in self.players.values():
+                if q is p or int(q.hp or 0) <= 0:
+                    continue
+                if not self._pvp_ok(p, q)[0]:
+                    continue
+                dd = (q.x - p.x) ** 2 + (q.z - p.z) ** 2
+                if dd < bd and dd <= rng * rng:
+                    bd, best, bkind = dd, q, 'p'
+            for c in self.clones.values():
+                if int(c.get('hp') or 0) <= 0:
+                    continue
+                _co = self.players.get(c.get('owner'))
+                if _co is None or not self._pvp_ok(p, _co)[0]:
+                    continue
+                dd = (c['x'] - p.x) ** 2 + (c['z'] - p.z) ** 2
+                if dd < bd and dd <= rng * rng:
+                    bd, best, bkind = dd, c, 'c'
+            if best is None:
+                continue                    # ★ 没目标 → 不进 CD、不扣灵气 ✓
+            if not self._sk_b_canfire(p, key, float(d.get('cd') or 6.0)):
+                continue
+            if (p.qi or 0) < int(d.get('qi') or 0):
+                continue
+            p.qi = max(0, int(p.qi or 0) - int(d.get('qi') or 0))
+            self._send_cid(p.cid, P.pack('qi', q=int(p.qi)))
+            _bx = best['x'] if bkind == 'c' else best.x
+            _bz = best['z'] if bkind == 'c' else best.z
+            self._sk_b_fx(p, key, _bx, _bz)
+            self._skill_damage(p, d, _bx, _bz, 2.0)
+
+    def _clone_tick(self, dt):
+        """★ round564：AI 分身 —— 跟着主人 8 米内的怪打；到点消散。"""
+        if not getattr(self, 'clones', None):
+            return
+        for cid in list(self.clones.keys()):
+            c = self.clones[cid]
+            c['ttl'] -= dt
+            c['atkT'] -= dt
+            # ★ round581：冻结/减速
+            if float(c.get('freezeT') or 0) > 0:
+                c['freezeT'] = max(0.0, float(c['freezeT']) - dt)
+                continue
+            if float(c.get('slowT') or 0) > 0:
+                c['slowT'] = max(0.0, float(c['slowT']) - dt)
+                if c['slowT'] <= 0:
+                    c['slowMul'] = 1.0
+            c['syncT'] = float(c.get('syncT') or 0) - dt
+            if c['syncT'] <= 0:
+                c['syncT'] = 0.15
+                for _q in self.players.values():
+                    if (_q.x - c['x']) ** 2 + (_q.z - c['z']) ** 2 <= 1600.0:
+                        self._send_cid(_q.cid, P.pack('skillfx', k='clone', move=1,
+                                                     cid=c['id'], x=round(c['x'], 2),
+                                                     z=round(c['z'], 2), r=0, dur=0, seed=0,
+                                                     hp=int(c.get('hp') or 0),
+                                                     hpm=int(c.get('hpMax') or 1)))
+
+            owner = self.players.get(c['owner'])
+            if owner is None or int(getattr(owner, 'hp', 0) or 0) <= 0 or c['ttl'] <= 0:
+                self._clone_despawn(cid)
+                continue
+            # 找目标：离自己 8 米内最近的目标
+            # ★ round574（用户："分身也要能打玩家"）
+            #   · 怪和【非队友玩家】一起比距离 ✓ 谁近打谁
+            #   · 玩家走 _pvp_ok 同一套门禁（队友/安全区/PvP 开关 全部生效 ✓）
+            best, bd, bkind = None, 64.0, None
+            # ★ round582（方案 B1）：优先打【主人当前目标】
+            _lt = getattr(owner, 'lastTgt', None)
+            if _lt:
+                try:
+                    _lk, _lid = _lt
+                    if _lk == 'm':
+                        _ob = self.mobs.get(str(_lid)) or self.mobs.get(_lid)
+                        if _ob is not None and _ob.hp > 0:
+                            _dd = (_ob.x - c['x']) ** 2 + (_ob.z - c['z']) ** 2
+                            if _dd <= 64.0:
+                                best, bd, bkind = _ob, _dd, 'm'
+                    elif _lk == 'p':
+                        _ob = self.players.get(_lid)
+                        if (_ob is not None and _ob is not owner
+                                and int(_ob.hp or 0) > 0 and self._pvp_ok(owner, _ob)[0]):
+                            _dd = (_ob.x - c['x']) ** 2 + (_ob.z - c['z']) ** 2
+                            if _dd <= 64.0:
+                                best, bd, bkind = _ob, _dd, 'p'
+                    elif _lk == 'c':
+                        _ob = self.clones.get(_lid)
+                        _co = self.players.get(_ob.get('owner')) if _ob else None
+                        if (_ob is not None and int(_ob.get('hp') or 0) > 0
+                                and _co is not None and self._pvp_ok(owner, _co)[0]):
+                            _dd = (_ob['x'] - c['x']) ** 2 + (_ob['z'] - c['z']) ** 2
+                            if _dd <= 64.0:
+                                best, bd, bkind = _ob, _dd, 'c'
+                except Exception:
+                    pass
+            if best is None:
+                for m in self.mobs.values():
+                    if m.hp <= 0:
+                        continue
+                    dd = (m.x - c['x']) ** 2 + (m.z - c['z']) ** 2
+                    if dd < bd:
+                        bd, best, bkind = dd, m, 'm'
+                for _q in self.players.values():
+                    if _q is owner or int(_q.hp or 0) <= 0:
+                        continue
+                    if not self._pvp_ok(owner, _q)[0]:
+                        continue
+                    dd = (_q.x - c['x']) ** 2 + (_q.z - c['z']) ** 2
+                    if dd < bd:
+                        bd, best, bkind = dd, _q, 'p'
+                for _cc3 in self.clones.values():
+                    if _cc3 is c or int(_cc3.get('hp') or 0) <= 0:
+                        continue
+                    _co3 = self.players.get(_cc3.get('owner'))
+                    if _co3 is None or not self._pvp_ok(owner, _co3)[0]:
+                        continue
+                    dd = (_cc3['x'] - c['x']) ** 2 + (_cc3['z'] - c['z']) ** 2
+                    if dd < bd:
+                        bd, best, bkind = dd, _cc3, 'c'
+            if best is None:
+                # 没目标 → 回到主人身边
+                dx, dz = owner.x - c['x'], owner.z - c['z']
+                d = math.hypot(dx, dz)
+                if d > 3:
+                    _sm = float(c.get('slowMul') or 1.0)
+                    c['x'] += dx / d * 3.2 * _sm * dt
+                    c['z'] += dz / d * 3.2 * _sm * dt
+                continue
+            # 靠近 + 打
+            _bx = best['x'] if bkind == 'c' else best.x
+            _bz = best['z'] if bkind == 'c' else best.z
+            dx, dz = _bx - c['x'], _bz - c['z']
+            d = math.hypot(dx, dz) or 1.0
+            if d > 1.6:
+                _sm2 = float(c.get('slowMul') or 1.0)
+                c['x'] += dx / d * 3.6 * _sm2 * dt
+                c['z'] += dz / d * 3.6 * _sm2 * dt
+            elif c['atkT'] <= 0:
+                c['atkT'] = 0.9
+                dmg = max(1, int(c['dmg']))
+                if bkind == 'p':
+                    # ★ round574：打玩家 —— 走 _aoe_players（它内部会再过一遍 _pvp_ok ✓）
+                    #   ★ 击杀奖励也在 _aoe_players 里统一结算 ✗ 这里不要重复调 ✓
+                    self._aoe_players(owner, best.x, best.z, 0.8, dmg, src='clone',
+                                      is_skill=True)
+                elif bkind == 'c':
+                    self._clone_damage(best, dmg, owner, False)
+                else:
+                    self._record_mob_damage(best, owner, dmg)
+                    best.hp -= dmg
+                    self._report_hit(owner, best.mid, dmg, False, best.x, best.z,
+                                     {'back': False, 'mb': None, 'heal': 0, 'clone': 1, 'sk': 1})
+                    if best.hp <= 0:
+                        best.hp = 0
+                        self._mob_died(owner, best)
+                # ★ 告诉客户端"我在挥刀"（播动作 ✓）
+                for _q in self.players.values():
+                    if (_q.x - c['x']) ** 2 + (_q.z - c['z']) ** 2 <= 1600.0:
+                        self._send_cid(_q.cid, P.pack('skillfx', k='clone', atk=1,
+                                                     cid=cid, x=round(c['x'], 2),
+                                                     z=round(c['z'], 2), r=0, dur=0, seed=0))
+
+    def _clone_damage(self, c, dmg, attacker=None, crit=False):
+        """★ round575：分身被打 —— 扣它自己的血；归零就走 _clone_despawn（客户端淡出 ✓）
+
+        ★ attacker：玩家普攻/技能打的分身 → 给他弹伤害数字 ✓
+                   僵尸咬的传 None ✗ 不给谁弹（血条会掉 ✓）
+        """
+        if not c:
+            return
+        cid = c.get('id')
+        c['hp'] = max(0, int(c.get('hp') or 0) - max(1, int(dmg)))
+        c['freezeT'] = 0.0        # ★ round584：受伤破冰
+        if attacker is not None:
+            try:
+                self._add_pend(attacker.cid, 'mhits',
+                               {'mid': 'clone:' + str(cid), 'dmg': int(dmg),
+                                'crit': bool(crit), 'clone': 1,
+                                'x': round(c['x'], 2), 'z': round(c['z'], 2)})
+            except Exception:
+                pass
+        if int(c['hp']) <= 0 and cid:
+            self._clone_despawn(cid)
+
+    def _clone_despawn(self, cid):
+        c = self.clones.pop(cid, None)
+        if not c:
+            return
+        o = self.players.get(c.get('owner'))
+        if o is not None:
+            o.skCloneN = max(0, int(getattr(o, 'skCloneN', 0) or 0) - 1)
+        # 告诉同屏的人：这个分身没了
+        for q in self.players.values():
+            if (q.x - c['x']) ** 2 + (q.z - c['z']) ** 2 <= 1600.0:
+                self._send_cid(q.cid, P.pack('skillfx', k='clone', x=round(c['x'], 2),
+                                             z=round(c['z'], 2), r=0, dur=0,
+                                             seed=0, gone=1, cid=cid,
+                                             by=c.get('role_id')))
+
+    def _mob_atk_on(self, q):
+        """妖兽现在能不能打这个人（第 134 轮）—— 单人覆盖优先 ✓
+
+        ★ 关掉之后：僵尸照样刷、照样追、照样围着你 ✗ 但咬不动你 ✓
+          （这样比"关掉就不刷怪"更好用 ✓ 想安全看风景/截图时用 ✓）
+        """
+        rid = getattr(q, 'role_id', None)
+        v = self.mob_atk_of.get(rid)
+        return bool(v) if v is not None else bool(self.mob_atk_all)
+
+    def _owned_count(self, q):
+        """数"标记给他"的僵尸有几只（第 132 轮：硬配额 ✓）
+
+        ★ 第 131 轮是"按距离算归属"✗ 有两个毛病：
+            ① 软上限：替 A 刷的那只后来离 B 更近 → 归属变了 → A 可能超过 8 ✓
+            ② 分配不均：僵尸追人跑 → 往一个人身边聚 → 别人刷不到 ✗
+        ★ 现在改成【刷的时候就打标记】✓（Mob.owner = 那个玩家的 role_id ✓）
+            · 每人严格 8 只 ✓ 谁都不会多也不会少 ✓
+            · 而且更快：O(僵尸数) ✓ 不用再跟每个玩家比距离 ✗
+        ★ 标记【不进协议】✗ 客户端不需要知道 ✓
+        """
+        rid = getattr(q, 'role_id', None)
+        if rid is None:
+            return 0
+        n = 0
+        for m in self.mobs.values():
+            if m.owner == rid:
+                n += 1
+        return n
+
+    def _snd_near(self, x, z, name, vol=1.0, exclude=None):
+        """★ round583/584：30 米内的玩家收到音效（客户端每 2 米一档衰减）"""
+        try:
+            for q in self.players.values():
+                if exclude is not None and q.cid == exclude:
+                    continue
+                if (q.x - x) ** 2 + (q.z - z) ** 2 > 900.0:   # 30 米外听不到
+                    continue
+                self._send_cid(q.cid, P.pack('snd', name=name,
+                                             x=round(x, 2), z=round(z, 2),
+                                             v=round(float(vol), 3)))
+        except Exception:
+            pass
+
+    def _evt_near(self, x, z, mtype, d, exclude=None):
+        """给【附近】的人发一个可见事件（第 63 轮）
+
+        ★ 为什么要"附近"而不是全体广播：远处的人根本不关心 ✗
+          而且这样带宽也省 ✓（和兴趣管理一个思路 ✓）
+        ★ 踩过的坑：P.pack 的第一个参数叫【mtype】不是 t ✗
+          我一开始写成 P.pack(**{'t': 'evt', ...}) → TypeError → 事件根本没发出去 ✗
+          （表现就是"别人看不到复活特效"，而且不报错、只静默失败 ✗）
+        """
+        v2 = mobs.MOB_VIEW * mobs.MOB_VIEW
+        raw = P.pack(mtype, **d)
+        for q in self.players.values():
+            if q is exclude or q.cid == exclude:
+                continue
+            if (q.x - x) ** 2 + (q.z - z) ** 2 > v2:
+                continue
+            self._send_cid(q.cid, raw)
+
+    def _find_player(self, name):
+        """按名字找在线玩家（管理页用 ✓ 找不到返回 None）"""
+        if not name:
+            return None
+        for q in self.players.values():
+            if q.name == name:
+                return q
+        return None
+
+    def _admin_tune_save(self):
+        """把管理员改的开关排队存进 meta（第 216 轮用户要求）
+
+        用户原话：刷怪上限和 PVP、妖兽伤害也是要保存的，
+                  不要重启服务器后也恢复默认了
+        ★ 为什么排队而不是直接写库：tick 线程不许碰磁盘（规矩 1）
+          post_save 是入队给存档线程，和玩家存档同一个机制
+        ★ 为什么打包成一条字典：以后再加管理员开关只改这一处
+        """
+        import json as _json
+        try:
+            blob = _json.dumps({
+                # ★★ round419（用户："配置页面下面这些功能重启后恢复默认"）★★
+                #   病根：这个 blob 里只存了 mob_cap ✗
+                #     「每人上限 mob_per_player」和「补怪间隔 spawn_interval」
+                #     根本没进来 ✗ → 重启当然回默认（眼睛一看就是"设置没保存"）✓
+                #   ★ 现在三个数一起存 ✗ 以后再加管理开关只改这里 ✓
+                'mob_per': int(getattr(self, 'mob_per_player', 8) or 8),
+                'spawn_interval': float(getattr(self, 'spawn_interval', 2.0) or 2.0),
+                'mob_cap': int(getattr(self, 'mob_cap', 0) or 0),
+                'mob_cap_of': {str(k): int(v) for k, v in (getattr(self, 'mob_cap_of', {}) or {}).items()},
+                'pvp_all': bool(getattr(self, 'pvp_all', False)),
+                'pvp_of': {str(k): bool(v) for k, v in (getattr(self, 'pvp_of', {}) or {}).items()},
+                'mob_atk_all': bool(getattr(self, 'mob_atk_all', True)),
+                'mob_atk_of': {str(k): bool(v) for k, v in (getattr(self, 'mob_atk_of', {}) or {}).items()},
+                # ★ round418：QQ 群转发的开关（None = 从未在管理页改过 ✗ 仍跟 config ✓）
+                'qq_on': (None if getattr(self, 'qq_on', None) is None
+                          else bool(self.qq_on)),
+            }, ensure_ascii=False)
+            self.post_save("INSERT OR REPLACE INTO meta(k, v) VALUES(?, ?)",
+                           ('admin_tune', blob))
+            print('[admin] 管理员设置已排队保存')
+        except Exception as e:
+            print('[admin] 管理员设置保存失败：%r' % (e,))
+
+    def _admin_tune_check(self):
+        """每约 2 秒比对一次指纹，变了就排队存
+
+        ★ 为什么不写在 _handle_admin 里：那几个分支里有 return
+          第一次就是这么失败的：接口返回 ok，库里啥也没有
+        ★ 谁改的都能兜住：HTTP、命令行、以后加的任何入口
+        """
+        try:
+            sig = (
+                int(getattr(self, 'mob_per_player', 8) or 8),
+                round(float(getattr(self, 'spawn_interval', 2.0) or 2.0), 3),
+                int(getattr(self, 'mob_cap', 0) or 0),
+                tuple(sorted((k, int(v)) for k, v in (getattr(self, 'mob_cap_of', {}) or {}).items())),
+                bool(getattr(self, 'pvp_all', False)),
+                tuple(sorted((k, bool(v)) for k, v in (getattr(self, 'pvp_of', {}) or {}).items())),
+                bool(getattr(self, 'mob_atk_all', True)),
+                tuple(sorted((k, bool(v)) for k, v in (getattr(self, 'mob_atk_of', {}) or {}).items())),
+                getattr(self, 'qq_on', None),
+            )
+            # ★★★ 第 278 轮修的真 bug（用户："管理页面的设置不是说了要保存吗，
+            #     为什么你重启服务器后又恢复默认了"）★★★
+            #   病根：self._tune_sig 初值是 None ✗
+            #     启动后第一次检查时 sig(默认值) != None ✗ 成立 ✓
+            #     → 【立刻把默认值保存进数据库】✗✓
+            #     → 如果这次启动没能从库里读回来（读失败/顺序不对 ✓）
+            #       存档就被默认值覆盖了 ✗ 用户的设置就"恢复默认"了 ✓✓
+            #   ★ 修：第一次检查【只记指纹 ✗ 不保存】✓
+            #     这样"没读回来"最坏也只是本次用默认值 ✗ 不会毁掉存档 ✓
+            if self._tune_sig is None:
+                self._tune_sig = sig          # ★ 第一次：只初始化指纹 ✓ 不写库 ✓
+                print('[admin] 管理员设置指纹已初始化（本次不写库 ✓ 避免默认值覆盖存档）')
+            elif sig != self._tune_sig:
+                self._tune_sig = sig
+                self._admin_tune_save()
+        except Exception as e:
+            print('[admin] 管理员设置检查失败：%r' % (e,))
+
+    def _handle_admin(self, act, d):
+        """管理页的操作（第 48 轮）—— ★ 只有 tick 线程会进来 ✓
+
+        ★ 管理页通过 HTTP 进来，但真正改世界状态的是这里（tick 线程）✓
+          所以"只有 tick 线程碰世界"这条规矩没破 ✓
+        """
+        if act == 'qq':
+            # ★★ round418：管理页开关 QQ 群转发 ★★
+            #   ★ 只改一个 bool ✗ 线程不用重建（已经在跑了 ✓）
+            #   ★ 关了之后 post() 直接丢弃 ✗ 进队都不进 ✓
+            try:
+                _on = bool((d or {}).get('on'))
+            except Exception:
+                _on = False
+            self.qq_on = _on
+            if getattr(self, 'qq', None) is not None:
+                self.qq.on = _on
+            _st = self.qq.stats() if getattr(self, 'qq', None) is not None else {'on': False}
+            self._broadcast(P.pack('notice', text='[管理] QQ 群转发已%s'
+                                   % ('开启' if _on else '关闭')))
+            print('[qq] 管理页把转发%s（已发 %s 条）'
+                  % ('开了' if _on else '关了', _st.get('sent')))
+            return
+        if act == 'skin':
+            # ★ round492：管理页"发皮肤并换上" → 立刻广播给他 ✓
+            import skins as skinsmod
+            q = self._find_player(d.get('name'))
+            k = str(d.get('key') or '')
+            if q is not None and skinsmod.valid(k):
+                q.role['skin'] = k
+                self._send_cid(q.cid, P.pack('skin', key=k))
+                self._skin_page_send(q)
+            return
+        if act == 'trigB':
+            # ★ round564：调试用 —— 强制触发一次被动释放（不用等 10% 概率）
+            q = self._find_player(d.get('name'))
+            if q is not None:
+                for _ in range(int(d.get('n') or 1)):
+                    try:
+                        self._sk_b_on_attack(q, ignore_safe=True)
+                    except Exception as e:
+                        print('[skill] 强制触发失败：%r' % (e,))
+                self._send_cid(q.cid, P.pack('notice', text='已强制触发被动 %d 次' %
+                                             int(d.get('n') or 1)))
+            return
+        if act == 'bagrefresh':
+            # ★ round527：管理页发了皮肤卡 → 让他背包立刻刷新 ✓
+            q2 = self._find_player(d.get('name'))
+            if q2 is not None:
+                self._send_cid(q2.cid, P.pack('bagrefresh', {}))
+            return
+        if act == 'notify':
+            q = self._find_player(d.get('name'))
+            if q is not None:
+                self._send_cid(q.cid, P.pack('notice', text=str(d.get('text') or '')[:120]))
+            return
+        if act == 'say':
+            txt = str(d.get('text') or '')[:80]
+            if txt:
+                # ★ 第 254 轮（用户要求）：管理公告改成走【弹幕】（全服滚动 ✓）
+                #   原来是 notice（屏幕中间弹一下 ✗ 容易被错过 ✓）
+                self._broadcast(P.pack('ticker', text='[管理] ' + txt, kind='sys'))
+            return
+        # ★★ 第 133 轮：调整刷怪上限（用户要求）★★
+        #   ★ 这一支【不需要 name】✗（全局设置人人可用 ✓）
+        #     所以必须放在下面那个"先找人、找不到就 return"之前 ✗
+        # ★★ 第 134 轮：PVP 开关 / 妖兽伤害开关（全人 + 单人）★★
+        #   和 mobcap 一样：不需要名字就是全局 ✗ 所以放在"先找人"之前 ✓
+        if act in ('pvp', 'mobatk'):
+            who = str(d.get('name') or '').strip()
+            on = 1 if d.get('on') else 0
+            if act == 'pvp':
+                tab, gall, gname = self.pvp_of, 'pvp_all', 'PVP'
+            else:
+                tab, gall, gname = self.mob_atk_of, 'mob_atk_all', '妖兽伤害'
+            if who:
+                q = self._find_player(who)
+                if q is None:
+                    return
+                rid = getattr(q, 'role_id', None)
+                if d.get('clear'):
+                    tab.pop(rid, None)
+                    self._send_cid(q.cid, P.pack('notice',
+                        text='管理员取消了你的【%s】单独设置' % gname))
+                else:
+                    tab[rid] = bool(on)
+                    self._send_cid(q.cid, P.pack('notice',
+                        text='管理员把你的【%s】设成了%s' % (gname, '开' if on else '关')))
+            else:
+                setattr(self, gall, bool(on))
+                self._broadcast(P.pack('notice',
+                    text='[管理] 【%s】已全服%s' % (gname, '开启' if on else '关闭')))
+            return
+        # ★ 第 139 轮：管理员"看某人实时状态"（只读 ✓ 不改任何东西 ✓）
+        #   为什么需要：用户报"只有某个角色打不到/被打死卡住"✗
+        #     光看数据库看不出问题 ✗（数据库的 hp 和内存里的不是一回事 ✓）
+        #     必须能看到【tick 线程里那个 Player 的真实状态】✓
+        if act == 'who':
+            q = self._find_player(str(d.get('name') or ''))
+            if q is None:
+                self._send_cid_who = None
+                return
+            near = 0
+            for m in self.mobs.values():
+                if m.hp <= 0:
+                    continue
+                if (m.x - q.x) ** 2 + (m.z - q.z) ** 2 <= 60.0 * 60.0:
+                    near += 1
+            rid = getattr(q, 'role_id', None)
+            self.lobby_stat = self.lobby_stat or {}
+            self.who_dump = {
+                'name': q.name, 'role_id': rid,
+                'hp': int(q.hp or 0), 'hp_max': self._hp_max(q),
+                'invulnT': round(float(getattr(q, 'invulnT', 0) or 0), 2),
+                'is_dead_in_world': int(q.hp or 0) <= 0,
+                'x': round(q.x, 1), 'z': round(q.z, 1),
+                'pvp': self._pvp_on(q), 'mob_atk': self._mob_atk_on(q),
+                'mob_cap': self._cap_of(q),
+                'owned_mobs': self._owned_count(q), 'near_mobs_60m': near,
+                'overrides': {'pvp': rid in self.pvp_of, 'mobatk': rid in self.mob_atk_of,
+                              'cap': rid in self.mob_cap_of},
+                'talents': dict(self.tal.get(q.role_id, {}) or {}) if False else dict(getattr(q, 'tal', {}) or {}),
+                'armor': (q.armor or {}).get('name'),
+                # ★ 第 155 轮：排障用 —— 魔气在【内存里】到底是多少 ✓
+                'mq': int(q.mq or 0), 'mqAt': int(q.mqAt or 0),
+                'weapon': (q.weapon or {}).get('name'),
+                'last_hurt_at': round(float(getattr(q, 'lastHurtT', 0) or 0), 1),
+            }
+            return
+        # ★★ 第 153 轮：魔气配置（用户要求"加到管理页面"）★★
+        #   ★ 和 mobcap 一样：全局设置不需要名字 ✗ 所以放在"先找人"之前 ✓
+        if act == 'mqcfg':
+            # ★ 第 158 轮：改配置 + 落库的活【全在 HTTP 层做完了】
+            #   这里只负责广播一句提示（只有 tick 线程能广播）
+            if d.get('done'):
+                self._broadcast(P.pack(
+                    'notice', text='[管理] 魔气配置已更新并保存（重启也在）'))
+            return
+        # ★ 单人魔气调整（测试用：直接给 500 就能看头顶最深档 ✓）
+        if act == 'mqset':
+            # ★ 第 154 轮：库已经由 HTTP 层写好了 ✓
+            #   这里只负责【改在线玩家的内存值】+ 推给他 ✓
+            #   （★ 千万别再写库 ✗ 两处都写就会出现"谁后写谁赢"✗ 最难查 ✓）
+            q = self._find_player(str(d.get('name') or ''))
+            if q is None:
+                return                        # 离线：库已经改了 ✓ 他下次登录就是新值 ✓
+            if d.get('exact'):
+                q.mq = max(0, min(int(mqmod.cfg('mq_max', mqmod.MQ_MAX)), int(d.get('v') or 0)))
+            elif d.get('clear'):
+                q.mq = 0
+            elif d.get('add') is not None:
+                q.mq = max(0, min(int(mqmod.cfg('mq_max', mqmod.MQ_MAX)),
+                                  int(q.mq or 0) + int(d.get('add') or 0)))
+            else:
+                q.mq = max(0, min(int(mqmod.cfg('mq_max', mqmod.MQ_MAX)), int(d.get('v') or 0)))
+            # ★★ 第 155 轮修的真 bug：这里原来写的是 dbmod.now_ms() ✗
+            #   而 world.py 里【没有导入 dbmod】✗（那是 app.py 的东西 ✗）
+            #   → NameError → 而 tick 派发那边把异常吞了 ✗
+            #   → 表现就是【接口返回 200、但魔气根本没变】✗✓
+            #     （用户报的就是这个 ✓ 这种最难查 ✗）
+            #   ★ 改用 world.py 自己就有的 now_s() → 毫秒 ✓
+            #     （第 149 轮 net.py 用 dbmod.now_ms() 存的 ✓ 两边单位必须一致 ✗）
+            q.mqAt = int(now_s() * 1000)
+            self._send_cid(q.cid, P.pack('mq', v=int(q.mq or 0)))   # ★ 客户端立刻刷新 ✓
+            self._send_cid(q.cid, P.pack(
+                'notice', text='管理员把你的魔气值设成了 %d' % int(q.mq or 0)))
+            return
+        if act == 'mobcap':
+            who = str(d.get('name') or '').strip()
+            if 'per' in d and d.get('per') is not None:
+                v = max(1, min(30, int(d.get('per'))))
+                if who:
+                    q = self._find_player(who)
+                    if q is None:
+                        return
+                    self.mob_cap_of[getattr(q, 'role_id', None)] = v
+                    self._send_cid(q.cid, P.pack('notice',
+                        text='管理员把你的僵尸上限调成了 %d 只' % v))
+                else:
+                    self.mob_per_player = v
+                    self._broadcast(P.pack('notice',
+                        text='[管理] 每人僵尸上限改为 %d 只' % v))
+            if 'cap' in d and d.get('cap') is not None and not who:
+                self.mob_cap = max(1, min(300, int(d.get('cap'))))
+            if 'interval' in d and d.get('interval') is not None and not who:
+                self.spawn_interval = max(0.2, min(30.0, float(d.get('interval'))))
+            if 'clearOne' in d and who:
+                q = self._find_player(who)
+                if q is not None:
+                    self.mob_cap_of.pop(getattr(q, 'role_id', None), None)
+            return
+        q = self._find_player(d.get('name'))
+        if q is None:
+            return
+        if act == 'spawn':
+            n = max(0, min(int(d.get('n') or 5), mobs.MOB_CAP))
+            self._debug_spawn(q, n, bool(d.get('clear')), d.get('kind') or None, d.get('lv'),
+                              d.get('rank'), d.get('skin') or '')
+            if n:
+                self._send_cid(q.cid, P.pack('notice',
+                                             text='管理员在你附近放了 %d 只僵尸' % n))
+        # ★ give 不在这里做 —— 它是【写库】，放在 HTTP 层（离线玩家也能收到 ✓）
+        #   见 app.py 的 _admin_give()
+        elif act == 'kick':
+            self._send_cid(q.cid, P.pack('kick', code='admin', msg='管理员把你请下线了'))
+        elif act == 'kill':
+            # ★ 第 57 轮：管理页把某个玩家打倒（测试死亡/复活/同步用 ✓）
+            q.hp = 0
+            self._tank_reset(q)       # ★ 死亡 → 坦克层数清零
+            self._add_pend(q.cid, 'hurts', {'dmg': 0, 'x': round(q.x, 2), 'z': round(q.z, 2),
+                                            'by': '管理员', 'kind': 'admin'})
+            self._send_cid(q.cid, P.pack('dead', by='管理员'))
+        elif act == 'heal':
+            q.hp = self._hp_max(q)     # 满血（★ 第 67 轮：含防具加成 ✓）
+            self._send_cid(q.cid, P.pack('notice', text='管理员把你治好了'))
+
+    def _debug_spawn(self, p, n, clear, kind=None, lv=None, rank=0, skin=''):
+        """调试：在我附近直接刷 n 只 / 清空（不做安全区判断 —— 就是要能立刻试 ✓）
+
+        ★ 第 46 轮加了 kind：可以指定职业（不指定就随机 ✓）
+          为什么需要：验证"医生的治疗"这类【按职业】的行为时，
+          随机刷可能刷半天刷不出医生 ✗ 测试和调试都不该靠运气 ✓
+        """
+        if clear:
+            self.mobs.clear()
+            return
+        n = max(0, min(int(n), mobs.MOB_CAP))
+        for _ in range(n):
+            # ★ 调试刷怪不受上限"挡住"：满了就淘汰最远的那只腾位置 ✓
+            #   （以前这里是 break → 上限被远处的僵尸占满时，调试按钮点了没反应 ✗）
+            if len(self.mobs) >= mobs.MOB_CAP and not self._evict_far():
+                break
+            ang = random.random() * math.pi * 2
+            dist = 3.0 + random.random() * 6.0
+            self.mob_seq += 1
+            # ★ 第 46 轮加了 lv：可以指定等级（不指定就按玩家等级随机 ✓）
+            #   为什么需要：验证"打残 → 医生回血"时，怪的血量必须落在
+            #   【一刀打不死、但能打到 85% 以下】那个区间里 —— 随机刷做不到 ✓
+            _lv = int(lv) if lv else mobs.roll_level(p.role.get('level', 1) or 1)
+            _rk = int(rank or 0)
+            if _rk and not skin:
+                skin = random.choice(mob_ranks.ELITE_SKINS if _rk == 1 else mob_ranks.BOSS_SKINS)
+            self.mobs[str(self.mob_seq)] = mobs.Mob(
+                self.mob_seq, _lv, p.x + math.sin(ang) * dist, p.z + math.cos(ang) * dist,
+                kind=kind, rank=_rk, skin=skin,
+                name=(mob_ranks.name_of(skin, _rk) if _rk else None))
+            if _rk:
+                self._special_spawn_send(self.mobs[str(self.mob_seq)])
+
+    def _hp_max_hint(self, role):
+        """给 HTTP 线程用的血量上限估算（第 102 轮）
+
+        ★ 为什么不直接调 _hp_max()：那要一个 Player 对象 ✗
+          而 Player 是 tick 线程的东西 ✗ HTTP 线程不许碰 ✓
+        → 这里只按【角色基础 + 数据库里那件防具】算 ✓ 够用 ✓
+        """
+        try:
+            import mobs as _mobs1
+            # ★ 第 225 轮：按等级算（和 tick 线程的 _hp_max 口径一致 ✓）
+            base = int(_mobs1.level_hp((role or {}).get('level') or 1))
+            import auth as _auth
+            ar = _auth.armor_of(self.cfg if hasattr(self, 'cfg') else None, role.get('id'))
+            # ★ round472：同上（HTTP 线程只能估算 ✗ 但口径要一致 ✓）
+            _a0 = (ar[0] if ar else None)
+            _lvh = (role or {}).get('level') or 1
+            st = armormod.stats_of(_a0, weapons.mastery_of(_a0, _lvh), level=_lvh)
+            return max(1, int(round((base + st['hp']) * (1.0 + st['hp_pct'] / 100.0))))
+        except Exception:
+            import mobs as _mobs2
+            return int(_mobs2.level_hp((role or {}).get('level') or 1))
+
+    def _hp_max(self, p):
+        """生命上限（角色基础 + 防具的 hp / hp%% ✓ 第 67 轮）
+
+        ★ 一定要【一处算、处处用】✗
+          以前 hpMax 散在好几处（role['hpMax'] or 200 ✗）
+          加了防具之后再散着写，迟早出现"治疗治不满 / 复活半血"✗
+        """
+        # ★★★ 第 225 轮（用户："玩家成长生命值是不是忘记做了"）★★★
+        #   原来这里是 int(role['hpMax'] or 200) —— 建号写死的 200 ✗
+        #   → 血量【完全不随等级成长】✗（方案 §4.5 要求 100 + 22L + 0.6L²）
+        #   → 63 级只有 249 血，而同级僵尸一口 403 → 一口就死 ✓
+        #   ★ 现在按等级算 ✓ 老角色不用迁移 ✗ 下次登录自动就对了 ✓
+        #   ★ 顺序保持不变：等级血 + 防具血 → 乘防具 hp% → 再加天赋血 ✓
+        #     （方案 §5 第 3 条特意写了：天赋要加在百分比【之后】✓ 免得被二次放大 ✓）
+        import mobs as _mobs
+        base = int(_mobs.level_hp((p.role or {}).get('level') or 1))
+        # ★ 第 232 轮：坏掉的防具不提供任何加成 ✗（不然"坏了还加血"很怪 ✓）
+        _ar = p.armor
+        if isinstance(_ar, dict) and _ar.get('broken'):
+            _ar = None
+        # ★ round472：防具也吃发挥度（等级不够 → 血量加成打折 ✓）
+        _lv_p = (p.role or {}).get('level') or 1
+        st = armormod.stats_of(_ar, weapons.mastery_of(_ar, _lv_p), level=_lv_p)
+        v = (base + st['hp']) * (1.0 + st['hp_pct'] / 100.0)
+        # ★★ 第 117 轮（方案第 4 步）：天赋血量加进来 ★★
+        #   ★ 故意加在【百分比之后】✗ 免得被防具的 hp% 二次放大 ✓
+        #     （方案 §5 第 3 条特意写了这一句 ✓）
+        v += float((p.talRaw or {}).get('hp') or 0.0)
+        v = max(1, int(round(v)))
+        # ★★ round576（用户："坦克引擎的生命上限没有改变"）★★
+        #   坦克引擎把成长后的上限存在 skTankHp 里 ✗ 之前这里根本没读 ✓
+        #   → me.hpm 每帧都按这个函数算 → 不改这里，HUD 上限永远不变 ✓
+        _tk = int(getattr(p, 'skTankHp', 0) or 0)
+        return max(v, _tk)
+
+    # ================= round293: gold =================
+    GOLD_CAP = 1000000000
+    GOLD_PER_BULLION = 100000000
+
+    # ================= round304b: exchange (tick-side, memory-authoritative) =================
+
+    def _mkt_player(self, role_id):
+        """按角色找【在线且不是幽灵】的会话（金币/背包都挂在它身上 ✓）"""
+        try:
+            rid = int(role_id)
+        except Exception:
+            return None
+        for q in self.players.values():
+            if (getattr(q, 'role_id', None) == rid
+                    and getattr(q, 'ghostAt', None) is None):
+                return q
+        return None
+
+    def _mkt_send(self, p, ok, msg='', **kw):
+        """交易所统一回执：★ 文案一律服务器写 ✗ 客户端不许自己编 ✓（方案 v1 §5）"""
+        d = {'ok': bool(ok), 'msg': str(msg or '')}
+        for k, v in kw.items():
+            if v is not None:
+                d[k] = v
+        self._send_cid(p.cid, P.pack('listres', **d))
+
+    def _mkt_bag_room(self, p):
+        """还能不能往背包里塞东西（★ 上架退回 / 购买前都要看 ✓）
+
+        ★★ round304t：用户报"用另一个号购买显示背包满了"★★
+          原来两处各写一遍同一句判断 ✗ 提示只写"满了"✓
+          现在收成一个函数 ✗ 并把【当前行数 / 上限】写进提示 ✓
+            · 玩家一眼能看出是真满还是卡了 ✓
+            · 排查时也不用再猜"它算的到底是哪个数"✓
+        ★ 判据是【行数】（材料合堆后一行一堆 ✗ 装备一件一行 ✓）
+          行数才是内存和查询的真实开销 ✓
+        """
+        n = len(p.role.get('bag') or [])
+        if n >= MKT_BAG_MAX:
+            return False, ('背包满了（%d / %d 行）✗ 先卖掉或用掉一些'
+                           % (n, MKT_BAG_MAX))
+        return True, ''
+
+    def _mkt_load(self, role_id, rows, replace=False):
+        """把（网络线程读好的）货架装进内存（★ tick 只装配 ✗ 一步都不查库 ✓）
+
+        role_id : 是谁在装载（只在 replace=False 时用来筛"他自己的单"✓）
+        rows    : auth.market_rows_of() 读出来的行 ✓
+        replace : round304c ★ 全量替换（打开交易所时用 ✓）
+                  False = 登录时那条老路（只补自己的 ✗ 不动已有的 ✓）
+        """
+        n = 0
+        seen = set()
+        now = now_s()
+        if replace:
+            # ★ 全量替换：先清空 ✗ 但【正在上架中的占位行】不能丢 ✓
+            #   （那些行是负数 lid ✗ 库里还没有它们 ✓ 清掉就等于玩家白点了一下 ✓）
+            keep = {l: r for l, r in self.mkt['by_lid'].items() if int(l) < 0}
+            for l in list(self.mkt['by_lid'].keys()):
+                if int(l) >= 0:
+                    mkmod.drop(self.mkt, l)
+            for l, r in keep.items():
+                mkmod.add(self.mkt, r)
+        for row in mkmod.load_rows(rows):
+            if int(row.get('lid') or 0) < 0:
+                # ★ 负数 lid 是【内存占位】（正在上架 ✗ 还没落库 ✓）不入内存 ✓
+                continue
+            if not replace and int(row.get('seller') or 0) != int(role_id):
+                # 登录那条老路只认自己的（★ 默认现在是全量读 ✗ 所以这个分支少走 ✓）
+                continue
+            if float(row.get('exp') or 0) <= now:
+                # ★ 已经过期的：不进内存 ✗ 直接排一条"退回过期"✓
+                self.post_save(('MKT', 'exp', {'lid': int(row['lid']),
+                                               'seller': int(row.get('seller') or 0)}))
+                continue
+            mkmod.add(self.mkt, row)
+            seen.add(int(row['lid']))
+            n += 1
+        if n or replace:
+            print('[mkt] %s loaded %d listing(s), shelf now %d'
+                  % ('reload' if replace else ('role %s' % role_id), n,
+                     len(self.mkt['by_lid'])))
+
+    def _mkt_open_fresh(self, p, d):
+        """round304c：打开交易所 = 网络线程刚读了库 ✗ 这里只装配 + 回第一页 ✓"""
+        try:
+            bag = d.get('bag')
+            if isinstance(bag, list):
+                # ★ 背包快照刷新（方案 §9 那条"刚捡的东西挂不上去"的解药 ✓）
+                p.role['bag'] = bag
+        except Exception as e:
+            print('[mkt] bag refresh failed: %r' % (e,))
+        try:
+            self._mkt_load(p.role_id, d.get('rows') or [], replace=True)
+        except Exception as e:
+            print('[mkt] reload failed: %r' % (e,))
+        self._mkt_browse(p, d.get('req') or {})
+        # ★ 顺手把"我的上架"也给一份：面板上"我的上架 N/10"那个角标要立刻有数 ✓
+        self._mkt_mine(p)
+
+    @staticmethod
+    def _mkt_exp_s(row):
+        """内存行里的到期时刻 → 秒（★ 换算口只有一处 ✗ 在 market.exp_s ✓）"""
+        return mkmod.exp_s(row)
+
+    @staticmethod
+    def _mkt_ts_s(row):
+        """同上：内存行里的上架时刻 → 秒（★ 同一套判据 ✗ 一起归一化 ✓）"""
+        return mkmod.exp_s({'exp': row.get('ts')})
+
+    def _mkt_rows_of(self, mkt, seller, now=None):
+        """我的上架（含过期待领取的 ✓ 方案 §9 第二条 ✓）"""
+        now = now_s() if now is None else now
+        out = []
+        n_on = 0
+        for row in mkt['by_lid'].values():
+            if int(row.get('seller') or 0) != int(seller):
+                continue
+            exp = self._mkt_exp_s(row)
+            state = 'on' if exp > now else 'expired'
+            if state == 'on':
+                n_on += 1
+            out.append({'state': state, 'row': row})
+        out.sort(key=lambda x: -self._mkt_ts_s(x['row']))
+        return out, n_on
+
+    def _mkt_mine(self, p):
+        """推"我的上架"给本人（★ 一页 20 条够用 ✗ 每人最多 10 件 ✓）"""
+        rows, n_on = self._mkt_rows_of(self.mkt, p.role_id)
+        body = []
+        _now = now_s()
+        for x in rows[:20]:
+            r = x['row']
+            _exp = self._mkt_exp_s(r)          # ★ 一律先归一化成秒 ✓
+            body.append({'lid': int(r['lid']), 'price': int(r['price']),
+                         'tier': int(r['tier']), 'lv': int(r['lv']),
+                         'name': r['name'], 'state': x['state'],
+                         # ★ left 单位 = 【秒】（和列表页同一个口径 ✓）
+                         'left': int(max(0, _exp - _now)),
+                         # ★ exp 给的是【毫秒】（★ 客户端拿它直接和 Date.now() 比 ✓）
+                         #   为什么这里给毫秒：JS 那边 Date.now() 就是毫秒 ✗
+                         #   让它自己去 /1000 就是又造一个单位混用的机会 ✓
+                         'exp': int(_exp * 1000),
+                         'tax': mkmod.tax_of(r['price']),
+                         'net': mkmod.net_of(r['price']),
+                         'it': r['it']})
+        self._send_cid(p.cid, P.pack('listpage', rows=body, page=1, pages=1,
+                                     total=len(rows), mine=1, on=n_on,
+                                     max=int(valuemod.MKT_MAX_PER_PLAYER),
+                                     gold=int(getattr(p, 'gold', 0) or 0)))
+
+    def _mkt_browse(self, p, d):
+        """浏览货架（★ 纯内存 ✗ 一步也不查库 ✓ 方案 §9 最后一条 ✓）"""
+        cat = str(d.get('cat') or 'all')
+        if cat not in ('all',) + tuple(valuemod.CAT_ORDER):
+            cat = 'all'
+        sort = str(d.get('sort') or 'price')
+        if sort not in ('price', 'price_desc', 'new', 'tier', 'tier_desc'):
+            sort = 'price'
+        try:
+            page = int(d.get('page') or 1)
+        except Exception:
+            page = 1
+        # 阶数筛选：客户端传 1~3 / 4~6 / 7~9 这样的档 ✗ 这里换算成区间 ✓
+        lo = hi = None
+        try:
+            tb = int(d.get('tier') or 0)
+        except Exception:
+            tb = 0
+        if tb == 1:
+            lo, hi = 0, 2      # ★ 材料是 0 阶 ✗ 归进"1-3 阶"这档才找得到 ✓
+        elif tb == 2:
+            lo, hi = 3, 5
+        elif tb == 3:
+            lo, hi = 6, 99
+        afford = None
+        if d.get('afford'):
+            afford = int(getattr(p, 'gold', 0) or 0)
+        res = mkmod.browse(self.mkt, cat=cat, q=str(d.get('q') or ''),
+                           tier_lo=lo, tier_hi=hi, afford=afford,
+                           sort=sort, page=page)
+        self._send_cid(p.cid, P.pack(
+            'listpage', rows=mkmod.pub_rows(res['rows']), page=res['page'],
+            pages=res['pages'], total=res['total'],
+            gold=int(getattr(p, 'gold', 0) or 0),
+            pageSize=int(valuemod.MKT_PAGE)))
+
+    def _mkt_open(self, p, d):
+        """客户端打开交易所：一次给齐（余额 + 我的上架 + 第一页商品 ✓）"""
+        op = str(d.get('op') or 'all')
+        if op == 'mine':
+            self._mkt_mine(p)
+            return
+        self._mkt_browse(p, d)
+
+    def _mkt_list(self, p, d):
+        """上架（★ 先查余额 ✗ 再扣上架费 ✗ 再入内存 ✗ 落库 ✗ 回滚兜底 ✓）"""
+        try:
+            iid = int(d.get('iid'))
+        except Exception:
+            return self._mkt_send(p, False, '参数不对')
+        okp, price = mkmod.price_ok(d.get('price'))
+        if not okp:
+            return self._mkt_send(p, False, price)
+        rec = None
+        for x in (p.role.get('bag') or []):
+            try:
+                if int(x.get('id')) == iid:
+                    rec = x
+                    break
+            except Exception:
+                continue
+        if rec is None:
+            return self._mkt_send(p, False, '背包里没有这件东西（刷新一下再看看）')
+        it = rec.get('item') or {}
+        if not isinstance(it, dict) or not it.get('name'):
+            return self._mkt_send(p, False, '这件东西不能上架')
+        if rec.get('lock') or it.get('locked_by') or it.get('locked'):
+            # ★ round410：玩家自己上的锁和"正在上架"分开提示 ✓
+            if it.get('locked'):
+                return self._mkt_send(p, False, '这件锁住了，先解锁才能挂交易所')
+            return self._mkt_send(p, False, '这件东西正在上架中')
+        # ★ round409（用户："坏掉的武器只能出售给系统"）
+        #   ★ 交易所一律不收坏的 ✗ 只能卖给系统换 10 金币 ✓
+        if it.get('broken'):
+            return self._mkt_send(p, False, '损坏的装备不能上架，只能卖给系统')
+        key = (int(p.role_id), iid)
+        if key in self.mkt_locking:
+            return self._mkt_send(p, False, '正在上架，稍等一下')
+        # ★★ 这一件是不是【已经挂在货架上了】（自测抓到的那条路 ✓）★★
+        #   为什么非要显式查一遍：role['bag'] 快照是打开交易所那一刻的副本 ✗
+        #     它不跟着背包刷新 ✓ 所以"同一件挂两次"用背包根本拦不住 ✓
+        #     （上架时存的就是【同一份 item_json】✗ 所以拿字典相等来认领位最准 ✓
+        #      用 lid == -iid 认领位 ✗ 落库换过 lid 之后就认不出来了 ✓）
+        try:
+            for _r in self.mkt['by_lid'].values():
+                if (int(_r.get('seller') or 0) == int(p.role_id)
+                        and (_r.get('it') or {}) == it):
+                    return self._mkt_send(p, False, '这件东西已经挂在货架上了')
+        except Exception:
+            pass
+        try:
+            n_on = mkmod.count_of(self.mkt, p.role_id)
+        except Exception:
+            n_on = 0
+        n_on += sum(1 for k in self.mkt_locking if k[0] == int(p.role_id))
+        if n_on >= int(valuemod.MKT_MAX_PER_PLAYER):
+            return self._mkt_send(p, False, '最多同时上架 %d 件' % valuemod.MKT_MAX_PER_PLAYER)
+        if len(self.mkt['by_lid']) + len(self.mkt_locking) >= MKT_ROW_MAX:
+            return self._mkt_send(p, False, '货架满了，过一会儿再试')
+        bal = int(getattr(p, 'gold', 0) or 0)
+        fee = mkmod.fee_of(bal, price)
+        if fee > 0 and bal < fee:
+            return self._mkt_send(p, False,
+                                  '上架费 %d 金币，你的余额不够' % fee)
+        # ★★★ round304l（用户："上架时，如果是堆叠的物品，可以拉动数量条选择数量上架"）★★★
+        #   · 装备（有 slot）→ 只能 1 件（它本来就不堆叠 ✓）
+        #   · 材料/黄金（没 slot）→ 1 ~ 背包里那一堆的数量 ✓
+        #   ★ 单价的校验在 mkmod.price_ok 里做过了 ✗ 这里管【数量 × 单价】✓
+        stack = max(1, int(rec.get('stack') or 1))
+        can_stack = mkmod.is_stack(it)
+        try:
+            qty = int(d.get('qty') or 1)
+        except Exception:
+            qty = 1
+        if not can_stack:
+            qty = 1
+        if qty < 1:
+            qty = 1
+        if qty > stack:
+            return self._mkt_send(p, False, '你只有 %d 个（选了 %d）' % (stack, qty))
+        total = int(price) * int(qty)
+        if total > int(valuemod.MKT_PRICE_MAX):
+            return self._mkt_send(p, False, '总价超出上限（单价 × 数量）')
+        if fee > 0:
+            self._gain_gold(p, -fee, 'mkt_fee')
+        self.mkt_locking.add(key)
+        # ★ 乐观入货架：lid 先用【负数占位】（-iid ✗ 一定不会和真 lid 撞 ✓）
+        #   真正落库之后 saver 会把真 lid 回灌 ✗ 那时再换掉这一行 ✓
+        #   为什么不等落库再入：等的这段时间里货架上没有它 ✗
+        #   而玩家可能已经在"我的上架"里找它了 ✓（体验 ✗ 不是正确性 ✓）
+        lid_tmp = -iid
+        try:
+            _t0 = valuemod.now_s()
+            # ★ round304q：把"原来那件物品的 id"记进这一行 ✗ 发给客户端 ✓
+            #   （it 是物品本身 ✗ 不该污染它 → 行里单独存一份 ✓）
+            _row = mkmod.row_of(lid_tmp, p.role_id, int(price), it, _t0,
+                                _t0 + int(valuemod.MKT_DAYS) * 86400,
+                                int(stack), int(qty), int(iid))
+            mkmod.add(self.mkt, _row)
+        except Exception as e:
+            print('[mkt] optimistic add failed: %r' % (e,))
+        self.post_save(('MKT', 'list', {'sid': str(d.get('sid') or ''),
+                                        'seller': int(p.role_id), 'iid': int(iid),
+                                        'price': int(price), 'fee': int(fee),
+                                        'qty': int(qty), 'stack': int(stack),
+                                        'it': it, 'lid_tmp': lid_tmp}))
+        # ★ 回执先回"处理中"✗ 真回执等落库（几百毫秒 ✗ 免得说成功了其实没成 ✓）
+        _qtxt = (' ×%d' % qty) if qty > 1 else ''
+        self._mkt_send(p, True,
+                       '正在上架【%s】%s（%s 金币 ✗ 上架费 %d）…'
+                       % (it.get('name'), _qtxt,
+                          ('单价 %d × %d = %d' % (price, qty, total)) if qty > 1
+                          else ('%d' % price), fee),
+                       lid=None, gold=int(getattr(p, 'gold', 0) or 0),
+                       name=str(it.get('name') or ''), price=int(price))
+
+    def _mkt_fail(self, p, msg, refund=0):
+        """落库失败的回滚（★ 钱是在内存里扣的 ✗ 必须退回 ✓ 方案 §6 ✓）"""
+        if p is None:
+            return
+        if refund:
+            self._gain_gold(p, int(refund), 'mkt_fee_back')
+        self._mkt_send(p, False, msg, gold=int(getattr(p, 'gold', 0) or 0))
+
+    def _mkt_unlist(self, p, d):
+        """下架（★ 上架费不退 ✗ 东西原样回背包 ✓ 方案 v2 ✓）"""
+        try:
+            lid = int(d.get('lid'))
+        except Exception:
+            return self._mkt_send(p, False, '参数不对')
+        row = self.mkt['by_lid'].get(lid)
+        if row is None:
+            return self._mkt_send(p, False, '这件商品已经不在了（刷新一下）')
+        if int(row.get('seller') or 0) != int(p.role_id):
+            return self._mkt_send(p, False, '这不是你的上架')
+        expired = float(row.get('exp') or 0) <= now_s()
+        mkmod.drop(self.mkt, lid)
+        # ★ 文案必须在【投给 saver 的那条】里就带上 ✓
+        #   落库回执是 drain 用的 ✗ 它拿不到这里的局部变量 ✓
+        #   （自测抓到的第 8 个坑：不带 msg → 界面显示成兜底的"操作完成"✓）
+        _msg = ('【%s】过期了，已退回背包' if expired else '已下架：%s 退回背包') % row.get('name')
+        self.post_save(('MKT', 'unlist', {'lid': int(lid),
+                                          'seller': int(p.role_id),
+                                          'expired': 1 if expired else 0,
+                                          'msg': _msg,
+                                          'it': row.get('it') or {},
+                                          'stack': int(row.get('stack') or 1)}))
+        # ★★ 这里【不回执】✗ 让落库那条回执来说话 ✓
+        #   为什么：回执一定要唯一 ✗ 回两条客户端会当成两次操作 ✓
+        #   （自测抓到的第 9 个坑：这一条 + drain 那条 = 两条一模一样的 listres ✓）
+        #   ★ 好处还顺带把"落库失败"说清楚 ✗ 不会先说成功再改口 ✓
+
+    def _mkt_claim(self, p, d):
+        """领取（★ 落库失败时东西还在货架上 ✗ 清出空位后点这个拿回来 ✓ 方案 §9 ✓）"""
+        try:
+            lid = int(d.get('lid'))
+        except Exception:
+            return self._mkt_send(p, False, '参数不对')
+        row = self.mkt['by_lid'].get(lid)
+        if row is None:
+            return self._mkt_send(p, False, '这件商品已经不在了（刷新一下）')
+        if int(row.get('seller') or 0) != int(p.role_id):
+            return self._mkt_send(p, False, '这不是你的上架')
+        if float(row.get('exp') or 0) > now_s():
+            return self._mkt_send(p, False, '还在上架中，先下架再领')
+        _ok, _why = self._mkt_bag_room(p)
+        if not _ok:
+            return self._mkt_send(p, False, _why)
+        mkmod.drop(self.mkt, lid)
+        self.post_save(('MKT', 'unlist', {'lid': int(lid),
+                                          'seller': int(p.role_id),
+                                          'expired': 1,
+                                          'msg': '已取回：%s' % row.get('name'),
+                                          'it': row.get('it') or {},
+                                          'stack': int(row.get('stack') or 1)}))
+        # ★ 同上：回执只由落库那条发（★ 唯一 ✗ 见 _mkt_unlist 的注释 ✓）
+
+    def _mkt_buy(self, p, d):
+        """购买（★ 校验+扣钱在同一拍 ✗ 交货和卖家到账等落库成功 ✓）"""
+        try:
+            lid = int(d.get('lid'))
+        except Exception:
+            return self._mkt_send(p, False, '参数不对')
+        row = self.mkt['by_lid'].get(lid)
+        if row is None:
+            return self._mkt_send(p, False, '这件商品已经不在了（刷新一下）')
+        if float(row.get('exp') or 0) <= now_s():
+            return self._mkt_send(p, False, '这件商品已过期')
+        if int(row.get('seller') or 0) == int(p.role_id):
+            return self._mkt_send(p, False, '这是你自己的上架')
+        # 重复点击 / 网络重发：同一个 sid 直接回"处理中"（真正的幂等在落库那一层 ✓）
+        if str(d.get('sid') or ''):
+            if lid in self.mkt_sids.get(str(d['sid']), ()):
+                return self._mkt_send(p, False, '这笔交易正在处理，别重复点')
+        # ★★★ round304l（用户："购买时也是一样拖动数量选择数量购买"）★★★
+        unit = int(row['price'])                     # ★ 单价
+        avail = max(1, int(row.get('qty') or 1))     # ★ 货架上还剩几个
+        try:
+            qty = int(d.get('qty') or 1)
+        except Exception:
+            qty = 1
+        if qty < 1:
+            qty = 1
+        if qty > avail:
+            return self._mkt_send(p, False, '货架上只剩 %d 个（你选了 %d）' % (avail, qty))
+        # ★ 可堆叠的才允许一次买多个 ✗ 装备永远 1 件 ✓
+        if not mkmod.is_stack(row.get('it') or {}):
+            qty = 1
+        price = unit * qty                          # ★ 这一笔的总价
+        if int(getattr(p, 'gold', 0) or 0) < price:
+            return self._mkt_send(p, False, '金币不够（要 %d ✗ 你有 %d）'
+                                  % (price, int(getattr(p, 'gold', 0) or 0)))
+        _ok, _why = self._mkt_bag_room(p)
+        if not _ok:
+            return self._mkt_send(p, False, _why)
+        applied = self._gain_gold(p, -price, 'mkt_buy')
+        if applied != -price:
+            if applied:
+                self._gain_gold(p, -applied, 'mkt_buy_back')
+            return self._mkt_send(p, False, '金币不够')
+        seller = self._mkt_player(row.get('seller'))
+        tax = mkmod.tax_of(price)
+        net = mkmod.net_of(price)      # ★ 卖家到手（落库回执要用 ✗ 自测抓到漏了这个 ✓）
+        # 内存里先扣数量 ✗ 免得两个人同一拍买同一批 ✓（落库失败会由 _mkt_drain 退回钱 ✓）
+        #   ★ 买完才 drop ✗ 买一半要留着继续卖 ✓
+        row['qty'] = avail - qty
+        if int(row['qty']) <= 0:
+            mkmod.drop(self.mkt, lid)
+        if str(d.get('sid') or ''):
+            self._mkt_sid_note(str(d['sid']), lid)
+        self.post_save(('MKT', 'buy', {'sid': str(d.get('sid') or ''),
+                                       'lid': int(lid),
+                                       'buyer': int(p.role_id),
+                                       'reply': int(p.role_id),
+                                       'seller': int(row.get('seller') or 0),
+                                       'price': price, 'unit': unit, 'qty': qty,
+                                       'tax': tax, 'net': net,
+                                       'seller_online': 1 if seller is not None else 0,
+                                       'it': row.get('it') or {},
+                                       'stack': int(row.get('stack') or 1)}))
+        # ★ 卖家到账【不在这里做】✗ 在落库成功之后（_mkt_drain ✓）
+        #   为什么：万一落库失败 ✗ 卖家已经拿到钱 ✗ 买家又全额退回 ✓ = 凭空多钱 ✓✓
+        #   ★ 买家这一半是安全的：扣钱和校验在【同一拍】✗ 失败全额退 ✓
+        self._mkt_send(p, True, '正在购买【%s】%s（%s）…'
+                       % (row.get('name'),
+                          (' ×%d' % qty) if qty > 1 else '',
+                          ('单价 %d × %d = %d 金币' % (unit, qty, price)) if qty > 1
+                          else ('%d 金币' % price)),
+                       lid=int(lid), kind='buy', gold=int(getattr(p, 'gold', 0) or 0),
+                       name=str(row.get('name') or ''), price=price)
+
+    def _mkt_offline_pay(self, seller_id, amount):
+        """离线卖家的钱 → 走 pending_gold（★ 上线时自动入账 ✗ 不绕过上限 ✓ 方案 §3 ✓）"""
+        try:
+            if int(amount) <= 0:
+                return
+            import db as dbmod
+            self.post_save(
+                'INSERT INTO pending_gold(role, amount, why, ts, done)'
+                ' VALUES(?,?,?,?,0)',
+                (int(seller_id), int(amount), 'trade_sell', dbmod.now_ms()))
+        except Exception as e:
+            print('[mkt] offline pay failed: %r' % (e,))
+
+    def _mkt_sid_note(self, sid, lid):
+        """记一笔"这个 sid 正在处理哪一件"（防连点 ✗ 只记最近 50 条 ✓）"""
+        try:
+            lst = self.mkt_sids.setdefault(str(sid), [])
+            lst.append(int(lid))
+            if len(self.mkt_sids) > 50:
+                for k in list(self.mkt_sids.keys())[:-40]:
+                    self.mkt_sids.pop(k, None)
+        except Exception:
+            pass
+
+    def _mkt_sweep(self):
+        """过期回收（★ 只动内存 + 投一条 UPDATE ✗ tick 不碰磁盘 ✓ 方案 §9 ✓）
+
+        ★★★ round410（用户："到期没卖出 → 在交易所【我的上架】里显示过期，
+                       点【下架】才回背包"）★★★
+          原来：一到期【立刻】自动退回背包 ✗ 玩家根本没看到"过期"这一步 ✓
+               而且人不在线的时候东西就悄悄回背包了 ✓
+          现在：
+            · 到期【不自动退回】✗ 留在货架上 ✓
+              状态由 _mkt_rows_of 现算（exp <= now → 'expired' ✓）
+              客户端「我的上架」本来就画成【已过期 / 待取回 / 取回按钮】✓
+            · 取回走 _mkt_claim（listclaim ✓ 那条路早就写好了 ✓）
+            · 兜底：过期超过 MKT_EXPIRED_KEEP 天还没人取 → 才自动退回背包 ✓
+              （不然挂机几百年的人东西会一直占内存 ✓）
+        """
+        now = now_s()
+        n = 0
+        for lid, row in list(self.mkt['by_lid'].items()):
+            _exp = self._mkt_exp_s(row)
+            if _exp > now:
+                continue                       # 还没到期 ✓
+            if now - _exp < MKT_EXPIRED_KEEP * 86400:
+                continue                       # 到期了但还在"等他自己取回"的窗口里 ✓
+            mkmod.drop(self.mkt, lid)
+            self.post_save(('MKT', 'exp', {'lid': int(lid),
+                                           'seller': int(row.get('seller') or 0),
+                                           'name': str(row.get('name') or ''),
+                                           'msg': '【%s】过期太久了，已自动退回背包（背包满就去交易所领取）'
+                                                  % row.get('name'),
+                                           'it': row.get('it') or {},
+                                           'stack': int(row.get('stack') or 1)}))
+            n += 1
+        if n:
+            print('[mkt] %d listing(s) expired and auto-returned' % n)
+
+    def _mkt_ack(self, p, text, **kw):
+        """先弹一句系统提示 ✗ 再回执 ✓
+
+        ★ 为什么用 notice 而不是编一套"刷新背包"协议：
+          notice 是【服务器写的文案】✗ 客户端本来就显示 ✓
+          再带一个约定好的尾巴"（背包已更新）"→ 客户端看到就去重拉背包 ✓
+          （下一轮做界面时用 ✓ 现在先把文案定死 ✓）
+        """
+        if text:
+            self._send_cid(p.cid, P.pack('notice', text='%s（背包已更新）' % text))
+
+    def _mkt_drain(self):
+        """处理落库结果（★ tick 线程唯一能改钱的地方之一 ✓）
+
+        ★★ round304b 的关键顺序（想清楚才写的 ✗ 别改）：
+            购买时【钱在 tick 里先扣】✗ 落库是异步的 ✓
+            → 落库成功：只补"卖家到账 + 买家拿到货"✓
+            → 落库失败：买家全额退回 ✓（绝不会"扣了钱没拿到货"✓）
+          ★ 为什么不等落库成功再扣钱：那样 buy 的校验和扣钱会跨 tick ✗
+            中间买家可能把钱花在别处 ✗ 变成"余额够 ✗ 扣的时候不够"✓
+            现在的写法：扣钱和校验在【同一拍】✗ 不存在这个缝 ✓
+        """
+        n = 0
+        while n < 200:
+            try:
+                ex = self.mkt_failq.get_nowait()
+            except queue.Empty:
+                break
+            n += 1
+            try:
+                kind = str(ex.get('kind') or '')
+                rid = int(ex.get('role') or 0)
+                p = self._mkt_player(rid)
+                if ex.get('done'):
+                    # ---------------- 落库成功 ----------------
+                    if kind == 'list':
+                        # 把乐观那行（lid 是负数占位）换成真行（真有 lid 才能买/下架 ✓）
+                        tmp = int(ex.get('lid_tmp') or 0)
+                        if tmp:
+                            mkmod.drop(self.mkt, tmp)
+                        # ★★ 到期时刻必须用 saver 回灌的那份 ✗ 别用乐观那个占位 ✓
+                        #   自测抓到的：面板显示"剩 20729074 天后过期"✓
+                        #   根因：上架那一刻 exp 还是 0（要落库才知道）✓
+                        #     → 0 - now = 负数 ✗ 界面把它当成小数天 ✓
+                        #   ★ 单位：_mkt_save_list 回灌的 ts/exp 已经是【秒】✓
+                        #     （它自己做过 now_ms()/1000 ✓ 和内存行的口径一致 ✓）
+                        _ts = float(ex.get('ts') or 0)
+                        _exp = float(ex.get('exp') or 0)
+                        if _ts <= 0:
+                            _ts = now_s()
+                        if _exp <= _ts:
+                            _exp = _ts + int(valuemod.MKT_DAYS) * 86400
+                        _r2 = mkmod.row_of(
+                            int(ex.get('lid') or 0), rid, int(ex.get('price') or 0),
+                            ex.get('it') or {}, _ts, _exp,
+                            int(ex.get('stack') or 1), int(ex.get('qty') or 1),
+                            int(ex.get('iid') or 0))
+                        mkmod.add(self.mkt, _r2)
+                        self.mkt_locking.discard((rid, int(ex.get('iid') or 0)))
+                        # ★ 为什么不把这一件从 role['bag'] 快照里删掉：
+                        #   那个快照是【打开交易所那一刻的】副本 ✗ 不跟背包刷新 ✓
+                        #   删了它 → 玩家把同一件再挂一次 ✗ 快照里已经没有它了 ✗
+                        #     于是"正在上架中"这道本地闸门形同虚设 ✓
+                        #     （自测抓到的：提示会变成落库阶段的"上架失败"✓ 不该这样 ✓）
+                        #   ★ 留着没坏处：真要再挂 ✗ 货架上那一份会先拦下来 ✓
+                        if p is not None:
+                            self._mkt_send(p, True,
+                                           '【%s】已上架：%d 金币（上架费 %d）'
+                                           % (ex.get('name'), int(ex.get('price') or 0),
+                                              int(ex.get('fee') or 0)),
+                                           lid=int(ex.get('lid') or 0),
+                                           gold=int(getattr(p, 'gold', 0) or 0),
+                                           refresh=1)
+                            self._mkt_ack(p, '【%s】已上架（%d 金币）'
+                                          % (ex.get('name'), int(ex.get('price') or 0)))
+                    elif kind == 'buy':
+                        lid = int(ex.get('lid') or 0)
+                        # ★★ 先把"还能买几个"按库里的权威值改掉 ✗ 再决定要不要下架 ✓
+                        #   （两个买家同时买的时候 ✗ 内存可能慢半拍 ✓ 以库为准 ✓）
+                        _left = ex.get('qty_left')
+                        if _left is not None:
+                            _r = self.mkt['by_lid'].get(lid)
+                            if _r is not None:
+                                _r['qty'] = int(_left)
+                        if _left is not None and int(_left) > 0 and                                 str(ex.get('state_left') or 'on') == 'on':
+                            pass          # ★ 还有货 → 留在货架上 ✓
+                        else:
+                            mkmod.drop(self.mkt, lid)
+                        it = ex.get('it') or {}
+                        # ★★ 自测抓到的第 6 个坑：成交这条回执【有两个当事人】★★
+                        #   上面那句 p = _mkt_player(ex['role']) 里的 role 是
+                        #   seller or buyer（卖家优先 ✗）→ 拿到的其实是【卖家】✗
+                        #   而这一段把 p 当买家 ✗
+                        #   → 结果是：买家那一份"交货通知"发给了卖家 ✓
+                        #     而 /api/sell 那边的卖家到账又被"p 就是卖家"覆盖 ✓
+                        #     最后账面上【买家只扣 5 ✗ 卖家净得 0】✓✓
+                        #   ★ 修：两个当事人各自查一次 ✗ 一个都不许猜 ✓
+                        bp = self._mkt_player(int(ex.get('buyer') or 0))
+                        sp = self._mkt_player(int(ex.get('seller') or 0))
+                        if bp is not None and isinstance(it, dict):
+                            # ★ 钱在 _mkt_buy 里已经扣过了 ✗ 这里只交货 ✓
+                            if isinstance(bp.role.get('bag'), list):
+                                bp.role['bag'].insert(0, {'id': 0, 'item': it,
+                                                          'stack': int(ex.get('stack') or 1),
+                                                          'lock': 1})
+                            _bq = max(1, int(ex.get('qty') or 1))
+                            _btxt = ('买到【%s】%s 花了 %d 金币'
+                                     % (ex.get('name'),
+                                        (' ×%d' % _bq) if _bq > 1 else '',
+                                        int(ex.get('price') or 0)))
+                            self._mkt_send(bp, True, _btxt, lid=lid, kind='buy',
+                                           gold=int(getattr(bp, 'gold', 0) or 0),
+                                           name=str(ex.get('name') or ''),
+                                           price=int(ex.get('price') or 0), refresh=1)
+                            self._mkt_ack(bp, _btxt)
+                        sid = int(ex.get('seller') or 0)
+                        if sp is not None:
+                            # ★ 卖家在线 → 只改内存（他那边下一拍就推金币 ✓）
+                            self._gain_gold(sp, int(ex.get('net') or 0), 'trade')
+                        else:
+                            # ★ 离线 → 走 pending_gold（上线时自动入账 ✓ 方案 §3 ✓）
+                            self._mkt_offline_pay(sid, int(ex.get('net') or 0))
+                    else:
+                        # 下架 / 过期 / 领取：东西已经在库里回到背包了 ✗ 叫客户端重拉 ✓
+                        if p is not None:
+                            self._mkt_send(p, True, str(ex.get('msg') or '操作完成'),
+                                           lid=int(ex.get('lid') or 0), refresh=1)
+                            self._mkt_ack(p, str(ex.get('msg') or '操作完成'))
+                    continue
+                # ---------------- 落库失败 ----------------
+                # ★ 乐观加进去的那一行必须先拿掉 ✓
+                #   不拿掉的话：货架上留着一行【没有 lid 的假商品】✗
+                #     别人看得见却买不了 ✗ 玩家自己也不能再挂它 ✓
+                #   （自测那条"不能留负数占位"的断言就是照这个写的 ✓）
+                if kind == 'list':
+                    # ★ 乐观那行的 lid 就是 -iid（_mkt_list 里定的 ✓）
+                    #   为什么要拿掉：不拿掉的话货架上留着一行【没有真 lid 的假商品】✗
+                    #     别人看得见却买不了 ✗ 玩家自己也不能再挂它 ✓
+                    #   （自测那条"不能留负数占位"的断言就是照这个写的 ✓）
+                    mkmod.drop(self.mkt, -int(ex.get('iid') or 0))
+                    self.mkt_locking.discard((rid, int(ex.get('iid') or 0)))
+                if p is None:
+                    continue
+                if kind == 'list':
+                    # ★ 文案里必须【说清钱退回来了】✗ 不然玩家只看到"上架失败"
+                    #   会以为上架费被吞了 ✓（自测的断言就是照这条写的 ✓）
+                    why = str(ex.get('msg') or '').replace('操作失败：', '') or '数据库出错'
+                    self._mkt_fail(p, '上架失败（%s）✗ 上架费已退还' % why,
+                                   refund=int(ex.get('fee') or 0))
+                elif kind == 'buy':
+                    why = str(ex.get('msg') or '').replace('操作失败：', '') or '数据库出错'
+                    self._mkt_fail(p, '购买失败（%s）✗ 金币没有被扣' % why)
+                else:
+                    why = str(ex.get('msg') or '').replace('操作失败：', '') or '数据库出错'
+                    self._mkt_fail(p, '交易落库失败（%s）✗ 钱已退回' % why)
+            except Exception as e:
+                print('[mkt] drain failed: %r' % (e,))
+        # ★ 卡住的锁也要清（玩家掉线 / 回滚 ✗ 不然他永远上架不了这一件 ✓）
+        try:
+            if self.mkt_locking and (self.tick_count % 300) == 0:
+                for key in list(self.mkt_locking):
+                    if self._mkt_player(key[0]) is None:
+                        self.mkt_locking.discard(key)
+        except Exception:
+            pass
+
+    def _mkt_do(self, p, t, d):
+        """交易所的六条消息（★ 全在 tick 线程 ✗ 纯内存 ✓）"""
+        if t == 'lists':
+            self._mkt_open(p, d)
+        elif t == 'mylists':
+            self._mkt_mine(p)
+        elif t == 'mklist':
+            self._mkt_list(p, d)
+        elif t == 'buyitem':
+            self._mkt_buy(p, d)
+        elif t == 'unlist':
+            self._mkt_unlist(p, d)
+        elif t == 'listclaim':
+            self._mkt_claim(p, d)
+        else:
+            self._send_cid(p.cid, P.pack('listres', ok=False, msg='未知的交易所操作'))
+
+    def _mkt_tick(self):
+        """每 tick 的交易所杂事（★ 全部只碰队列和内存 ✗ 没有磁盘 IO ✓）"""
+        # ① 上线时读好的货架（网络线程读的 ✗ 这里只入内存 ✓）
+        n = 0
+        while n < 50:
+            try:
+                rid, rows = self._joinq2.get_nowait()
+            except queue.Empty:
+                break
+            n += 1
+            try:
+                self._mkt_load(rid, rows)
+            except Exception as e:
+                print('[mkt] load failed: %r' % (e,))
+        # ② 落库失败 → 回滚内存里的钱
+        if not self.mkt_failq.empty():
+            self._mkt_drain()
+        # ③ 过期回收（每 5 秒一次 ✗ 只动内存 + 投 UPDATE ✓）
+        self._mkt_acc += TICK_DT
+        if self._mkt_acc >= MKT_SWEEP_INTERVAL:
+            self._mkt_acc = 0.0
+            try:
+                self._mkt_sweep()
+            except Exception as e:
+                print('[mkt] sweep failed: %r' % (e,))
+
+    def _gain_gold(self, q, n, why=''):
+        """THE only place gold changes. Returns the amount actually applied.
+
+          * memory is authoritative - never write the db here (tick thread)
+          * n < 0 -> will not go below zero (returns 0 when it cannot pay)
+          * n > 0 -> anything above GOLD_CAP becomes gold bullion automatically
+          * every change goes into a small ring buffer (admin / debugging)
+        """
+        if q is None or not n:
+            return 0
+        try:
+            n = int(n)
+        except Exception:
+            return 0
+        cur = int(getattr(q, 'gold', 0) or 0)
+        if n < 0:
+            pay = min(cur, -n)
+            if pay <= 0:
+                return 0
+            q.gold = cur - pay
+            applied = -pay
+        else:
+            q.gold = cur + n
+            applied = n
+            try:
+                if q.gold > self.GOLD_CAP:
+                    k = (q.gold - self.GOLD_CAP) // self.GOLD_PER_BULLION
+                    if k > 0 and self._give_bullion(q, k):
+                        q.gold -= k * self.GOLD_PER_BULLION
+            except Exception as e:
+                print('[gold] bullion convert failed: %r' % (e,))
+        q.goldDirty = True
+        try:
+            if applied > 0:
+                rptmod.add_gold(q, applied)   # ★ round502
+        except Exception:
+            pass
+        # ★★★ round305 修的真 bug：钱只在内存里 ✗ 会被一次"早排队的存档"盖掉 ★★★
+        #   用户脚本踩到的现象："号里卖过东西 ✗ 余额却是 0"✓
+        #   复现：离线卖东西（写 pending_gold）→ 【马上】登录 →
+        #     ① 登录时排了一次存档（那一刻 gold=0 ✓）
+        #     ② 同一拍 tick 把 pending 入账 535 ✗ 只改了内存 ✓
+        #     ③ 存档线程随后把 ① 那份（0）写回库 ✓ → 钱没了①
+        #     等 3 秒再登录就不会中（①已经写完 ✗ ②之后 15 秒的定时存档才写 ✓）
+        #   ★ 根因：gold 的落库【只有一条路】= _save_player（15 秒 / 下线）
+        #     而这条路上的值是【排队那一刻】的快照 ✗ 入账比它晚就丢 ✓
+        #   ★ 修法（两处都要 ✗ 少一处都还会丢）：
+        #     ① 这里【顺手把存档也排上】✗ 让钱的改动自己触发落库 ✓
+        #     ② _save_player 取【当前】内存值 ✗ 不用过期快照 ✓
+        try:
+            _rid = int(getattr(q, 'role_id', 0) or 0)
+            if _rid:
+                if isinstance(getattr(q, 'role', None), dict):
+                    q.role['gold'] = int(q.gold or 0)      # 内存里那份也跟着对 ✓
+                _seq = int(self._gold_seq.get(_rid, 0)) + 1
+                self._gold_seq[_rid] = _seq
+                self.post_save(*gold_sql(_seq, _rid, q.gold))
+        except Exception as e:
+            print('[gold] flush queue failed: %r' % (e,))
+        # round302: 记住内存余额 ✗ 让【刷新后的新会话】也能拿到最新值 ✓
+        #   （只影响重连时的取值 ✗ 落库那条路一点没变 ✓）
+        try:
+            _rid = getattr(q, 'role_id', None)
+            if _rid is not None:
+                _live_gold[int(_rid)] = int(q.gold)
+        except Exception:
+            pass
+        # round302: 大额 / 交易类变更【立刻排队落库】✗ 不等 15 秒定时存盘 ✓
+        #   为什么：金币是内存权威 ✗ 而落库只在 15 秒定时 + 下线时 ✓
+        #   → 这段时间里刷新/崩溃/被踢 = 这笔钱没了 ✓（docs v3 s1 要求关键节点立即入队）
+        #   ★ 只入队 ✗ 不做 IO ✓（tick 线程的铁律不变 ✓）
+        try:
+            if abs(int(applied)) >= 100000 or str(why).startswith('trade'):
+                self._save_player(q)
+        except Exception:
+            pass
+        try:
+            log = getattr(q, 'goldLog', None)
+            if log is None:
+                log = q.goldLog = []
+            log.append((int(now_s()), int(applied), str(why)[:24]))
+            if len(log) > 200:
+                del log[:len(log) - 200]
+        except Exception:
+            pass
+        return applied
+
+    def _give_bullion(self, q, k):
+        """Hand k gold bullion to the player. True when it was queued.
+
+        post_save() takes SQL, NOT an action name - my first version passed
+        'give_bullion' and would have failed at runtime. Pattern copied from
+        the debug give-weapon branch near world.py:914.
+        """
+        try:
+            rid = getattr(q, 'role_id', None)
+            if not rid:
+                return False
+            import json
+            import db as dbmod
+            it = {'name': '黄金', 'tier': 0, 'kind': 'material', 'rarity': 'legend'}
+            self.post_save(
+                'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
+                ' VALUES(?,0,-1,?,?,?)',
+                (rid, int(k), json.dumps(it, ensure_ascii=False), dbmod.now_ms()))
+            try:
+                self._send_cid(q.cid, P.pack('notice',
+                    text='金币已达上限——自动兑换成 %d 个【黄金】' % int(k)))
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            print('[gold] give bullion failed: %r' % (e,))
+            return False
+
+
+    def _gain_exp(self, q, amount):
+        """给某个玩家加经验 → 够就升级 → 推 me（第 81 轮抽出来的 ✓）
+
+        ★ 为什么抽成函数：队友分经验必须走【一模一样】的逻辑 ✗
+          不然会出现"队友升级了但界面没刷新""队友升级没提示"这种鬼问题 ✓
+        ★ 注意：me 是【单个对象】不是数组 —— 客户端读 d.me.lv / d.me.exp ✗
+          （这是第 39 轮踩过的坑，注释留着 ✓）
+        """
+        if q is None or amount <= 0:
+            return
+        try:
+            rptmod.add_exp(q, amount)      # ★ round502：战报统计（内存 ✓）
+        except Exception:
+            pass
+        role = q.role
+        role['exp'] = int(role.get('exp') or 0) + int(amount)
+        ups = 0
+        while ups < 100:
+            lv = int(role.get('level') or 1)
+            need = mobs.level_up_need(lv)
+            if int(role.get('exp') or 0) < need:
+                break
+            role['exp'] = int(role.get('exp') or 0) - need
+            role['level'] = lv + 1
+            ups += 1
+        # ★★ 第 168 轮（用户 #1）：升级后恢复满血 ★★
+        #   ★ 放在循环【外面】✗ 连升两级也只回一次血 ✓（反正都是回满 ✓）
+        #   ★ 用 _hp_max（含防具/天赋加成 ✓）不是写死的 200 ✗
+        if ups > 0:
+            try:
+                q.hp = int(self._hp_max(q))
+            except Exception:
+                pass
+        level = int(role.get('level') or 1)
+        e = self._pend.get(q.cid)
+        if e is None:
+            e = self._pend[q.cid] = {}
+        try:
+            self._tal_send(q)     # ★ 第 116 轮：升级了点数会变 → 必须重推 ✗（方案 §7.2）
+        except Exception:
+            pass
+        e['me'] = {'lv': level, 'exp': int(role.get('exp') or 0),
+                   'hp': int(q.hp or 0),   # ★ 第 168 轮：升级回满血后让客户端跟上 ✓
+                   'need': mobs.level_up_need(level),
+                   'inv': round(q.invulnT, 2),
+                   # ★ 第 102 轮：把【有效血量上限】带上 ✓
+                   #   （含防具加成 ✓ 客户端那边原来一直是写死的 200 ✗
+                   #    所以"穿了防具血量没变化"✓ 根因就在这 ✗）
+                   'hpm': self._hp_max(q)}
+        if ups:
+            # ★ round409（用户："滚动通知的升级，把升级改成玩家突破到 xx 层"）
+            #   ★ 两处一起改 ✗ 只改滚动通知的话，自己屏幕上还是"升到 X 级" ✓
+            #     会出现"弹幕说突破、自己看是升级"✓ 同一个事件两种说法 ✓
+            self._send_cid(q.cid, P.pack('notice', text='突破到第 %d 层！' % level,
+                                         level=level))
+            # ★ 第 247 轮：升级还要播报给全服（用户要求：谁升到了多少级）
+            self._ticker('%s 突破到第 %d 层' % (q.name, level), 'up',
+                         tag='up:%d' % q.role_id)
+            # ★★ round446（用户："突破的动画没有同步给别的玩家"）★★
+            #   把"谁在哪里突破了"发给【同屏】的人 ✗ 他们也能看到雷击 + 听到雷声 ✓
+            #   ★ 格式：[x, z, 新等级, 是不是本人]（和 hurts/mhits 一样走快照 ✓）
+            try:
+                _v2 = VIEW * VIEW
+                for _q2 in self.players.values():
+                    if (_q2.x - q.x) ** 2 + (_q2.z - q.z) ** 2 > _v2:
+                        continue
+                    self._add_pend(_q2.cid, 'lvfx',
+                                   [round(q.x, 2), round(q.z, 2), int(level),
+                                    1 if _q2 is q else 0])
+            except Exception:
+                pass
+
+    # ================================================================ 组队（第 81 轮）
+
+    def _party_members(self, pid):
+        """这个队的在线玩家对象列表（离开的人自动跳过 ✓）"""
+        pt = self.parties.get(pid)
+        if not pt:
+            return []
+        out = []
+        for rid in pt['members']:
+            for q in self.players.values():
+                if getattr(q, 'role_id', None) == rid:
+                    out.append(q)
+                    break
+        return out
+
+    def _party_roster(self, pid):
+        """给客户端的一份队伍名单（紧凑数组 ✓ 只推必要的 ✓）"""
+        pt = self.parties.get(pid)
+        if not pt:
+            return None
+        out = []
+        for q in self._party_members(pid):
+            w = q.weapon or {}
+            out.append([q.role_id, q.name, int((q.role or {}).get('level') or 1),
+                        int(q.hp or 0), self._hp_max(q), int(q.qi or 0),
+                        self._qi_max(q),          # ★ round411：含天赋灵气 ✓
+                        w.get('look') or 'sword', int(w.get('tier') or 0),
+                        1 if int(q.hp or 0) <= 0 else 0,
+                        1 if q.role_id == pt['leader'] else 0,
+                           # ★ 第 264 轮（用户：无论队友多远都显示位置）
+                           #   名单里原来没有坐标 ✗ 所以超出视野(100米)就完全看不到队友 ✓
+                           #   加上 x / z ✗ 客户端就能画远处队友的方向和距离 ✓
+                           #   ★ 名单每秒补推一次(PARTY_PUSH_INTERVAL=1) ✗ 所以坐标够新 ✓
+                           round(float(q.x or 0.0), 1), round(float(q.z or 0.0), 1)])
+        return out
+
+    def _party_push(self, pid):
+        """队伍有变化 → 给每个在线成员推一份完整名单 ✓"""
+        pt = self.parties.get(pid)
+        if not pt:
+            return
+        ros = self._party_roster(pid)
+        for q in self._party_members(pid):
+            self._send_cid(q.cid, P.pack('party', roster=ros, pid=pid,
+                                         leader=pt['leader'], me=q.role_id))
+
+    def _party_leave(self, p, quiet=False):
+        """离队（退出/被踢/掉线都走这里 ✓）"""
+        rid = getattr(p, 'role_id', None)
+        pid = self.party_of.pop(rid, None)
+        if not pid:
+            return
+        pt = self.parties.get(pid)
+        if pt and rid in pt['members']:
+            pt['members'].remove(rid)
+        self._send_cid(p.cid, P.pack('party', roster=None, pid=None, me=rid))
+        if not pt or len(pt['members']) <= 1:
+            # ★ 只剩 1 个人就自动解散（用户方案 §3.1 ✓）
+            for rid2 in (pt['members'] if pt else []):
+                self.party_of.pop(rid2, None)
+                for q in self.players.values():
+                    if getattr(q, 'role_id', None) == rid2:
+                        self._send_cid(q.cid, P.pack('party', roster=None, pid=None, me=rid2))
+            self.parties.pop(pid, None)
+            return
+        if pt['leader'] == rid:
+            pt['leader'] = pt['members'][0]      # 队长走了 → 顺位给第一个 ✓
+        self._party_push(pid)
+
+    def _party_op(self, p, d):
+        """所有队伍操作（第 81 轮 ✓ 全部在 tick 线程 ✓）"""
+        op = (d or {}).get('op') or ''
+        rid = getattr(p, 'role_id', None)
+        if not rid:
+            return
+        now = now_s()
+
+        def find_q(role_id):
+            for q in self.players.values():
+                if getattr(q, 'role_id', None) == role_id:
+                    return q
+            return None
+
+        if op == 'invite':
+            tgt = find_q(int((d or {}).get('cid') or 0))
+            if tgt is None or tgt is p:
+                return self._send_cid(p.cid, P.pack('notice', text='找不到这个人'))
+            if int(tgt.hp or 0) <= 0:
+                return self._send_cid(p.cid, P.pack('notice', text='他倒着呢，等起来再说'))
+            # 限流 + 距离（防全图骚扰 ✗）
+            rl = [x for x in self.party_rate.get(rid, []) if now - x < 10.0]
+            if len(rl) >= PARTY_INVITE_RATE:
+                return self._send_cid(p.cid, P.pack('notice', text='邀请发太快了，缓一缓'))
+            if (tgt.x - p.x) ** 2 + (tgt.z - p.z) ** 2 > PARTY_INVITE_DIST ** 2:
+                return self._send_cid(p.cid, P.pack('notice', text='太远了，走近点再邀请'))
+            rl.append(now)
+            self.party_rate[rid] = rl
+            # 我这边先确保有个队（没有就建一个，我是队长 ✓）
+            mypid = self.party_of.get(rid)
+            if not mypid:
+                self._party_seq += 1
+                mypid = 'p%d' % self._party_seq
+                self.parties[mypid] = {'id': mypid, 'leader': rid, 'members': [rid]}
+                self.party_open[mypid] = True      # ★ 建队默认上榜 ✓
+                self.party_of[rid] = mypid
+                self._party_push(mypid)
+            if len(self.parties[mypid]['members']) >= PARTY_MAX:
+                return self._send_cid(p.cid, P.pack('notice', text='队伍满了（%d 人）' % PARTY_MAX))
+            if tgt.role_id in self.party_of:
+                return self._send_cid(p.cid, P.pack('notice', text='他已经在别的队里了'))
+            # ★ 第 84 轮用户要求：同一个人重复邀请【只留一条】✓ 只刷新时间 ✓
+            _lst = [x for x in self.party_inv.get(tgt.role_id, []) if x[0] != rid]
+            _lst.append((rid, now))
+            self.party_inv[tgt.role_id] = _lst
+            self._send_cid(tgt.cid, P.pack('partyinv', name=p.name, pid=mypid))
+            self._send_cid(p.cid, P.pack('notice', text='已邀请 %s' % tgt.name))
+
+        elif op == 'accept':
+            pid = (d or {}).get('pid') or None
+            lst = self.party_inv.get(rid, [])
+            lst = [x for x in lst if now - x[1] < PARTY_INVITE_TTL]
+            self.party_inv[rid] = lst
+            if not lst:
+                return self._send_cid(p.cid, P.pack('notice', text='邀请已经过期了'))
+            frm = int((d or {}).get('cid') or 0) or lst[-1][0]
+            pid = self.party_of.get(frm)
+            if not pid:
+                return self._send_cid(p.cid, P.pack('notice', text='那个队已经散了'))
+            pt = self.parties.get(pid)
+            if not pt or len(pt['members']) >= PARTY_MAX:
+                return self._send_cid(p.cid, P.pack('notice', text='队伍满了'))
+            if rid in self.party_of:
+                self._party_leave(p)
+            pt['members'].append(rid)
+            self.party_of[rid] = pid
+            self.party_inv[rid] = []
+            for q in self._party_members(pid):
+                self._send_cid(q.cid, P.pack('notice', text='%s 加入了队伍' % p.name))
+            self._party_push(pid)
+
+        elif op == 'decline':
+            frm = int((d or {}).get('cid') or 0)
+            self.party_inv[rid] = [x for x in self.party_inv.get(rid, []) if x[0] != frm]
+
+        elif op == 'leave':
+            self._party_leave(p)
+
+        elif op == 'kick':
+            pid = self.party_of.get(rid)
+            pt = self.parties.get(pid) if pid else None
+            if not pt or pt['leader'] != rid:
+                return self._send_cid(p.cid, P.pack('notice', text='只有队长能踢人'))
+            tgt = find_q(int((d or {}).get('cid') or 0))
+            if tgt is None or tgt.role_id == rid:
+                return
+            self._party_leave(tgt)
+            self._send_cid(p.cid, P.pack('notice', text='把 %s 请出了队伍' % tgt.name))
+
+        elif op == 'promote':
+            pid = self.party_of.get(rid)
+            pt = self.parties.get(pid) if pid else None
+            if not pt or pt['leader'] != rid:
+                return
+            tgt = find_q(int((d or {}).get('cid') or 0))
+            if tgt is None or tgt.role_id not in pt['members']:
+                return
+            pt['leader'] = tgt.role_id
+            self._party_push(pid)
+
+        elif op == 'disband':
+            pid = self.party_of.get(rid)
+            pt = self.parties.get(pid) if pid else None
+            if not pt or pt['leader'] != rid:
+                return
+            for q in self._party_members(pid):
+                self.party_of.pop(q.role_id, None)
+                self._send_cid(q.cid, P.pack('party', roster=None, pid=None, me=q.role_id))
+                self._send_cid(q.cid, P.pack('notice', text='队伍解散了'))
+            self.parties.pop(pid, None)
+
+        elif op == 'apply':
+            # ★ 玩家 → 申请加入某个队（第 82 轮 ✓）
+            pid = (d or {}).get('pid') or None
+            pt = self.parties.get(pid)
+            if not pt:
+                return self._send_cid(p.cid, P.pack('notice', text='这个队伍已经不存在了'))
+            if rid in self.party_of:
+                return self._send_cid(p.cid, P.pack('notice', text='你已经有队伍了'))
+            if len(pt['members']) >= PARTY_MAX:
+                return self._send_cid(p.cid, P.pack('notice', text='这个队伍已经满了'))
+            rl = [x for x in self.party_rate.get(rid, []) if now - x < 10.0]
+            if len(rl) >= PARTY_APPLY_RATE:
+                return self._send_cid(p.cid, P.pack('notice', text='申请发太快了，缓一缓'))
+            rl.append(now)
+            self.party_rate[rid] = rl
+            lst = [x for x in self.party_apply.get(pid, [])
+                   if now - x[1] < PARTY_APPLY_TTL and x[0] != rid]
+            lst.append((rid, now))
+            self.party_apply[pid] = lst
+            self._send_cid(p.cid, P.pack('notice', text='已申请加入，等队长同意'))
+            for q in self._party_members(pid):
+                if q.role_id == pt['leader']:
+                    self._send_cid(q.cid, P.pack('partyapply', pid=pid, name=p.name,
+                                                 cid=rid))
+
+        elif op in ('okapply', 'noapply'):
+            pid = self.party_of.get(rid)
+            pt = self.parties.get(pid) if pid else None
+            if not pt or pt['leader'] != rid:
+                return self._send_cid(p.cid, P.pack('notice', text='只有队长能处理申请'))
+            who = int((d or {}).get('cid') or 0)
+            self.party_apply[pid] = [x for x in self.party_apply.get(pid, []) if x[0] != who]
+            tgt = find_q(who)
+            if op == 'noapply':
+                if tgt:
+                    self._send_cid(tgt.cid, P.pack('notice', text='队长拒绝了你的申请'))
+                return
+            if tgt is None:
+                return self._send_cid(p.cid, P.pack('notice', text='那个人不在了'))
+            if len(pt['members']) >= PARTY_MAX:
+                return self._send_cid(p.cid, P.pack('notice', text='队伍满了'))
+            if who in self.party_of:
+                return self._send_cid(p.cid, P.pack('notice', text='他已经有队伍了'))
+            pt['members'].append(who)
+            self.party_of[who] = pid
+            self.party_apply[pid] = []
+            self._send_cid(tgt.cid, P.pack('notice', text='队长同意你加入了'))
+            for q in self._party_members(pid):
+                self._send_cid(q.cid, P.pack('notice', text='%s 加入了队伍' % tgt.name))
+            self._party_push(pid)
+
+        elif op == 'cancelapply':
+            pid = (d or {}).get('pid') or None
+            if pid:
+                self.party_apply[pid] = [x for x in self.party_apply.get(pid, [])
+                                         if x[0] != rid]
+            self._send_cid(p.cid, P.pack('notice', text='已取消申请'))
+
+        elif op == 'recruit':
+            pid = self.party_of.get(rid)
+            pt = self.parties.get(pid) if pid else None
+            if not pt or pt['leader'] != rid:
+                return
+            self.party_open[pid] = bool((d or {}).get('on', True))
+            self._send_cid(p.cid, P.pack('notice',
+                                         text=('已开启招募（大厅能看到你们队）'
+                                               if self.party_open[pid] else '已关闭招募')))
+        elif op == 'chat':
+            pid = self.party_of.get(rid)
+            if not pid:
+                return
+            txt = str((d or {}).get('text') or '')[:120]
+            if not txt:
+                return
+            for q in self._party_members(pid):
+                self._send_cid(q.cid, P.pack('partychat', name=p.name, text=txt))
+
+    def _party_share_exp(self, killer, m):
+        """队友分经验（用户确认：每个队友拿该僵尸的 10% ✓ 和人数无关 ✓）"""
+        pid = self.party_of.get(getattr(killer, 'role_id', None))
+        if not pid:
+            return
+        share = int(round(int(m.exp) * PARTY_SHARE))
+        if share <= 0:
+            return
+        d2 = PARTY_SHARE_DIST * PARTY_SHARE_DIST
+        for q in self._party_members(pid):
+            if q is killer or int(q.hp or 0) <= 0:
+                continue
+            if (q.x - m.x) ** 2 + (q.z - m.z) ** 2 > d2:
+                continue                      # round 241: 距离已不限制，这句现在永不触发
+            # ★ round474：队友各自吃自己的【经验】词条（用户定的 ✓）
+            self._gain_exp(q, int(round(share * (1.0 + self._aff(q, 'exp_pct') / 100.0))))
+            # ★★ 第 86 轮（用户报）："这个没有真的加上，一刷新就没有了" ★★
+            #   病根：分经验只改了内存里的 role['exp'] ✗
+            #         而落库是靠"本人做了什么事"触发的（击杀/拾取时才排队保存 ✓）
+            #         → 队友光在旁边蹭，什么都没做 → 他的 exp 一直没落库 ✗
+            #         → 一刷新（重新登录读库）就回到旧值 ✓ 用户说的一模一样 ✓
+            #   修：分经验时【替他也排一次存档】✓
+            try:
+                self._save_player(q)
+                # ★★★ 第 242 轮修的真 bug（用户：有玩家反馈重新进掉了等级）★★★
+
+                #   病根：上面那句 _save_player 存的是【坐标/朝向/血/气】✗
+
+                #         它的 SQL 里【没有 level 和 exp】✗✗
+
+                #         → 队友蹭经验升了级 ✓ 但等级和经验一直没写库 ✓
+
+                #         → 一重新登录读回旧值 → ★ 掉级 ✓✓ 和玩家反馈一致 ✓
+
+                #   ★ 第 86 轮修「分经验不落库」时加的就是 _save_player ✗
+
+                #     意图是对的（分经验也要替他存一次 ✓）但存错了函数 ✓
+
+                #   ★ 该调的是 _save_role —— 它的 SQL 是 level=?, exp=? ✓
+
+                #   ★ 实测（离线跑真逻辑）：
+
+                #     队友差 3 点升级 → 分到 6 点 → 等级 10 变 11 ✓
+
+                #     但排队写库的操作里【没有 level=?】✗✓ 所以一定会掉级 ✓
+
+                self._save_role(q)
+            except Exception:
+                pass
+            #   ★ 顺手给他飘一个（用户要求：获得经验时头上显示"队伍经验分享 +N"✓）
+            try:
+                self._send_cid(q.cid, P.pack('fx', kind='pexp', n=int(share)))
+            except Exception:
+                pass
+
+    def _break_weapon(self, p):
+        """武器耐久归零 → ★ 标记为已损坏（不删除）★ 第 232 轮改的
+
+        ★★ 用户原话："武器防具损坏了把穿戴的格子做一个损坏的样式，
+                      这样玩家挂机回来后知道是武器防具坏了，
+                      而不是不知道是坏了还是丢了"
+        ★ 以前的做法：直接 DELETE 掉 ✗ 背包里那件凭空消失 ✓
+          挂机一晚上回来只看到"少了一件"✗ 分不清是坏了还是丢了 ✓✓
+        ★ 现在的做法：
+          · 物品【留在背包里】✗ 标记 broken: true ✓
+          · 而且【继续保持穿戴】✗ 这样穿戴格子上能看到"已损坏" ✓
+          · 但打不出伤害（_atk_of 里判 ✓）· 也不能再穿（auth 里判 ✓）
+        ★★ round409（用户："武器坏了直接放回背包，用空手打；
+                       坏掉的武器只能出售给系统，并且只值 10 金币"）★★
+          → 不再"继续穿戴"：卸下装备表那条 + 手上换空手 ✓
+          → 物品本身留在背包（items 里 in_storage=0 + broken:true ✓）
+          → 价格走 value.BROKEN_SCRAP = 10 ✓（交易所不收坏的 ✓ 只能卖系统 ✓）
+        """
+        import json
+        nm = (p.weapon or {}).get('name') or '武器'
+        old_id = p.weaponItemId
+        if p.weapon is not None:
+            p.weapon['broken'] = True          # ★ 身上这份也标上（画穿戴格子要用 ✓）
+        self._invalidate_stats(p)
+        p.wDur = 0
+        p.wDurDirty = 0
+        if old_id:
+            # ★ 不删 ✗ 把物品 JSON 改写成 broken 状态 ✓
+            #   ★★ 为什么不用读库：规矩 1 —— tick 线程不许碰磁盘 ✗
+            #      而且【根本不用读】✗ 身上这份 p.weapon 就是物品 JSON 本身 ✓
+            #      （存的时候就是把它 json.dumps 进去的 ✓）
+            try:
+                wv = dict(p.weapon or {})
+                wv['broken'] = True
+                wv['dur'] = 0
+                self.post_save('UPDATE items SET item_json=? WHERE id=? AND role_id=?',
+                               (json.dumps(wv, ensure_ascii=False), old_id, p.role_id))
+                # ★ round409：把【装备表】里那条也删掉 ✗
+                #   不删的话重登又会把它穿回身上 ✓（用户要的是"放回背包、空手打"✓）
+                self.post_save('DELETE FROM equipment WHERE role_id=? AND slot=?',
+                               (p.role_id, 'weapon'))
+            except Exception as e:
+                print('[装备] 标记武器损坏失败：%r' % (e,))
+        # ★ round409：手上换成【空手】✗ 不再留着那把坏的 ✓
+        #   （_atk_of 里对 broken 也按空手算 ✓ 双保险 ✓ 但服务器状态要一致 ✓）
+        p.weapon = dict(weapons.FIST)
+        p.weaponItemId = None
+        p.wDurMax = 0
+        self._send_cid(p.cid, P.pack('notice',
+                                     text='⚠ %s 耐久耗尽，已损坏 → 已放回背包（现在空手）；'
+                                          '坏武器只能卖给系统，值 %d 金币'
+                                          % (nm, int(getattr(valuemod, 'BROKEN_SCRAP', 10)))))
+        self._send_cid(p.cid, P.pack('weapon', w=None))
+
+    def _break_armor(self, p):
+        """防具耐久归零 → ★ 标记为已损坏（不删除）★ 第 232 轮（和武器一个规矩 ✓）"""
+        import json
+        nm = (p.armor or {}).get('name') or '防具'
+        old_id = p.armorItemId
+        if p.armor is not None:
+            p.armor['broken'] = True
+        self._invalidate_stats(p)
+        p.aDur = 0
+        p.aDurDirty = 0
+        if old_id:
+            try:
+                av = dict(p.armor or {})
+                av['broken'] = True
+                av['dur'] = 0
+                self.post_save('UPDATE items SET item_json=? WHERE id=? AND role_id=?',
+                               (json.dumps(av, ensure_ascii=False), old_id, p.role_id))
+            except Exception as e:
+                print('[装备] 标记防具损坏失败：%r' % (e,))
+        self._send_cid(p.cid, P.pack('notice',
+                                     text='⚠ %s 耐久耗尽，已损坏（还在背包里，不能再用了）' % nm))
+        self._send_cid(p.cid, P.pack('armor', a=None, hpm=self._hp_max(p)))
+
+    def _flush_adur(self, p):
+        """防具耐久写回数据库（和武器一个套路：攒够次数才写 ✓）"""
+        if p.aDurDirty and p.armorItemId and p.aDurMax > 0:
+            import json
+            a2 = dict(p.armor or {})
+            a2['dur'] = p.aDur
+            a2['durMax'] = p.aDurMax
+            self.post_save('UPDATE items SET item_json=? WHERE id=? AND role_id=?',
+                           (json.dumps(a2, ensure_ascii=False), p.armorItemId, p.role_id))
+            p.aDurDirty = 0
+
+    def _flush_dur(self, p):
+        """把内存里的耐久写回数据库（攒够次数才写 ✓ 不然磁盘受不了 ✗）"""
+        if p.wDurDirty and p.weaponItemId and p.wDurMax > 0:
+            import json
+            w2 = dict(p.weapon or {})
+            w2['dur'] = p.wDur
+            w2['durMax'] = p.wDurMax
+            self.post_save('UPDATE items SET item_json=? WHERE id=? AND role_id=?',
+                           (json.dumps(w2, ensure_ascii=False), p.weaponItemId, p.role_id))
+            p.wDurDirty = 0
+
+    def _mob_bite_clone(self, m, ct):
+        """★ round575：僵尸咬分身 —— 只吃基础伤害（分身没有防具/天赋）"""
+        owner = getattr(ct, 'owner', None)
+        if owner is not None and not self._mob_atk_on(owner):
+            return
+        c = getattr(self, 'clones', {}).get(getattr(ct, 'id', None))
+        if not c or int(c.get('hp') or 0) <= 0:
+            return
+        dv, crit = mobs.roll_damage(m.atk, crit_pt=0.0)
+        self._clone_damage(c, dv, None, crit)
+
+    def _thorns_reflect(self, q, src, dmg):
+        """★ round580（B5 荆棘护甲）：把伤害按比例弹回攻击者"""
+        try:
+            if hasattr(src, 'cid'):          # 玩家
+                src.hp = max(0, int(src.hp or 0) - int(dmg))
+                self._add_pend(src.cid, 'hurts',
+                               {'dmg': int(dmg), 'x': round(src.x, 2),
+                                'z': round(src.z, 2), 'by': q.name, 'pvp': 1, 'sk': 1})
+                if int(src.hp) <= 0:
+                    self._pvp_killed(q, src)
+            elif hasattr(src, 'mid'):        # 僵尸
+                src.hp -= int(dmg)
+                self._report_hit(q, src.mid, int(dmg), False, src.x, src.z,
+                                 {'back': False, 'mb': None, 'heal': 0, 'sk': 1})
+                if src.hp <= 0:
+                    src.hp = 0
+                    self._mob_died(q, src)
+        except Exception as e:
+            print('[skill] 荆棘反弹失败：%r' % (e,))
+
+    def _on_player_hurt(self, q, dv, src=None, is_skill=False):
+        """★ round580：玩家受伤的统一被动入口
+
+        · 血怒：受到伤害 +20%
+        · 灵能护盾：先吃护盾
+        · 不灭意志：致命伤免死 + 回 30%
+        · 荆棘护甲：15% 概率反弹 30%
+        """
+        try:
+            if self._in_safe(q):
+                return dv
+            # ★ round584（用户）：冰冻受到伤害立即解除
+            if int(dv or 0) > 0 and float(getattr(q, 'freezeT', 0) or 0) > 0:
+                q.freezeT = 0.0
+            if float((getattr(q, 'skTA', {}) or {}).get('bloodrage', 0) or 0) > 0:
+                dv = max(1, int(round(dv * 1.2)))
+            # 灵能护盾
+            if float(getattr(q, 'skShieldT', 0) or 0) > 0 and float(getattr(q, 'skShield', 0) or 0) > 0:
+                _ab = min(float(q.skShield), float(dv))
+                q.skShield = max(0.0, float(q.skShield) - _ab)
+                dv = int(round(float(dv) - _ab))
+                if q.skShield <= 0:
+                    q.skShield = 0.0
+                    q.skShieldT = 0.0
+                if dv <= 0:
+                    return 0
+            # 不灭意志
+            if (int(q.hp or 0) > 0 and dv >= int(q.hp or 0)
+                    and self._has_b(q, 'undying')):
+                if self._sk_b_canfire(q, 'undying', 60.0):
+                    q.hp = max(1, int(round(self._hp_max(q) * 0.30)))
+                    self._sk_b_fx(q, 'undying')
+                    self._send_cid(q.cid, P.pack(
+                        'notice', text='不灭意志：免死并恢复 30% 生命'))
+                    return 0
+            # 荆棘护甲
+            if src is not None and self._has_b(q, 'thorns'):
+                _ch = 0.15 * (1.0 + self._sk_val(q, 'masterB'))
+                if random.random() < _ch and int(q.qi or 0) >= 2:
+                    q.qi = max(0, int(q.qi) - 2)
+                    self._send_cid(q.cid, P.pack('qi', q=int(q.qi)))
+                    self._thorns_reflect(q, src, max(1, int(round(dv * 0.30))))
+                    self._sk_b_fx(q, 'thorns')   # ★ round593：荆棘触发动画
+            return dv
+        except Exception as e:
+            print('[skill] 受伤被动失败：%r' % (e,))
+            return dv
+
+    def _mob_bite(self, m, p):
+        """僵尸咬玩家 —— 伤害由服务器算（§5：僵尸和人走同一套公式）
+
+        ★ 挥爪动画【不在这里】点 —— 已经在"开始蓄力"那一刻点了（第 41 轮）✓
+          那样才有前摇可看：抬手 → 咬 → 收招 ✓ 在这里再点一次会把动画重置，看着像抖一下 ✗
+        """
+        # ★ round575：目标是分身 → 走分身自己的结算（不套玩家防具/天赋 ✓）
+        if getattr(p, 'clone', False):
+            self._mob_bite_clone(m, p)
+            return
+        # ★ 第 56 轮：复活无敌期间【咬不动】✓（不然复活的瞬间又被围死 ✗）
+        if getattr(p, 'invulnT', 0) > 0:
+            return
+        # ★★ 第 134 轮：妖兽伤害开关 ✓（关了就咬不动 ✓）
+        #   ★ 放在这里（刚进函数、还没算伤害时）✗
+        #     比" 算完伤害再丢掉"省 CPU ✓ 而且不会误触发反伤类效果 ✓
+        if not self._mob_atk_on(p):
+            return
+        if str(getattr(m, 'kind', '') or '') == '程序员':
+            self._mob_shot_send(m, p)
+        dv, crit = mobs.roll_damage(
+            m.atk,
+            crit_pt=float(getattr(m, 'crit_pt', 0.0) or 0.0) - self._tal(p, 'anticrit'),
+            crit_dmg=max(0.0, float(getattr(m, 'crit_dmg', 0.0) or 0.0)
+                         - self._tal(p, 'anticritdmg')))
+        if crit and int(getattr(m, 'rank', 0) or 0) > 0:
+            self._mob_evt(m, 'crit')
+        # ★★★ round411（用户："剩下的天赋属性也做出来"）★★★
+        #   ① 闪避：天赋闪避 > 0 就有概率完全不挨这一口 ✓
+        _dodge = max(0.0, min(80.0, self._tal(p, 'dodge') - float(getattr(m, 'hit_pt', 0.0) or 0.0)))
+        if float((getattr(p, 'skTA', {}) or {}).get('gale', 0) or 0) > 0:
+            _dodge += 30.0
+        if _dodge > 0 and random.random() * 100.0 < _dodge:
+            self._send_cid(p.cid, P.pack('fx', kind='dodge'))
+            return
+        #   ② 免爆：上面已经通过 crit_pt 负数压掉了一部分暴击率 ✓
+        # ★★ 第 118 轮：记下【原始伤害】★★
+        #   这一行下面就开始各种减伤了 ✗（招架 / 防具固定 / 天赋百分比）
+        #   全局 30% 地板就拿这个值算 ✓
+        #   ★ 我前两版都插错了 ✗（一次插在招架分支里 ✗ 一次插在防具之前 ✗）
+        #     两次都是"看着像第一次赋值"✗ 实际不是 ✗
+        _dv0 = int(dv)
+        # ★★ 第 59 轮：单手剑的【招架】—— 按手上武器的概率把这一口减半 ✓
+        #   （意图写在武器文案里 ✓ 玩家看得到才不冤 ✓）
+        # ★★ 第 67 轮：防具在这里生效（闪避 → 固定减伤 → 受击回灵气 ✓）
+        _lvf = (p.role or {}).get('level') or 1
+        _st = armormod.stats_of(p.armor, weapons.mastery_of(p.armor, _lvf), level=_lvf)
+        if _st['dodge'] > 0 and random.random() < (max(0.0, _st['dodge'] - float(getattr(m, 'hit_pt', 0.0) or 0.0)) / 100.0):
+            # 闪开了：这一口完全没打到 ✓ 但也不回灵气（没被打到 ✓）
+            self._send_cid(p.cid, P.pack('fx', kind='dodge'))
+            return
+        # ★ 第 103 轮：挨到了就扣【防具耐久】1 点 ✓（闪避那条已经 return 了 ✓）
+        if p.aDurMax > 0:
+            p.aDur -= 1
+            p.aDurDirty += 1
+            if p.aDurDirty >= 50:
+                self._flush_adur(p)
+            if p.aDur <= 0:
+                self._break_armor(p)
+        _w = p.weapon or {}
+        _fx = weapons.fx_of(_w.get('look'), int(_w.get('tier') or 0))
+        if _fx and _fx['name'] == '招架' and random.random() < _fx['chance']:
+            dv = max(1, int(round(dv * (1.0 - _fx['value']))))
+            # ★ 第 125 轮：这里原本又把 _dv0 覆盖了一次 ✗
+            #   （招架后的值 ✗ → 地板跟着变低 ✗）已删✓
+            self._send_cid(p.cid, P.pack('fx', kind='parry'))
+        # ★ 固定减伤（防具的 dr ✓）：至少挨 1 点（不然穿了甲就无敌了 ✗）
+        # ★★ round475 修 bug：这里原来是 `self._aff(p, 'pen_pt')` ✗✗
+        #   p 是【挨打的人】✗ 用他自己的穿透去削自己的护甲 ✓✓（方向完全反了）
+        #   而且打怪时攻击方是僵尸、僵尸没有词条 → 这里什么都不该做 ✓
+        #   （穿透只在 PvP 里由【攻击方】结算，见 _pvp_hit ✓）
+        if _st['dr'] > 0:
+            # ★★ 第 106 轮（用户要求）："基础减伤不能[把伤害]低于实际受到伤害的 10%" ★★
+            #   也就是：不管减伤多高，最后至少还要吃【原来伤害的 10%】✗
+            #   → 不然高品阶防具能把伤害压到 1 点，等于无敌 ✓
+            _floor = max(1, int(round(dv * DMG_FLOOR)))   # ★ 第 118 轮：30% 地板 ✓
+            dv = max(_floor, int(round(dv - _st['dr'])))
+        # ★★ 第 117 轮（方案第 4 步）：天赋减伤 ★★
+        #   和防具的【固定减伤】不是一回事 ✗
+        #     防具 dr = 固定点数（先扣掉这么多 ✓）
+        #     天赋 dr = 百分比（按剩下的伤害按比例减 ✓）
+        #   顺序：先扣固定的 → 再打百分比 → 再吃 10% 地板 ✓
+        # ★ round474：百分比减伤 = 天赋 + 防具词条【减伤%】，合计上限 50% ✓
+        _tdr = float((p.talEff or {}).get('dr') or 0.0) + self._aff(p, 'dr_pct')
+        _tdr = max(0.0, min(50.0, _tdr - float(getattr(m, 'pen_pt', 0.0) or 0.0)))
+        if _tdr > 0:
+            dv = int(round(dv * (1.0 - _tdr / 100.0)))
+        # ★★ 第 118 轮：全局地板（所有减伤算完之后统一过 ✓）★★
+        #   至少吃【最初伤害的 30%】✓ 也就是减伤最多 70% ✓
+        #   ★ 只在这一处兜底 ✗ 前面几步各自的临时地板拦不住叠加 ✓
+        _global_floor = max(1, int(round(_dv0 * DMG_FLOOR)))
+        if dv < _global_floor:
+            dv = _global_floor
+        # ★ 受击回灵气（词条 ✓）
+        if _st['qi_hurt'] > 0:
+            p.qi = min(self._qi_max(p), int(p.qi) + int(_st['qi_hurt']))
+        # ★★★ 第 125 轮：30% 地板放在【所有减伤之后、扣血之前】的最后一步 ★★★
+        #   为什么要放这么后：
+        #     前几版我把它放在"天赋减伤之后"✗
+        #     但后面其实还有别的减伤在跑 ✗
+        #     （词条里的"受到伤害 -X 点" / 减伤类武器技能 等等 ✗）
+        #     → 结果就是"说了 30% 其实没守住"✗（测出 10 阶 28% / 12 阶 25% ✗）
+        #   现在放在最后一步 ✓ 不管中间多少道减伤 ✗ 都兜得住 ✓
+        #   ★ 而且只用 _dv0（roll_damage 刚出来那个值 ✓）
+        #     不依赖中间任何一步 → 不会再出现"插错位置"✗
+        dv = max(dv, max(1, int(round(_dv0 * DMG_FLOOR))))
+        dv = self._on_player_hurt(p, dv, m)   # ★ 护盾/不灭/荆棘/血怒
+        self._tp_break(p)      # 第 173 轮（用户 #6）：受伤打断传送读条
+        _was_alive = int(p.hp) > 0                      # ★ 第 166 轮：记下“刚才还活着”✓
+        p.hp = max(0, int(p.hp) - dv)
+        self._snd_near(p.x, p.z, 'zhurt', 0.8, exclude=p.cid)   # ★ round583
+        if _was_alive and int(p.hp or 0) <= 0:
+            self._tank_reset(p)          # ★ 死亡 → 坦克层数清零
+        self._add_pend(p.cid, 'hurts', {'dmg': dv, 'x': round(m.x, 2), 'z': round(m.z, 2),
+                                        'by': m.kind, 'kind': 'mob', 'crit': bool(crit)})
+        # ★★ 第 166 轮（用户：被僵尸杀死也会掉 1 点魔气）★★
+        #   ★ 只在【从活着变成倒下】的那一下扣 ✗
+        #     （不然连续咬尸体会一直扣 ✗ 虽然僵尸不咬死人 ✓）
+        #   ★ 和 PVP 那边一样：只会到 0 为止 ✓ 走 post_save 落库 ✓
+        if _was_alive and int(p.hp or 0) <= 0 and int(p.mq or 0) > 0:
+            _lost = min(int(p.mq or 0), int(mqmod.cfg('killed_loss', mqmod.KILLED_LOSS)))
+            p.mq = max(0, int(p.mq or 0) - _lost)
+            self._mq_save(p)
+            self._send_cid(p.cid, P.pack(
+                'notice', text='你被%s打死了，魔气 −%d（现在 %d）'
+                              % (m.kind, _lost, int(p.mq or 0))))
+
+    # ================================================================
+    #  ★★★ 第 150 轮：PVP（用户确认的规则，方案 §15）★★★
+    #    谁能打谁：只要不是队友就能打 ✓ 不需要宣战 ✓
+    #              队友之间永远打不到 ✗
+    #              总闸门 = 管理页的 PVP 开关（关了全世界都打不到 ✓）
+    #    怎么打：普通攻击就能打到 ✓ 以后的技能也按同一套筛选 ✓
+    #    伤害：和打怪完全一样 ✓
+    #  ================================================================
+    def _pvp_ok(self, a_, b_):
+        """a 能不能打 b（返回 True/False + 原因，原因只用来排障 ✓）"""
+        if a_ is None or b_ is None or a_ is b_:
+            return False, 'self'
+        if int(b_.hp or 0) <= 0:
+            return False, 'dead'                      # 已经倒下的不再打 ✓
+        if getattr(b_, 'invulnT', 0) > 0:
+            return False, 'invuln'                    # 复活无敌期 ✓
+        if not self._pvp_on(a_):
+            return False, 'a_off'                     # 自己关了 PVP（双向 ✓ 用户确认 ✓）
+        if not self._pvp_on(b_):
+            return False, 'b_off'                     # 对方关了 ✓
+        # ★ 队友之间永远打不到（硬规则 ✓）
+        pa = self.party_of.get(getattr(a_, 'role_id', None))
+        pb = self.party_of.get(getattr(b_, 'role_id', None))
+        if pa is not None and pa == pb:
+            return False, 'teammate'
+        # ★ 同一个账号的多个角色不算（防自己杀自己 ✓）
+        if (a_.role or {}).get('account_id') and            (a_.role or {}).get('account_id') == (b_.role or {}).get('account_id'):
+            return False, 'same_account'
+        # ★ 安全区内不夺取、也不算魔气（出生点 20 米内 ✓）
+        # 第 173 轮（用户 #6）：安全区是【正方形 30×30】（半边长 15）
+        if abs(b_.x) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(b_.z) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+            return False, 'safe_zone'
+        # ★ 等级差太大不算（防大号刷小号 ✓）
+        la = int((a_.role or {}).get('level') or 1)
+        lb = int((b_.role or {}).get('level') or 1)
+        if abs(la - lb) > int(mqmod.cfg('level_gap_max', mqmod.LEVEL_GAP_MAX)):
+            return False, 'level_gap'
+        return True, 'ok'
+
+    def _pvp_pair_ok(self, a_, b_, kind='mq'):
+        """防刷：同一对玩家的冷却（魔气和夺取各一把锁 ✗ 第 167 轮拆开的 ✓）"""
+        ka = getattr(a_, 'role_id', None)
+        kb = getattr(b_, 'role_id', None)
+        now = now_s()
+        # ★★ 第 167 轮（用户）：两把独立的锁 ★★
+        #   kind='mq'    → 魔气（默认 10 分钟）
+        #   kind='steal' → 夺取（默认 1 分钟）
+        #   ★ 为什么拆：魔气是长期声望 ✓ 夺取是每次打架的收益 ✓
+        #     合用一把锁 → 为了防刷魔气，把夺取也锁死了 ✗
+        book = self.pvp_pair_steal if kind == 'steal' else self.pvp_pair
+        cd = float(mqmod.cfg('steal_cooldown', mqmod.STEAL_COOLDOWN)) if kind == 'steal' \
+            else float(mqmod.cfg('pair_cooldown', mqmod.PAIR_COOLDOWN))
+        ts = book.get((ka, kb))
+        if ts is not None and now - ts < cd:
+            return False
+        book[(ka, kb)] = now
+        return True
+
+    def _pvp_hit(self, p, q, reach, arc, allow_area=True):
+        """p 打 q 一下（伤害算法和打怪完全一样 ✓ 用户确认 ✓）
+
+        返回打中了几次（0 或 1 ✓）
+        ★ allow_area：这一次挥砍要不要放【区域型】武器机制（横扫/旋击/溅射）
+          False = 这一刀已经打到怪了 ✗ 区域效果打怪那条路径已经放过 ✓
+        """
+        if not mobs.in_front(p.x, p.z, p.yaw, q.x, q.z, reach, arc):
+            return 0
+        ok, why = self._pvp_ok(p, q)
+        if not ok:
+            return 0
+        # ★★★ round411：天赋【命中 / 闪避】★★★
+        #   ★ 规则：我打得到你吗 = 我的命中 抵消 你的闪避 ✓
+        #     剩余部分才是真的闪避率（和"对抗类成对相减"那条设计一致 ✓）
+        _dodge = max(0.0, self._tal(q, 'dodge') - self._tal(p, 'hit'))
+        # ★ round580（疾风步）：闪避 +30%，可突破上限
+        if float((getattr(q, 'skTA', {}) or {}).get('gale', 0) or 0) > 0:
+            _dodge += 30.0
+        if _dodge > 0 and random.random() * 100.0 < _dodge:
+            # 闪开了：双方各一条提示 ✗ 不然打的人以为"点了没反应" ✓
+            try:
+                self._send_cid(q.cid, P.pack('fx', kind='dodge'))
+                self._add_pend(p.cid, 'mhits',
+                               {'mid': 'p:' + str(getattr(q, 'cid', '')),
+                                'dmg': 0, 'crit': False, 'dodge': 1,
+                                'x': round(q.x, 2), 'z': round(q.z, 2)})
+            except Exception:
+                pass
+            return 0
+        # ---- 伤害：走和打怪一样的口径（攻击力 → 随武器系数 → 暴击 ✓）----
+        _w = p.weapon or {}
+        _T = affixes.totals(_w.get('affixes'))
+        atk = self._atk_of(p)
+        # ★ round411：暴击 = 武器词条 + 天赋暴击 − 对方天赋免爆 ✓
+        _cp = (_T.get('crit_pt', 0.0) + self._tal(p, 'crit')
+               - self._tal(q, 'anticrit'))
+        # ★★ round473：暴伤 = 词条 + 天赋 − 对方【抗爆】✗ 封顶 250% ✓
+        #   对抗关系和 命中↔闪避 完全同构 ✓
+        _cd = (_T.get('crit_dmg', 0.0) + self._tal(p, 'critdmg')
+               - max(0.0, self._tal(q, 'anticritdmg')))
+        _cd = max(0.0, min(100.0, _cd))          # 150% + 100% = 250% 封顶 ✓
+        dv, crit = mobs.roll_damage(atk, crit_pt=_cp, crit_dmg=_cd)
+        dv = int(dv)
+        # ---- 对方的减伤：固定（防具）+ 百分比（天赋）✓ 最后吃 30% 地板 ✓
+        _lvq = (q.role or {}).get('level') or 1
+        _st = armormod.stats_of(q.armor, weapons.mastery_of(q.armor, _lvq), level=_lvq)
+        _dv0 = dv
+        # ★ round474：穿透词条（无视 N 点减伤）先抵掉对方的固定减伤 ✓
+        _pen_f2 = self._aff(p, 'pen_pt')
+        if _pen_f2 > 0:
+            _st = dict(_st)
+            _st['dr'] = max(0.0, float(_st['dr']) - _pen_f2)
+        if _st['dr'] > 0:
+            dv = max(max(1, int(round(_dv0 * DMG_FLOOR))), int(round(dv - _st['dr'])))
+        # ★ round411：天赋减伤 = 他的减伤 − 我的穿透（对抗相减 ✗ 战斗时才算 ✓）
+        # ★ round474：两边都加上装备词条（减伤% / 穿透），合计上限 50% ✓
+        _tdr = max(0.0, min(50.0,
+                            (self._tal(q, 'dr') + self._aff(q, 'dr_pct'))
+                            - self._tal(p, 'pen')))
+        if _tdr > 0:
+            dv = int(round(dv * (1.0 - _tdr / 100.0)))
+        dv = max(dv, max(1, int(round(_dv0 * DMG_FLOOR))))
+        if dv <= 0:
+            return 0
+        self._tp_break(q)      # 第 173 轮：被打也打断传送 ✓
+        dv = self._on_player_hurt(q, dv, p)   # ★ 护盾/不灭/荆棘/血怒
+        _was_q2 = int(q.hp or 0) > 0
+        q.hp = max(0, int(q.hp) - dv)
+        self._snd_near(q.x, q.z, 'zhurt', 0.8, exclude=q.cid)   # ★ round583
+        if _was_q2 and int(q.hp or 0) <= 0:
+            self._tank_reset(q)      # ★ PvP 死亡 → 坦克层数清零
+        # ---- 告诉被打的人（红色数字 + 谁打的 ✓ 客户端已有 ✓）----
+        self._add_pend(q.cid, 'hurts', {'dmg': dv, 'x': round(p.x, 2), 'z': round(p.z, 2),
+                                       'by': p.name, 'kind': 'mob', 'pvp': True,
+                                       'crit': bool(crit)})
+        # ---- 打人的人的反馈（和打怪一样弹数字 ✓）----
+        _heal = self._lifesteal(p, dv, q.x, q.z)
+        self._add_pend(p.cid, 'mhits', {'mid': 'p:' + str(getattr(q, 'cid', '')),
+                                        'dmg': dv, 'crit': bool(crit), 'heal': _heal,
+                                        'x': round(q.x, 2), 'z': round(q.z, 2)})
+        # ★★★ round407/408：武器机制对玩家也要生效 ★★★
+        #   round407 先把【挑飞】挂上来 ✓ 那时其它机制还是"打怪才触发"✗
+        #   round408 用户实测："连刺/横扫一次都没对玩家触发过" ✓
+        #   → 统一走 _weapon_fx_player（挑飞也在里面 ✓ 这里只留一个入口 ✓）
+        #   ★ allow_area 由调用方给（这一次挥砍有没有已经打到怪 ✓）
+        self._weapon_fx_player(p, q,
+                               weapons.fx_of(_w.get('look') or weapons.DEFAULT_TYPE,
+                                             int(_w.get('tier') or 0)),
+                               dv, allow_area=allow_area)
+        # ---- 打死了 → 魔气 + 击杀播报 ----
+        if int(q.hp or 0) <= 0:
+            self._pvp_killed(p, q)
+        p.lastTgt = ('p', q.cid)
+        return 1
+
+    def _weapon_fx_player(self, p, q, fx, dv, allow_area=True):
+        """武器机制对【玩家】也要触发（★ round408 · 用户实测报的 bug）
+
+        病根（用户原话："单手剑的连续攻击两次，一次都没有对玩家触发过"）：
+          _weapon_fx 只在【打怪那个循环】里被调用 ✓
+          打人走 _pvp_hit：只有伤害 ✗ 一个机制都不掷 ✓
+          → 单手剑连刺 / 弯刀连砍 / 长棍横扫 / 锤子旋击 / 斧溅射
+            对玩家【永远不触发】✓
+          → 只有"怪在前面"时打怪触发了横扫 ✗ 顺带溅到玩家才看得到伤害 ✓
+            （用户："如果怪在前面打到玩家确实会有伤害" ✓ 完全对上 ✓）
+
+        ★ 概率规则和 _weapon_fx 一模一样（掷一次 ✓）
+        ★ allow_area=False：这一次挥砍【已经打到怪了】✗
+          区域型机制（横扫/旋击/溅射）打怪那条路径已经放过一次 ✓
+          → 这里不再放第二次 ✓（不然同一次挥砍对玩家造成两倍 AOE ✓）
+          ★ 只打人、没打到怪的时候 allow_area=True → 照常放 ✓
+        """
+        if not fx or int(getattr(q, 'hp', 0) or 0) <= 0:
+            return
+        if fx.get('chance', 1.0) < 1.0 and random.random() >= fx['chance']:
+            return
+        nm = fx['name']
+        _AREA = ('横扫', '旋击', '溅射')
+        if nm in _AREA and not allow_area:
+            return
+        if nm == '连刺':
+            # ★ 第二段延后 0.18 秒（和打怪同一个节奏 ✓ 客户端才看得见"两下"）
+            _extra = max(1, int(round(dv * fx['value'])))
+            self._later_pl.append((now_s() + 0.18, p.cid, q.cid, _extra))
+        elif nm == '连砍':
+            _n = max(2, min(13, int(round(fx['value']))))
+            self._fx_broadcast(p, {'kind': 'saber', 'n': _n})
+            _each = max(1, int(round(dv * 0.6)))
+            for _i3 in range(1, _n):
+                self._later_pl.append((now_s() + 0.18 * _i3, p.cid, q.cid, _each))
+        elif nm == '横扫':
+            _d = max(1.0, float(fx['value']))
+            self._fx_broadcast(p, {'kind': 'staff', 'len': round(_d, 1)})
+            self._aoe_players(p, p.x, p.z, _d, max(1, int(round(dv * 0.8))),
+                              push=1.2, cone=(p.yaw, 0.80), skip=q.cid)
+            # ★ round409（用户）：正在打的那个人也要被击退（只是不再吃横扫伤害 ✓）
+            self._kb_player(p, q, 1.2)
+        elif nm == '旋击':
+            self._fx_broadcast(p, {'kind': 'spin'})
+            self._aoe_players(p, p.x, p.z, 4.4,
+                              max(1, int(round(dv * fx['value']))), skip=q.cid)
+        elif nm == '溅射':
+            # ★ 以【被打的那个人】为中心炸开（打怪那条是以怪为中心 ✓ 同一个意思）
+            self._aoe_players(p, q.x, q.z, weapons.SPLASH_R,
+                              max(1, int(round(dv * fx['value']))), skip=q.cid)
+        elif nm == '挑飞':
+            self._launch_player(p, q, dv)
+
+    def _launch_player(self, p, q, dv):
+        """把玩家挑到空中（★ round407 · 交接文档第四节 ④）
+
+        ★ 玩家位置是客户端权威 ✗ 服务端【不能】自己改高度（下一帧就被覆盖 ✓）
+          → 只能发事件：客户端接管 1.5 秒的模型高度 ✓（同"击退只能发事件"那条）
+        ★ 周围的人也发一条 launch_him ✓ 不然只有挨打的人自己看得见 ✓
+        ★ 落地伤害【不在这里算】✗ 压进 _flyq 到点再算 ✓
+          （和怪的 m.flyT / m.latDmg 一个思路 ✓ 只是玩家的状态存在 World 上 ✓）
+        """
+        _t = 1.5
+        try:
+            self._send_cid(q.cid, P.pack('fx', kind='launch_me',
+                                         h=round(FLY_H, 2), t=_t))
+        except Exception:
+            pass
+        self._fx_broadcast(p, {'kind': 'launch_him', 'who': q.role_id,
+                               'h': round(FLY_H, 2), 't': _t})
+        self._flyq.append((now_s() + _t, p.cid, q.cid, max(1, int(dv))))
+
+    def _pvp_killed(self, killer, victim):
+        """玩家击杀玩家：魔气 +2 / 被杀 −1（用户确认 ✓）+ 防刷判定 ✓"""
+        # ★ 第 250 轮（用户要求）：击杀玩家进弹幕（谁杀了谁 ✓）
+        #   僵尸打死玩家【不进】弹幕（用户明确说不需要 ✓）
+        self._broadcast(P.pack('ticker', text='%s 击杀了 %s' % (killer.name, victim.name), kind='kill'))
+        # ★ 防刷：这一对 10 分钟内只算一次 ✗（不然开小号互刷 ✓）
+        counted = self._pvp_pair_ok(killer, victim, 'mq')       # ★ 魔气那把锁（10 分钟 ✓）
+        steal_ok = self._pvp_pair_ok(killer, victim, 'steal')   # ★ 第 167 轮：夺取另一把锁（1 分钟 ✓）
+        if counted:
+            # ★ round424：魔气榜的排序项 = 击杀玩家数 ✗ 和魔气共用同一把防刷锁 ✓
+            #   （不然开小号互刷就能刷榜 ✗）
+            try:
+                killer.st_pvp = int(getattr(killer, 'st_pvp', 0) or 0) + 1
+            except Exception:
+                pass
+            killer.mq = min(int(mqmod.cfg('mq_max', mqmod.MQ_MAX)),
+                            int(killer.mq or 0) + int(mqmod.cfg('kill_gain', mqmod.KILL_GAIN)))
+            victim.mq = max(0, int(victim.mq or 0) - int(mqmod.cfg('killed_loss', mqmod.KILLED_LOSS)))
+            self._mq_save(killer)
+            self._mq_save(victim)
+        # 播报（附近的人看得到 ✓）
+        self._evt_near(victim.x, victim.z, 'notice',
+                       {'text': '%s 击杀了 %s' % (killer.name, victim.name)})
+        # ★ round409（用户："夺取的 CD 我们改了，文案还提示 10 分钟"）
+        #   ★ 两个冷却都【现读配置】✗ 不再写死 10 分钟 / 1 分钟 ✓
+        _cd_mq = float(mqmod.cfg('pair_cooldown', mqmod.PAIR_COOLDOWN))
+        _cd_st = float(mqmod.cfg('steal_cooldown', mqmod.STEAL_COOLDOWN))
+        self._send_cid(killer.cid, P.pack(
+            'notice', text='你击杀了 %s%s' % (
+                victim.name,
+                ('，魔气 +%d（现在 %d）' % (int(mqmod.cfg('kill_gain', mqmod.KILL_GAIN)), killer.mq)) if counted
+                else '（魔气冷却没到 —— 同一对手%s内只算一次；夺取是另一条冷却%s）'
+                     % (cd_human(_cd_mq), cd_human(_cd_st)))))
+        self._send_cid(victim.cid, P.pack(
+            'notice', text='你被 %s 击杀了%s' % (
+                victim.name if False else killer.name,
+                ('，魔气 −%d（现在 %d）' % (int(mqmod.cfg('killed_loss', mqmod.KILLED_LOSS)), victim.mq)) if counted
+                else '')))
+        # ★★ 第 151 轮：夺取（方案 §5/§6 + 用户确认的 §14）★★
+        self._pvp_steal(killer, victim, steal_ok)   # ★ 用夺取自己的锁 ✗ 不再用魔气的 ✓
+
+    def _pvp_steal(self, killer, victim, counted):
+        """夺取经验 / 物品（第 151 轮）
+
+        用户确认的规则：
+          概率 = 5% + 魔气/2 × 0.2%，封顶 15%；取【魔气高】那边的 ✓
+          只掷一次骰子 ✗ 经验比例看【实际夺取方】自己的魔气 ✓
+          背包里没装备的随机 1 件必夺 ✓
+          ★ 穿戴中的另外掷 1%（耐久原样保留 ✓）
+          没经验 → 扣 100 金币（金币系统还没做 ✗ 先留接口 ✓）
+          10 分钟限制挡住的那次不夺取 ✗
+        """
+        if not counted:
+            return                                   # 被防刷拦住了 → 不夺取 ✓
+        try:
+            who, pct = mqmod.pick_stealer(killer.mq, victim.mq)
+            stealer = killer if who == 'killer' else victim
+            loser = victim if who == 'killer' else killer
+            if random.random() * 100.0 >= pct:
+                self._send_cid(killer.cid, P.pack(
+                    'notice', text='夺取判定：%.0f%% 没中（对方没损失）' % pct))
+                return
+            # ---- 经验 ----
+            pct_exp = mqmod.steal_exp_pct(stealer.mq)
+            lrole = loser.role or {}
+            have = max(0, int(lrole.get('exp') or 0))
+            take = min(int(have * pct_exp), have)     # ★ 不会变负 → 不会掉级 ✓
+            got_exp = 0
+            if take > 0:
+                lrole['exp'] = have - take
+                got_exp = take
+                self._gain_exp(stealer, take)
+                # ★ round409（用户："夺取了背包、经验，文案没写清楚"）
+                #   ★ 原来是【经验一条、背包一条】两三条独立的弹幕 ✓
+                #     同一次夺取被拆成好几行 ✗ 谁夺了谁看不出关系 ✓
+                #   → 改成先在下面【汇总成一条】✗ 这里不再单发 ✓
+                self._save_role(stealer)   # 第 242 轮：抢来的经验也要落库         # ★ 走正常升级检查 ✓
+                self.post_save('UPDATE roles SET exp=? WHERE id=?',
+                               (int(lrole['exp']), loser.role_id))
+            else:
+                # ★ 没经验 → 改扣 100 金币（用户确认 ✓）
+                #   金币系统还没做 ✗ 这里先只提示 ✓
+                #   ★ 做金币时：扣 loser 100 金币 → 给 stealer（用户确认：金币归夺取方 ✓）
+                #     没金币就什么都不扣 ✓
+                self._send_cid(killer.cid, P.pack(
+                    'notice', text='%s 没经验了（金币还没上，暂时什么都拿不到）' % loser.name))
+            # ---- 背包里没装备的：必夺 1 件 ----
+            #   ★ round409（用户："夺取了背包……文案没写清楚"）
+            #     原来这里只说"一件背包物品"✗ 玩家不知道丢了什么 ✓
+            #     → 现在从【上线时读进内存的背包快照】里随机挑一件 ✗
+            #       这样弹幕能写出【物品名】✓ 而且 SQL 是精确 id（不用 RANDOM()）✓
+            #     ★ tick 线程不能查库 ✗ 所以只能用 role['bag']（net.py 登录时装的 ✓）
+            #       快照过期（刚捡的/刚卖掉的）→ 挑不到就退回原来那条 RANDOM() SQL ✓
+            #       （退回时只敢说"一件背包物品"✗ 猜名字会更糟 ✓）
+            taken_item = False
+            taken_name = ''
+            try:
+                _snap = (loser.role or {}).get('bag')
+                _cand = []
+                if isinstance(_snap, list):
+                    for _x in _snap:
+                        if isinstance(_x, dict) and _x.get('id') is not None \
+                                and not _x.get('in_storage'):
+                            _it = _x.get('item') if isinstance(_x.get('item'), dict) else _x
+                            _cand.append((_x['id'], (_it or {}).get('name') or ''))
+                n = int(getattr(loser, 'bagN', -1))
+                if _cand:
+                    _iid2, _nm2 = random.choice(_cand)
+                    self.post_save('UPDATE items SET role_id=? WHERE id=? AND role_id=?',
+                                   (stealer.role_id, _iid2, loser.role_id))
+                    taken_item = True
+                    taken_name = _nm2
+                elif n != 0:                          # ★ -1 = 不知道 → 还是试一下 ✓
+                    self.post_save(
+                        'UPDATE items SET role_id=? WHERE id IN ('
+                        ' SELECT id FROM items WHERE role_id=? AND in_storage=0'
+                        ' ORDER BY RANDOM() LIMIT 1)', (stealer.role_id, loser.role_id))
+                    taken_item = True
+            except Exception:
+                pass
+            # ---- ★ 穿戴中的：另外掷 1%（耐久原样保留 ✓）----
+            worn_taken = ''
+            try:
+                if random.random() * 100.0 < float(mqmod.cfg('worn_steal_pct', mqmod.WORN_STEAL_PCT)):
+                    if loser.weaponItemId and (not loser.armorItemId or random.random() < 0.5):
+                        worn_taken = (loser.weapon or {}).get('name') or '武器'
+                        self._steal_worn(loser, stealer, 'weapon')
+                    elif loser.armorItemId:
+                        worn_taken = (loser.armor or {}).get('name') or '防具'
+                        self._steal_worn(loser, stealer, 'armor')
+            except Exception:
+                worn_taken = ''
+            # ---- 双方提示 ----
+            bits = []
+            if got_exp:
+                bits.append('%d 点经验' % got_exp)
+            if taken_item:
+                bits.append('【%s】' % taken_name if taken_name else '一件背包物品')
+            if worn_taken:
+                bits.append('他身上的【%s】' % worn_taken)
+            if not bits:
+                bits.append('什么都没抢到')
+            # ★ round409：一次夺取只发【一条】弹幕 ✗ 而且把拿到的都写清楚 ✓
+            self._ticker('%s 夺取了 %s 的 %s' % (stealer.name, loser.name,
+                                                '、'.join(bits)),
+                         'mq', tag='st:%d' % stealer.role_id)
+            self._send_cid(stealer.cid, P.pack(
+                'notice', text='你夺取了 %s 的 %s（概率 %.0f%% 中了）'
+                              % (loser.name, '、'.join(bits), pct)))
+            self._send_cid(loser.cid, P.pack(
+                'notice', text='%s 夺走了你的 %s' % (stealer.name, '、'.join(bits))))
+        except Exception:
+            pass
+
+    def _steal_worn(self, loser, stealer, which):
+        """把对方【穿着的】抢走（耐久原样保留 ✓）
+
+        ★ 三件事要一起做（少一件就不一致 ✗）：
+          ① 对方身上卸下（内存） ② 改库里的所有者（SQL）
+          ③ 把 equipment 里那条删掉（不然他重登又穿上了 ✗）
+        """
+        try:
+            rid = loser.role_id
+            if which == 'weapon':
+                iid = loser.weaponItemId
+                loser.weapon = None
+                loser.weaponItemId = None
+                loser.wDur = loser.wDurMax = 0
+            else:
+                iid = loser.armorItemId
+                loser.armor = None
+                loser.armorItemId = None
+                loser.aDur = loser.aDurMax = 0
+            self._invalidate_stats(loser)
+            if iid:
+                self.post_save('UPDATE items SET role_id=? WHERE id=? AND role_id=?',
+                               (stealer.role_id, iid, rid))
+                self.post_save('DELETE FROM equipment WHERE role_id=? AND slot=?', (rid, which))
+            # 被抢的人：装备与血量上限都变了 → 重算并告诉他 ✓
+            self._send_cid(loser.cid, P.pack('weapon' if which == 'weapon' else 'armor',
+                                             **({'w': None, 'hpm': self._hp_max(loser)}
+                                                if which == 'weapon'
+                                                else {'a': None, 'hpm': self._hp_max(loser)})))
+        except Exception:
+            pass
+
+
+    def _mq_save(self, p):
+        """魔气变了 → 落库（tick 线程只排队 ✗ saver 线程真写 ✓）"""
+        self.post_save('UPDATE roles SET mq=?, mq_at=? WHERE id=?',
+                       (int(p.mq or 0), int(p.mqAt or 0), p.role_id))
+        # 顺手推给本人（以后属性页/头顶要显示 ✓）
+        self._send_cid(p.cid, P.pack('mq', v=int(p.mq or 0)))
+
+    def _stat_sheet(self, q):
+        """属性面板的【完整】数值表（round411 建立，round465 重写）
+
+        ★ 在服务器算：基础值 / 词条 / 天赋 / 上限 全部只有服务器有权威副本 ✗
+          客户端自己再算一遍 = 两套公式 → 迟早不一致 ✓
+        ★ 每一项：k / n / v(当前) / base(人物本身) / gear(装备词条)
+                 / tal(天赋) / cap(上限 ✗ 0 = 无) / unit / grp(分组)
+        """
+        out = []
+        try:
+            lv = int((q.role or {}).get('level') or 1)
+        except Exception:
+            lv = 1
+        _w = q.weapon or {}
+        if _w.get('broken'):
+            _w = {}
+        try:
+            _T = affixes.totals(_w.get('affixes'))
+        except Exception:
+            _T = {}
+        _ar = q.armor
+        if isinstance(_ar, dict) and _ar.get('broken'):
+            _ar = None
+        try:
+            # ★ round472：属性面板里的防具部分也要乘发挥度 ✓
+            _am = weapons.mastery_of(_ar, lv)
+            _st = armormod.stats_of(_ar, _am, level=lv)
+        except Exception:
+            _am = 1.0
+            _st = {'hp': 0, 'hp_pct': 0, 'dr': 0, 'dodge': 0}
+
+        def tal(k):
+            return max(0.0, self._tal(q, k))
+
+        # ★★ round474：词条合计 = 武器 + 防具 ✗
+        #   以前只有武器（_T）✗ 于是防具上的 经验/减伤%/移速/抗爆 在面板里永远是 0 ✓✓
+        try:
+            _aT = affixes.totals((_ar or {}).get('affixes'))
+        except Exception:
+            _aT = {}
+
+        def g(k):
+            return float(_T.get(k) or 0.0) + float(_aT.get(k) or 0.0)
+
+        def add(k, n, v, base, gear, talv, cap, unit, grp, bn=None):
+            # ★ round470：以前一律四舍五入到 1 位小数 ✗
+            #   攻速 ×1.15 会被压成 ×1.1 ✗ 间隔 0.54 → 0.5 ✗✗
+            #   → 改成 2 位（客户端该显示 1 位的自己四舍五入 ✓）
+            out.append({'k': k, 'n': n,
+                        'v': (round(v, 2) if isinstance(v, float) else int(round(v))),
+                        'base': (round(base, 2) if isinstance(base, float) else int(round(base))),
+                        'gear': (round(gear, 2) if isinstance(gear, float) else int(round(gear))),
+                        'tal': (round(talv, 2) if isinstance(talv, float) else int(round(talv))),
+                        'cap': (round(cap, 2) if isinstance(cap, float) else int(cap)),
+                        'unit': unit, 'grp': grp, 'bn': (bn or '人物')})
+
+        # ---------- 属性一：生存 ----------
+        _base_hp = int(mobs.level_hp(lv))
+        _gear_hp = int(round(_st['hp'] * (1.0 + _st['hp_pct'] / 100.0)))
+        add('hp', '生命上限', int(self._hp_max(q)), _base_hp, _gear_hp,
+            int(tal('hp')), 0, '点', '生存')
+        add('dr_fix', '减伤（固定）', float(_st['dr']), 0, float(_st['dr']), 0.0,
+            0, '点', '生存')
+        # ★ round474（用户定：减伤%词条 + 天赋，总上限仍然 50%）
+        _dr_all = tal('dr') + g('dr_pct')
+        add('dr', '减伤（百分比）', min(50.0, _dr_all), 0, g('dr_pct'), tal('dr'), 50, '%', '生存')
+        add('dodge', '闪避', _st['dodge'] + tal('dodge'), 0, float(_st['dodge']),
+            tal('dodge'), 30, '%', '生存')
+        # ★ round474：免爆 / 抗爆 / 命中 / 穿透 都把装备词条算进去 ✓
+        add('anticrit', '免爆', g('anticrit') + tal('anticrit'), 0, g('anticrit'), tal('anticrit'), 0, '%', '生存')
+        # ★ round586：全能吸血 = 词条（vamp_all/lifesteal）+ C3 被动，合并显示一行
+        _omni_gear = g('vamp_all') + g('lifesteal')
+        _omni_pas = float(self._sk_val(q, 'omnivamp') or 0.0) * 100.0
+        add('vamp_all', '全能吸血', _omni_gear + _omni_pas, 0.0,
+            _omni_gear, _omni_pas, 0, '%', '生存')
+        add('qi', '灵气上限', int(self._qi_max(q)),
+            int((q.role or {}).get('qiMax') or 100), 0, int(tal('qi')), 0, '点', '生存')
+
+        # ---------- 属性二：输出 ----------
+        add('atk', '攻击力', float(self._atk_of(q)), float(mobs.player_atk(lv)),
+            float(self._atk_of(q) - mobs.player_atk(lv) - tal('atk')), tal('atk'), 0, '点', '输出')
+        _crit_base = mobs.CRIT_CHANCE * 100.0
+        add('crit', '暴击率', _crit_base + g('crit_pt') + tal('crit'),
+            _crit_base, g('crit_pt'), tal('crit'), 30, '%', '输出')
+        # ★ round473：爆伤显示口径 = 【暴击伤害倍率】✗ 基础 150% · 上限 250% ✓
+        _cd_b = float(mobs.CRIT_MUL) * 100.0
+        _cd_v = min(250.0, _cd_b + g('crit_dmg') + tal('critdmg'))
+        add('critdmg', '爆伤', _cd_v, _cd_b, g('crit_dmg'), tal('critdmg'), 250, '%', '输出')
+        # ★ round473：抗爆（降低受到的暴击伤害，无上限 ✓）
+        add('anticritdmg', '抗爆', g('anticritdmg') + tal('anticritdmg'),
+            0.0, g('anticritdmg'), tal('anticritdmg'), 0, '%', '生存')
+        # ★ round474：新增【全能吸血】（对所有伤害生效）
+        #   ★ round586：已经和 C3 被动合并到上面一行 ✓
+        # ★★ round475：穿透有【两种口径】，以前混成一行 ✗✗
+        #   · 词条穿透 = 【点】→ 抵对方固定减伤（装备）
+        #   · 天赋穿透 = 【%】  → 抵对方减伤%（对抗相减）
+        #   混在一行会导致"天赋 50 显示成 50 点"这种误导 ✓ → 拆成两行 ✓
+        add('pen', '穿透', g('pen_pt'), 0, g('pen_pt'), 0.0, 0, '点', '输出')
+        add('pen_pct', '穿透（%）', tal('pen'), 0, 0.0, tal('pen'), 0, '%', '输出')
+        add('hit', '命中', g('hit_pt') + tal('hit'), 0, g('hit_pt'), tal('hit'), 0, '%', '输出')
+
+        # ---------- 属性三：手感 / 时间 ----------
+        # ★★★ round470（用户："攻速的上限是多少根据武器定的上限，还是人物？
+        #   并且在属性页面要显示玩家当前的攻速，要算上武器和词条加成"）★★★
+        #   答案：【不是按武器、也不是按人物】✗ 是一个全局常量 ✓
+        #     weapons.S_MIN = 0.6 · weapons.S_MAX = 2.2 · BASE_INTERVAL = 0.62
+        #     间隔 = 0.62 / S → 最快 0.282 秒（×2.2）· 最慢 1.033 秒（×0.6）
+        #     每把武器只影响【基础 S】（匕首 1.45、锤 0.66…）✗ 词条在基础上乘 ✓
+        #   ★ 顺手修个 bug：这里以前写的上下限是 0.55~1.8 ✗ 和 weapons.py 的 0.6~2.2 不一致 ✗✗
+        _S_MIN = float(getattr(weapons, 'S_MIN', 0.6))
+        _S_MAX = float(getattr(weapons, 'S_MAX', 2.2))
+        _BASE_IV = float(getattr(weapons, 'BASE_INTERVAL', 0.62))
+        _s_base = 1.0
+        try:
+            _s_base = float((_w.get('base') or {}).get('atkSpeed') or 1.0)
+        except Exception:
+            _s_base = 1.0
+        _s_tot = _s_base * (1.0 + g('spd_pct') / 100.0)
+        _s_tot = max(_S_MIN, min(_S_MAX, _s_tot))
+        # ★ 新增【攻速】行（当前值含词条 ✗ 上限写清楚 ✓）
+        add('aspd', '攻速', round(_s_tot, 2),
+            round(_s_base, 2), round(_s_tot - _s_base, 2), 0.0, round(_S_MAX, 2), '×', '手感',
+            bn='武器')
+        _interval = _BASE_IV / max(0.1, _s_tot)
+        add('interval', '攻击间隔', round(_interval, 2),
+            round(_BASE_IV / max(0.1, _s_base), 2), round(_interval - _BASE_IV / max(0.1, _s_base), 2),
+            0.0, 0, '秒', '手感', bn='武器')
+        # ★ round471（用户："攻速上限 2.2 是一秒攻击 2.2 次吗？"）
+        #   不是 ✗ ×2.2 = 0.28 秒一刀 = 3.55 刀/秒 ✓
+        #   → 直接把"每秒几刀"写出来 ✗ 看不混 ✓
+        _iv_b = _BASE_IV / max(0.1, _s_base)
+        add('aps', '每秒攻击', round(1.0 / _interval, 2),
+            round(1.0 / _iv_b, 2), round(1.0 / _interval - 1.0 / _iv_b, 2),
+            0.0, 0, '刀/秒', '手感', bn='武器')
+        _v0 = float(PLAYER_SPEED)
+        # ★ round474：移速 = 天赋 + 装备词条，上限 30%（用户：砍一半 ✓）
+        _sp_tot = min(30.0, tal('speed') + g('speed_pct'))
+        # ★ 装备那一份也要按【封顶后】算 ✗ 不然词条 +100% 会显示"装备 +4.4"却只给一半 ✓
+        _sp_gear = max(0.0, _sp_tot - tal('speed'))
+        add('speed', '移动速度', round(_v0 * (1.0 + _sp_tot / 100.0), 2),
+            round(_v0, 2), round(_v0 * _sp_gear / 100.0, 2),
+            round(_v0 * tal('speed') / 100.0, 2),
+            # ★ 上限这里要给【米/秒】口径（不然显示成"上限 30 米/秒" ✗）
+            round(_v0 * 1.30, 2), '米/秒', '手感')
+
+        # ---------- 属性四：副加 ----------
+        add('treasure', '寻宝', g('treasure'), 0, g('treasure'), 0, 0, '%', '副加')
+        # ★ round474（用户：经验词条算到防具）：杀怪经验 +%
+        add('exp_pct', '经验', g('exp_pct'), 0.0, g('exp_pct'), 0.0, 0, '%', '副加')
+        add('qi_on_hurt', '受击回灵气', float(_st.get('qi_hurt') or 0), 0,
+            float(_st.get('qi_hurt') or 0), 0, 0, '点', '副加')
+        add('qi_on_kill', '击杀回灵气', float(_st.get('qi_kill') or 0), 0,
+            float(_st.get('qi_kill') or 0), 0, 0, '点', '副加')
+
+        # ★★ round465b（用户："把所有有的属性都列出来"）✗
+        #   不再过滤掉 0 值项 ✗ 全部返回 ✓
+        #   （客户端把 0 值的行调暗 → 看得出"这项存在但还没加成"）
+        return out
+
+    def _aff(self, p, key):
+        """★ round474：读一个词条的【武器 + 防具】合计值 ✓
+
+        ★ 为什么要合并：新加的词条分散在两个部位上（经验在防具 ✓）
+          而战斗里只想"问一句有没有"✗ 不想分两次写 ✓
+        ★ 坏掉的装备不算 ✓
+        """
+        tot = 0.0
+        for it in ((p.weapon or None), (p.armor or None)):
+            if not isinstance(it, dict) or it.get('broken'):
+                continue
+            try:
+                tot += float(affixes.totals(it.get('affixes')).get(key, 0.0) or 0.0)
+            except Exception:
+                pass
+        return tot
+
+    def _tal(self, q, k):
+        """读一个天赋的【有效值】（★ round411：天赋接进战斗的唯一入口）
+
+        ★ 一律读 talEff（服务端算好的有效值 ✗ 含对抗相减 + 封顶 ✓）
+          ✗ 不要读 talRaw（那是没相减没封顶的原始值 ✓）
+        ★ 拿不到就当 0 ✗ 绝不让天赋缺字段把整段战斗搞崩 ✓
+        """
+        try:
+            return float((q.talEff or {}).get(k) or 0.0)
+        except Exception:
+            return 0.0
+
+    def _invalidate_stats(self, p):
+        """★ 性能：装备/技能/天赋变化后清派生属性缓存"""
+        try:
+            p.qiMaxC = 0
+            p.omniC = None
+            p.skProfTick = -1
+            p.skProf = None
+        except Exception:
+            pass
+
+    def _qi_max(self, q):
+        """灵气上限 = 角色基础 + 天赋灵气（★ round411 新接上）
+        ★ 角色表里的 qiMax 是个固定值（默认 100）✗ 天赋【灵气】+2/点之前完全没算 ✓
+        """
+        try:
+            if int(getattr(q, 'qiMaxC', 0) or 0) > 0:
+                return int(q.qiMaxC)
+        except Exception:
+            pass
+        try:
+            base = int((q.role or {}).get('qiMax') or 100)
+        except Exception:
+            base = 100
+        # ★ round580（C5 灵气涌动）：灵气上限 +20%~40%
+        try:
+            base = int(round(base * (1.0 + self._sk_val(q, 'qiflow'))))
+        except Exception:
+            pass
+        # ★ round474：装备词条【灵气上限】也算 ✓
+        _v = max(1, int(base + int(self._tal(q, 'qi')) + int(self._aff(q, 'qi_flat'))))
+        try:
+            q.qiMaxC = _v
+        except Exception:
+            pass
+        return _v
+
+    def _atk_of(self, p):
+        """玩家的攻击力 —— ★★ 服务器算，不看客户端报什么（第 39 轮 + 第 47 轮接武器）★★
+
+        方案 §4.5 固有属性：攻击 = 10 + 3L + 0.08L²
+        方案 §7.5 接武器：攻击 = 固有 + (固有 × 武器系数 + 武器平伤)，装备贡献封顶 60% ✓
+        ★ 客户端只在切换武器时【上报意图】，具体是哪把、系数多少 —— 一律服务器说了算 ✓
+        """
+        lv = int(p.role.get('level') or 1)
+        inherent = mobs.player_atk(lv)
+        w = p.weapon or {}
+        # ★ 第 232 轮：坏了的武器 = 空手打 ✗ 不然会出现"武器坏了伤害照旧"✓
+        if w.get('broken'):
+            w = {}
+        base = w.get('base') or {}
+        coeff = float(base.get('coeff') or 1.0)
+        # ★ 第 51 轮：用【物品自己的等级】算平伤加成 ✓（原来错用了玩家等级 ✗）
+        # ★ 第 53 轮：等级不够不是"不能装"，而是【发挥度打折】✓
+        # ★★ 第 149 轮：魔气加成 —— 只加在这一处 ✗ 别处不动 ✓
+        #   最终攻击 = 原来的攻击 × (1 + 魔气加成)
+        #   ★ 意思是：固有 + 武器 + 词条 + 天赋 先加完 ✓ 最后乘魔气 ✗
+        #     → 魔气不会被别的加成二次放大 ✓（和方案 §4.1 一致 ✓）
+        #   ★ 打怪也算 ✓（用户确认 ✓）—— 因为打怪也走这个函数 ✓
+        # ★ round472：平伤也用【有效等级】（min(装备等级, 你的等级)）✗
+        #   不然 1 级拿 1000 级剑：平伤 2194 → 就算打 2% 也是 44 ✗
+        _eff_lv = weapons.eff_level(w, lv)
+        _atk0 = weapons.player_atk_with(inherent, w.get('look'), coeff,
+                                       w.get('tier') or 0, _eff_lv,
+                                       weapons.mastery_of(w, lv),
+                                       # ★ 第 117 轮：flat 里加上【天赋攻击】✓
+                                       #   武器/词条/天赋三者是相加关系 ✓ 走同一个 flat ✓
+                                       flat=(weapons.flat_full(w, lv) +
+                                             float((p.talRaw or {}).get('atk') or 0.0)),
+                                       aff_w=w)                      # ★ 第 60 轮：词条 ✓
+        # ★ 注意是 p.mq ✗ 不是 self.mq ✓（self 是 World ✓ 玩家是 p ✓ 我第一版写成 self ✗ 已修 ✓）
+        # ★ round580：主动/被动攻击 buff（血怒 +40%、暴走 +20%）
+        _bmul = 1.0
+        _ta = getattr(p, 'skTA', {}) or {}
+        if float(_ta.get('bloodrage', 0) or 0) > 0:
+            _bmul *= 1.40
+        if float(_ta.get('berserk', 0) or 0) > 0:
+            _bmul *= 1.20
+        return _atk0 * (1.0 + mqmod.dmg_bonus_pct(p.mq) / 100.0) * _bmul
+
+    def _intent_atk(self, p, d):
+        """玩家挥了一刀 —— ★★ 服务器算伤害（客户端只报"我挥了"，不报打中谁）★★
+
+        为什么不信任客户端报的目标：那样改个包就能隔空打死别人 / 怪 ✗
+        服务器自己按【攻击者的权威位置 + 朝向】重算一遍扇形里的目标 ✓
+        规则和客户端那条完全一样（mobs.in_front / ATK_RANGE / ATK_ARC）—— 两边常量必须一致 ✓
+
+        ★ 协议里还留着 mid / uid 字段，但这里【故意不看】—— 一律以服务器的扇形为准 ✓
+          （客户端传什么都改变不了打中谁，最多只是"我挥了"这个事实）
+        """
+        # 第 174 轮（用户）：★ 玩家在安全区内不能攻击（③）
+        #   ★ 放在最前面：连耐久都不该扣 ✗（挥空也不给 ✓）
+        if abs(p.x) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(p.z) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+            self._send_cid(p.cid, P.pack('notice', text='安全区内不能攻击'))
+            return
+        # ★ round583（用户）：冰封/击倒期间不能攻击
+        if float(getattr(p, 'freezeT', 0) or 0) > 0:
+            self._send_cid(p.cid, P.pack('notice', text='被冰封：不能攻击'))
+            return
+        if p.atkT > 0:
+            return
+        # ★★ 第 47 轮：冷却 / 射程 / 攻击弧 全部按【手上那把武器】算（方案 §5.1 / §7.4）★★
+        #   以前这三个是写死的常量（= 单手剑）—— 现在匕首就快而短、长枪就慢而长 ✓
+        w = p.weapon or {}
+        wlook = w.get('look') or weapons.DEFAULT_TYPE
+        wtier = int(w.get('tier') or 0)
+        # ★ 第 60 轮：冷却吃【攻速词条】（S 再夹回 §5.1 上下限 ✓）
+        _T = affixes.totals(w.get('affixes'))
+        p.atkT = weapons.interval_of(wlook, _T.get('spd_pct', 0.0))
+        # ★ round580：嗜血 +20% / 暴走 +50% 攻速（间隔做除法 ✓ 可叠乘）
+        _ta0 = getattr(p, 'skTA', {}) or {}
+        _as = 1.0
+        if float(_ta0.get('bloodthirst', 0) or 0) > 0:
+            _as *= 1.2
+        if float(_ta0.get('berserk', 0) or 0) > 0:
+            _as *= 1.5
+        if _as > 1.0:
+            p.atkT = max(0.18, p.atkT / _as)
+        reach = weapons.reach_of(wlook)
+        arc = weapons.arc_of(wlook)
+
+        # ★★ 第 59 轮：耐久 —— 每次挥砍扣 1（打空也算 ✓ 更真实）
+        #   ★ 归零 → 武器消失（卸下 + 删库 + 告诉他 ✓）
+        #   ★ 空手不扣（durMax=0 ✓）
+        if p.wDurMax > 0:
+            p.wDur -= 1
+            p.wDurDirty += 1
+            if p.wDurDirty >= 50:
+                self._flush_dur(p)                   # ★ 攒 50 次写一次盘 ✓ 不炸磁盘 ✓
+            # ★ 第 103 轮：防具耐久也定期推 ✓
+            if p.aDurMax > 0 and p.aDurDirty % 10 == 0:
+                self._send_cid(p.cid, P.pack('dur', d=p.wDur, m=p.wDurMax,
+                                             ad=p.aDur, am=p.aDurMax))
+            if p.wDurDirty % 10 == 0:
+                # ★ 每 10 次推一次耐久给客户端 ✓（不然界面上的条子会停在旧值 ✗）
+                self._send_cid(p.cid, P.pack('dur', d=p.wDur, m=p.wDurMax))
+            if p.wDur <= 0:
+                self._break_weapon(p)
+                return
+
+        p.atkSeq += 1        # ★★ 第 66 轮：这一刀要播给所有人看（别人靠它触发动作 ✓）
+        # ★ round583：别人也能听到挥刀（客户端按距离衰减）
+        self._snd_near(p.x, p.z, 'swing', 0.9, exclude=p.cid)
+        # ★ round574：被动【不再在这里】无条件掷骰 ✗
+        #   → 改成"这一刀真的打中了谁"才掷（见 _sk_b_attack_hit ✓ 用户："打空不能掷骰"）
+
+        # ★★★ round386（用户："匕首第一下丢出去，第二下近身刺"）★★★
+        #   ★ 奇数刀 = 投掷（远程 ✓ 复用箭矢系统）
+        #     偶数刀 = 近身刺（走下面的正常近战 ✓）
+        #   ★ 投掷伤害按品阶：1 阶 20% → 12 阶 80%（每阶 +6%）
+        if wlook == 'dagger':
+            if True:   # ★ round391：不再立刻发射 ✗ 压队列延后 0.40 秒 ✓
+                self._arrow_id += 1
+                _atk2 = self._atk_of(p)
+                _dv2, _crit2 = mobs.roll_damage(
+                    _atk2, crit_pt=_T.get('crit_pt', 0.0) + self._tal(p, 'crit'),
+                    crit_dmg=_T.get('crit_dmg', 0.0) + self._tal(p, 'critdmg'))
+                _t2 = max(0, min(11, int(wtier)))
+                # ★ round388：和武器文案【同一个公式】✗ 别各写一套 ✓
+                #   文案是 0.20 + 0.0545 × 品阶 ✗ 封顶 0.80 ✓
+                _ratio = 0.20 + 0.0545 * _t2
+                if _ratio > 0.80:
+                    _ratio = 0.80
+                _dv2 = max(1, int(round(_dv2 * _ratio)))
+                # ★ round391（用户："也要做延迟，看起来才像两段伤害"）
+                #   ★ 不再立刻发射 ✗ 压进队列 0.40 秒后再射 ✓
+                #     0.40 秒 ≈ 动画里左臂真正甩出去的时刻 ✓
+                self._later_arrow.append((now_s() + 0.40, p.cid, _dv2, _crit2, True,
+                                          int(p.atkSeq)))
+            # ★ round390（用户："两次攻击作为一次，分成两段，像单手剑一样"）
+            #   ★ 这里【不 return】✗ 继续往下走普通近战 ✓
+            #   → 一次按键 = 先扔出一把（远程）✗ 再近身刺一刀 ✓
+        # ★★ 第 69 轮：弓 = 远程投射物（不走下面的近战扇形 ✗）★★
+        if wlook in weapons.RANGED:
+            if len(self.arrows) < ARROW_MAX:
+                self._arrow_id += 1
+                _atk = self._atk_of(p)
+                _dv, _crit = mobs.roll_damage(
+                    _atk, crit_pt=_T.get('crit_pt', 0.0) + self._tal(p, 'crit'),
+                    crit_dmg=_T.get('crit_dmg', 0.0) + self._tal(p, 'critdmg'))
+                self.arrows[str(self._arrow_id)] = {
+                    'id': self._arrow_id,
+                    'x': p.x, 'z': p.z, 'yaw': p.yaw,
+                    'dx': math.sin(p.yaw), 'dz': math.cos(p.yaw),
+                    'dmg': _dv, 'crit': bool(_crit),
+                    'life': reach / ARROW_SPEED,      # 飞完射程就落地 ✓
+                    'by': p.cid,
+                    'seq': int(p.atkSeq),             # ★ round574：命中后按这一刀去重
+                }
+                # ★ round581（B6 分裂箭）：远程限定，额外 2 箭各 50%
+                if (self._has_b(p, 'splitarrow') and int(p.qi or 0) >= 2
+                        and random.random() < 0.20 * (1.0 + self._sk_val(p, 'masterB'))):
+                    p.qi = max(0, int(p.qi) - 2)
+                    self._send_cid(p.cid, P.pack('qi', q=int(p.qi)))
+                    # ★ round590：不再播分裂箭 VFX（本身已有箭），只加箭
+                    for _ang in (-0.36, -0.18, 0.18, 0.36):
+                        if len(self.arrows) >= ARROW_MAX:
+                            break
+                        self._arrow_id += 1
+                        self.arrows[str(self._arrow_id)] = {
+                            'id': self._arrow_id,
+                            'x': p.x, 'z': p.z, 'yaw': p.yaw + _ang,
+                            'dx': math.sin(p.yaw + _ang), 'dz': math.cos(p.yaw + _ang),
+                            'dmg': max(1, int(_dv * 0.5)), 'crit': bool(_crit),
+                            'life': reach / ARROW_SPEED,
+                            'by': p.cid, 'seq': int(p.atkSeq),
+                        }
+            return
+
+        # ★ 这把武器的机制（按品阶加成 ✓）
+        fx = weapons.fx_of(wlook, wtier)
+        # ①-★ 第 150 轮：先打人✗（PVP ✓一次挥砍两者都能打到 ✓ 用户确认 ✓）
+        #   放在前面是为了让 PVP 先结算 ✗（不影响僵尸那边 ✓ 两边各算各的 ✓）
+        # ★★ round408：先看这一刀【会不会打到怪】★★
+        #   横扫/旋击/溅射 是"一次挥砍放一次"✗ 不是"每命中一个人放一次"✓
+        #   打怪那条路径本来就会顺手打到玩家（_aoe_players ✓）
+        #   → 已经有怪在扇形里时，打人这边就不再放第二次 ✓
+        #     （不然同一次挥砍，玩家那边会吃到两遍 AOE ✓ 用户一定会报）
+        #   ★ 和下面打怪循环用【同一个】in_front 判断 ✓ 不能自己另写一套 ✓
+        _mobInCone = False
+        for _m0 in self.mobs.values():
+            if _m0.hp > 0 and mobs.in_front(p.x, p.z, p.yaw, _m0.x, _m0.z,
+                                            reach + float(getattr(_m0, 'hitR', 0) or 0), arc):
+                _mobInCone = True
+                break
+        try:
+            _pHit = 0
+            for _q in list(self.players.values()):
+                if _q is p:
+                    continue
+                if (abs(_q.x - p.x) > reach + 1.0) or (abs(_q.z - p.z) > reach + 1.0):
+                    continue
+                _pHit += self._pvp_hit(p, _q, reach, arc, allow_area=not _mobInCone)
+        except Exception:
+            _pHit = 0
+        # ★ round575：普攻也能打到【分身】（它现在有血、会死 ✓）
+        #   门禁和打本人同一套：PvP 开关 / 队友 / 安全区 ✓
+        try:
+            _catk = self._atk_of(p)
+            for _c in list(self.clones.values()):
+                if int(_c.get('hp') or 0) <= 0:
+                    continue
+                owner = self.players.get(_c['owner'])
+                if owner is None:
+                    continue
+                if abs(_c['x']) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF) and abs(_c['z']) <= mqmod.cfg('safe_r', mqmod.SAFE_HALF):
+                    continue
+                if not self._pvp_ok(p, owner)[0]:
+                    continue
+                if not mobs.in_front(p.x, p.z, p.yaw, _c['x'], _c['z'], reach, arc):
+                    continue
+                _dc, _cc = mobs.roll_damage(
+                    _catk, crit_pt=_T.get('crit_pt', 0.0) + self._tal(p, 'crit'),
+                    crit_dmg=_T.get('crit_dmg', 0.0) + self._tal(p, 'critdmg'))
+                self._clone_damage(_c, _dc, p, _cc)
+                _pHit += 1
+        except Exception:
+            pass
+        # ① 僵尸：扇形里按武器机制结算（第 59 轮 ✓）
+        rng = random.random
+        _hits = 0
+        _pierce = 1
+        if fx and fx['name'] == '贯穿' and rng() < fx['chance']:
+            _pierce = int(fx['value'])          # 这一刀最多打几个 ✓
+        for m in list(self.mobs.values()):
+            if m.hp <= 0:
+                continue
+            if not mobs.in_front(p.x, p.z, p.yaw, m.x, m.z,
+                                 reach + float(getattr(m, 'hitR', 0) or 0), arc):
+                continue
+            if _hits >= _pierce:
+                break                                # 贯穿次数用完 → 后面的打不到 ✓
+            _hits += 1
+            # ★ round582：记下主人最近打的目标（分身优先打它）
+            p.lastTgt = ('m', m.mid)
+            atk = self._atk_of(p)
+
+            # ★ 匕首【背击】：从背后打 +X%（僵尸是背对着你 ✓）
+            back = False
+            backMul = 1.0
+            if fx and fx['name'] == '背击':
+                # 僵尸的朝向 vs 我从它哪边来：夹角 > 90° = 我在它背后 ✓
+                dx, dz = p.x - m.x, p.z - m.z
+                fa = math.atan2(dx, dz) - m.yaw
+                while fa > math.pi:
+                    fa -= math.pi * 2
+                while fa < -math.pi:
+                    fa += math.pi * 2
+                if abs(fa) > math.pi * 0.5:
+                    atk *= (1.0 + fx['value'])
+                    back = True
+                    backMul = 1.0 + fx['value']
+
+            dv, crit = mobs.roll_damage(atk, crit_pt=_T.get('crit_pt', 0.0) + self._tal(p, 'crit'),
+                                        crit_dmg=_T.get('crit_dmg', 0.0) + self._tal(p, 'critdmg'))
+            # ★ 保安会格挡（方案 §3.3"高防、会格挡"）—— 防御属性已被砍（§4.5），
+            #   所以这里用"减伤"实现，和方案 §5"减伤是唯一的减伤属性"一致 ✓
+            blocked = False
+            if m.kind == '保安' and rng() < mobs.BLOCK_CHANCE:
+                dv = max(1, int(round(dv * mobs.BLOCK_MUL)))
+                blocked = True
+            # ★ round395（用户："每刀 60%"）
+            #   ★ 弯刀连砍：把这一刀本身也压到 60% ✗ 后面的刀由队列补 ✓
+            #   → 总计 = N × 60% ✓（不加这一句就是 100% + (N-1)×60% ✗）
+            _fxRun = fx
+            if fx and fx.get('name') == '连砍':
+                # ★ round397（用户："统一概率 20%"）
+                #   ★ 先掷骰子 ✗ 没触发就【完全走普通攻击】(100% 伤害 ✓)
+                #   ★ 触发了才把第一刀压到 60% ✗ 后面的刀由队列补 ✓
+                if random.random() < fx['chance']:
+                    dv = max(1, int(round(dv * 0.6)))
+                    _fxRun = dict(fx)
+                    _fxRun['chance'] = 1.0      # ★ 已经掷过了 ✗ 别再掷一次 ✓
+                else:
+                    _fxRun = None
+            dv = self._mob_defense(p, m, dv, True)
+            if dv <= 0:
+                continue
+            self._record_mob_damage(m, p, dv)
+            m.hp -= dv
+            m.freezeT = 0.0          # ★ round584：受伤破冰
+            # ★★★ round361 修的真 bug（用户："打僵尸的受伤音效没有了"）★★★
+            #   根因：我上次把 'heal': _heal 塞进 mhits ✗
+            #         而 _heal 是在【这行之后】才赋值的 ✓
+            #         → NameError → 整段攻击处理中断 ✗
+            #         → mhits 根本没发出去 ✗ 客户端既没有伤害数字也没有受伤音效 ✓
+            #   修：先把吸血算完 ✗ 再发 mhits ✓（顺序反了就是崩溃 ✓）
+            # ★ round586：全能吸血 = 被动 + 词条，所有伤害统一走 _lifesteal
+            _heal = self._lifesteal(p, dv, m.x, m.z)
+            self._add_pend(p.cid, 'mhits', {'mid': m.mid, 'dmg': dv, 'crit': bool(crit),
+                                            'block': blocked, 'back': back,
+                                            # ★ 第 62 轮：背击倍率 → 客户端能算出"额外打了多少"✓
+                                            'mb': round(backMul, 2) if back else None,
+                                            'heal': _heal,
+                                            'x': round(m.x, 2), 'z': round(m.z, 2)})
+
+            # ★★ 命中后按武器类型触发机制 ★★
+            # ★ round399（用户："暴击跳打也要同步"）
+            #   ★ 暴击是 mhits 里的信息 ✗ 只发给我 ✓ → 额外广播一条 ✓
+            if crit:
+                self._fx_broadcast(p, {'kind': 'crit'})
+            # ★ round400（用户："把别人打的伤害也显示出来"）
+            #   ★ mhits 只发给我 ✗ 别人看不到我在打多少 ✓ → 广播一条 ✓
+            #   ★ _skip = 我自己 ✗ 我已经有 mhits 了 ✓ 不重复弹数字 ✓
+            self._fx_broadcast(p, {'kind': 'dmg', 'v': int(dv),
+                                   'crit': 1 if crit else 0,
+                                   'x': round(m.x, 2), 'z': round(m.z, 2),
+                                   '_skip': p.cid})
+            self._weapon_fx(p, m, _fxRun, dv)
+
+            if m.hp <= 0:
+                m.hp = 0
+                self._mob_died(p, m)
+        # ★ round574：打中怪 / 打中玩家 才掷普攻类被动（打空不掷 ✓）
+        if _hits > 0 or _pHit > 0:
+            self._sk_b_attack_hit(p)
+        # ★★★ round407：这里原来有一整段「② 玩家」的结算（round405 加的）★★★
+        #   它被包在 `if self.pvp:` 里 —— 而 self.pvp 从头到尾【没有任何地方置 True】
+        #   （World.__init__ 给了 False ✗ 之后就只有注释里那句"原来写错在这里"✗）
+        #   → 整段是【死代码】✗ 连刺/连砍/挑飞对玩家的伤害一次都没结算过 ✓
+        #   ★ 真正的玩家伤害一直走上面的 _pvp_hit（_pvp_ok 那套开关 ✓）
+        #   ★ 所以这里删掉，别留着"看着像活的"第二次误导人 ✓
+        #     （交接文档 ④ 的 挑飞 现在实现在 _pvp_hit → _launch_player ✓）
+
+    def _weapon_fx(self, p, m, fx, dv):
+        """命中后触发武器机制（第 59 轮 ✓ 全部由服务器算 ✓）"""
+        if not fx or m.hp <= 0:
+            return
+        # ★★★ round397：概率【统一在这里掷一次】★★★
+        #   原来只有流血/击退/眩晕三个分支自己掷 ✗
+        #   而我新加的连刺/旋击/横扫/连砍【一个都没掷】✗ 等于必定触发 ✓
+        #   现在统一：chance >= 1 的（溅射/投掷/连砍）不受影响 ✓
+        if fx.get('chance', 1.0) < 1.0 and random.random() >= fx['chance']:
+            return
+        nm = fx['name']
+        if nm == '流血':
+            if True:
+                m.bleedT = weapons.BLEED_TIME
+                m.bleedDmg = max(0.5, dv * fx['value'] / weapons.BLEED_TIME)
+                m.bleedFrom = p
+                self._send_cid(p.cid, P.pack('fx', kind='bleed', mid=m.mid))
+        elif nm == '击退':
+            if m.knockImmune <= 0 and self._mob_control_mul(m) > 0:
+                m.knockImmune = weapons.KNOCK_IMMUNE
+                # 顺着"我→他"的方向推出去 ✓
+                dx, dz = m.x - p.x, m.z - p.z
+                d = max(0.01, (dx * dx + dz * dz) ** 0.5)
+                m.x += dx / d * fx['value']
+                m.z += dz / d * fx['value']
+                self._send_cid(p.cid, P.pack('fx', kind='knock', mid=m.mid))
+        elif nm == '眩晕':
+            if m.stunImmune <= 0 and self._mob_control_mul(m) > 0:
+                m.stunT = fx['value'] * self._mob_control_mul(m)
+                m.stunImmune = weapons.STUN_IMMUNE
+                self._send_cid(p.cid, P.pack('fx', kind='stun', mid=m.mid))
+        elif nm == '挑飞':
+            # ★ round404（用户："长枪把敌人挑到 6 格高，1.5 秒后落地，落地范围伤害"）
+            m.flyT = 1.5
+            m.flyH = max(2.0, float(fx['value']))
+            m.latDmg = int(dv)                # ★ 落地伤害按这一次的伤害算 ✓
+            self._fx_broadcast(p, {'kind': 'launch', 'mid': m.mid,
+                                   'by': p.role_id})
+        elif nm == '连砍':
+            # ★ round395（用户："向前挥砍 2~13 刀，每刀 60%，一刀一步"）
+            #   ★ 第一刀刚才已经结算了（也压到 60% ✓）→ 这里只补后面的 N-1 刀 ✓
+            #   ★ 每刀间隔 0.18 秒 ✗ 动画也按这个节奏循环 ✓
+            _n = max(2, min(13, int(round(fx['value']))))
+            self._fx_broadcast(p, {'kind': 'saber', 'n': _n})
+            for _i2 in range(1, _n):
+                self._later.append((now_s() + 0.18 * _i2, p.cid, m.mid, dv,
+                                    {'step': 0.35, 'push': 0.35}))
+        elif nm == '横扫':
+            # ★ round392（用户："长棍触发时前方一条直线伤害并击退，按品阶延长"）
+            #   ★ "一条直线" = 前方夹角 20° 内（dot > 0.94）✗ 不是扇形 ✓
+            #   ★ 长度 = fx['value']（4~10 米 ✓ 由品阶决定 ✓）
+            _d = max(1.0, float(fx['value']))
+            _dxs = math.sin(p.yaw)
+            _dzs = math.cos(p.yaw)
+            self._fx_broadcast(p, {'kind': 'staff', 'len': round(_d, 1)})
+            for o in list(self.mobs.values()):
+                if o is m or o.hp <= 0:
+                    continue
+                _vx = o.x - p.x
+                _vz = o.z - p.z
+                _dist = (_vx * _vx + _vz * _vz) ** 0.5
+                if _dist > _d or _dist < 0.01:
+                    continue
+                # ★ round394（用户："触发时攻击范围再宽一点"）
+                #   0.94 ≈ 20° → 0.80 ≈ 37°（窄锥变宽锥 ✗ 但仍然像"一条"✓）
+                if (_vx * _dxs + _vz * _dzs) / _dist < 0.80:
+                    continue
+                sdv = max(1, int(round(dv * 0.8)))
+                o.hp -= sdv
+                # ★ 击退：沿玩家朝向推 1.2 米 ✓
+                o.x += _dxs * 1.2
+                o.z += _dzs * 1.2
+                self._report_hit(p, o.mid, sdv, False, o.x, o.z,
+                                 {'splash': True, 'heal': 0})
+                if o.hp <= 0:
+                    o.hp = 0
+                    self._mob_died(p, o)
+            # ★★★ round409（用户："长棍对后面的人才击退，在打的目标不击退，改一下"）★★★
+            #   病根：上面那个循环第一句就是 `if o is m: continue` ✗
+            #        主目标连"被推开"都没有 ✓（它只吃了直击 dv ✓）
+            #   → 这里补上：主目标也沿玩家朝向推 1.2 米 ✓（和旁边的人一样 ✓）
+            #   ★ 只补【击退】不补【伤害】✗ 主目标已经吃过 dv 了 ✓
+            #     （和旋击那句"主目标不重复算"同一个道理 ✓）
+            m.x += _dxs * 1.2
+            m.z += _dzs * 1.2
+            # ★★★ round407 修的真 bug（交接文档第四节 ②）★★★
+            #   病根：这里原来是从【上一轮】误贴过来的溅射代码 ✗
+            #     _aoe_players(p, m.x, m.z, weapons.SPLASH_R, dv * fx['value'])
+            #     → 圆心是【主目标怪】✗ 半径只有 1.5 米（SPLASH_R）✗
+            #     → 伤害还被乘了 fx['value']（4~10）✗ 等于 4~10 倍伤害 ✓
+            #   正确 = 和上面打怪那段同一个判定：
+            #     圆心【玩家自己】· 半径 = 横扫长度 _d（4~10 米）·
+            #     夹角 37°（cos >= 0.80）· 伤害 dv × 0.8 ✓
+            self._aoe_players(p, p.x, p.z, _d,
+                              max(1, int(round(dv * 0.8))),
+                              push=1.2, cone=(p.yaw, 0.80))
+        elif nm == '旋击':
+            # ★ round381（用户："锤子触发了就转圈打整个一圈"）
+            #   ★ 半径 2.2 米（≈ 锤的攻击距离）✗ 不看朝向 = 360° ✓
+            #   ★ 主目标不重复算（它已经吃过 dv 了 ✓）
+            # ★ round383（用户："锤子转圈时攻击距离提升一倍"）
+            _r2 = 4.4 * 4.4
+            self._fx_broadcast(p, {'kind': 'spin'})
+            for o in list(self.mobs.values()):
+                if o is m or o.hp <= 0:
+                    continue
+                if (o.x - m.x) ** 2 + (o.z - m.z) ** 2 > _r2:
+                    continue
+                sdv = max(1, int(round(dv * fx['value'])))
+                o.hp -= sdv
+                self._report_hit(p, o.mid, sdv, False, o.x, o.z,
+                                 {'splash': True, 'heal': 0})
+                if o.hp <= 0:
+                    o.hp = 0
+                    self._mob_died(p, o)
+            # ★ 旋击也打玩家（半径 4.4 ✓）
+            self._aoe_players(p, m.x, m.z, 4.4,
+                              max(1, int(round(dv * fx['value']))))
+        elif nm == '连刺':
+            # ★ round379（用户："单手剑改成连刺，概率造成两次伤害"）
+            #   ★ 触发时【再结算一次 dv】✗ 不是把 dv 翻倍 ✓
+            #     （分开报两次 mhits ✗ 玩家能看到"两下"✓）
+            # ★ round382（用户："第二段伤害延迟一点，看着才像二段"）
+            #   ★ 原来两段同一帧结算 ✗ 数字叠在一起 ✗ 看着像一次大伤害 ✓
+            #   ★ 现在第二段延后 0.18 秒 ✗ 正好是动画里第二下刺出去的时刻 ✓
+            extra = max(1, int(round(dv * fx['value'])))
+            self._later.append((now_s() + 0.18, p.cid, m.mid, extra, None))
+            # ★ 不在这里判死 ✗ 交给调用方（它在本函数之后统一判 hp<=0 ✓）
+        elif nm == '溅射':
+            # ★★★ round378（用户："斧头溅射应该由品阶决定，最低 2 个，12 阶可以 13 个"）★★★
+            #   ★ 规则：1 阶 = 2 个 ✗ 每多 1 阶多 1 个 ✗ 12 阶 = 13 个 ✓
+            #   ★ 其余武器（斧以外）保持原来的 SPLASH_MAX 不变 ✓
+            _wTier = 0
+            try:
+                _wTier = int((p.weapon or {}).get('tier') or 0)
+            except Exception:
+                _wTier = 0
+            _splashCap = weapons.SPLASH_MAX
+            if (p.weapon or {}).get('look') == 'axe' or (p.weapon or {}).get('id') == 'axe':
+                _splashCap = max(2, min(13, 2 + max(0, _wTier - 1)))
+            n, r2 = 0, weapons.SPLASH_R * weapons.SPLASH_R
+            for o in list(self.mobs.values()):
+                if n >= _splashCap:
+                    break
+                if o is m or o.hp <= 0:
+                    continue
+                if (o.x - m.x) ** 2 + (o.z - m.z) ** 2 > r2:
+                    continue
+                sdv = max(1, int(round(dv * fx['value'])))
+                o.hp -= sdv
+                self._add_pend(p.cid, 'mhits', {'mid': o.mid, 'dmg': sdv, 'crit': False,
+                                                'splash': True,
+                                                'x': round(o.x, 2), 'z': round(o.z, 2)})
+                n += 1
+                if o.hp <= 0:
+                    o.hp = 0
+                    self._mob_died(p, o)
+            # ★★★ round407 修的真 bug（交接文档第四节 ①）★★★
+            #   斧头溅射【打不到玩家】—— 上一轮这句被误贴到了横扫分支上 ✓
+            #   ★ 圆心 = 主目标怪（溅射是"以怪为中心炸开" ✓ 和打怪那段一致 ✓）
+            #   ★ 半径 = SPLASH_R（1.5 米）· 伤害 = dv × fx['value']（和打怪同一个公式 ✓）
+            #   ★ 不吃 _splashCap（那是"最多打几只怪"✓ 玩家不该被它挤掉 ✓）
+            self._aoe_players(p, m.x, m.z, weapons.SPLASH_R,
+                              max(1, int(round(dv * fx['value']))))
+
+    def _mob_control_mul(self, m):
+        try:
+            return float(mob_ranks.cfg(int(getattr(m, 'rank', 0) or 0)).get('control_mul', 1.0))
+        except Exception:
+            return 1.0
+
+    def _mob_defense(self, p, m, dmg, allow_dodge=True):
+        """玩家打精英/Boss：命中/穿透 vs 怪物闪避/减伤。"""
+        try:
+            if int(getattr(m, 'rank', 0) or 0) <= 0:
+                return dmg
+            hit = self._aff(p, 'hit_pt') + self._tal(p, 'hit')
+            if allow_dodge and random.random() * 100.0 < pve_combat.dodge_chance(
+                    m.dodge_pt, hit, 50.0):
+                self._add_pend(p.cid, 'mhits', {
+                    'mid': m.mid, 'dmg': 0, 'dodge': 1, 'crit': False,
+                    'x': round(m.x, 2), 'z': round(m.z, 2)})
+                return 0
+            pen = self._aff(p, 'pen_pt') + self._tal(p, 'pen')
+            dr = pve_combat.effective_dr(m.dr_pct, pen)
+            return pve_combat.mitigate(dmg, dr, m.dr_flat)
+        except Exception:
+            return dmg
+
+    def _record_mob_damage(self, m, p, dmg):
+        try:
+            if p is None or dmg <= 0:
+                return
+            cid = str(getattr(p, 'cid', '') or '')
+            if not cid:
+                return
+            m.dmgBy[cid] = int(m.dmgBy.get(cid, 0)) + int(dmg)
+            m.dmgTotal = int(getattr(m, 'dmgTotal', 0) or 0) + int(dmg)
+        except Exception:
+            pass
+
+    def _award_special_exp(self, m, last_hit):
+        """精英/Boss 按伤害贡献分经验（普通怪不用）。"""
+        by = dict(getattr(m, 'dmgBy', {}) or {})
+        online = {}
+        for cid, dmg in by.items():
+            q = self.players.get(cid) or self.players.get(str(cid))
+            if q is not None and int(getattr(q, 'hp', 0) or 0) > 0 and dmg > 0:
+                online[q.cid] = float(dmg)
+        if not online:
+            if last_hit is not None:
+                online[last_hit.cid] = 1.0
+            else:
+                return None
+        total_dmg = sum(online.values()) or 1.0
+        total_exp = max(0, int(round(int(m.exp) * (1.0 + 0.0))))
+        shares = {}
+        top_cid, top_dmg = None, -1.0
+        for cid, dmg in online.items():
+            if dmg > top_dmg:
+                top_cid, top_dmg = cid, dmg
+        for cid, dmg in online.items():
+            q = self.players.get(cid)
+            if q is None:
+                continue
+            exp = int(round(total_exp * dmg / total_dmg))
+            shares[cid] = exp
+        # 余数给伤害最高的人，保证总和一致
+        if shares:
+            _sum = sum(shares.values())
+            if top_cid in shares:
+                shares[top_cid] += max(0, total_exp - _sum)
+        top = self.players.get(top_cid) if top_cid else last_hit
+        for cid, exp in shares.items():
+            q = self.players.get(cid)
+            if q is None:
+                continue
+            exp = int(round(exp * (1.0 + self._aff(q, 'exp_pct') / 100.0)))
+            if exp > 0:
+                self._gain_exp(q, exp)
+                try:
+                    self._save_role(q)
+                except Exception:
+                    pass
+        try:
+            print('[mobexp] mid=%s rank=%s total=%s shares=%s sum=%s' % (
+                m.mid, m.rank, total_exp, shares, sum(shares.values())))
+        except Exception:
+            pass
+        return top
+
+    def _mob_died(self, p, m):
+        try:
+            if p is not None:
+                self._sk_b_on_kill(p, m)
+        except Exception as e:
+            print('[skill] 击杀触发失败：%r' % (e,))
+        # ★★ round424：屠戮榜计数（只算最后一刀是玩家的 ✗ 地火/流血也算 ✓）
+        #   ★ 这里只改内存 ✗ 落库在 _save_player 里（每 15 秒 / 下线 ✓）
+        #   ★ 不会重复计：这个函数本身就有"每只怪只结算一次"保护 ✓
+        if p is not None:
+            try:
+                p.st_kills = int(getattr(p, 'st_kills', 0) or 0) + 1
+            except Exception:
+                pass
+            try:
+                rptmod.add_kill(p)            # ★ round502
+            except Exception:
+                pass
+        # ★★★ 第 217 轮修的真 bug（用户实测发现）★★★
+        #   用户原话："出现给很多经验的情况是自动捡东西触发的，
+        #             我看到这个系统提示一下刷新很多条，经验也跟着狂长"
+        #
+        #   病根：这个函数是"结算一只怪"（给经验 + 队友分经验 + 掉落 ✓）
+        #         但它【没有"这只怪已经算过了"的标记】✗
+        #         唯一的保护是调用处那句 "血量 <= 0 才结算"✓
+        #         而尸体还留在场景里 ✓ 任何一条路径再打到它 ✗
+        #         → 就再结算一次 ✓✓
+        #   ★ 为什么自动战斗/自动捡东西一开就明显：
+        #     自动战斗每 0.62 秒挥一刀 ✓ 全砍在尸体上 ✓
+        #     → 一次击杀被结算几十次 → 提示刷屏 + 经验狂涨 ✓✓
+        #   ★ 修法：加一个一次性标记 ✗ 一只怪【只可能】结算一次 ✓
+        #     这样不管以后谁再写出打到尸体的路径 ✗ 都不会重复给 ✓
+        if getattr(m, 'awarded', False):
+            return
+        m.awarded = True
+        # ★ 第 67 轮：击杀回灵气（防具词条 ✓）
+        try:
+            _lvqi = (p.role or {}).get('level') or 1
+            _qi = armormod.stats_of(p.armor, weapons.mastery_of(p.armor, _lvqi), level=_lvqi)['qi_kill']
+            if _qi > 0:
+                p.qi = min(self._qi_max(p), int(p.qi) + int(_qi))
+        except Exception:
+            pass
+        """僵尸死了 → 给击杀者经验 → 队友分 10% → 落库"""
+        _rank0 = int(getattr(m, 'rank', 0) or 0)
+        if _rank0 > 0:
+            _top = self._award_special_exp(m, p)
+            if p is None:
+                p = _top
+        else:
+            # ★ round474：击杀者自己的【经验】词条（防具）在这里生效 ✓
+            self._gain_exp(p, int(round(int(m.exp) * (1.0 + self._aff(p, 'exp_pct') / 100.0))))
+        # round293: gold from kills. Base by kind, scaled by mob level.
+        #   Small on purpose (~25 gold per mob) - user decision, see docs v3.
+        try:
+            _gk = str(getattr(m, 'kind', '') or '')
+            if _gk in ('工人', '保安', '健身教练'):
+                _gb = 12
+            elif _gk in ('医生', '程序员'):
+                _gb = 8
+            else:
+                _gb = 5
+            _gl = max(1, int(getattr(m, 'lv', 1) or 1))
+            _gg = int(_gb * (1.0 + _gl / 12.0))
+            if _gg > 0:
+                self._gain_gold(p, _gg, 'kill')
+        except Exception as _ge:
+            print('[gold] kill drop failed: %r' % (_ge,))
+        # ★★ 第 81 轮：队友分经验（用户确认：每个队友拿该僵尸的 10% ✓）★★
+        if _rank0 == 0:
+            self._party_share_exp(p, m)
+            self._save_role(p)
+        # ★ 掉落（第 38 轮）：地上生成一件，走过去自动捡 ✓
+        if p is not None:
+            self._roll_loot(p, m)
+        if _rank0 >= 2:
+            self._boss_mid = ''
+            self._boss_next_at = now_s() + random.uniform(1200.0, 2400.0)
+            for _smid, _sm in list(self.mobs.items()):
+                if getattr(_sm, 'summoner', None) == m.mid:
+                    self.mobs.pop(_smid, None)
+            self._mob_evt(m, 'death', 1000.0)
+
+    def _roll_loot(self, p, m):
+        """僵尸死了 roll 掉落（方案 §8：每次击杀【逐项独立】roll ✓）
+
+        ★ 第 47 轮：材料和装备各 roll 一次 —— 所以一次击杀有可能两样都掉 ✓
+          （§8 开头那句"全部概率到身上"就是这个意思 ✓）
+        """
+        klv = int(p.role.get('level') or 1)
+        # ★ 第 60 轮：寻宝词条会按比例抬掉落概率 ✓
+        _t = affixes.totals(((p.weapon or {}).get('affixes')))
+        _tb = 1.0 + _t.get('treasure', 0.0) / 100.0
+        it = drops.roll_drop(m.lv, klv, luck=_tb)
+        # ★ 第 67 轮：掉到东西时有 25% 概率是【防具】✓
+        #   （不然防具永远拿不到 ✗ 只能靠管理页发 ✗）
+        if it and random.random() < 0.25:
+            # ★★★ round463（用户："防具不会掉 3 阶以上的"）★★★
+            #   病根：这里拿的是【材料】的品阶 ✗
+            #     而材料表 drops.MATERIALS 里最高只有 2 阶（疫苗 / 铜线卷）✗
+            #     → 防具品阶永远 ≤ 2 ✗ 用户说「3 阶以上不掉」一字不差 ✓
+            #   修：和武器一样用 weapons.roll_tier（幂律曲线，按怪等级）✓
+            import weapons as _weap
+            _ta = max(0, min(11, int(_weap.roll_tier(m.lv, klv))))
+            # ★★★ 第 104 轮修的真 bug ★★★
+            #   原来这里是包了一层：{'name':…, 'kind':'armor', 'slot':'armor',
+            #                        'armor': make_armor(...)}
+            #     外层【没有 base】✗ 而拾取时是把【外层】直接存进背包 ✗
+            #     → 捡起来的防具 = 一个"材料形状的假防具"✗
+            #       （名字对、图标是防具、但没有 base → 属性算不出来 ✓
+            #         20 件这样的假防具已经在库里了 ✓ 用户报的"材料图标像防具"就是它 ✓）
+            #   修：直接存【防具本体】✓ 它的字段本来就是齐的（name/tier/base/slot…）✓
+            # ★★ round472：装备等级 = 击杀者等级 ✗ 不再 ÷4 ✓（用户："和人物等级差不多"）
+            it = armormod.make_armor(_ta, max(1, int(klv)))
+        self._drop_one(p, m, it)
+        eq = drops.roll_equip(m.lv, klv)          # ★ 装备类（独立 roll）
+        self._drop_one(p, m, eq)
+        # ★ round600：精英/Boss 额外掉落（最后一刀归属不变）
+        try:
+            _rk = int(getattr(m, 'rank', 0) or 0)
+            for _xi in range(2 if _rk >= 2 else (1 if _rk == 1 else 0)):
+                self._drop_one(p, m, drops.roll_equip(m.lv + _xi, klv))
+        except Exception:
+            pass
+        # ★★★ round485：皮肤掉落（用户定 1%）★★★
+        #   ★ 掉落"即解锁" ✗ 不发背包物品（少一套背包/图标逻辑 ✓）
+        #   ★ 抽到已解锁的 → 折 10000 金币（用户之前定的补偿 ✓）
+        try:
+            if random.random() < skinsmod.DROP_RATE:
+                _k = skinsmod.drop_key(random)
+                # ★ round487（用户："打到背包然后使用，并且可以出售"）
+                #   → 掉的是【皮肤卡】物品 ✗ 不再当场解锁 ✓
+                _it = {'name': '皮肤·' + skinsmod.NAME.get(_k, _k), 'tier': 0,
+                       'kind': 'skin', 'key': _k}
+                self._drop_one(p, m, _it)
+        except Exception as _se:
+            print('[skin] drop failed: %r' % (_se,))
+        # ★ round596：技能书掉落 1%（用户定）
+        #   ★ 主动/被动释放书 1 品；被动加成书随机品阶（1~5，越高越难）
+        try:
+            if random.random() < 0.01:
+                import skills as _skm
+                _k2 = random.choice(_skm.KEYS)
+                _tr = 1
+                if _skm.tier_max(_k2) > 1:
+                    _tr = random.choices([1, 2, 3, 4, 5], weights=[45, 27, 15, 9, 4])[0]
+                _it2 = {'name': '技能书·' + _skm.NAME.get(_k2, _k2) +
+                        ('' if _skm.tier_max(_k2) <= 1 else '（%d 品）' % _tr),
+                        'tier': _tr, 'kind': 'skillbook', 'key': _k2}
+                self._drop_one(p, m, _it2)
+        except Exception as _ske:
+            print('[skill] drop failed: %r' % (_ske,))
+
+    def _drop_one(self, p, m, it):
+        """把一件掉落物放到地上（it 为 None 就什么都不做 ✓）"""
+        if not it:
+            return
+        self.loot_seq += 1
+        lid = str(self.loot_seq)
+        # ★ 装备的坐标稍微错开一点 —— 不然和材料叠在同一点，捡的时候看不出来哪件是哪件 ✗
+        ox = 0.0 if it.get('slot') != 'weapon' else 0.7
+        self.loot[lid] = {'x': m.x + ox, 'z': m.z, 'item': it, 'ttl': drops.DROP_TTL}
+        if it.get('kind') == 'skin':
+            self._send_cid(p.cid, P.pack('notice', text='★ 掉落皮肤：%s（捡起来去背包用 ✓）'
+                                         % it.get('name', '皮肤')))
+        else:
+            self._send_cid(p.cid, P.pack('notice', text='掉落：%s（%d 阶）走过去自动捡 ✓'
+                                         % (it['name'], tier_no(it.get('tier')))))
+
+    def _loot_tick(self, dt):
+        """地上物：倒计时 + 过期收掉（不清理的话服务器越积越多 ✗）"""
+        for lid in list(self.loot.keys()):
+            e = self.loot[lid]
+            e['ttl'] -= dt
+            if e['ttl'] <= 0:
+                self.loot.pop(lid, None)
+
+    def _loot_for(self, p):
+        """发给客户端的地上物：范围内、最近的优先、最多 LOOT_SEND_CAP 件
+           格式 [id, x, z, name, tier]（和 mobs 一样是紧凑数组 ✓）"""
+        if not self.loot:
+            return None
+        v2 = drops.LOOT_VIEW * drops.LOOT_VIEW
+        cand = []
+        for lid, e in self.loot.items():
+            d2 = (e['x'] - p.x) ** 2 + (e['z'] - p.z) ** 2
+            if d2 <= v2:
+                cand.append((d2, lid, e))
+        if not cand:
+            return None
+        if len(cand) > drops.LOOT_SEND_CAP:
+            cand.sort(key=lambda it: it[0])
+            cand = cand[:drops.LOOT_SEND_CAP]
+        # ★ 第 70 轮：多带一个 look（客户端要在地上摆【缩小版模型】✓）
+        # ★ 第 171 轮（用户 #9）：再追加一位【大类】= slot
+        #   客户端要按它选形状（防具用胸甲模型 ✓ 武器用缩小版武器 ✓ 其余方块 ✓）
+        #   ★ 只能往后追加 ✗ 前面的下标一个都不能动 ✓（客户端按下标读 ✓）
+        # ★ round489：再追加一位【kind】→ 客户端把皮肤卡画成一张卡 ✓
+        return [[lid, round(e['x'], 2), round(e['z'], 2), e['item']['name'],
+                 e['item']['tier'], e['item'].get('look') or '',
+                 e['item'].get('slot') or 'mat',
+                 e['item'].get('kind') or '']
+                for _, lid, e in cand]
+
+    def _intent_pick(self, p, d):
+        """捡东西 —— ★ 服务器判距离（客户端说捡到了不算数 ✓）"""
+        lid = str(d.get('id') or '')
+        e = self.loot.get(lid)
+        if not e:
+            return
+        if (e['x'] - p.x) ** 2 + (e['z'] - p.z) ** 2 > drops.PICK_RANGE ** 2:
+            return                      # 太远 → 不认（防"隔空捡"✗）
+        it = e['item']
+
+        # ★★★ round466（用户："增加装备自动出售，可以设置低于多少阶获取后自动出售"）★★★
+        #   在【拾取那一刻】就卖掉 ✗ 不进背包 ✓
+        #   ★ 只对装备（武器/防具）生效 ✗ 材料不卖 ✓
+        #   ★ 价格用 value.value_of（和背包里卖系统同一套公式 ✓）
+        try:
+            _as = int((p.role or {}).get('autosell') or 0)
+        except Exception:
+            _as = 0
+        if _as > 0 and it.get('slot') in ('weapon', 'armor'):
+            _tier_no = int(it.get('tier') or 0) + 1          # 0 基 → 显示层数 ✓
+            if _tier_no < _as:
+                try:
+                    import value as _vm
+                    _price = int(_vm.value_of(it, 1))
+                except Exception:
+                    _price = 0
+                if _price > 0:
+                    self._gain_gold(p, _price, '自动出售')
+                    self.loot.pop(lid, None)
+                    self._send_cid(p.cid, P.pack(
+                        'notice',
+                        text='自动出售：%s（%d 阶）→ +%d 金币'
+                             % (it.get('name') or '装备', _tier_no, _price)))
+                    return
+        # ★ 第 250 轮（用户要求）：捡到 5 阶及以上要播报
+        #   tier_no() 是 0 基的（内部 0 = 显示 1 阶）✗ 所以判断用 >= 4 ✓
+        try:
+            if int(it.get('tier') or 0) >= 4:
+                self._ticker('%s 拾取到 %d 阶 · %s' % (
+                    p.name, int(it.get('tier') or 0) + 1, it.get('name') or '装备'),
+                    'tier', tag='tier:%d' % p.role_id)
+        except Exception as _e3:
+            print('[ticker] 拾取播报失败：%r' % (_e3,))
+        self.loot.pop(lid, None)
+        self.loot_seq += 1
+        import json
+        import db as dbmod
+        # ★★ 第 54 轮：不再直接 INSERT ★★
+        #   材料要堆叠（同名同阶合到一行 ✓），武器不堆叠 ✓
+        #   但"查一下有没有同类的"要读库 ✗ → tick 线程不许碰磁盘 ✗
+        #   → 把整件事交给存档线程（它收到 'PICK' 自己决定 +1 还是新建 ✓）
+        try:
+            rptmod.add_gear(p, it)             # ★ round502：只算武器/防具 ✓
+        except Exception:
+            pass
+        self.post_save('PICK', (p.role_id, json.dumps(it, ensure_ascii=False),
+                                dbmod.now_ms()))
+        self._send_cid(p.cid, P.pack('notice',
+                                     text='拾取：%s（%d 阶）' % (it['name'], tier_no(it.get('tier')))))
+
+    def _add_pend(self, cid, key, item):
+        """攒本 tick 要给某个玩家的反馈（hurts / mhits / me）"""
+        e = self._pend.get(cid)
+        if e is None:
+            e = self._pend[cid] = {}
+        lst = e.get(key)
+        if lst is None:
+            lst = e[key] = []
+        if len(lst) < 24:                # 一条快照最多带 24 条（防刷屏 + 防包太大 ✓）
+            lst.append(item)
+
+    def _mobs_for(self, p):
+        """发视野内的僵尸（近的优先，最多 MOB_RENDER_CAP 只 —— 方案 §3.2）"""
+        if not self.mobs:
+            return None                  # ★ 返回 None = 快照里干脆不带这个字段 ✓
+        v2 = mobs.MOB_VIEW * mobs.MOB_VIEW
+        cand = []
+        for m in self.mobs.values():
+            dx = m.x - p.x
+            dz = m.z - p.z
+            d2 = dx * dx + dz * dz
+            if d2 <= v2:
+                cand.append((d2, m))
+        if not cand:
+            return None
+        if len(cand) > mobs.MOB_RENDER_CAP:
+            cand.sort(key=lambda it: it[0])
+            cand = cand[:mobs.MOB_RENDER_CAP]
+        return [m.wire() for _, m in cand]
+
+    def _save_role(self, p):
+        """经验 / 等级落库（只入队 ✓ 写盘交给存档线程）"""
+        import db as dbmod
+        self.post_save('UPDATE roles SET level=?, exp=?, updated_at=? WHERE id=?',
+                       (int(p.role.get('level') or 1), int(p.role.get('exp') or 0),
+                        dbmod.now_ms(), p.role_id))
+
+    # ============================================================ 发给网络线程
+
+    def _to_net(self, fn, *args):
+        """从 tick 线程往 asyncio 循环里投任务。循环已经关了就算了"""
+        if self.loop is None:
+            return
+        try:
+            self.loop.call_soon_threadsafe(fn, *args)
+        except Exception:
+            pass
+
+    def _send_cid(self, cid, text):
+        self._to_net(self._send_one, cid, text)
+
+    def _send_one(self, cid, text):
+        """★ 在 asyncio 循环里执行"""
+        conn = self.srv_conns.get(cid) if self.srv_conns else None
+        if conn:
+            conn.push_text(text)
+
+    def _fanout(self, batch):
+        """★ 在 asyncio 循环里执行：把这一 tick 的快照推给各自的连接"""
+        conns = self.srv_conns
+        for cid, text in batch:
+            c = conns.get(cid)
+            if c:
+                c.push_text(text)
+
+    # ============================================================ 皮肤（round485）
+    #  ★ 规则（用户定）：
+    #    没人出价 → 所有解锁者都能用
+    #    有人出价 → 前三名（并列同额一起）能用
+    #    第一 ≥ 第二 × 1.3 → 只有第一能用（独占）
+    #  ★ 出价金币【扣了不退】，可累计；扣钱走 _gain_gold（同一套经济 ✓）
+
+    def _skin_bids_load(self):
+        """第一次用到时从库读一次（之后都在内存 ✓ tick 不碰）"""
+        if getattr(self, '_skin_bids', None) is not None:
+            return
+        self._skin_bids = {}
+        try:
+            with dbmod.db(self.cfg) as c:
+                rows = c.execute('SELECT role_id, key, total FROM skin_bids').fetchall()
+        except Exception:
+            return
+        for rid, key, total in rows:
+            self._skin_bids.setdefault(str(key), {})[int(rid)] = int(total)
+
+    def _skin_access(self, key):
+        """→ {'mode': 'free'|'top3'|'solo', 'allowed': set|None, 'top': [(rid,total)]}"""
+        self._skin_bids_load()
+        b = self._skin_bids.get(key) or {}
+        rows = sorted(b.items(), key=lambda kv: (-kv[1], kv[0]))
+        if not rows:
+            return {'mode': 'free', 'allowed': None, 'top': []}
+        if len(rows) >= 2 and rows[0][1] > rows[1][1] * skinsmod.EXCLUSIVE_X:
+            return {'mode': 'solo', 'allowed': {rows[0][0]}, 'top': rows}
+        cut = rows[min(skinsmod.TOP_N, len(rows)) - 1][1]
+        allowed = set(rid for rid, v in rows if v >= cut)
+        return {'mode': 'top3', 'allowed': allowed, 'top': rows}
+
+    def _skin_can_use(self, role_id, key):
+        a = self._skin_access(key)
+        return (a['allowed'] is None) or (role_id in a['allowed'])
+
+    def _skin_owns(self, role_id, key):
+        try:
+            with dbmod.db(self.cfg) as c:
+                r = c.execute('SELECT 1 FROM skin_unlocks WHERE role_id=? AND key=?',
+                              (role_id, key)).fetchone()
+            return bool(r)
+        except Exception:
+            return False
+
+    def _skin_unlock(self, p, key):
+        """解锁一个皮肤（掉落 / 初始赠送都走它 ✓）"""
+        if not skinsmod.valid(key):
+            return False
+        try:
+            with dbmod.db(self.cfg) as c:
+                c.execute('INSERT OR IGNORE INTO skin_unlocks(role_id, key, at)'
+                          ' VALUES(?,?,?)', (p.role_id, key, dbmod.now_ms()))
+        except Exception:
+            return False
+        self._send_cid(p.cid, P.pack('notice', text='解锁皮肤：' + skinsmod.NAME.get(key, key)))
+        return True
+
+    def _skin_set(self, p, key):
+        """换皮肤（服务端裁决：没解锁 / 被别人独占 → 拒绝 ✓）"""
+        if not skinsmod.valid(key):
+            self._send_cid(p.cid, P.pack('notice', text='没有这个皮肤'))
+            return
+        if not self._skin_owns(p.role_id, key):
+            self._send_cid(p.cid, P.pack('notice', text='你还没解锁这个皮肤'))
+            return
+        if not self._skin_can_use(p.role_id, key):
+            a = self._skin_access(key)
+            who = ''
+            if a['top']:
+                rid0 = a['top'][0][0]
+                who = self._name_of(rid0)
+            self._send_cid(p.cid, P.pack(
+                'notice', text=('这个皮肤现在被 %s 独占了' % who) if a['mode'] == 'solo'
+                else '这个皮肤现在只给出价前三名用'))
+            return
+        p.role['skin'] = key
+        # ★ round528：换上时把他的自定义一起带上 ✓（不然换回来自定义"丢了"）
+        try:
+            if not getattr(p, 'skCustomBySkin', None):
+                p.skCustomBySkin = {}
+            p.skCustom = p.skCustomBySkin.get(key)
+        except Exception:
+            p.skCustom = None
+        self.post_save('UPDATE roles SET skin=?, updated_at=? WHERE id=?',
+                       (key, int(now_s() * 1000), p.role_id))
+        self._send_cid(p.cid, P.pack('skin', key=key, c=p.skCustom))
+        self._send_cid(p.cid, P.pack('notice',
+                                     text='已换上皮肤：' + skinsmod.NAME.get(key, key)))
+        self._skin_page_send(p)
+
+    def _name_of(self, role_id):
+        for q in self.players.values():
+            if q.role_id == role_id:
+                return q.name
+        try:
+            with dbmod.db(self.cfg) as c:
+                r = c.execute('SELECT name FROM roles WHERE id=?', (role_id,)).fetchone()
+            return r['name'] if r else ('#' + str(role_id))
+        except Exception:
+            return ('#' + str(role_id))
+
+    def _skin_page_send(self, p):
+        """把 40 个皮肤的状态一次性发给客户端（打开皮肤页 / 换完 / 出价后 ✓）"""
+        try:
+            with dbmod.db(self.cfg) as c:
+                rows = c.execute('SELECT key FROM skin_unlocks WHERE role_id=?',
+                                 (p.role_id,)).fetchall()
+            owned = set(str(r['key']) for r in rows)
+        except Exception:
+            owned = set()
+        cur = (p.role or {}).get('skin') or ''
+        items = []
+        for k in skinsmod.KEYS:
+            a = self._skin_access(k)
+            top = [{'name': self._name_of(rid), 'total': int(tot)} for rid, tot in a['top'][:3]]
+            items.append({
+                'k': k,
+                'n': skinsmod.NAME.get(k, k),
+                'own': 1 if k in owned else 0,
+                'use': 1 if k == cur else 0,
+                'can': 1 if (k in owned and self._skin_can_use(p.role_id, k)) else 0,
+                'mode': a['mode'],
+                'top': top,
+                # ★ round489：我是不是这个皮肤的独占者（客户端据此给"独·XXX"称号）
+                'solo': 1 if (a['mode'] == 'solo' and p.role_id in (a['allowed'] or set())) else 0,
+            })
+        self._send_cid(p.cid, P.pack('skinpage', items=items,
+                                     start=skinsmod.BID_START, step=skinsmod.BID_STEP,
+                                     gold=int((p.role or {}).get('gold') or 0)))
+
+    def _skin_bid(self, p, key, amount):
+        """出价（加价）—— 金币扣了不退，累计排名 ✓"""
+        if not skinsmod.valid(key):
+            return
+        if not self._skin_owns(p.role_id, key):
+            self._send_cid(p.cid, P.pack('notice', text='要先解锁这个皮肤才能出价'))
+            return
+        try:
+            amt = int(amount or 0)
+        except Exception:
+            amt = 0
+        self._skin_bids_load()
+        cur = int((self._skin_bids.get(key) or {}).get(p.role_id, 0))
+        need = skinsmod.BID_START if cur == 0 else skinsmod.BID_STEP
+        if amt < need:
+            self._send_cid(p.cid, P.pack(
+                'notice', text=('第一次出价不能低于 %d' % need) if cur == 0
+                else ('每次加价不能低于 %d' % need)))
+            return
+        gold = int((p.role or {}).get('gold') or 0)
+        if gold < amt:
+            self._send_cid(p.cid, P.pack('notice', text='金币不够（要 %d，你有 %d）' % (amt, gold)))
+            return
+        self._gain_gold(p, -amt, '皮肤竞价')
+        total = cur + amt
+        self._skin_bids.setdefault(key, {})[p.role_id] = total
+        self.post_save('INSERT INTO skin_bids(role_id, key, total, times, at) VALUES(?,?,?,1,?)'
+                       ' ON CONFLICT(role_id, key) DO UPDATE SET'
+                       ' total=total+?, times=times+1, at=?',
+                       (p.role_id, key, total, int(now_s() * 1000), amt, int(now_s() * 1000)))
+        self._skin_kick_losers(key)
+        self._send_cid(p.cid, P.pack(
+            'notice', text='出价成功：%s 累计 %d' % (skinsmod.NAME.get(key, key), total)))
+        self._skin_page_send(p)
+
+    def _skin_drain(self):
+        """把"皮肤卡用掉了"的结果告诉玩家（saver 写库 → 这里发网络 ✓）"""
+        q = getattr(self, '_skin_q', None)
+        if not q:
+            return
+        while q:
+            try:
+                rid, key, ok = q.pop(0)
+            except Exception:
+                break
+            p = None
+            for q2 in self.players.values():
+                if q2.role_id == rid:
+                    p = q2
+                    break
+            if p is None:
+                continue
+            if ok:
+                nm_sk = skinsmod.NAME.get(key, key)
+                self._send_cid(p.cid, P.pack(
+                    'notice', text='已解锁：%s（去菜单→皮肤 点「使用」才换上）' % nm_sk))
+                self._send_cid(p.cid, P.pack('bagrefresh', {}))
+                self._skin_page_send(p)
+            else:
+                self._send_cid(p.cid, P.pack('notice', text='这张皮肤卡用不了（可能已经用过了）'))
+                self._send_cid(p.cid, P.pack('bagrefresh', {}))
+
+    def _skin_kick_losers(self, key):
+        """★ 用户定的：被挤出前三 → 立刻换回默认皮肤（'' = 老外观）+ 提示"""
+        a = self._skin_access(key)
+        if a['allowed'] is None:
+            return
+        for q in list(self.players.values()):
+            if ((q.role or {}).get('skin') or '') != key:
+                continue
+            if q.role_id in a['allowed']:
+                continue
+            q.role['skin'] = ''
+            self.post_save('UPDATE roles SET skin=?, updated_at=? WHERE id=?',
+                           ('', int(now_s() * 1000), q.role_id))
+            self._send_cid(q.cid, P.pack('skin', key=''))
+            self._send_cid(q.cid, P.pack('notice', text='你被挤出前三，已换回默认皮肤'))
+            self._skin_page_send(q)
+
+    def _skin_title_of(self, p):
+        """★ round489：皮肤称号（暂时 = 独占期间）
+        规则（用户）：是某个皮肤的【独占者】（第一 > 第二 × 1.3）才能挂
+          文本：独·<皮肤名> ✓  一被超过就自动失效 ✓
+        返回 (文本, 0) 或 ('', 0)
+        """
+        try:
+            tb = str(getattr(p, 'titleBoard', '') or '')
+            if not tb.startswith('skin:'):
+                return '', 0
+            key = tb[5:]
+            if not skinsmod.valid(key):
+                return '', 0
+            a = self._skin_access(key)
+            if a['mode'] != 'solo' or p.role_id not in (a['allowed'] or set()):
+                return '', 0
+            return '独·' + skinsmod.NAME.get(key, key), 0
+        except Exception:
+            return '', 0
+
+    def _title_of(self, p):
+        """玩家的头顶称号 → (text, medal)
+
+        ★★ round424（用户："可以设置其中一个排行榜排名显示在玩家头上"）
+          ★ 名次来自 self.rank_map（刷新线程每分钟算一次 ✗ tick 只读 ✓）
+          ★ 只显示前 100 名（用户定）✗ 超了就当没有 ✓
+          ★ 格式：国服在线top1 ✗ 前三名另外回一个奖牌号 1/2/3 ✓
+        """
+        try:
+            b = getattr(p, 'titleBoard', '') or ''
+            if not b:
+                return '', 0
+            # ★ round489：皮肤称号（独·XXX）走另一条判定 ✓
+            if b.startswith('skin:'):
+                return self._skin_title_of(p)
+            m = self.rank_map.get(getattr(p, 'role_id', None)) or {}
+            return rankboard.title_text(m, b)
+        except Exception:
+            return '', 0
+
+    def _qq_join(self, p):
+        """玩家上线 → QQ 群（★ round417 用户要求）
+
+        ★ 只入队 ✗ 不发网络 ✓
+        ★ 抽成一个方法是为了能单独测 ✗
+          （上线那段代码在 _step 里 ✗ 要跑真的连接才能触发 ✓）
+        """
+        try:
+            if self.qq is None:
+                return False
+            # ★★ round419（用户："上线不仅显示名字，还要加炼气层数"）★★
+            #   ★ 层数 = 角色等级（和界面上那个「炼气 N 层」同一个数 ✓）
+            #   ★ 名字后面直接写「炼气 28 层」✗ 群里一眼就知道人多大了 ✓
+            try:
+                _lv = int((p.role or {}).get('level') or 1)
+            except Exception:
+                _lv = 1
+            return self.qq.post('🟢 %s 上线了（炼气 %d 层 · 当前在线 %d 人）'
+                                % (p.name, _lv, len(self.players)), 'join')
+        except Exception:
+            return False
+
+    def _ticker(self, text, kind='sys', tag=''):
+        """第 247 轮（用户要求）：滚动通知（弹幕）
+
+        · notice = 只发给一个人 ✗ 屏幕中间弹一下（"你已经在安全区了"这类）
+        · ticker = 广播给所有人 ✗ 屏幕上方【向左滚动】（谁升级了 / 谁杀了谁）
+        同类 1 秒内合并：打团战 3 秒杀 5 个 ✗ 不然弹幕滚一分钟
+
+        ★★★ round410（用户："滚动文字信息不完整，只能看到前面的部分"）★★★
+          病根就在这里：原来【卡死在 22 字】✗ 超过就砍掉加"…" ✓
+            → "A 夺取了 B 的 500 点经验、【青锋剑】" 这种 24 字的，
+              屏幕上永远只显示前 21 个字 ✓ 用户看到的就是"夺取了 B 的 500…"✓✓
+          ★ 注意：客户端那条滚动条本身【没有截断】✗ 它按文字实际宽度滚完为止 ✓
+            （实测：45 字 → 宽 529px ✓ 一直滚到 -(w+20) ✓）
+            → 所以"看不到后面"完全是【服务端提前砍掉】造成的 ✓
+          ★ 现在：上限放到 TICKER_MAX_CHARS（48）✗ 真实事件文案基本都放得下 ✓
+            滚多久：48 字 ≈ 580px ✗ (512+600)/110 ≈ 10 秒 ✓ 两条轨道并排 ✓ 能接受 ✓
+        """
+        try:
+            import time as _t
+            now = _t.time()
+            if tag:
+                last = self._ticker_last.get(tag)
+                if last is not None and now - last < 1.0:
+                    self._ticker_dup[tag] = self._ticker_dup.get(tag, 0) + 1
+                    return
+                n = self._ticker_dup.pop(tag, 0)
+                if n:
+                    text = text + '（等 %d 条）' % n
+                self._ticker_last[tag] = now
+            if len(text) > TICKER_MAX_CHARS:
+                text = text[:TICKER_MAX_CHARS - 1] + '…'
+            self._broadcast(P.pack('ticker', text=text, kind=kind))
+            # ★ round417：滚动通知同步转到 QQ 群
+            #   ★ 只入队 ✗ 不发网络 ✓（见 qqbridge.py 的注释）
+            try:
+                if self.qq is not None:
+                    self.qq.post(text, kind)
+            except Exception:
+                pass
+        except Exception as e:
+            print('[ticker] 发不出去：%r' % (e,))
+
+    def _broadcast(self, text):
+        """★ 在 asyncio 循环里执行"""
+        for c in list(self.srv_conns.values()):
+            c.push_text(text)
+
+    # ============================================================ 快照
+
+    def _snapshot_for(self, p):
+        """只发接收者视野内的玩家（方案 §13.2 兴趣管理的第一步）"""
+        out = []
+        v2 = VIEW * VIEW
+        for o in self.players.values():
+            if o is p:
+                continue
+            dx = o.x - p.x
+            dz = o.z - p.z
+            if dx * dx + dz * dz > v2:
+                continue
+            _tt_o, _tm_o = self._title_of(o)
+            out.append({
+                'id': o.role_id,
+                # ★★ 第 90 轮：直接告诉你"他是不是你队友" ★★
+                #   为什么不让客户端自己比 role_id ✗
+                #   因为客户端要拿到名单、要判断时机、还可能因为消息没到而判断不出来 ✗
+                #   服务器这里一句话就说清了 ✓ 最可靠 ✓
+                'mate': 1 if (self.party_of.get(o.role_id) is not None and
+                              self.party_of.get(o.role_id) == self.party_of.get(p.role_id)) else 0,
+                # ★ 第 152 轮：头顶要显示魔气 → 快照里带上它 ✓
+                #   （只有 >0 才有意义 ✗ 客户端拿不到就是 0 ✓）
+                'mq': (int(o.mq or 0) if int(o.mq or 0) > 0 else 0),
+                'n': o.name,
+                'x': round(o.x, 3),
+                'z': round(o.z, 3),
+                'y': round(o.yaw, 3),
+                # ★ round330：离地高度 ✗ 别人的客户端拿它还原跳跃动作 ✓
+                'jy': round(getattr(o, 'jy', 0.0) or 0.0, 3),
+                't': round(o.ct, 3),      # ★ 对方自己的钟 → 客户端做插值时间轴
+                'hp': o.hp,
+                # ★★★ 第 220 轮修的真 bug（用户自己发现的！）★★★
+                #   用户原话："玩家看到的血量是没有防具加成的，而我自己看是有的"
+                #   病根：这里【只发了 hp，没发 hpm（有效上限）】✗
+                #         而客户端读别人的血条时兜底值是 100：
+                #             hpMax: (w.hpm > 0) ? w.hpm : 100
+                #         → 别人看你的血条分母永远是 100 ✗
+                #           你实际上限 200+（含防具）→ 血条一直是满的/乱的 ✓
+                #   ★ 用 _hp_max（含防具 + 天赋 ✓）和发给你自己的那个口径完全一致 ✓
+                #   ★ 客户端本来就在读 w.hpm ✗ 所以只需要服务器补这一行 ✓
+                'hpm': self._hp_max(o),
+                # ★ round576：坦克引擎体型（别人也要看到他变大 ✓）
+                'sz': round(float(getattr(o, 'skSize', 1.0) or 1.0), 4),
+                'frz': 1 if float(getattr(o, 'freezeT', 0) or 0) > 0 else 0,
+                'downT': round(float(getattr(o, 'downT', 0) or 0), 2),
+                'galeT': round(float((getattr(o, 'skTA', {}) or {}).get('gale', 0) or 0), 2),
+                'lv': (o.role or {}).get('level', 1),
+                'atk': o.atkSeq,   # ★ 第 66 轮：发【挥砍序号】✗ 不是攻击力
+                                   #   （攻击力是个从不变化的数 ✗ 客户端拿它当计数器 → 动作永远不播 ✗）
+                # ★ 第 61 轮：手上的武器类型 —— 别的玩家要按它放对应的动作 ✓
+                #   （不然别人砍起来永远是同一套 ✗）
+                'w': (o.weapon or {}).get('look') or 'sword',
+                # ★ 第 65 轮：连品阶一起发（模型的颜色/发光是按品阶的 ✓
+                #   不然别人看你的剑永远是最低阶的颜色 ✗）
+                'wt': int((o.weapon or {}).get('tier') or 0),
+                # ★★ 第 63 轮：他的无敌剩余 ★★
+                #   不然别人看不到"他刚复活"✗ 只能看到一个站着不挨打的人 ✗
+                'inv': round(o.invulnT, 2),
+                # ★★ 第 57 轮：他倒下了没有 ★★
+                #   以前只同步 hp，客户端没法知道"该不该躺下" ✗
+                #   → 别人看被围死的队友，永远是站着的 ✗（用户报的）
+                'd': 1 if int(o.hp) <= 0 else 0,
+                # ★★ round424：头顶称号（别人也看得见 ✗ 用户要求 ✓）
+                #   tt = 文本（'' = 不显示）、tm = 1/2/3 奖牌（0 = 没牌）
+                'tt': _tt_o, 'tm': _tm_o,
+                # ★ round485：他的皮肤（客户端按 key 搭模型 ✓ ''=老外观）
+                'sk': (o.role or {}).get('skin') or '',
+                # ★ round510：他的自定义（染色/眼型）✗ 不走自定义就是 None ✓
+                'skc': getattr(o, 'skCustom', None),
+            })
+        return out
+
+    # ============================================================ 存档线程
+
+    def _save_player(self, p):
+        """只入队，不写盘 —— 写盘交给存档线程"""
+        import db as dbmod
+        self._flush_dur(p)                       # ★ 下线时把耐久落一次 ✓
+        # round302: gold has to be saved too. Memory is authoritative (docs v3 s1),
+        # so this is a FULL OVERWRITE - idempotent, and it cannot fight the periodic
+        # save. Without it every logout/restart threw the whole balance away.
+        # ★ round577：坦克引擎也要随常规存档落库（刷新后层数不丢 ✓）
+        #   ★ tankAt 每次存档都刷新 → "离线 1 小时"从最后一次在线算 ✓
+        try:
+            p.tankAt = int(now_s())
+        except Exception:
+            pass
+        self.post_save(
+            'UPDATE roles SET x=?, z=?, yaw=?, hp=?, qi=?, '
+            'sk_tank_hp=?, sk_tank_base=?, sk_tank_size=?, sk_tank_n=?, sk_tank_at=?, '
+            'updated_at=? WHERE id=?',
+            (p.x, p.z, p.yaw, p.hp, p.qi,
+             int(getattr(p, 'skTankHp', 0) or 0),
+             int(getattr(p, 'skTankBase', 0) or 0),
+             round(float(getattr(p, 'skSize', 1.0) or 1.0), 6),
+             int(getattr(p, 'skTankN', 0) or 0),
+             int(getattr(p, 'tankAt', 0) or 0),
+             dbmod.now_ms(), p.role_id))
+        # ★ round305：余额【单独】写 ✗ 而且带代号 ✓
+        #   ★ 为什么不能跟上面那条 SQL 一起写：
+        #     那条里的 gold 是【排队那一刻】的值 ✗ 半秒后可能已经过期 ✓
+        #     （登录时排 0 ✗ 同一拍入账 535 ✗ 存档把 0 写下去 → 钱没了 ✓）
+        _rid2 = int(getattr(p, 'role_id', 0) or 0)
+        if _rid2 and isinstance(getattr(p, 'role', None), dict):
+            p.role['gold'] = int(getattr(p, 'gold', 0) or 0)
+        # ★★ round424：排行榜的计数落库（每 15 秒 / 下线 ✗ 走队列 ✓）
+        #   ★ 在线时长只在「整秒数变了」时才写 ✗ 不然每 15 秒白写一次 ✓
+        try:
+            if _rid2:
+                _sec = int(getattr(p, 'st_play', 0.0) or 0.0)
+                if _sec != int(getattr(p, 'st_play0', -1) or 0):
+                    p.st_play0 = _sec
+                    self.post_save(
+                        'INSERT INTO role_stats(role_id, kills, deaths, pvp_kills, play_sec, updated_at)'
+                        ' VALUES(?,?,?,?,?,?)'
+                        ' ON CONFLICT(role_id) DO UPDATE SET kills=excluded.kills,'
+                        ' deaths=excluded.deaths, pvp_kills=excluded.pvp_kills,'
+                        ' play_sec=excluded.play_sec, updated_at=excluded.updated_at',
+                        (_rid2, int(getattr(p, 'st_kills', 0) or 0),
+                         int(getattr(p, 'st_deaths', 0) or 0),
+                         int(getattr(p, 'st_pvp', 0) or 0), _sec,
+                         dbmod.now_ms()))
+        except Exception as _ste:
+            print('[rank] 统计落库失败：%r' % (_ste,))
+        self.post_save(*gold_sql(self._gold_seq.get(_rid2, 0), _rid2,
+                                  getattr(p, 'gold', 0) or 0))
+
+    def gold_write_ok(self, seq, role_id):
+        """这一笔余额写入【还有效吗】（★ 存档线程和离线测试共用同一条判据 ✓）
+
+        ★ round305：gold 是内存权威 ✗ 而存档半秒攒一批 ✗ 排队快照会过期 ✓
+          判据：这一笔带的序号 == 该角色当前的序号 ✓
+          对不上 = 排队之后钱又被改过 ✗ 这一笔作废（新的那笔马上就来 ✓）
+        """
+        return int(self._gold_seq.get(int(role_id), 0)) == int(seq)
+
+    def _run_saver(self):
+        import db as dbmod
+        while self.running:
+            batch = []
+            try:
+                # 攒一小会儿再一起写，减少磁盘次数
+                end = time.time() + 0.5
+                while time.time() < end and len(batch) < 200:
+                    try:
+                        batch.append(self.saves.get(timeout=0.1))
+                    except queue.Empty:
+                        if batch:
+                            break
+            except Exception:
+                pass
+            if not batch:
+                continue
+            # ★ round304b：本批里有哪些交易所事务做成功了（★ commit 之后才通知 tick ✓）
+            mkt_ok = []
+            mkt_wrote = False
+            try:
+                with dbmod.db(self.cfg) as db:
+                    for sql, params in batch:
+                        _gseq = gold_sql_split(sql)
+                        if _gseq is not None:
+                            # ★★ round305：带"代号"的余额写入 ★★
+                            #   sql = 'GOLD:<seq>' ✗ params = (role_id, gold) ✓
+                            #   ★ 只有当【这一笔不是在它排队之后又被改过】才写 ✓
+                            #     排队时是 0 ✗ 之后入账成 535 ✓ → 这一笔作废 ✓
+                            #     （入账自己会排一笔新的 ✗ 值一定是新的 ✓）
+                            #   ★ 为什么要这么绕：gold 是全项目唯一"内存权威"的字段 ✗
+                            #     而存档是【半秒攒一批】的 ✗ 排队快照随时可能过期 ✓
+                            if not self.gold_write_ok(_gseq, params[0]):
+                                continue
+                            db.execute('UPDATE roles SET gold=?, updated_at=? WHERE id=?',
+                                       (int(params[1]), dbmod.now_ms(), int(params[0])))
+                            continue
+                        if isinstance(sql, tuple):
+                            # ★★ round304b：交易所事务在队列里是 (('MKT', kind, {...})) ★★
+                            #   ★ 是【元组】不是字符串 ✗（自测当场抓到：
+                            #     写成 sql == 'MKT' 的话元组会掉到最后那条 db.execute ✗
+                            #     报 TypeError: execute() argument 1 must be str ✓）
+                            mkt_wrote = True
+                            self._save_mkt(db, sql)
+                            if sql[2].pop('_mkt_ok', 0):
+                                mkt_ok.append(sql[2])
+                            continue
+                        if sql == 'USE_SKIN':
+                            self._save_use_skin(db, params)
+                            continue
+                        if sql == 'PICK':
+                            # ★★ 材料堆叠（第 54 轮）★★
+                            #   武器/装备：永远新建一行（不堆叠 ✓）
+                            #   材料：同名同阶就 +1（只在【背包里】合并 ✓ 仓库不混 ✗）
+                            self._save_pick(db, params)
+                            continue
+                        db.execute(sql, params)
+            except Exception as e:
+                # ★ 整批回滚了（含已经写好的交易所事务 ✗）
+                #   → 这一批里所有"标记成功"的都要改口说失败 ✗ 让 tick 把钱退回去 ✓
+                for row in mkt_ok:
+                    self._mkt_mem(False, str(row.pop('_mkt_kind', '') or ''), row,
+                                  reason=repr(e))
+                mkt_ok = []
+                if mkt_wrote:
+                    print('  [save] 交易落盘失败（整批回滚）：%r' % e)
+                else:
+                    print('  [save] 落盘失败：%r' % e)
+            # ★ commit 真的过了 ✗ 现在才敢通知 tick"成了"（方案 §9 ✓）
+            for row in mkt_ok:
+                self._mkt_mem(True, str(row.pop('_mkt_kind', '') or ''), row)
+
+    def _save_use_skin(self, db, params):
+        """用一张皮肤卡：校验物品真是他的 + 是皮肤卡 + key 对得上 → 删物品 + 解锁
+
+        ★ 只有存档线程会进来（tick 不碰盘 ✓）
+        ★ 结果丢进 self._skin_q ✗ 由 tick 下一拍发给玩家 ✓
+          （和交易所回执同一套路子：saver 只写库，内存/网络都归 tick ✓）
+        """
+        import json as _json
+        rid, iid, key = params
+        ok = False
+        try:
+            row = db.execute('SELECT item_json, stack FROM items WHERE id=? AND role_id=?',
+                             (iid, rid)).fetchone()
+            if row is not None:
+                it = _json.loads(row['item_json'] if hasattr(row, 'keys') else row[0])
+                if it.get('kind') == 'skin' and str(it.get('key') or '') == key:
+                    # ★ round598：已经解锁过的皮肤卡不能再消耗（用户实测）
+                    _owned = db.execute('SELECT 1 FROM skin_unlocks WHERE role_id=? AND key=?',
+                                        (rid, key)).fetchone()
+                    if _owned is None:
+                        _st = int((row['stack'] if hasattr(row, 'keys') else row[1]) or 1)
+                        if _st > 1:
+                            db.execute('UPDATE items SET stack = stack - 1 WHERE id=? AND role_id=?',
+                                       (iid, rid))
+                        else:
+                            db.execute('DELETE FROM items WHERE id=? AND role_id=?', (iid, rid))
+                        db.execute('INSERT OR IGNORE INTO skin_unlocks(role_id, key, at)'
+                                   ' VALUES(?,?,?)', (rid, key, dbmod.now_ms()))
+                        # ★★ round528（用户："背包使用了，不代表要换皮肤，只是解锁"）
+                        #   → 只写 unlocked ✗ 不动 roles.skin ✓（换装只在皮肤页点「使用」）
+                        ok = True
+        except Exception as e:
+            print('  [skin] 用皮肤卡落盘失败：%r' % (e,))
+        q = getattr(self, '_skin_q', None)
+        if q is None:
+            q = self._skin_q = []
+        try:
+            q.append((int(rid), str(key), bool(ok)))
+        except Exception:
+            pass
+
+    def _save_mkt(self, db, params):
+        """交易所的一条事务（★ 只有存档线程会进来 ✓ 方案 §9 ✓）
+
+        四种动作：
+          list   上架：INSERT listings → DELETE items
+          buy    成交：UPDATE listings@sold → 保证买家身份 → INSERT trade_log(sid 主键)
+                       → 把物品塞给买家 / 把卖家的钱记进 pending_gold
+          unlist 下架：UPDATE listings@cancelled/expired → 把东西放回卖家背包
+          exp    过期：同上（原样退回 ✓）
+
+        ★★ 为什么整段都在这一个 with 里：
+           方案 v3 §9 要的是"成交 = 一条事务"✗ 中途抛异常整笔回滚 ✓
+           → 不会出现"上架单变已售但东西没给买家"这种半截状态 ✓
+        ★★ trade_log.sid 是主键：同一个 sid 再来一次会撞 UNIQUE ✗ 整笔回滚 ✓
+           这就是幂等的最后一层（方案 v3 §5 ✓）
+        ★★ 失败要回滚【内存里的钱】✗ 而内存只有 tick 线程能碰 ✓
+           → 所以这里只把失败丢进 mkt_failq ✗ tick 下一次就把钱退回去 ✓
+        """
+        # ★★ 自测当场抓到的两个坑（都改在这里 ✗ 别再写回去）★★
+        #   ① 我原来写的是 json_dumps ✗ 而这个函数【根本不存在】✗
+        #      （凭印象写名字 ✗ 和 auth.py 那次 _equipped 一个毛病 ✓）
+        #      → 4 处调用全会 NameError ✗ 被 run_saver 的 except 吞掉 ✓
+        #   ② 参数解错了：队列里那一条【整条就是元组】
+        #        语句 = ('MKT', 'list'|'buy'|'unlist'|'exp', {...})
+        #      → params[0] 是 'MKT' ✗ params[1] 才是动作名 ✓
+        #      我原来写 params[1] 当 row ✗ 于是 isinstance(row, dict) 永远 False
+        #      → 【静默 return】✗ 库里什么都没发生 ✗ 而且一点都不报错 ✓✓
+        #      ★ 教训：静默 return 比抛异常难查一百倍 ✗ 该抛就抛 ✓
+        #   ③ 还有第三个：_mkt_save_list 里的 json.dumps 在【模块级】就没导入过
+        #      → 局部 import 救不了别的函数 ✗ 只能提到文件头 ✓
+        kind = ''
+        row = None
+        if isinstance(params, (tuple, list)):
+            if len(params) >= 3 and str(params[0]) == 'MKT':
+                kind = str(params[1] or '')
+                row = params[2]
+            elif len(params) == 2:
+                kind, row = str(params[0] or ''), params[1]
+        if not isinstance(row, dict):
+            print('[mkt] save_mkt got a bad payload: %r' % (params,))
+            return
+        # ★ 动作名钉在 row 上：后面所有回执都用它 ✗ 不再从别处猜 ✓
+        row['_mkt_kind'] = kind
+        try:
+            if kind == 'list':
+                self._mkt_save_list(db, row)
+                row['lid_tmp'] = int(row.get('lid_tmp') or 0)
+            elif kind == 'buy':
+                self._mkt_save_buy(db, row)
+            elif kind in ('unlist', 'exp'):
+                self._mkt_save_back(db, row, kind)
+                # ★ 幂等：已经不是 'on' 了也算成功（重复点不该报错 ✗ 但钱/货都没动 ✓）
+                row['noop'] = 1 if not row.pop('_did', 0) else 0
+        except _MktRollback as e:
+            # 业务性回滚（东西被买走了 / 物品不在背包 ✗）→ 报给 tick 去退钱 ✓
+            self._mkt_mem(False, kind, row, reason=str(e))
+            return
+        except Exception as e:
+            self._mkt_mem(False, kind, row, reason=repr(e))
+            raise
+        # ★ 走到这里 = with 块会正常 commit ✗ 但 commit 本身还可能失败 ✓
+        #   所以真正的"成功"由 _run_saver 在 commit 之后再说（见那里的 done 通知 ✓）
+        row['_mkt_ok'] = 1
+
+    def _mkt_save_list(self, db, row):
+        seller = int(row.get('seller') or 0)
+        iid = int(row.get('iid') or 0)
+        price = int(row.get('price') or 0)
+        it = row.get('it') or {}
+        try:
+            qty = max(1, int(row.get('qty') or 1))
+        except Exception:
+            qty = 1
+        if not mkmod.is_stack(it):
+            qty = 1        # ★ 装备永远 1 件（防有人乱传 qty ✓）
+        # ① 先把上架单开出来（lid 是自增的 ✗ 要拿到手才能进内存 ✓）
+        #   ★ round304l：qty 一起写 ✗ 这就是"还剩几个"的权威值 ✓
+        # ★ round304q：把"原物品 id"也写进上架单的 item_json（__iid ✓）
+        #   ★ 为什么要写进去："我挂的是哪一件"只能靠 id 认（同名多件 ✗）
+        #     而货架重启/重载时是从库里的 item_json 重建的 ✗
+        #     不写进去 → 重载后 iid 全变 0 ✗（自测正好抓到这个 ✓）
+        _it_saved = dict(it)
+        _it_saved['__iid'] = int(iid)
+        cur = db.execute(
+            'INSERT INTO listings(seller, item_json, price, ts, expire, state, qty)'
+            ' VALUES(?,?,?,?,?,?,?)',
+            (seller, json.dumps(_it_saved, ensure_ascii=False), price, dbmod.now_ms(),
+             dbmod.now_ms() + int(valuemod.MKT_DAYS) * 86400000, 'on', qty))
+        lid = int(cur.lastrowid or 0)
+        # ★★ 自测抓到的第 5 个坑：到期时刻必须【回灌】到内存行 ✓
+        #   内存那一行是上架时乐观加进去的 ✗ 那时还没有 ts/expire ✓
+        #   不回灌的话 exp=0 ✗ → 刚上架的东西当场算"已过期"✓✓
+        #     表现：买家一点就说"已过期"✗ 5 秒后清扫还会把它退回来 ✓
+        #   ★ 单位：内存行里的 ts/exp 一律【秒】✗ 详见 value.now_s() 的注释 ✓
+        #     这里原来写的是 now_ms()/1000.0（毫秒换算过来 ✓ 数值对得上）
+        #     但和 _mkt_list 里乐观写进去的 now_s() 是【两个来源】✓ → 迟早错 ✓
+        _now = valuemod.now_s()
+        row['lid'] = lid
+        row['ts'] = _now
+        row['exp'] = _now + int(valuemod.MKT_DAYS) * 86400
+        # ② 从背包里把它拿走（★ 这是"东西还在不在"的唯一判据 ✓）
+        #   ★★ round304l：能堆叠的要【按数量拆】✗ 不能把整堆都拿走 ✓
+        #      · qty == 整堆  → 直接删那一行（最省事 ✓）
+        #      · qty <  整堆  → 行里的 stack 减 qty（★ 只减不删 ✓）
+        #      · 装备（不堆叠）→ 只能 qty=1 ✗ 走删除 ✓
+        #    ★ 为什么不用"删了再插回去"：那样会换 id ✗
+        #      客户端手里的背包快照立刻就过期了 ✓（能少动就少动 ✓）
+        cur2 = db.execute(
+            'UPDATE items SET stack = stack - ?'
+            ' WHERE id=? AND role_id=? AND in_storage=0 AND stack >= ?',
+            (qty, iid, seller, qty))
+        try:
+            took = int(cur2.rowcount or 0)
+        except Exception:
+            took = 0
+        if took == 1:
+            # 减完了是 0 就把那一行删掉（不留 stack=0 的空行 ✓）
+            db.execute('DELETE FROM items WHERE id=? AND role_id=? AND in_storage=0'
+                       ' AND stack <= 0', (iid, seller))
+        else:
+            # 减不动：要么东西不在了 ✗ 要么那一堆不够 qty ✓
+            left = None
+            try:
+                r2 = db.execute('SELECT stack FROM items WHERE id=? AND role_id=?'
+                                ' AND in_storage=0', (iid, seller)).fetchone()
+                left = int(r2[0]) if r2 else None
+            except Exception:
+                left = None
+            raise _MktRollback('背包里这件东西不够了（要 %d ✗ 剩 %s）' % (qty, left))
+        row['lid'] = lid
+
+    def _mkt_save_buy(self, db, row):
+        """买家买走 N 个（★ round304l：可以只买一部分 ✓）
+
+        ★ 一笔成交 = 【一行 trade_log】+ 【上架单 qty 递减】✓
+          · 买完（qty 到 0）→ state 变 sold ✗ 从货架上消失 ✓
+          · 只买一部分 → state 还是 on ✗ qty 变小 ✓ 别人还能接着买 ✓
+        ★ 幂等仍然靠 trade_log.sid（主键 ✓ 重复撞了整笔回滚 ✓）
+        """
+        sid = str(row.get('sid') or '')
+        lid = int(row.get('lid') or 0)
+        price = int(row.get('price') or 0)      # ★ 这一笔的【总价】
+        qty = max(1, int(row.get('qty') or 1))  # ★ 这一笔买几个
+        tax = int(row.get('tax') or 0)
+        buyer = int(row.get('buyer') or 0)
+        seller = int(row.get('seller') or 0)
+        it = row.get('it') or {}
+        stack = max(1, int(row.get('stack') or 1))
+        # ① 扣数量：条件里带 qty >= 本笔数量 ✗ rowcount=0 = 被别人买光/买超了 ✓
+        #   ★ 这是并发下唯一的真相来源（内存只是"大概"✗ 库才是准的 ✓）
+        cur = db.execute(
+            "UPDATE listings SET qty = qty - ? WHERE lid=? AND seller=?"
+            " AND state='on' AND qty >= ?",
+            (qty, lid, seller, qty))
+        try:
+            n = int(cur.rowcount or 0)
+        except Exception:
+            n = 0
+        if n != 1:
+            raise _MktRollback('上架单已被买走或数量不够（lid=%d ✗ 要 %d）' % (lid, qty))
+        # ② 卖完了才下架（★ 只买一部分就继续挂着 ✓）
+        db.execute("UPDATE listings SET state='sold' WHERE lid=? AND state='on' AND qty<=0",
+                   (lid,))
+        #   ★★ 把库里剩下的数量回给 tick ✗ 不然内存那份会停在旧值 ✓
+        #     自测抓到的：内存里还剩 4 ✗ 回执重建那一行时 qty 丢了 → 默认 1
+        #       → 下一个人"买 1"就把它买空了 ✗ 整单直接下架 ✓✓
+        try:
+            _r = db.execute('SELECT qty, state FROM listings WHERE lid=?', (lid,)).fetchone()
+            if _r is not None:
+                row['qty_left'] = int(_r[0] or 0)
+                row['state_left'] = str(_r[1] or '')
+        except Exception:
+            pass
+        # ③ 保证这个买家真的存在（roles 里没有就是脏数据 ✗ 回滚 ✓）
+        if not db.execute('SELECT 1 FROM roles WHERE id=?', (buyer,)).fetchone():
+            raise _MktRollback('买家角色不存在（%d）' % buyer)
+        # ④ 流水（sid 主键 ✗ 撞了就整笔回滚 ✓）
+        #   ★ qty 一起记 ✗ 以后看成交记录才知道"这一笔买的是几个"✓
+        db.execute(
+            'INSERT INTO trade_log(sid, lid, seller, buyer, price, tax, item_json, ts, qty)'
+            ' VALUES(?,?,?,?,?,?,?,?,?)',
+            (sid or ('t%d.%d' % (dbmod.now_ms(), lid)), lid, seller, buyer, price, tax,
+             json.dumps(it, ensure_ascii=False), dbmod.now_ms(), qty))
+        # ⑤ 东西给买家（★ 买几个给几个 ✗ 可堆叠的在买家背包里合堆 ✓）
+        self._add_item(db, buyer, it, qty, ('sid', sid, 'buyer', buyer))
+        # ⑥ 卖家的钱：在线的话 tick 已经加进内存了 ✗ 这里只补【离线】的 ✓
+        if not int(row.get('seller_online') or 0):
+            #   走 pending_gold ✗ 上线时自动入账 ✓（不绕过上限/黄金转换 ✓ 方案 §3 ✓）
+            db.execute(
+                'INSERT INTO pending_gold(role, amount, why, ts, done)'
+                ' VALUES(?,?,?,?,0)',
+                (seller, mkmod.net_of(price), 'trade_sell', dbmod.now_ms()))
+
+    def _mkt_save_back(self, db, row, kind):
+        """把货架上的东西退回背包（下架 / 过期 / 领取 ✗ 三处共用 ✓）"""
+        lid = int(row.get('lid') or 0)
+        seller = int(row.get('seller') or 0)
+        it = row.get('it') or {}
+        stack = max(1, int(row.get('stack') or 1))
+        state = 'expired' if (kind == 'exp' or int(row.get('expired') or 0)) else 'cancelled'
+        cur = db.execute("UPDATE listings SET state=? WHERE lid=? AND state='on'",
+                         (state, lid))
+        try:
+            n = int(cur.rowcount or 0)
+        except Exception:
+            n = 0
+        if n != 1:
+            # ★ 已经不是 'on' 了（重复下架 / 已经被买走 ✗）
+            #   幂等：什么都不做 ✗ 也不报错 ✓（重复点不该把东西变出两份 ✓）
+            return
+        row['_did'] = 1
+        self._add_item(db, seller, it, stack, ('lid', lid, 'back', seller))
+
+    def _add_item(self, db, role_id, it, stack, tag):
+        """把一件东西放进某个角色的背包（★ 材料合堆 ✗ 装备单开 ✓ 和 _save_pick 同一口径 ✓）
+
+        ★ 为什么要看 slot 而不是 kind：
+          背包里"能堆叠"的只有 slot 为空的东西（材料 / 黄金 ✓）
+          装备（slot=weapon/armor）永远一件一行 ✓（和第 54 轮的堆叠规则一致 ✓）
+        """
+        if not isinstance(it, dict) or not it.get('name'):
+            raise _MktRollback('物品数据坏了（%r）' % (tag,))
+        n = max(1, int(stack or 1))
+        if not it.get('slot'):
+            cur = db.execute(
+                'UPDATE items SET stack = stack + ?'
+                ' WHERE role_id=? AND in_storage=0'
+                "   AND json_extract(item_json,'$.name')=?"
+                "   AND json_extract(item_json,'$.tier')=?"
+                "   AND json_extract(item_json,'$.slot') IS NULL",
+                (n, role_id, it.get('name'), int(it.get('tier') or 0)))
+            try:
+                hit = int(cur.rowcount or 0)
+            except Exception:
+                hit = 0
+            if hit:
+                return
+        db.execute(
+            'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
+            ' VALUES(?,0,-1,?,?,?)',
+            (role_id, n, json.dumps(it, ensure_ascii=False), dbmod.now_ms()))
+
+    def _mkt_mem(self, ok, kind, row, reason=''):
+        """把落库结果告诉 tick 线程（★ 内存只有 tick 能改 ✗ 走队列 ✓）
+
+        ★ 为什么成功和失败走【同一个队列】：
+          它们必须在 tick 里按【落库的先后顺序】处理 ✗
+          分成两个队列的话顺序就乱了 ✓（比如先成功后失败，钱会算错 ✓）
+        ★ 里面装的是那个 row（原地加工过的）✗ 不重新拼一份 ✓
+          因为 tick 需要 lid / it / price / fee 这些原样的字段 ✓
+        """
+        try:
+            d = dict(row)
+            d['done'] = 1 if ok else 0
+            # ★★ 自测抓到的连环坑（第 4 个 ✗ 都长一个样）★★
+            #   原来是 d['kind'] = str(kind) ✗ 而调用处写的是 row.get('kind') ✓
+            #   那个 key 本来【不存在】→ None → str 成 'None' ✗
+            #   → 回执的 kind 变成字符串 'None' ✗ drain 认不出 ✓
+            #   → 走了"未知动作"分支 ✗ 界面显示"操作完成" ✗ 而货架那一行还是负数占位 ✓✓
+            #   ★ 教训：kind 必须【显式传进来】✗ 绝不从 row 里猜 ✓
+            d['kind'] = str(kind)
+            # ★ 回执要用的名字：从 item_json 里补一份 ✗ 别指望调用方都传 ✓
+            #   （自测抓到的第 7 个坑：成交回执给买家发的通知是"买到【None】"✓
+            #    因为 buy 那条 post_save 里根本没带 name ✓）
+            if not d.get('name') and isinstance(d.get('it'), dict):
+                d['name'] = str(d['it'].get('name') or '物品')
+            # ★ 回执发给谁：默认是卖家（上架/下架/过期都是他 ✓）
+            #   买入那条由 _mkt_buy 显式写 'reply'（买家 ✗ 卖家优先会取错人 ✓）
+            d['role'] = int(d.get('reply') or d.get('seller') or d.get('buyer') or 0)
+            if not ok:
+                d['msg'] = '操作失败：%s' % (reason or '数据库出错')
+            self.mkt_failq.put(d)
+        except Exception as e:
+            print('[mkt] mem report failed: %r' % (e,))
+
+
+    def _save_pick(self, db, params):
+        """把捡到的一件东西落库：材料堆叠、装备单开（★ 只有存档线程会进来 ✓）"""
+        role_id, js, now = params[0], params[1], params[2]
+        import json
+        try:
+            it = json.loads(js)
+        except Exception:
+            return
+        is_equip = bool(it.get('slot'))          # 武器/防具 → 不堆叠 ✓
+        is_card = it.get('kind') in ('skin', 'skillbook')   # ★ 卡片/书一张一个 ✓
+        if not is_equip and not is_card:
+            # 同名同阶的材料（且必须是【材料】：slot 为空 ✓）→ stack + 1
+            cur = db.execute(
+                "UPDATE items SET stack = stack + 1"
+                " WHERE role_id=? AND in_storage=0"
+                "   AND json_extract(item_json,'$.name')=?"
+                "   AND json_extract(item_json,'$.tier')=?"
+                "   AND json_extract(item_json,'$.slot') IS NULL",
+                (role_id, it.get('name'), it.get('tier') or 0))
+            try:
+                n = cur.rowcount
+            except Exception:
+                n = 0
+            if n:
+                return
+        db.execute(
+            'INSERT INTO items(role_id, in_storage, slot_index, stack, item_json, created_at)'
+            ' VALUES(?,0,-1,1,?,?)',
+            (role_id, js, now))
+
+    # ============================================================ 状态（自检用）
+
+    def stats(self):
+        return {
+            'online': len(self.players),
+            'mobs': len(self.mobs),          # ★ P2：现在世界上有多少只僵尸（排查用 ✓）
+            'tick': self.tick_count,
+            'tickMs': round(self.tick_ms, 3),
+            'tickMaxMs': round(self.tick_max_ms, 3),
+            'dropped': self.dropped_intents,
+            'pendingSave': self.saves.qsize(),
+            'inbox': self.inbox.qsize(),
+        }
+
+
+def _f(v, dflt=0.0):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return dflt

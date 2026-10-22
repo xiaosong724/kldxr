@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>精英 / BOSS 模型概念图</title>
+<style>
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0b1112;
+    font-family:"Microsoft YaHei","PingFang SC",sans-serif}
+  #cv{display:block;width:100%;height:100%}
+  #hud{position:fixed;left:32px;top:24px;z-index:2;pointer-events:none}
+  #hud b{display:block;color:#ffd76a;font-size:24px;letter-spacing:3px;
+    text-shadow:0 2px 8px #000}
+  #hud span{display:block;margin-top:6px;color:#8fa6a3;font-size:12px;letter-spacing:1px}
+  #tip{position:fixed;right:28px;bottom:20px;z-index:2;color:#667a76;font-size:11px;
+    letter-spacing:1px;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="hud"><b id="ttl">精 英 怪 · 白 模 方 向 图</b><span id="sub">同一套骨骼 · 不同剪影/配件 · 最终再加贴图</span></div>
+<div id="tip">MODEL SHEET / 2026-10-20</div>
+<script src="./lib/three.min.js"></script>
+<script>
+(function(){
+'use strict';
+var Q = new URLSearchParams(location.search);
+var GROUP = (Q.get('g') || 'elite');
+var IS_BOSS = GROUP === 'boss';
+
+var cv = document.getElementById('cv');
+var rd = new THREE.WebGLRenderer({canvas:cv, antialias:true, alpha:false});
+rd.setPixelRatio(1);
+rd.setSize(innerWidth, innerHeight, false);
+rd.shadowMap.enabled = true;
+rd.shadowMap.type = THREE.PCFSoftShadowMap;
+rd.outputEncoding = THREE.sRGBEncoding;
+rd.toneMapping = THREE.ACESFilmicToneMapping;
+rd.toneMappingExposure = 1.0;
+
+var scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a1011);
+scene.fog = new THREE.Fog(0x0a1011, 18, 34);
+
+var cam = new THREE.PerspectiveCamera(38, innerWidth/innerHeight, 0.1, 80);
+if (IS_BOSS) { cam.position.set(0, 4.1, 11.8); cam.lookAt(0, 2.5, 0); }
+else { cam.position.set(0, 3.0, 8.2); cam.lookAt(0, 1.7, 0); }
+
+/* lights */
+var hemi = new THREE.HemisphereLight(0x9fc6c0, 0x120d0b, 0.48); scene.add(hemi);
+var key = new THREE.DirectionalLight(0xffe2bd, 1.05);
+key.position.set(5, 9, 7); key.castShadow = true;
+key.shadow.mapSize.set(2048,2048);
+key.shadow.camera.left=-10; key.shadow.camera.right=10;
+key.shadow.camera.top=10; key.shadow.camera.bottom=-6;
+key.shadow.camera.near=1; key.shadow.camera.far=30;
+scene.add(key);
+var fill = new THREE.DirectionalLight(0x7bb6d8, 0.55); fill.position.set(-7,4,3); scene.add(fill);
+var rim = new THREE.DirectionalLight(0xff7a3a, 0.75); rim.position.set(-2,5,-8); scene.add(rim);
+var pt = new THREE.PointLight(0x54d6c0, 0.7, 18); pt.position.set(0,2,5); scene.add(pt);
+
+/* ground */
+var ground = new THREE.Mesh(new THREE.PlaneGeometry(40,22),
+  new THREE.MeshStandardMaterial({color:0x0d1413, roughness:0.98, metalness:0.03}));
+ground.rotation.x = -Math.PI/2; ground.receiveShadow = true; scene.add(ground);
+var grid = new THREE.GridHelper(40, 40, 0x2c4a45, 0x1a2a28);
+grid.position.y = 0.012; scene.add(grid);
+
+function mat(color, o) {
+  o = o || {};
+  var _c = new THREE.Color(color).convertSRGBToLinear();
+  var _e = new THREE.Color(o.emissive === undefined ? 0x000000 : o.emissive).convertSRGBToLinear();
+  var m = new THREE.MeshStandardMaterial({
+    color: _c,
+    roughness: o.rough === undefined ? 0.72 : o.rough,
+    metalness: o.metal === undefined ? 0.08 : o.metal,
+    emissive: _e,
+    emissiveIntensity: o.ei === undefined ? 1 : o.ei,
+    flatShading: !!o.flat,
+    transparent: !!o.transparent,
+    opacity: o.opacity === undefined ? 1 : o.opacity,
+    side: o.side || THREE.FrontSide
+  });
+  return m;
+}
+function mesh(parent, geo, material, x,y,z, rx,ry,rz, sx,sy,sz) {
+  var m = new THREE.Mesh(geo, material);
+  m.position.set(x||0,y||0,z||0);
+  m.rotation.set(rx||0,ry||0,rz||0);
+  m.scale.set(sx===undefined?1:sx, sy===undefined?1:sy, sz===undefined?1:sz);
+  m.castShadow = true; m.receiveShadow = true;
+  parent.add(m); return m;
+}
+function cyl(parent, rt, rb, h, material, x,y,z, seg) {
+  return mesh(parent, new THREE.CylinderGeometry(rt,rb,h,seg||12), material, x,y,z);
+}
+function sph(parent, r, material, x,y,z, sx,sy,sz) {
+  return mesh(parent, new THREE.SphereGeometry(r,14,10), material, x,y,z,0,0,0,sx,sy,sz);
+}
+function box(parent, w,h,d, material, x,y,z, rx,ry,rz) {
+  return mesh(parent, new THREE.BoxGeometry(w,h,d), material, x,y,z,rx,ry,rz);
+}
+function cone(parent, r,h, material, x,y,z, rx,ry,rz, seg) {
+  return mesh(parent, new THREE.ConeGeometry(r,h,seg||8), material, x,y,z,rx,ry,rz);
+}
+function torus(parent, r, tube, material, x,y,z, rx,ry,rz) {
+  return mesh(parent, new THREE.TorusGeometry(r,tube,8,22), material, x,y,z,rx,ry,rz);
+}
+
+/* 同一个骨架：脚底 y=0，髋部 1.05，肩 1.95，头 2.35 */
+function skeleton(cfg) {
+  var root = new THREE.Group();
+  var skin = mat(cfg.skin, {rough: cfg.rough||0.86});
+  var cloth = mat(cfg.cloth||0x3a3a34, {rough:0.95});
+  var metal = mat(cfg.metal||0x6f7370, {metal:0.75, rough:0.38});
+  var dark = mat(cfg.dark||0x151918, {rough:0.9});
+  var eye = mat(cfg.eye||0xffb347, {emissive:cfg.eye||0xffb347, ei:2.2, rough:0.3});
+  var accent = mat(cfg.accent||0x8a2f25, {rough:0.8});
+
+  var hip = new THREE.Group(); hip.position.y = 1.06; root.add(hip);
+  /* 骨盆 */
+  cyl(hip, 0.34*cfg.bulk, 0.30*cfg.bulk, 0.26, dark, 0,0,0, 10);
+  /* 躯干 */
+  var torso = new THREE.Group(); torso.position.y = 1.36; root.add(torso);
+  cyl(torso, 0.48*cfg.bulk, 0.34*cfg.bulk, 1.02, skin, 0,0.36,0, 12);
+  /* 肩、颈、锁骨：让剪影更像人，不是圆桶 */
+  sph(torso, 0.20*cfg.bulk, skin, -0.48*cfg.bulk,0.78,0, 1,0.8,1);
+  sph(torso, 0.20*cfg.bulk, skin, 0.48*cfg.bulk,0.78,0, 1,0.8,1);
+  cyl(torso, 0.13*cfg.bulk,0.16*cfg.bulk,0.22, skin, 0,0.92,0, 8);
+  box(torso, 0.64*cfg.bulk,0.10,0.12, dark, 0,0.70,0.22, 0,0,0.02);
+  /* 胸甲/布甲 */
+  if (cfg.armor) {
+    box(torso, 0.82*cfg.bulk, 0.58, 0.52*cfg.bulk, metal, 0,0.50,0.02);
+    box(torso, 0.68*cfg.bulk, 0.18, 0.56*cfg.bulk, accent, 0,0.78,0.02);
+    box(torso, 0.30, 0.16, 0.55*cfg.bulk, dark, 0.0,0.72,0.02);
+  } else {
+    /* 交叠的破布 */
+    box(torso, 0.58*cfg.bulk, 0.34, 0.40*cfg.bulk, cloth, 0,0.16,0.16, 0.05,0,0.12);
+    box(torso, 0.22, 0.66, 0.06, accent, 0.18,0.26,0.26, 0.08,0,0.18);
+  }
+  /* 腰布 */
+  cyl(torso, 0.38*cfg.bulk, 0.50*cfg.bulk, 0.45, cloth, 0,-0.18,0, 9);
+
+  /* 头 */
+  var head = new THREE.Group(); head.position.y = 2.34; root.add(head);
+  sph(head, 0.27*cfg.head||0.27, skin, 0,0,0, 1,1.08,0.95);
+  /* 眉骨 / 鼻 / 下颌：三个小件就能把"球"变成脸 */
+  box(head, 0.34*cfg.bulk,0.07,0.06, dark, 0,0.12,0.23, 0,0,0.10);
+  box(head, 0.09,0.13,0.08, skin, 0,-0.01,0.26, 0.12,0,0);
+  box(head, 0.20,0.07,0.05, skin, 0,-0.17,0.235, 0.10,0,0);
+  /* 眼 */
+  sph(head, 0.055, eye, -0.105,0.035,0.235);
+  sph(head, 0.055, eye, 0.105,0.035,0.235);
+  /* 嘴 */
+  box(head, 0.16,0.035,0.04, dark, 0,-0.09,0.245);
+
+  /* 手臂：肩关节 → 上臂 → 肘 → 前臂 → 手 */
+  function arm(side) {
+    var g = new THREE.Group();
+    g.position.set(side*0.56*cfg.bulk, 1.92, 0.02);
+    g.rotation.z = side * (cfg.armOut || 0.16);
+    g.rotation.x = cfg.hunch ? -0.18 : 0.02;
+    root.add(g);
+    cyl(g, 0.105*cfg.bulk, 0.09*cfg.bulk, cfg.armLen||0.72, skin, 0,-0.34,0, 8);
+    var fore = new THREE.Group(); fore.position.y = -(cfg.armLen||0.72); g.add(fore);
+    fore.rotation.x = cfg.hunch ? 0.58 : 0.18;
+    cyl(fore, 0.09*cfg.bulk, 0.075*cfg.bulk, (cfg.armLen||0.72)*0.95, skin, 0,-0.34,0, 8);
+    var hand = new THREE.Group(); hand.position.y = -(cfg.armLen||0.72)*0.92; fore.add(hand);
+    sph(hand, 0.11*cfg.bulk, skin, 0,0,0, 1,0.9,1);
+    for (var c=0;c<3;c++) {
+      cone(hand, 0.035, 0.24, dark, (c-1)*0.06, -0.15, 0.05, -0.25, 0, (c-1)*0.18, 6);
+    }
+    return {g:g, fore:fore, hand:hand};
+  }
+  var armL = arm(-1), armR = arm(1);
+
+  /* 腿：髋关节 → 大腿 → 膝 → 小腿 → 脚 */
+  function leg(side) {
+    var g = new THREE.Group(); g.position.set(side*0.24*cfg.bulk, 1.05, 0); root.add(g);
+    cyl(g, 0.13*cfg.bulk, 0.11*cfg.bulk, 0.56, cfg.legSkin?mat(cfg.legSkin):skin, 0,-0.28,0, 8);
+    var knee = new THREE.Group(); knee.position.y = -0.56; g.add(knee);
+    cyl(knee, 0.105*cfg.bulk, 0.075*cfg.bulk, 0.46, cfg.legSkin?mat(cfg.legSkin):skin, 0,-0.23,0, 8);
+    box(knee, 0.20*cfg.bulk, 0.10, 0.36*cfg.bulk, dark, 0,-0.46,0.07);
+    return {g:g, knee:knee};
+  }
+  var legL = leg(-1), legR = leg(1);
+  return {root:root, hip:hip, torso:torso, head:head, armL:armL, armR:armR, legL:legL, legR:legR,
+          skin:skin, cloth:cloth, metal:metal, dark:dark, eye:eye, accent:accent};
+}
+
+/* ---------- 精英 1：裂口者 ---------- */
+function eliteRift() {
+  var c = skeleton({skin:0x3d5f55, cloth:0x2b2620, dark:0x101817, eye:0xffa62e,
+    bulk:0.92, armLen:1.05, hunch:true, accent:0x7d2f22, rough:0.9});
+  c.root.scale.setScalar(0.98);
+  /* 背刺 */
+  for (var i=0;i<6;i++) {
+    cone(c.torso, 0.06, 0.48, c.dark, (i-2.5)*0.12, 0.65+Math.abs(i-2.5)*-0.05, -0.30,
+      -0.45, 0, (i-2.5)*0.12, 6);
+  }
+  /* 长舌/裂口 */
+  box(c.head, 0.24,0.07,0.05, c.accent, 0,-0.14,0.25);
+  box(c.head, 0.05,0.18,0.04, c.accent, 0,-0.23,0.24, 0.2,0,0);
+  /* 破布裙 */
+  for (var k=0;k<5;k++) {
+    box(c.torso, 0.15,0.34+0.08*(k%2),0.04, c.cloth,
+      (k-2)*0.12, -0.34, 0.24, 0.05,0,(k-2)*0.12);
+  }
+  /* 眼睛辉光 */
+  var aura = new THREE.PointLight(0xff7a2a, 0.55, 2.4); aura.position.set(0,2.3,0.4); c.root.add(aura);
+  return c;
+}
+
+/* ---------- 精英 2：铁卫 ---------- */
+function eliteGuard() {
+  var c = skeleton({skin:0x8c735d, cloth:0x3b2e25, metal:0x757b78, dark:0x1c1d1b,
+    eye:0xffd36a, bulk:1.16, armor:true, armLen:0.72, accent:0x7f2a24, rough:0.68});
+  c.root.scale.setScalar(1.02);
+  /* 头盔 */
+  cyl(c.head, 0.30,0.32,0.32, c.metal, 0,0.20,0, 10);
+  box(c.head, 0.46,0.08,0.10, c.dark, 0,0.03,0.25);
+  for (var i=0;i<4;i++) box(c.head,0.05,0.09,0.05,c.metal,(i-1.5)*0.075,0.10,0.28);
+  /* 红缨 */
+  cone(c.head, 0.10,0.48, c.accent, 0,0.48,0, 0,0,0, 7);
+  /* 左盾 */
+  var sh = new THREE.Group(); sh.position.set(-0.72,1.72,0.20); sh.rotation.y=0.18; c.root.add(sh);
+  cyl(sh, 0.48,0.48,0.10, c.metal,0,0,0,18); sh.rotation.x=Math.PI/2;
+  torus(sh, 0.48,0.035, c.accent,0,0,0.01);
+  sph(sh,0.14,c.dark,0,0,0.07,1,1,0.35);
+  /* 右锤 */
+  var wg = new THREE.Group(); wg.position.set(0.72,1.55,0.18); wg.rotation.z=-0.18; c.root.add(wg);
+  cyl(wg,0.055,0.06,1.2,c.dark,0,-0.42,0,8);
+  box(wg,0.34,0.28,0.28,c.metal,0,-0.98,0);
+  box(wg,0.42,0.10,0.30,c.accent,0,-0.85,0);
+  return c;
+}
+
+/* ---------- 精英 3：火鬼 ---------- */
+function eliteEmber() {
+  var c = skeleton({skin:0x2b2420, cloth:0x241b16, dark:0x0d0d0c, eye:0xffd24a,
+    bulk:0.95, armLen:0.82, hunch:true, accent:0xd4471f, rough:0.92});
+  c.root.scale.setScalar(0.97);
+  var flame1 = mat(0xff5a1f,{emissive:0xff3d0a, ei:1.6, rough:0.5});
+  var flame2 = mat(0xffc23a,{emissive:0xff9b1f, ei:1.8, rough:0.4});
+  for (var i=0;i<7;i++) {
+    var a=(i/7)*Math.PI*2;
+    cone(c.head,0.075,0.42+0.16*(i%3),i%2?flame1:flame2,
+      Math.cos(a)*0.14,0.30+0.05*(i%3),Math.sin(a)*0.12, 0,0,Math.cos(a)*0.30);
+  }
+  /* 胸口裂缝 */
+  for (var k=0;k<4;k++) box(c.torso,0.05,0.26,0.03,flame1,(k-1.5)*0.10,0.36,0.245,0,0,(k%2?0.3:-0.2));
+  /* 臂环 */
+  torus(c.armL.g,0.13,0.035,flame2,0,-0.45,0,Math.PI/2,0,0);
+  torus(c.armR.g,0.13,0.035,flame2,0,-0.45,0,Math.PI/2,0,0);
+  var light = new THREE.PointLight(0xff6a1f,0.8,3.4); light.position.set(0,1.9,0.4); c.root.add(light);
+  return c;
+}
+
+/* ---------- BOSS 1：屠夫 ---------- */
+function bossButcher() {
+  var c = skeleton({skin:0xb49a7e, cloth:0x5d3b2c, dark:0x1b1310, eye:0xff4b35,
+    bulk:1.55, head:0.34, armLen:0.94, hunch:true, accent:0x8a2b24, rough:0.9});
+  c.root.scale.setScalar(1.28);
+  /* 大肚子 */
+  sph(c.torso,0.56,c.skin,0,0.12,0.08,1.05,0.82,0.82);
+  /* 围裙 */
+  box(c.torso,0.70,0.86,0.06,c.cloth,0,0.08,0.42,0.05,0,0);
+  box(c.torso,0.26,0.18,0.04,c.accent,0,0.42,0.46);
+  /* 缝线 */
+  for (var i=0;i<4;i++) box(c.head,0.12,0.018,0.03,c.dark,0,-0.02-i*0.055,0.25);
+  /* 角 */
+  cone(c.head,0.08,0.34,c.dark,-0.20,0.22,0,0,0,0.45,7);
+  cone(c.head,0.08,0.34,c.dark,0.20,0.22,0,0,0,-0.45,7);
+  /* 巨斧 */
+  var wg=new THREE.Group(); wg.position.set(1.08,1.62,0.15); wg.rotation.z=-0.24; c.root.add(wg);
+  cyl(wg,0.07,0.08,1.8,c.dark,0,-0.70,0,8);
+  box(wg,0.62,0.48,0.12,c.metal,0.26,-1.35,0,0,0,-0.08);
+  box(wg,0.20,0.40,0.14,c.metal,-0.28,-1.30,0);
+  /* 钩子 */
+  torus(c.armL.hand,0.15,0.04,c.metal,0,-0.08,0.05,0.4,0,0);
+  return c;
+}
+
+/* ---------- BOSS 2：深渊法师 ---------- */
+function bossMage() {
+  var c = skeleton({skin:0x5a4b70, cloth:0x241a38, dark:0x110d19, eye:0x8fe8ff,
+    bulk:0.88, armLen:0.78, hunch:true, accent:0x5b2f8a, rough:0.82});
+  c.root.scale.setScalar(1.32);
+  /* 长袍 */
+  cyl(c.root,0.16,0.78,1.55,c.cloth,0,0.78,0,16);
+  cyl(c.root,0.82,0.92,0.18,c.accent,0,0.10,0,16);
+  /* 兜帽 */
+  cone(c.head,0.40,0.62,c.cloth,0,0.28,0,0,0,0,14);
+  sph(c.head,0.31,c.dark,0,0.06,0.05,1,1,0.9);
+  sph(c.head,0.055,c.eye,-0.11,0.02,0.27);
+  sph(c.head,0.055,c.eye,0.11,0.02,0.27);
+  /* 漂浮法球 */
+  var orb=new THREE.Group(); orb.position.set(0.86,2.05,0.32); c.root.add(orb);
+  sph(orb,0.20,mat(0x8fe8ff,{emissive:0x38bcd8,ei:2.4,rough:0.2}),0,0,0);
+  torus(orb,0.34,0.025,mat(0xb98cff,{emissive:0x6d3fd8,ei:1.6}),0,0,0,1.1,0.3,0);
+  torus(orb,0.26,0.02,mat(0x8fe8ff,{emissive:0x38bcd8,ei:2}),0,0,0,0.2,1.2,0.7);
+  var ol=new THREE.PointLight(0x5ad7ff,0.9,4); orb.add(ol);
+  /* 符文环地面 */
+  var ring = torus(c.root,0.95,0.025,mat(0x9b6cff,{emissive:0x5a2ec8,ei:1.5,transparent:true,opacity:0.7}),0,0.06,0,Math.PI/2,0,0);
+  ring.scale.set(1,1,1);
+  return c;
+}
+
+/* ---------- BOSS 3：钢铁巨兽 ---------- */
+function bossMech() {
+  var c = skeleton({skin:0x5c6666, cloth:0x333b3b, metal:0x8c9794, dark:0x1a2020,
+    eye:0xff5a3a, bulk:1.62, head:0.28, armLen:1.0, accent:0xc9472a, rough:0.35, armor:true});
+  c.root.scale.setScalar(1.30);
+  /* 肩甲 */
+  box(c.root,0.55,0.34,0.62,c.metal,-0.86,2.02,0,0,0,0.16);
+  box(c.root,0.55,0.34,0.62,c.metal,0.86,2.02,0,0,0,-0.16);
+  /* 面甲 */
+  box(c.head,0.42,0.16,0.10,c.dark,0,0.03,0.25);
+  box(c.head,0.18,0.05,0.04,mat(0xff5a3a,{emissive:0xff3a1a,ei:2.4}),0,0.03,0.31);
+  /* 胸口核心 */
+  sph(c.torso,0.20,mat(0xff5a3a,{emissive:0xff2a0a,ei:2.2,rough:0.2}),0,0.38,0.30);
+  torus(c.torso,0.30,0.04,c.metal,0,0.38,0.28);
+  /* 背后排气管 */
+  for (var i=0;i<2;i++) {
+    cyl(c.torso,0.08,0.09,0.55,c.dark,(i?0.24:-0.24),0.66,-0.40,8);
+    cyl(c.torso,0.10,0.08,0.10,c.metal,(i?0.24:-0.24),0.96,-0.40,8);
+  }
+  /* 右臂炮 */
+  cyl(c.armR.fore,0.16,0.20,0.62,c.metal,0,-0.55,0,10);
+  cyl(c.armR.fore,0.21,0.21,0.10,c.accent,0,-0.86,0,10);
+  /* 左臂刃 */
+  box(c.armL.fore,0.08,0.62,0.22,c.metal,0,-0.62,0.12,0.18,0,0);
+  box(c.armL.fore,0.05,0.44,0.06,c.accent,0,-0.80,0.22,0.18,0,0);
+  /* 腿甲 */
+  box(c.legL.g,0.28,0.46,0.36,c.metal,0,-0.22,0.02);
+  box(c.legR.g,0.28,0.46,0.36,c.metal,0,-0.22,0.02);
+  var coreLight=new THREE.PointLight(0xff4a20,0.9,4); coreLight.position.set(0,1.8,0.5); c.root.add(coreLight);
+  return c;
+}
+
+/* 黑色描边：概念白模也有一点漫画轮廓 */
+function addOutline(root) {
+  var om = new THREE.MeshBasicMaterial({color:0x050807, side:THREE.BackSide});
+  var list=[];
+  root.traverse(function(o){
+    if (o.isMesh && o.material && o.material.side !== THREE.BackSide) { list.push(o); }
+  });
+  for (var i=0;i<list.length;i++) {
+    var o=list[i];
+    if (!o.parent) { continue; }
+    var c=new THREE.Mesh(o.geometry, om);
+    c.position.copy(o.position);
+    c.rotation.copy(o.rotation);
+    c.scale.copy(o.scale).multiplyScalar(1.035);
+    c.userData.noOutline=true;
+    o.parent.add(c);
+  }
+}
+
+function labelSprite(rank, name, role, color) {  var cw=512, ch=160;
+  var c=document.createElement('canvas'); c.width=cw; c.height=ch;
+  var g=c.getContext('2d');
+  g.clearRect(0,0,cw,ch);
+  /* 玻璃底 */
+  var grd=g.createLinearGradient(0,20,0,ch-20);
+  grd.addColorStop(0,'rgba(12,18,18,.88)'); grd.addColorStop(1,'rgba(8,12,12,.55)');
+  g.fillStyle=grd; g.strokeStyle='rgba(255,255,255,.12)'; g.lineWidth=2;
+  g.beginPath(); g.roundRect ? g.roundRect(8,20,cw-16,ch-40,16) : g.rect(8,20,cw-16,ch-40); g.fill(); g.stroke();
+  g.textAlign='center';
+  g.font='700 22px "Microsoft YaHei"'; g.fillStyle=color;
+  g.fillText(rank, cw/2, 58);
+  g.font='800 34px "Microsoft YaHei"'; g.fillStyle='#eef5ee';
+  g.fillText(name, cw/2, 102);
+  g.font='400 18px "Microsoft YaHei"'; g.fillStyle='#92a49e';
+  g.fillText(role, cw/2, 130);
+  var tex=new THREE.CanvasTexture(c); tex.encoding=THREE.sRGBEncoding;
+  var sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true, depthWrite:false}));
+  sp.scale.set(3.4,1.06,1);
+  return sp;
+}
+
+var defs = IS_BOSS ? [
+  {make:bossButcher, name:'屠 夫', role:'巨斧 · 钩锁 · 血腥重击', color:'#ff7a5a', rank:'BOSS'},
+  {make:bossMage, name:'深渊法师', role:'法球 · 符文 · 范围诅咒', color:'#b58cff', rank:'BOSS'},
+  {make:bossMech, name:'钢铁巨兽', role:'炮击 · 冲锋 · 核心过载', color:'#ffb066', rank:'BOSS'}
+] : [
+  {make:eliteRift, name:'裂口者', role:'荆棘 · 长爪 · 撕裂', color:'#ffb45a', rank:'精英'},
+  {make:eliteGuard, name:'铁 卫', role:'护盾 · 反伤 · 重锤', color:'#ffd36a', rank:'精英'},
+  {make:eliteEmber, name:'火 鬼', role:'灼烧 · 迅捷 · 火焰', color:'#ff8a4a', rank:'精英'}
+];
+
+var xs = [-3.5, 0, 3.5];
+for (var i=0;i<defs.length;i++) {
+  var d=defs[i];
+  var c=d.make();
+  c.root.position.x = xs[i];
+  c.root.position.y = 0.11;
+  if (IS_BOSS) { c.root.position.z = 0.2; c.root.rotation.y = [-0.12,0,0.12][i]; }
+  else { c.root.position.z = 0; c.root.rotation.y = [-0.08,0,0.08][i]; }
+  scene.add(c.root);
+  var base = new THREE.Mesh(new THREE.CylinderGeometry(0.92,1.04,0.09,36),
+    new THREE.MeshStandardMaterial({color:new THREE.Color(0x202b29).convertSRGBToLinear(), roughness:0.65, metalness:0.45}));
+  base.position.set(xs[i],0.045,0.15); base.receiveShadow=true; base.castShadow=true; scene.add(base);
+  var lab=labelSprite(d.rank, d.name, d.role, d.color);
+  lab.position.set(xs[i], IS_BOSS?5.15:3.75, 0.2);
+  scene.add(lab);
+  var ring = new THREE.Mesh(new THREE.RingGeometry(0.95,1.02,40),
+    new THREE.MeshBasicMaterial({color:new THREE.Color(d.color), transparent:true, opacity:0.22, side:THREE.DoubleSide}));
+  ring.rotation.x=-Math.PI/2; ring.position.set(xs[i],0.02,0.15); scene.add(ring);
+}
+
+function resize(){
+  var w=innerWidth,h=innerHeight;
+  rd.setSize(w,h,false); cam.aspect=w/h; cam.updateProjectionMatrix();
+}
+addEventListener('resize',resize); resize();
+
+function frame(){
+  rd.render(scene,cam);
+  requestAnimationFrame(frame);
+}
+frame();
+window.__ready=true;
+})();
+</script>
+</body>
+</html>

@@ -202,7 +202,7 @@
       <h2>刷怪上限 <span class="tip">（改完立刻生效 ✓ 不用重启 ✓ 玩家会收到提示 ✓）</span></h2>
       <div style="margin:6px 0">
         <b>所有人</b>
-        <input id="mobPer" type="number" min="1" max="30" value="8" style="width:70px">
+        <input id="mobPer" type="number" min="1" max="100" value="8" style="width:70px">
         <span class="tip">每人上限（默认 8）</span>
         <button id="btnMobPer">应用给所有人</button>
       </div>
@@ -574,7 +574,7 @@ function ovBind() {
     if (s) {
       var inp = rows.querySelector('[data-cap="' + s + '"]');
       var v = inp ? (+inp.value || 0) : 0;
-      if (v < 1) { return msg('先填个上限（1~30）', '#ff7a6a'); }
+      if (v < 1) { return msg('先填个上限（1~100）', '#ff7a6a'); }
       return act('mobcap', { name: s, per: v });
     }
     var c = el.getAttribute('data-capclr');
@@ -749,7 +749,7 @@ function refresh() {
           '<option value="0"' + ((p.ov && p.ov.mobatk === false) ? ' selected' : '') + '>关</option>' +
         '</select></span>' +
         '<span class="ov"><s>上限</s>' +
-          '<input type="number" min="1" max="30" style="width:46px" data-cap="' + nm + '" value="' +
+          '<input type="number" min="1" max="100" style="width:46px" data-cap="' + nm + '" value="' +
             ((p.ov && p.ov.cap) ? p.ov.cap : '') + '" placeholder="默认">' +
           '<button data-capset="' + nm + '">设</button>' +
           '<button data-capclr="' + nm + '">清</button></span>' +

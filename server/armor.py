@@ -59,7 +59,8 @@ def make_armor(tier, item_lv=1, rng=None):
                  'hp': int(hp_of(t) * (1 + 0.06 * (item_lv - 1)))},
         'affixes': affixes.roll_affixes(t, ('armor',), r),
         'effect': None,
-        'reqLevel': req_level_of(t),
+        # ★ round472：建议等级 = 装备等级（无上限 ✓）
+        'reqLevel': max(1, int(item_lv)),
         # ★ 防具这一版【不做耐久】（第 67 轮）——
         #   武器耐久是用户点名要的 ✓ 防具先不做，就不显示一条永远不掉的条子 ✗
         # ★★ 第 103 轮（用户要求：防具的耐久度也没有做补上）★★
@@ -70,19 +71,37 @@ def make_armor(tier, item_lv=1, rng=None):
     }
 
 
-def stats_of(w):
-    """一件防具最终提供的属性（基础 + 词条 ✓）
+def stats_of(w, mastery=1.0, level=None):
+    """一件防具最终提供的属性（基础 + 词条 × 发挥度 ✓）
 
-    返回 {dr, hp, hp_pct, dodge, qi_hurt, qi_kill}
+    返回 {dr, hp, hp_pct, dodge, qi_hurt, qi_kill, mastery}
+
+    ★★ round472（用户："等级不适配要降低发挥度，不然 1 级拿 1000 级装备太强"）★★
+       以前防具【完全不打折】✗ 一件高等级防具 = 无敌 ✗✗
+       现在和武器一个口径：发挥度乘在【基础值 + 词条】上 ✓
+       （hp_pct 是百分比，不乘 ✗ 乘了会变成"乘两次"✓）
     """
     w = w or {}
     b = w.get('base') or {}
     T = affixes.totals(w.get('affixes'))
+    m = max(0.0, min(1.0, float(mastery)))
+    # ★ round472：有效等级 —— 超过玩家等级的郣分不算 ✗
+    #   base 是【造的时候就写死在里面】的（含 itemLv 的 6%/级 ✓）
+    #   所以这里把它换算成【effLv 那一级的值】→ 乘一个比例 ✓
+    _sc = 1.0
+    if level is not None:
+        il = max(1, int(w.get('itemLv') or 1))
+        el = max(1, min(il, int(level or 1)))
+        if il > 1:
+            _sc = (1.0 + 0.06 * (el - 1)) / (1.0 + 0.06 * (il - 1))
+        else:
+            _sc = 1.0
     return {
-        'dr': float(b.get('dr') or 0) + T.get('dr_flat', 0.0),
-        'hp': float(b.get('hp') or 0) + T.get('hp_flat', 0.0),
-        'hp_pct': T.get('hp_pct', 0.0),
-        'dodge': T.get('dodge_pt', 0.0),
-        'qi_hurt': T.get('qi_on_hurt', 0.0),
-        'qi_kill': T.get('qi_on_kill', 0.0),
+        'dr': (float(b.get('dr') or 0) * _sc + T.get('dr_flat', 0.0)) * m,
+        'hp': (float(b.get('hp') or 0) * _sc + T.get('hp_flat', 0.0)) * m,
+        'hp_pct': T.get('hp_pct', 0.0) * m,
+        'dodge': T.get('dodge_pt', 0.0) * m,
+        'qi_hurt': T.get('qi_on_hurt', 0.0) * m,
+        'qi_kill': T.get('qi_on_kill', 0.0) * m,
+        'mastery': m,
     }

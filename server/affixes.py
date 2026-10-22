@@ -33,19 +33,31 @@ AFFIXES = [
     ('crit_pt',  '暴击率',    'flat', _s(0.26, 1),      90, ('weapon',), True,   '暴击率 +{v}%'),
     ('crit_dmg', '暴击伤害',  'pct',  _s(1.05, 5),      80, ('weapon',), True,   '暴击伤害 +{v}%'),
     ('spd_pct',  '攻击速度',  'pct',  _s(0.15, 1),      80, ('weapon',), True,   '攻速 +{v}%（受上限约束）'),
-    ('lifesteal', '吸血',     'pct',  _s(0.09, 1),      70, ('weapon',), True,   '造成伤害的 {v}% 回血'),
+    ('lifesteal', '全能吸血', 'pct',  _s(0.09, 1),      70, ('weapon',), True,   '造成伤害的 {v}% 回血（对所有伤害生效）'),
+    # ★★★ round474：把现有属性补成词条 ✓
+    ('hit_pt',   '命中',      'flat', _s(0.14, 1),      60, ('weapon',), True,   '命中 +{v}%'),
+    # ★ 全能吸血：任何伤害都回血（含 PvP，用户定全额 ✓）
+    ('vamp_all', '全能吸血',  'pct',  _s(0.05, 1),      55, ('weapon',), True,   '造成伤害的 {v}% 回血（对所有伤害生效）'),
     ('treasure', '寻宝',      'pct',  _s(0.30, 3),      60, ('weapon',), True,   '掉落概率 +{v}%'),
     # ---- 武器词条（定义了、但效果待做 → 先不掉 ✓）----
     ('splash',   '溅射',      'pct',  _s(0.65, 5),      70, ('weapon',), False,  '溅射 +{v}%'),
     ('execute',  '斩杀',      'pct',  _s(0.48, 5),      60, ('weapon',), False,  '残血目标额外 +{v}%'),
     ('combo',    '连击',      'pct',  _s(0.13, 2),      60, ('weapon',), False,  '连击每层 +{v}%（最多 5 层）'),
-    ('pen_pt',   '穿透',      'flat', _s(0.22, 1),      60, ('weapon',), False,  '无视 {v} 点减伤'),
+    ('pen_pt',   '穿透',      'flat', _s(0.22, 1),      60, ('weapon',), True ,  '无视 {v} 点减伤'),
     ('spellbreak', '破法',    'flat', _s(0.48, 5),      50, ('weapon',), False,  '对护盾额外穿透 {v}'),
     # ---- 防具词条（定义好了 ✓ 等防具系统做出来再掉 ✓）----
     ('hp_flat',  '生命',      'flat', _s(3.5, 6),       90, ('armor',), True,    '生命上限 +{v} 点'),
     ('hp_pct',   '生命',      'pct',  _s(0.48, 1),      70, ('armor',), True,    '生命上限 +{v}%'),
     ('dr_flat',  '减伤',      'flat', _s(0.16, 1),      80, ('armor',), True,    '受到伤害 -{v} 点'),
     ('dodge_pt', '闪避',      'flat', _s(0.14, 1),      60, ('armor',), True,    '闪避 +{v}%'),
+    # ★★ round474：把现有属性补成词条 ✓
+    ('anticrit', '免爆',     'flat', _s(0.16, 1),      60, ('armor',), True,    '免爆 +{v}%'),
+    ('anticritdmg', '抗爆',  'flat', _s(0.20, 2),      60, ('armor',), True,    '抗爆 +{v}%'),
+    ('dr_pct',   '减伤',     'pct',  _s(0.10, 1),      55, ('armor',), True,    '减伤 +{v}%'),
+    ('qi_flat',  '灵气上限', 'flat', _s(0.30, 2),      50, ('armor',), True,    '灵气上限 +{v} 点'),
+    ('speed_pct', '移速',    'pct',  _s(0.08, 1),      50, ('armor',), True,    '移速 +{v}%'),
+    # ★ 经验：用户定【防具】✓
+    ('exp_pct',  '经验',     'pct',  _s(0.10, 2),      50, ('armor',), True,    '经验 +{v}%'),
     ('qi_on_hurt', '受击回灵气', 'flat', _s(0.12, 1),   50, ('armor',), True,    '受击回 {v} 灵气'),
     ('qi_on_kill', '击杀回灵气', 'flat', _s(0.34, 2),   60, ('armor',), True,    '击杀回 {v} 灵气'),
     ('silent',   '静音',      'pct',  _s(0.34, 5),      50, ('armor',), False,   '少惊动僵尸 {v}%'),
@@ -94,11 +106,13 @@ def _value(a, tier, rng):
 def make_affix(a, tier, rng):
     v = _value(a, tier, rng)
     unit = '%' if a[2] == 'pct' else ' 点'
-    if a[0] in ('crit_pt', 'dodge_pt', 'lifesteal', 'spd_pct', 'treasure'):
+    if a[0] in ('crit_pt', 'dodge_pt', 'lifesteal', 'spd_pct', 'treasure',
+                'hit_pt', 'anticrit', 'anticritdmg', 'vamp_all',
+                'dr_pct', 'speed_pct', 'exp_pct'):
         unit = '%'
     txt = a[7].format(v=v)                       # 文案模板在第 7 列 ✓
     if '%' not in txt and a[0] not in ('atk_flat', 'hp_flat', 'dr_flat', 'pen_pt',
-                                       'spellbreak', 'qi_on_hurt', 'qi_on_kill'):
+                                       'spellbreak', 'qi_on_hurt', 'qi_on_kill', 'qi_flat'):
         txt += '%'                               # 概率类的补个百分号 ✓
     return {'key': a[0], 'name': a[1], 'mode': a[2], 'val': v,
             'text': txt, 'live': bool(a[6])}

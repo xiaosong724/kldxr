@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>公告管理</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; background:#0f1116; color:#dfe8f2;
+         font-family:system-ui,"Microsoft YaHei","PingFang SC",sans-serif; font-size:13px; }
+  a { color:#8ee0ff; }
+  .top { display:flex; align-items:center; gap:12px; padding:12px 18px;
+         border-bottom:1px solid #ffffff14; position:sticky; top:0; background:#0f1116ee;
+         backdrop-filter:blur(6px); z-index:10; }
+  .top h1 { font-size:16px; margin:0; color:#ffd83d; letter-spacing:1px; }
+  .top .sp { flex:1; }
+  .btn { background:#1b2230; border:1px solid #ffffff22; color:#dfe8f2; border-radius:8px;
+         padding:6px 12px; font-size:13px; cursor:pointer; }
+  .btn:hover { border-color:#8ee0ff88; }
+  .btn.on { background:#2f6b3f; border-color:#7ee08a; }
+  .btn.gold { background:#3a300f; border-color:#ffd83d88; color:#ffe9a0; }
+  .btn.red { background:#3a1a1a; border-color:#ff6a5c88; color:#ffb4a0; }
+  .btn:disabled { opacity:.45; cursor:not-allowed; }
+  .main { display:flex; gap:16px; padding:16px; align-items:flex-start; }
+  .col { background:#141a22; border:1px solid #ffffff12; border-radius:12px; }
+  .left { flex:0 0 420px; max-height:calc(100vh - 90px); display:flex; flex-direction:column; }
+  .right { flex:1 1 auto; min-width:520px; max-height:calc(100vh - 90px); overflow:auto;
+           background:#0b0c0a; }
+  .hd { padding:10px 12px; border-bottom:1px solid #ffffff12; color:#8fa3b8; font-size:12px;
+        display:flex; gap:8px; align-items:center; }
+  #list { overflow:auto; padding:8px; }
+  .row { display:flex; gap:8px; align-items:center; padding:8px 10px; border-radius:8px;
+         cursor:pointer; border:1px solid transparent; }
+  .row:hover { background:#1b2230; }
+  .row.sel { background:#1d2b3d; border-color:#3f86c8; }
+  .row .id { color:#ffd83d; font-weight:700; min-width:34px; }
+  .row .tt { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .st { font-size:11px; padding:1px 7px; border-radius:20px; border:1px solid; }
+  .st.live { color:#8ee0a8; border-color:#8ee0a855; }
+  .st.draft { color:#8fa3b8; border-color:#8fa3b855; }
+  .st.retracted { color:#ff9a8a; border-color:#ff9a8a55; }
+  .form { padding:12px; overflow:auto; flex:1; }
+  .fld { margin-bottom:10px; }
+  .fld label { display:block; color:#8fa3b8; font-size:11px; margin-bottom:3px; }
+  input[type=text], textarea, select {
+    width:100%; background:#0f141b; border:1px solid #ffffff1f; color:#dfe8f2;
+    border-radius:7px; padding:7px 9px; font-size:13px; font-family:inherit; }
+  textarea { min-height:64px; resize:vertical; line-height:1.6; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .cards { border-top:1px dashed #ffffff18; margin-top:8px; padding-top:10px; }
+  .card1 { border:1px solid #ffffff14; border-radius:9px; padding:8px; margin-bottom:8px;
+           background:#121821; }
+  .card1 .h { display:flex; gap:6px; align-items:center; margin-bottom:6px; }
+  .card1 .h .no { color:#ffd83d; font-weight:800; min-width:24px; }
+  .card1 .h input { flex:1; }
+  .card1 .h select { flex:0 0 88px; }
+  .card1 .h .del { flex:0 0 auto; padding:4px 8px; }
+  .err { color:#ff9a8a; min-height:16px; padding:0 12px 8px; font-size:12px; }
+  .ok { color:#8ee0a8; }
+  .hint { color:#6f7f90; font-size:11px; line-height:1.7; padding:0 12px 10px; }
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>📢 公告管理</h1>
+  <span id="who" style="color:#6f7f90"></span>
+  <span class="sp"></span>
+  <button class="btn" id="btnNew">+ 新建公告</button>
+  <button class="btn" id="btnRefresh">刷新</button>
+  <a class="btn" href="/admin" style="text-decoration:none">← 返回世界管理</a>
+</div>
+
+<div class="main">
+  <div class="col left">
+    <div class="hd">历史公告（最近在上）<span class="sp" style="flex:1"></span>
+      <span id="cnt" style="color:#6f7f90"></span></div>
+    <div id="list"></div>
+    <div class="hint">
+      ● 已发布 = 没看过的人下次登录会弹 · 草稿 = 不弹 · 已撤回 = 留档不弹<br>
+      ● 改【已发布】的只影响没看过的人；想让所有人重看 → 「另存为新公告」
+    </div>
+  </div>
+
+  <div class="col right">
+    <div class="hd">
+      <span id="editTitle">编辑公告</span>
+      <span class="sp" style="flex:1"></span>
+      <a class="btn" id="btnPreviewPage" target="_blank" style="text-decoration:none">独立预览页 ↗</a>
+      <button class="btn gold" id="btnPublish">发布</button>
+      <button class="btn" id="btnDraft">存草稿</button>
+      <button class="btn" id="btnCopy">另存为新公告</button>
+      <button class="btn red" id="btnDel">删除</button>
+    </div>
+    <div id="formView" style="display:none">
+      <div class="form">
+        <div class="grid2">
+          <div class="fld"><label>标题</label><input type="text" id="fTitle" value="更 新 公 告"></div>
+          <div class="fld"><label>版本 / 日期</label>
+            <div style="display:flex;gap:8px">
+              <input type="text" id="fVer" placeholder="v1.2" style="flex:0 0 90px">
+              <input type="text" id="fDate" placeholder="2026-10-19" style="flex:1">
+            </div>
+          </div>
+        </div>
+        <div class="fld"><label>一句话（副标题第二段）</label>
+          <input type="text" id="fHeadline" placeholder="皮肤系统上线"></div>
+        <div class="grid2">
+          <div class="fld"><label>绿色胶囊（可空）</label>
+            <input type="text" id="fBadge" placeholder="刷新页面即可生效"></div>
+          <div class="fld"><label>底部小字（可空，允许 &lt;b&gt; &lt;br&gt;）</label>
+            <input type="text" id="fFoot" placeholder="数值口径 / 去哪看 …"></div>
+        </div>
+        <div class="cards">
+          <div style="display:flex;align-items:center;margin-bottom:8px">
+            <label style="color:#8fa3b8;font-size:11px;margin:0">卡片（和发群的海报同款）</label>
+            <span style="flex:1"></span>
+            <button class="btn" id="btnAddCard">+ 加一条</button>
+          </div>
+          <div id="cards"></div>
+        </div>
+        <div class="err" id="err"></div>
+      </div>
+    </div>
+    <div id="empty" style="padding:40px;color:#6f7f90;text-align:center">
+      左边选一条公告，或者点「+ 新建公告」
+    </div>
+  </div>
+</div>
+
+<iframe id="pv" style="display:none"></iframe>
+<script src="/lib/annrender.js"></script>
+<script>
+var TOKEN = '';
+try { TOKEN = localStorage.getItem('adminToken') || ''; } catch (e) { }
+/* ★ 方便调试/截图：?token=xxx 直接带管理 token（临时用 ✓ 不进链接就别传）*/
+(function () {
+  var m = /[?&]token=([^&]+)/.exec(location.search || '');
+  if (m) {
+    TOKEN = decodeURIComponent(m[1]);
+    try { localStorage.setItem('adminToken', TOKEN); } catch (e2) { }
+  }
+})();
+var LIST = [], CUR = null;   // CUR = 正在编辑的公告（null = 新建）
+
+function api(path, opt) {
+  opt = opt || {};
+  opt.headers = Object.assign({ 'Content-Type': 'application/json' }, opt.headers || {});
+  if (TOKEN) { opt.headers['X-Admin'] = TOKEN; }
+  return fetch(path, opt).then(function (r) {
+    return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; });
+  });
+}
+function $(id) { return document.getElementById(id); }
+
+function loadList() {
+  api('/api/admin/announce').then(function (j) {
+    if (!j.ok) {
+      /* ★ 不要用 confirm（无头浏览器里会卡住渲染线程 ✗ 页面直接白屏 ✓）
+         → 直接在列表区给一行提示 + 一个链接 ✓ */
+      $('cnt').textContent = '';
+      $('list').innerHTML = '<div style="padding:14px;color:#ff9a8a;line-height:1.9">' +
+        (j.error || '读取失败') + '<br>' +
+        '<a href="/admin">先去世界管理页登录 →</a></div>';
+      return;
+    }
+    LIST = j.list || [];
+    renderList();
+  });
+}
+function renderList() {
+  var box = $('list');
+  box.innerHTML = '';
+  $('cnt').textContent = LIST.length + ' 条';
+  LIST.forEach(function (a) {
+    var d = document.createElement('div');
+    d.className = 'row' + (CUR && CUR.id === a.id ? ' sel' : '');
+    d.innerHTML = '<span class="id">#' + a.id + '</span>' +
+      '<span class="tt">' + (a.title || '') + (a.headline ? ' · ' + a.headline : '') + '</span>' +
+      '<span class="st ' + a.status + '">' +
+      ({ live: '已发布', draft: '草稿', retracted: '已撤回' }[a.status] || a.status) +
+      '</span><span style="color:#6f7f90;font-size:11px">' + (a.date || '') + '</span>';
+    d.onclick = function () { openOne(a.id); };
+    box.appendChild(d);
+  });
+}
+
+function emptyAnn() {
+  return { id: 0, ver: '', title: '更 新 公 告', date: new Date().toISOString().slice(0, 10),
+           headline: '', badge: '', foot: '', items: [], status: 'draft' };
+}
+function openOne(id) {
+  api('/api/admin/announce').then(function (j) {
+    var a = (j.list || []).filter(function (x) { return x.id === id; })[0];
+    if (a) { fill(a); }
+  });
+}
+function fill(a) {
+  CUR = a;
+  $('empty').style.display = 'none';
+  $('formView').style.display = 'block';
+  $('editTitle').textContent = (a.id ? ('编辑 #' + a.id) : '新建公告') +
+    ' · ' + ({ live: '已发布', draft: '草稿', retracted: '已撤回' }[a.status] || a.status);
+  $('fTitle').value = a.title || '';
+  $('fVer').value = a.ver || '';
+  $('fDate').value = a.date || '';
+  $('fHeadline').value = a.headline || '';
+  $('fBadge').value = a.badge || '';
+  $('fFoot').value = a.foot || '';
+  renderCards(a.items || []);
+  $('btnDel').disabled = (a.status !== 'draft');
+  $('btnPreviewPage').href = '/ann?shot=1&t=' + Date.now();
+  renderList();
+  preview();
+}
+
+function tags() {
+  return ['皮肤', '掉落', '战斗', '玩法', '装备', '交易行', '背包', '成长',
+          '系统', '画面', '优化', '修复', '挂机', '提示', '群', '其它'];
+}
+function renderCards(items) {
+  var box = $('cards');
+  box.innerHTML = '';
+  items.forEach(function (it, i) {
+    var d = document.createElement('div');
+    d.className = 'card1';
+    var sel = '<select class="tag">' +
+      '<option value="">（无）</option>' +
+      tags().map(function (t) {
+        return '<option value="' + t + '"' + (it.tag === t ? ' selected' : '') + '>' + t + '</option>';
+      }).join('') + '</select>';
+    d.innerHTML = '<div class="h"><span class="no">' + String(i + 1).padStart(2, '0') + '</span>' +
+      sel +
+      '<input type="text" class="t" placeholder="卡片标题（如：40 套皮肤）" value="' +
+      escAttr(it.t || '') + '">' +
+      '<button class="btn del">✕</button></div>' +
+      '<textarea class="b" placeholder="每条一行（会显示成 • 列表）">' +
+      escAttr((it.b || []).join('\n')) + '</textarea>';
+    d.querySelector('.del').onclick = function () {
+      var arr = collectCards(); arr.splice(i, 1); renderCards(arr); preview();
+    };
+    d.querySelector('select').onchange = preview;
+    d.querySelector('.t').oninput = preview;
+    d.querySelector('.b').oninput = preview;
+    box.appendChild(d);
+  });
+}
+function escAttr(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function collectCards() {
+  var out = [];
+  var cs = document.querySelectorAll('#cards .card1');
+  for (var i = 0; i < cs.length; i++) {
+    var tag = cs[i].querySelector('select').value;
+    var t = cs[i].querySelector('.t').value.trim();
+    var b = cs[i].querySelector('.b').value.split('\n').map(function (x) { return x.trim(); })
+      .filter(Boolean);
+    if (t) { out.push({ tag: tag, t: t, b: b }); }
+  }
+  return out;
+}
+function collect() {
+  return {
+    ver: $('fVer').value.trim(),
+    title: $('fTitle').value.trim() || '更 新 公 告',
+    date: $('fDate').value.trim(),
+    headline: $('fHeadline').value.trim(),
+    badge: $('fBadge').value.trim(),
+    foot: $('fFoot').value.trim(),
+    items: collectCards()
+  };
+}
+
+/* 实时预览：直接用同一个渲染器 ✓ */
+function preview() {
+  var d = collect();
+  var frame = $('empty');
+  var pv = document.getElementById('pv');
+  if (!pv) { return; }
+  var html = AnnRender.html(d, { scale: 0.9 });
+  pv.style.display = 'none';
+  var box = document.getElementById('pvBox');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'pvBox';
+    box.style.cssText = 'padding:10px;background:#0b0c0a';
+    $('empty').parentNode.insertBefore(box, $('formView'));
+  }
+  box.style.display = 'block';
+  box.innerHTML = html;
+  $('empty').style.display = 'none';
+}
+
+function save(publish, copyAsNew) {
+  var body = collect();
+  body.publish = !!publish;
+  var isNew = copyAsNew || !CUR || !CUR.id;
+  var req = isNew
+    ? api('/api/admin/announce', { method: 'POST', body: JSON.stringify(body) })
+    : api('/api/admin/announce/' + CUR.id, { method: 'PUT', body: JSON.stringify(body) });
+  req.then(function (j) {
+    if (!j.ok) { $('err').textContent = j.error || '保存失败'; return; }
+    $('err').textContent = '';
+    $('err').className = 'err ok';
+    $('err').textContent = (copyAsNew ? '已另存为新公告 #' + j.id : (publish ? '已发布' : '已保存'));
+    loadList();
+    if (j.ann) { fill(j.ann); }
+  });
+}
+
+$('btnNew').onclick = function () { fill(emptyAnn()); };
+$('btnRefresh').onclick = loadList;
+$('btnAddCard').onclick = function () {
+  var arr = collectCards();
+  arr.push({ tag: '', t: '', b: [] });
+  renderCards(arr);
+};
+$('btnDraft').onclick = function () { save(false, false); };
+$('btnPublish').onclick = function () {
+  if (!CUR || !CUR.id || CUR.status !== 'live') {
+    if (!confirm('发布后：所有没看过这条的玩家，下次进游戏会先看到它。\n确定发布？')) { return; }
+  }
+  save(true, false);
+};
+$('btnCopy').onclick = function () {
+  if (!confirm('另存为【新公告】并发布？\n\n★ 所有人（包括已经看过的）下次登录都会再看到一次')) { return; }
+  save(true, true);
+};
+$('btnDel').onclick = function () {
+  if (!CUR || !CUR.id) { return; }
+  if (!confirm('删除草稿 #' + CUR.id + '？（不可恢复）')) { return; }
+  api('/api/admin/announce/' + CUR.id, { method: 'DELETE' }).then(function (j) {
+    if (!j.ok) { $('err').textContent = j.error || '删除失败'; return; }
+    CUR = null; $('formView').style.display = 'none';
+    $('empty').style.display = 'block'; loadList();
+  });
+};
+['fTitle', 'fVer', 'fDate', 'fHeadline', 'fBadge', 'fFoot'].forEach(function (id) {
+  $(id).oninput = preview;
+});
+
+loadList();
+/* ★ ?id=N → 打开后自动选中那条（截图/分享链接方便 ✓）*/
+(function () {
+  var m = /[?&]id=(\d+)/.exec(location.search || '');
+  if (m) { setTimeout(function () { openOne(parseInt(m[1], 10)); }, 700); }
+})();
+</script>
+</body>
+</html>

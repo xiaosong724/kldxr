@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>眼睛 / 嘴巴 10 款</title>
+<style>
+  html, body { margin: 0; overflow: hidden; background: #0e1116; color: #dfe8f2;
+               font-family: "Microsoft YaHei", system-ui, sans-serif; }
+  #head { padding: 10px 14px 2px; font-size: 17px; font-weight: 800; color: #ffd83d;
+          letter-spacing: 2px; }
+  #head i { font-style: normal; font-size: 12px; color: #8fa3b8; letter-spacing: 0;
+            margin-left: 10px; font-weight: 400; }
+  #wrap { display: grid; grid-template-columns: repeat(5, 264px); gap: 4px 8px;
+          padding: 4px 12px 8px; }
+  .cell { width: 264px; }
+  .cell canvas { display: block; width: 264px; height: 226px; border-radius: 10px;
+                 background: radial-gradient(circle at 50% 40%, #24303f, #0b0f14 74%); }
+  .cell .t { text-align: center; font-size: 12px; color: #d8e2ee; margin-top: 2px; }
+  .cell .t b { color: #ffd83d; }
+</style>
+</head>
+<body>
+<div id="head">—</div>
+<div id="wrap"></div>
+<script src="../web/lib/three.min.js"></script>
+<script src="skin_rig_bundle.js"></script>
+<script>
+var _mc = {};
+function matOf(c) { var k = c | 0; if (!_mc[k]) { _mc[k] = new THREE.MeshLambertMaterial({ color: k }); } return _mc[k]; }
+function fillHeldWeapon() { }
+
+var q = (location.search || '').replace('?', '');
+var KIND = (q.split('&')[0] || 'k=eyesM').split('=')[1] || 'eyesM';
+var SKIN = { eyesM: 'm01', eyesF: 'f06', mouth: 'm01' }[KIND] || 'm01';
+var TITLE = { eyesM: '男生眼睛 · 10 款', eyesF: '女生眼睛 · 10 款', mouth: '嘴巴 · 10 款' }[KIND];
+var SUB = {
+  eyesM: '（m01 熔岩魔修 · 光头 ✗ 额头露出来好对比 · 眉毛是男生才有的）',
+  eyesF: '（f06 水手服少女 · 女生那套睫毛和高光都在）',
+  mouth: '（m01 熔岩魔修 · 眼睛固定为 1 号，只看嘴）'
+}[KIND];
+
+var NAMES = {
+  eyesM: ['窄长眼', '方眼', '上挑凶眼', '小圆眼', '眯眼', '竖瞳', '三角眼', '肿眼泡', '单眼皮长眼', '疤眼'],
+  eyesF: ['标准大眼', '圆眼', '细长眼', '猫眼', '下垂眼', '半眯眼', '星眼', '竖瞳', '清冷细眼', '小豆眼'],
+  mouth: ['平静', '微笑', '抿嘴', '张嘴', '咧嘴笑', '撇嘴', '八字嘴', '嘟嘴', '大笑露牙', '缝合嘴']
+}[KIND];
+
+document.getElementById('head').innerHTML = TITLE + '<i>' + SUB + '</i>';
+var wrap = document.getElementById('wrap');
+
+for (var i = 1; i <= 10; i++) {
+  var cell = document.createElement('div');
+  cell.className = 'cell';
+  var cv = document.createElement('canvas');
+  cv.width = 264 * 2; cv.height = 226 * 2;
+  cell.appendChild(cv);
+  var t = document.createElement('div');
+  t.className = 't';
+  t.innerHTML = '<b>' + i + '</b> ' + NAMES[i - 1];
+  cell.appendChild(t);
+  wrap.appendChild(cell);
+
+  var r = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
+  r.setPixelRatio(2);
+  r.setSize(264, 226, false);
+  r.shadowMap.enabled = false;
+  var sc = new THREE.Scene();
+  sc.add(new THREE.HemisphereLight(0xd8e4f4, 0x3a3020, 1.05));
+  var dl = new THREE.DirectionalLight(0xfff3d8, 0.95); dl.position.set(2.2, 3.4, 3.6); sc.add(dl);
+  var dl2 = new THREE.DirectionalLight(0x8fb0ff, 0.35); dl2.position.set(-2.6, 1.2, -1.6); sc.add(dl2);
+
+  var bak = SKIN_DEFS[SKIN].eyes;
+  var eyes = { w: (bak && bak.w) || 0.26, h: (bak && bak.h) || 0.30 };
+  if (KIND === 'mouth') { eyes.st = 1; eyes.mo = i; }
+  else { eyes.st = i; eyes.mo = 1; }
+  SKIN_DEFS[SKIN].eyes = eyes;
+  var hero = skBuildHero(SKIN);
+  SKIN_DEFS[SKIN].eyes = bak;
+  sc.add(hero.g);
+  /* ★ 看嘴的时候不要侧转 ✗ 一转就跑偏 ✓ 看眼睛时留一点侧脸更有立体感 ✓ */
+  hero.g.rotation.y = (KIND === 'mouth') ? 0 : 0.20;
+  hero.armL.rotation.x = 0.05; hero.armR.rotation.x = -0.05;
+  hero.g.updateMatrixWorld(true);
+  /* ★ 用构建器给回来的【头坐标】取景 ✗ 不再靠包围盒猜（女生的头发一高就取歪）✓ */
+  var hy = hero.headY, hh = hero.headH;
+  var fov = 30;
+  var cam;
+  if (KIND === 'mouth') {
+    var my = hy - hh * 0.30;                  /* 嘴在头中心下 0.30 个身位 ✓ */
+    var wantM = hh * 0.52;
+    var zM = wantM / (2 * Math.tan(fov * Math.PI / 360));
+    cam = new THREE.PerspectiveCamera(fov, 264 / 226, 0.1, 60);
+    cam.position.set(0, my + hh * 0.06, zM);
+    cam.lookAt(0, my, 0);
+  } else {
+    var faceY = hy + hh * 0.00;               /* 眼睛那一块 ✓ */
+    var wantH = hh * 1.55;
+    var camZ = wantH / (2 * Math.tan(fov * Math.PI / 360));
+    cam = new THREE.PerspectiveCamera(fov, 264 / 226, 0.1, 60);
+    cam.position.set(0, faceY + hh * 0.04, camZ);
+    cam.lookAt(0, faceY, 0);
+  }
+  r.render(sc, cam);
+}
+</script>
+</body>
+</html>

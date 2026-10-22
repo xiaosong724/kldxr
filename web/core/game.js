@@ -3726,20 +3726,22 @@ function skinRebuildSelf() {
     scene.remove(H.g);
     H.g.traverse(function (o) { if (o.isMesh && o.geometry) { o.geometry.dispose(); } });
     H = hero(MY_SKIN, MY_SKIN_CUSTOM);      /* ★ round510：带上自定义 */
-    H.g.scale.set(heroScaleOf(MY_SIZE), heroScaleOf(MY_SIZE), heroScaleOf(MY_SIZE));
+    /* ★ 2026-10-22：以前用 MY_SIZE（坦克 10 倍）✗ 镇内应该是 1 倍
+       → 换皮肤/登录带皮肤时，自己会突然变成巨大体型 ✓ 就是这个函数干的 */
+    H.g.scale.set(heroScaleOf(heroVisualSize()), heroScaleOf(heroVisualSize()), heroScaleOf(heroVisualSize()));
     H.g.position.set(px, py, pz);
     H.g.rotation.y = ry;
     scene.add(H.g);
     if (_oldShadow) {
       H.shadow = _oldShadow;
       H.shadow.visible = true;
-      H.shadow.scale.setScalar(MY_SIZE);
+      H.shadow.scale.setScalar(heroVisualSize());
     } else {
       H.shadow = new THREE.Mesh(new THREE.CircleGeometry(0.62, 16),
         new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true,
                                       opacity: 0.26, depthWrite: false }));
       H.shadow.rotation.x = -Math.PI / 2;
-      H.shadow.scale.setScalar(MY_SIZE);
+      H.shadow.scale.setScalar(heroVisualSize());
       scene.add(H.shadow);
     }
     /* 手上的武器按当前武器重建（换皮肤不该把剑弄丢 ✓）*/
@@ -3748,6 +3750,13 @@ function skinRebuildSelf() {
       fillHeldWeapon(H.sw, _mw.look, +(_mw.tier || 0), H.swL);
     } else {
       fillHeldWeapon(H.sw, null, null);
+    }
+    /* ★ 2026-10-22：重建后要把【安全区状态】重新套一次
+       （新造的武器默认 visible=true ✗ 镇里会又拿在手上 ✓）*/
+    try { applyMySize(); } catch (e6) { }
+    if (SAFE_MODE) {
+      try { if (H.sw) { H.sw.visible = false; } } catch (e7) { }
+      try { if (typeof FP !== 'undefined' && FP && FP.sw) { FP.sw.visible = false; } } catch (e8) { }
     }
   } catch (e) { }
 }
@@ -5926,6 +5935,13 @@ function wsApplyWorld(d) {
       sleep: !!w.sleep,                                        // ★ 他躺下了没有
       snapYaw: (typeof w.syaw === 'number') ? w.syaw : 0,
       sz: (typeof w.sz === 'number' && w.sz > 0) ? w.sz : 1,   // ★ round576：体型
+      /* ★ 2026-10-22（用户："头上的信息框要能看见经验这些"）
+         ★★ 这个显式清单就是第 4 次踩同一个坑 ✗ 服务器发的字段不加这里就被丢掉 ✓
+         打工：job=岗位 · js=已打工秒数 · je/jp=已赚经验/金币 */
+      job: (typeof w.job === 'string') ? w.job : '',
+      js: (typeof w.js === 'number') ? w.js : 0,
+      je: (typeof w.je === 'number') ? w.je : 0,
+      jp: (typeof w.jp === 'number') ? w.jp : 0,
       /* ★★★ 第 221 轮修的真 bug（用户："我的血条在别的玩家那边没有按比例扣除，
              只有数字变化"）★★★
          这里原来写死 hpm: 0 ✗
@@ -6319,11 +6335,13 @@ function netUploadProps() {
 
 function netSendHit(mid, dv, crit) {
   if (!WSC.ready) { return; }
+  if (typeof MY_JOB !== 'undefined' && MY_JOB) { return; }   // ★ 打工中不能打
   wsSend('atk', { mid: String(mid) });
 }
 
 function netSendPvp(uid, dv, crit) {
   if (!WSC.ready) { return; }
+  if (typeof MY_JOB !== 'undefined' && MY_JOB) { return; }   // ★ 打工中不能打
   wsSend('atk', { uid: uid });
 }
 
@@ -6717,9 +6735,25 @@ function addOther(w, t) {
     /* ★★ 第 152 轮（用户要求）：有魔气就在名字前面显示【恶魔图标 + 数字】★★
        红色 ✓ 魔气越高颜色越深 ✓ 魔气 0 → 整个标记消失 ✓ */
     o.mq = +w.mq || 0;          // ★ 魔气单独一行显示 ✓ 不再拼进名字 ✗
+    /* ★ 2026-10-22（用户："打工状态要同步广播，头上能看到打工信息"）
+       服务端快照里带 job → 名牌后面加一个「· 打工中」✓ */
+    o.job = String(w.job || '');
     UI.plate.name(o.ui,
       (_mate2 ? '★ ' : '') + (w.name || '道友') + ' ' + (w.realm || ''),
       _mate2 ? '#5aa8ff' : '#fff');
+    /* ★ 2026-10-22（用户："头上的信息框要能看见经验这些"）
+       打工进度【单独一行】显示在名牌上方（和称号/魔气同容器 ✓ 不抢名字）*/
+    if (typeof UI !== 'undefined' && UI.plate && UI.plate.job) {
+      var _jt = '';
+      if (o.job) {
+        var _js = Math.max(0, +w.js || 0);
+        var _jh = Math.floor(_js / 3600), _jm = Math.floor((_js % 3600) / 60), _jss = _js % 60;
+        var _jts = (_jh > 0 ? (_jh + ':') : '') +
+                   (_jm < 10 ? '0' + _jm : _jm) + ':' + (_jss < 10 ? '0' + _jss : _jss);
+        _jt = '打工中 ' + _jts + ' · +' + (+w.jp || 0) + '金 +' + (+w.je || 0) + '经验';
+      }
+      UI.plate.job(o.ui, _jt);
+    }
     /* ★★ round424（用户："其它玩家和自己都可以看见"）★★
        称号在名牌最上面 ✗ 魔气在它下面 ✓（两个不互相覆盖 ✓）*/
     UI.plate.title(o.ui, o.tt || '', o.tm || 0);
@@ -7397,6 +7431,22 @@ function updateSelfBar() {
   }
   if (!_selfUI) { _selfUI = mkMobUI('', 1); }
   if (!_selfUI) { return; }
+  /* ★ 2026-10-22（用户："头上的信息框要能看见经验这些"）
+     自己头顶也显示打工进度（打工中 00:23 · +3194金 +13经验）*/
+  try {
+    if (typeof UI !== 'undefined' && UI.plate && UI.plate.job) {
+      if (typeof MY_JOB !== 'undefined' && MY_JOB) {
+        var _s2 = Math.max(0, Math.floor((Date.now() - MY_JOB_T0) / 1000)) + (MY_JOB_BASE || 0);
+        var _h2 = Math.floor(_s2 / 3600), _m2 = Math.floor((_s2 % 3600) / 60), _c2 = _s2 % 60;
+        var _ts2 = (_h2 > 0 ? (_h2 + ':') : '') + (_m2 < 10 ? '0' + _m2 : _m2) + ':' + (_c2 < 10 ? '0' + _c2 : _c2);
+        var _pay2 = Math.round((MY_JOB_PAYH || 0) * _s2 / 3600);
+        var _exp2 = Math.round((MY_JOB_EXPH || 0) * _s2 / 3600);
+        UI.plate.job(_selfUI, '打工中 ' + _ts2 + ' · +' + _pay2 + '金 +' + _exp2 + '经验');
+      } else {
+        UI.plate.job(_selfUI, '');
+      }
+    }
+  } catch (eJb) { }
   UI.plate.tag(_selfUI, MY_FROZEN ? '❄ 冰冻' : (MY_DOWN > 0 ? '击倒' : ''),
                MY_FROZEN ? '#9fe8ff' : '#ffb35a');
   /* 持续技能 / 被动触发：头顶进度条 */
@@ -9492,6 +9542,15 @@ function frame(ts) {
     H.g.rotation.x = 0;
     H.g.rotation.z = 0;
   }
+  /* ★ 2026-10-22（用户："打工后不能离开建筑，也不能进行任何操作"）
+     打工期间：位置钉在店里 ✗ 输入全部清零（服务端也会丢包 ✓ 双保险）*/
+  if (typeof MY_JOB !== 'undefined' && MY_JOB && !dead) {
+    if (MY_JOB_X || MY_JOB_Z) { P.x = MY_JOB_X; P.z = MY_JOB_Z; }
+    jx = 0; jy = 0;
+    try { MOV.vx = 0; MOV.vz = 0; MOV.tx = 0; MOV.tz = 0; } catch (eJ3) { }
+    atkHeld = false; if (typeof AUTO !== 'undefined' && AUTO) { AUTO.attacking = false; }
+    if (typeof jobHudTick === 'function') { jobHudTick(); }
+  }
   /* ★ 坐姿：腿向前收、手放大腿、剑收起；轻微下沉到椅面 */
   if (MY_SEAT && !dead) {
     var st = MY_SEAT;
@@ -9604,6 +9663,24 @@ function frame(ts) {
                     ref: _shopN });
     }
 
+    /* ★ 2026-10-22（用户："打工按钮在哪"）—— 以前 jobStart() 根本没人调用 ✗
+       靠近【能打工的店】(咖啡/茶馆这类 served) 就给一个「打工」候选 ✓ */
+    try {
+      var _workKinds = { dessert: 1, cafe: 1, ramen: 1, izakaya: 1, tea: 1 };
+      var _canWork = !!(_shopN && (_shopN.served || _shopN.job ||
+        _workKinds[String(_shopN.kind || '')] ||
+        _workKinds[String((_shopN.id || '').replace(/^shop_/, '').replace(/_v\d+$/, ''))]));
+      if (_canWork) {
+        var _jobOn = (typeof MY_JOB !== 'undefined' && MY_JOB);
+        _cands.push({ kind: 'work', prompt: 'workPrompt', cls: 'work',
+                      title: _jobOn ? '结束打工' : '打工',
+                      sub: (_shopN.name || '') + (_jobOn ? ' · 正在打工' : ' · 端盘子'),
+                      text: _jobOn ? '按 E / 点击交互按钮 结束打工' : '按 E / 点击交互按钮 打工',
+                      dist: Math.hypot((+_shopN.x || 0) - P.x, (+_shopN.z || 0) - P.z) + 0.01,
+                      ref: _shopN });
+      }
+    } catch (eJob2) { }
+
     var _whN = (typeof townNearWarehouse === 'function') ? townNearWarehouse(P.x, P.z) : false;
     if (MY_SEAT) { _whN = false; }
     WH_NEAR = !!_whN;
@@ -9615,6 +9692,14 @@ function frame(ts) {
     }
 
     /* 近的排前面（椅子/商店有距离，其余排后） */
+    /* ★ 2026-10-22（用户："按钮要一直保持交互状态，不然万一无法结算"）
+       打工期间：候选里【只留结算打工】✗ 不再看距离/别的交互 ✓ */
+    if (typeof MY_JOB !== 'undefined' && MY_JOB) {
+      _cands = [{ kind: 'work', prompt: 'workPrompt', cls: 'work',
+                  title: '结算打工', sub: '打工中（点一下结算）',
+                  text: '按 E / 点击交互按钮 结算打工', dist: 0,
+                  ref: (typeof MY_JOB_REF !== 'undefined') ? MY_JOB_REF : null }];
+    }
     _cands.sort(function (a, b) { return (a.dist || 0) - (b.dist || 0); });
     if (typeof UI !== 'undefined' && UI.interactNear) { UI.interactNear(_cands); }
     if (typeof townRoofTick === 'function') { townRoofTick(P.x, P.z, CAM_VIEW === 'first'); }
@@ -9841,7 +9926,7 @@ function frame(ts) {
          为什么不做本地预测：客户端一旦上报目标，改个包就能隔空打人 ✗（方案 §5）
          所以这里不判命中、也不弹伤害数字 —— 等服务器的 mhits + 快照回来 ✓
          （自己那份 inAtkArc 只给下面单机那条路用 ✓）*/
-      wsSend('atk', { seq: NET.atkSeq });
+      if (!(typeof MY_JOB !== 'undefined' && MY_JOB)) { wsSend('atk', { seq: NET.atkSeq }); }
     } else {
       /* 单机：本地就是权威 → 扇形里的全打，立刻给反馈 ✓ */
       var hitList = [], hi, anyCrit = false;

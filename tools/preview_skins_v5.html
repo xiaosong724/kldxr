@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>玩家皮肤 · 二次元 20 款（v4 细节版）</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0a0c11; color: #dfe8f2;
+               font-family: "Microsoft YaHei", system-ui, sans-serif; }
+  #wrap { width: 1500px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 10px 0 2px; color: #ffd83d; letter-spacing: 2px; }
+  .sub { font-size: 12px; color: #8fa3b8; margin-bottom: 6px; }
+  #stage { position: relative; width: 1500px; height: 1400px; }
+  #cv { display: block; width: 1500px; height: 1400px; }
+  #labels { position: absolute; left: 0; top: 0; width: 1500px; height: 1400px; pointer-events: none; }
+  #labels .lb { position: absolute; transform: translate(-50%, 0); text-align: center;
+                white-space: nowrap; text-shadow: 0 1px 3px #000; }
+  #labels .lb b { display: block; font-size: 14px; color: #eaf2fb; letter-spacing: 1px; }
+  #labels .lb i { display: block; font-style: normal; font-size: 10.5px; color: #7f93a8; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <h1 id="ttl">玩家皮肤 · 二次元 20 款（v6：方眼 + 圆角）</h1>
+  <div class="sub">方眼保留、四角削圆；比 v3 多：分层头发 + 刘海碎发 + 双色眼睛（睫毛/下眼线/高光）+ 鼻子 + 笑口 + 指甲袖口 + 裙褶 + 袜口 + 鞋底 + 发饰/领结/胸针</div>
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="labels"></div>
+  </div>
+</div>
+<script src="../web/lib/three.min.js"></script>
+<script>
+/* ============================================================
+   v4：在 v3（二次元）基础上加细节
+   骨架仍然参数化（hipY / legW / torsoH,W,D / armLen,W / headW,H,D）
+   ============================================================ */
+
+var DEF = { hipY: 0.92, legW: 0.24, torsoH: 1.00, torsoW: 0.86, torsoD: 0.54,
+            armLen: 0.96, armW: 0.19, armX: 0.56, headW: 1.10, headH: 1.06, headD: 1.02,
+            neck: 0.02 };
+
+/* 颜色工具：把颜色调亮/调暗，用来做阴影和高光 */
+function shade(hex, k) {
+  var r = (hex >> 16) & 255, g = (hex >> 8) & 255, b = hex & 255;
+  r = Math.max(0, Math.min(255, Math.round(r * k)));
+  g = Math.max(0, Math.min(255, Math.round(g * k)));
+  b = Math.max(0, Math.min(255, Math.round(b * k)));
+  return (r << 16) | (g << 8) | b;
+}
+
+function C(o) {
+  var p = { skin: o.skin || 0xffe0cc, hair: o.hair || 0x2b2b33,
+            shirt: o.shirt || 0xffffff, shirtD: o.shirtD || 0xd0d8e0,
+            pants: o.pants || 0x2a2e3a, boot: o.boot || 0x2a2e3a,
+            belt: o.belt || 0x222630, gold: o.gold || 0xffd166,
+            collar: o.collar || 0xffffff, iris: o.iris || 0x3a6ac0,
+            sock: o.sock || null, apron: o.apron || null, skirt: o.skirt || null };
+  /* 自动派生：头发高光 / 阴影，皮肤阴影，布料阴影 */
+  p.hair2 = o.hair2 || shade(p.hair, 1.35);
+  p.hairS = shade(p.hair, 0.72);
+  p.skinS = shade(p.skin, 0.90);
+  p.shirtS = shade(p.shirt, 0.84);
+  p.skirtS = p.skirt ? shade(p.skirt, 0.80) : null;
+  p.iris2 = shade(p.iris, 0.62);
+  return p;
+}
+
+var CHARS_F = [
+  { n: '双马尾剑士', sx: '女 · 1.00', sk: { legW: 0.22, armW: 0.18, torsoW: 0.82, torsoD: 0.52, headW: 1.03, headH: 0.99 },
+    c: C({ hair: 0xe05a5a, shirt: 0xf4f6fa, shirtD: 0xd8dce6, pants: 0x2a2e3a, collar: 0x3a5aa8, iris: 0xd04060,
+           skirt: 0x2a3448, sock: 0xf0f2f8, gold: 0xffd166 }),
+    hair: 'twintail', eyes: { w: 0.30, h: 0.34, blush: 1 }, outfit: 'sailor',
+    hairpin: 0xffd166, skirt: { top: 0.92, bot: 1.34, len: 0.62, seg: 8 } },
+
+  { n: '巫女', sx: '女 · 1.02', sk: { legW: 0.23, armW: 0.18, torsoW: 0.84, torsoD: 0.52, headW: 1.01, headH: 0.97 },
+    c: C({ hair: 0x1a1a22, shirt: 0xfbfbff, shirtD: 0xe6e6ee, pants: 0xd8342c, collar: 0xfbfbff, iris: 0x8a2a3a,
+           skirt: 0xd8342c, sock: 0xffffff, gold: 0xffffff }),
+    hair: 'hime', eyes: { w: 0.28, h: 0.32, blush: 1 }, outfit: 'miko',
+    hairpin: 0xd8342c, skirt: { top: 0.86, bot: 1.30, len: 0.86 } },
+
+  { n: '女仆', sx: '女 · 0.98', sk: { legW: 0.22, armW: 0.17, torsoW: 0.80, torsoD: 0.50, headW: 1.01, headH: 0.97 },
+    c: C({ hair: 0x8a5a3a, shirt: 0x2a2c36, shirtD: 0x1c1e26, pants: 0x14151a, collar: 0xffffff, iris: 0x4a8ad0,
+           skirt: 0x1e1f26, sock: 0xf4f6fa, apron: 0xf8f9fc, gold: 0xffffff }),
+    hair: 'twintail', eyes: { w: 0.30, h: 0.34, blush: 1 }, outfit: 'maid',
+    hairpin: 0xffffff, skirt: { top: 0.90, bot: 1.32, len: 0.60 } },
+
+  { n: '精灵射手', sx: '女 · 1.06', sk: { hipY: 1.00, legW: 0.21, armW: 0.17, armLen: 1.02, torsoW: 0.78, torsoD: 0.48, headW: 0.95, headH: 0.92 },
+    c: C({ hair: 0xf0d888, shirt: 0x3a7a4a, shirtD: 0x2a5c38, pants: 0x2a3a2e, collar: 0x8ad0a0, iris: 0x3aa070,
+           skirt: 0x2a5c38, sock: 0x6a8a5a, gold: 0xd8c060 }),
+    hair: 'long', eyes: { w: 0.26, h: 0.30 }, outfit: 'plain', acc: 'elfEar',
+    skirt: { top: 0.80, bot: 1.06, len: 0.56 } },
+
+  { n: '猫耳少女', sx: '女 · 0.94', sk: { hipY: 0.84, legW: 0.22, armW: 0.17, armLen: 0.88, torsoH: 0.92, torsoW: 0.84, torsoD: 0.54, headW: 1.04, headH: 0.99 },
+    c: C({ hair: 0xc86a3a, shirt: 0xf0e8dc, shirtD: 0xd8ccb8, pants: 0x3a3448, collar: 0xffffff, iris: 0xd8a030,
+           skirt: 0x3a3448, sock: 0x2a2a30, gold: 0xffd166 }),
+    hair: 'bob', eyes: { w: 0.30, h: 0.34, blush: 1 }, outfit: 'hoodie', acc: 'catEar',
+    skirt: { top: 0.88, bot: 1.14, len: 0.46 } },
+
+  { n: '水手服少女', sx: '女 · 1.00', sk: { legW: 0.22, armW: 0.17, torsoW: 0.82, torsoD: 0.50, headW: 1.01, headH: 0.97 },
+    c: C({ hair: 0x2a2a3a, shirt: 0xfafcff, shirtD: 0xe4e8f0, pants: 0x2a3450, collar: 0x2a3450, iris: 0x5a7ad0,
+           skirt: 0x2a3450, sock: 0xffffff, gold: 0xff6a8a }),
+    hair: 'bob', eyes: { w: 0.28, h: 0.32 }, outfit: 'sailor',
+    skirt: { top: 0.92, bot: 1.32, len: 0.58 } },
+
+  { n: '魔法少女', sx: '女 · 0.96', sk: { hipY: 0.88, legW: 0.21, armW: 0.16, armLen: 0.90, torsoH: 0.94, torsoW: 0.82, torsoD: 0.52, headW: 1.04, headH: 1.01 },
+    c: C({ hair: 0xf07aa8, shirt: 0xfff2f8, shirtD: 0xf0d0e0, pants: 0xf07aa8, collar: 0xff8ab8, iris: 0xff5a9a,
+           skirt: 0xff8ab8, sock: 0xffffff, gold: 0xffe066 }),
+    hair: 'twintail', eyes: { w: 0.32, h: 0.36, blush: 1 }, outfit: 'frill',
+    hairpin: 0xffe066, skirt: { top: 0.96, bot: 1.40, len: 0.54 } },
+
+  { n: '吸血鬼萝莉', sx: '女 · 0.90', sk: { hipY: 0.80, legW: 0.21, armW: 0.16, armLen: 0.84, torsoH: 0.88, torsoW: 0.80, torsoD: 0.50, headW: 1.06, headH: 1.03 },
+    c: C({ hair: 0x4a2c44, shirt: 0x3a2438, shirtD: 0x241628, pants: 0x1a1020, collar: 0xd04050, iris: 0xd02030,
+           skin: 0xfbeef2, skirt: 0x1a1020, sock: 0x1a1020, gold: 0xd04050 }),
+    hair: 'long', eyes: { w: 0.32, h: 0.36 }, outfit: 'dress', acc: 'batWing',
+    skirt: { top: 0.94, bot: 1.28, len: 0.52 } },
+
+  { n: '女骑士', sx: '女 · 1.05', sk: { hipY: 0.98, legW: 0.26, armW: 0.21, torsoW: 0.88, torsoD: 0.58, headW: 0.95, headH: 0.94 },
+    c: C({ hair: 0xd8b878, shirt: 0xb8c2d0, shirtD: 0x94a0b0, pants: 0x6a7484, collar: 0xdfe8f4, iris: 0x4a7ac0,
+           skirt: 0x6a7484, sock: 0x5a6270, gold: 0xf0d070 }),
+    hair: 'ponytail', eyes: { w: 0.26, h: 0.30 }, outfit: 'armorkirt', acc: 'cape',
+    skirt: { top: 0.88, bot: 1.16, len: 0.62 } },
+
+  { n: '剑道少女', sx: '女 · 1.00', sk: { legW: 0.24, armW: 0.19, torsoW: 0.86, torsoD: 0.54, headW: 0.99, headH: 0.95 },
+    c: C({ hair: 0x22222a, shirt: 0xf8f8fc, shirtD: 0xe0e0e8, pants: 0x2a2a34, collar: 0x2a2a34, iris: 0x4a4a5a,
+           skirt: 0x2a2a34, sock: 0xf8f8fc, gold: 0xffffff }),
+    hair: 'ponytail', eyes: { w: 0.26, h: 0.30 }, outfit: 'kendo', acc: 'headband',
+    skirt: { top: 0.88, bot: 1.28, len: 0.92 } },
+
+  { n: '修女', sx: '女 · 1.02', sk: { hipY: 0.94, legW: 0.23, armW: 0.18, torsoW: 0.84, torsoD: 0.52, headW: 0.99, headH: 0.95 },
+    c: C({ hair: 0x22222a, shirt: 0x2e2e38, shirtD: 0x1e1e26, pants: 0x1e1e24, collar: 0xf4f6fa, iris: 0x6a8ac0,
+           skin: 0xfbe6d8, skirt: 0x18181f, sock: 0x1e1e24, gold: 0xdfe8f4 }),
+    hair: 'veil', eyes: { w: 0.26, h: 0.30 }, outfit: 'nun',
+    skirt: { top: 0.90, bot: 1.30, len: 0.94 } },
+
+  { n: '机械少女', sx: '女 · 1.00', sk: { legW: 0.23, armW: 0.19, torsoW: 0.84, torsoD: 0.54, headW: 0.99, headH: 0.95 },
+    c: C({ hair: 0x5ac8e0, shirt: 0x2a3038, shirtD: 0x1e242c, pants: 0x242a32, collar: 0x0ae0e0, iris: 0x0ae0e0,
+           skin: 0xf2e6e0, skirt: 0x242a32, sock: 0x2a3038, gold: 0xff2fa0 }),
+    hair: 'short', eyes: { w: 0.28, h: 0.32 }, outfit: 'mech', acc: 'visor',
+    skirt: { top: 0.92, bot: 1.20, len: 0.44 } },
+
+  { n: '狐仙', sx: '女 · 1.04', sk: { hipY: 0.96, legW: 0.22, armW: 0.17, torsoW: 0.82, torsoD: 0.52, headW: 1.01, headH: 0.97 },
+    c: C({ hair: 0xb9a8e2, shirt: 0xfdf4fb, shirtD: 0xead4e8, pants: 0xd8c4e8, collar: 0xd06aa0, iris: 0xd06aa0,
+           skirt: 0xead4ee, sock: 0xffffff, gold: 0xd06aa0 }),
+    hair: 'long', eyes: { w: 0.28, h: 0.32, blush: 1 }, outfit: 'hanfu', acc: 'foxEar',
+    skirt: { top: 0.84, bot: 1.18, len: 0.70 } },
+
+  { n: '学生会长', sx: '女 · 1.02', sk: { legW: 0.22, armW: 0.17, torsoW: 0.82, torsoD: 0.50, headW: 0.99, headH: 0.95 },
+    c: C({ hair: 0x2a2440, shirt: 0xfafcff, shirtD: 0xe2e6ee, pants: 0x2a2e3a, collar: 0x2a2e3a, iris: 0x9a6ad0,
+           skirt: 0x2a2e3a, sock: 0x1e1e24, gold: 0xffd166 }),
+    hair: 'hime', eyes: { w: 0.28, h: 0.32 }, outfit: 'sailor', acc: 'glasses',
+    skirt: { top: 0.92, bot: 1.30, len: 0.58 } },
+
+  { n: '拳击少女', sx: '女 · 1.00', sk: { legW: 0.25, armW: 0.21, torsoW: 0.84, torsoD: 0.54, headW: 0.99, headH: 0.95 },
+    c: C({ hair: 0xd8582a, shirt: 0xf0f2f8, shirtD: 0xd8dae4, pants: 0xd8582a, collar: 0xd8582a, iris: 0xd8a020,
+           skirt: 0xd8582a, sock: 0xf0f2f8, gold: 0xffd166 }),
+    hair: 'ponytail', eyes: { w: 0.28, h: 0.32 }, outfit: 'sport', acc: 'gloves',
+    skirt: { top: 0.94, bot: 1.18, len: 0.40 } },
+
+  { n: '弓道少女', sx: '女 · 1.02', sk: { hipY: 0.96, legW: 0.23, armW: 0.18, torsoW: 0.82, torsoD: 0.52, headW: 0.99, headH: 0.95 },
+    c: C({ hair: 0x3a2a2a, shirt: 0xfbfbff, shirtD: 0xe8e8f0, pants: 0x2e2e3a, collar: 0x2e2e3a, iris: 0x6a4a3a,
+           skirt: 0x2e2e3a, sock: 0xfbfbff, gold: 0xe8e8f0 }),
+    hair: 'hime', eyes: { w: 0.26, h: 0.30 }, outfit: 'kendo', acc: 'ribbon',
+    skirt: { top: 0.88, bot: 1.30, len: 0.96 } },
+
+  { n: '丧尸少女', sx: '女 · 0.98', sk: { legW: 0.23, armW: 0.17, torsoW: 0.82, torsoD: 0.52, headW: 1.01, headH: 0.97 },
+    c: C({ hair: 0x3a4a3a, shirt: 0xd8dce0, shirtD: 0xb8bcc4, pants: 0x3a4450, collar: 0x3a4450, iris: 0x8ac06a,
+           skin: 0xd8dcc8, skirt: 0x3a4450, sock: 0x2a2e36, gold: 0x8a2a2a }),
+    hair: 'long', eyes: { w: 0.30, h: 0.34 }, outfit: 'sailor', acc: 'blood',
+    skirt: { top: 0.92, bot: 1.28, len: 0.56 } },
+
+  { n: '天使', sx: '女 · 1.04', sk: { hipY: 0.98, legW: 0.22, armW: 0.17, torsoW: 0.84, torsoD: 0.52, headW: 0.99, headH: 0.95 },
+    c: C({ hair: 0xf2cf5e, shirt: 0xfdfdff, shirtD: 0xdfe4f2, pants: 0xfdfdff, collar: 0xf2cf5e, iris: 0x5aa8e0,
+           skirt: 0xeef2fc, sock: 0xffffff, gold: 0xffe066 }),
+    hair: 'long', eyes: { w: 0.28, h: 0.32 }, outfit: 'dress', acc: 'halo',
+    skirt: { top: 0.86, bot: 1.36, len: 0.98 } },
+
+  { n: '恶魔', sx: '女 · 1.02', sk: { hipY: 0.94, legW: 0.23, armW: 0.18, torsoW: 0.84, torsoD: 0.52, headW: 0.99, headH: 0.95 },
+    c: C({ hair: 0x3a2432, shirt: 0x4c2234, shirtD: 0x32182a, pants: 0x1e1018, collar: 0xd03050, iris: 0xff4a5a,
+           skirt: 0x1e1018, sock: 0x1e1018, gold: 0xff5a6a }),
+    hair: 'twintail', eyes: { w: 0.30, h: 0.34 }, outfit: 'dress', acc: 'demonHorn',
+    hairpin: 0xff5a6a, skirt: { top: 0.92, bot: 1.30, len: 0.58 } },
+
+  { n: '雪女', sx: '女 · 1.03', sk: { hipY: 0.98, legW: 0.21, armW: 0.16, torsoW: 0.80, torsoD: 0.50, headW: 0.97, headH: 0.94 },
+    c: C({ hair: 0x8ec2e8, shirt: 0xeaf6ff, shirtD: 0xbcd8f0, pants: 0xa8c8e8, collar: 0x6aa8d8, iris: 0x4a9ad0,
+           skirt: 0xdcecfa, sock: 0xffffff, gold: 0xbfe0f8 }),
+    hair: 'long', eyes: { w: 0.26, h: 0.30 }, outfit: 'hanfu', acc: 'snow',
+    skirt: { top: 0.84, bot: 1.36, len: 1.00 } }
+];
+
+
+/* ============================================================
+   20 个男角色（同一套二次元细节：圆眼、分层头发、袖口、鞋底…）
+   前 5 个就是你之前留下的：熔岩魔修 / 侏儒炼金师 / 僵尸王 / 赤膊狂战 / 龙裔
+   ============================================================ */
+var CHARS_M = [
+  { n: '熔岩魔修', sx: '男 · 壮硕 · 1.10', sk: { hipY: 0.86, legW: 0.40, torsoH: 1.04, torsoW: 1.22, torsoD: 0.78, armLen: 0.98, armW: 0.38, headW: 1.08, headH: 1.00 },
+    c: C({ hair: 0x3a1a14, shirt: 0x3a241c, shirtD: 0x241611, pants: 0x20120e, collar: 0x3a2018, belt: 0xff6a20,
+           hair: 0x2a1210, skin: 0x8a4432, eye: 0xffa040, iris: 0x4a2318, skirt: 0x20120e, sock: null, gold: 0xffa040 }),
+    hair: 'bald', eyes: { w: 0.24, h: 0.24 }, outfit: 'plain', acc: 'lava' },
+
+  { n: '侏儒炼金师', sx: '男 · 矮小 · 0.74', sk: { hipY: 0.58, legW: 0.30, torsoH: 0.70, torsoW: 0.94, torsoD: 0.64, armLen: 0.66, armW: 0.26, headW: 1.28, headH: 1.18 },
+    c: C({ hair: 0xc0c0c8, shirt: 0x6a5a8a, shirtD: 0x4e4268, pants: 0x3a3448, collar: 0x9a8ac0, belt: 0x8a7a4a,
+           skin: 0xe8c49a, iris: 0x2a2a30, skirt: 0x3a3448, gold: 0xd8c070 }),
+    hair: 'messy', eyes: { w: 0.26, h: 0.26 }, outfit: 'plain', acc: 'goggles' },
+
+  { n: '僵尸王', sx: '男 · 驼背长臂 · 1.05', sk: { hipY: 0.80, legW: 0.34, torsoH: 0.96, torsoW: 1.06, torsoD: 0.66, armLen: 1.16, armW: 0.32, headW: 1.08, headH: 1.02 },
+    c: C({ hair: 0x3a3428, shirt: 0x6b6a5a, shirtD: 0x4a4a3c, pants: 0x4a4a3c, collar: 0x7a7a68, belt: 0x3a382e,
+           skin: 0x9fb08a, eye: 0x8a1a1a, iris: 0x33402a, skirt: 0x4a4a3c, gold: 0x8a2a2a }),
+    hair: 'messy', eyes: { w: 0.26, h: 0.26 }, outfit: 'plain', acc: 'blood' },
+
+  { n: '赤膊狂战', sx: '男 · 粗壮 · 1.09', sk: { hipY: 0.82, legW: 0.42, torsoH: 1.02, torsoW: 1.28, torsoD: 0.82, armLen: 1.00, armW: 0.42, headW: 1.10, headH: 1.02 },
+    c: C({ hair: 0x8a2a1a, shirt: 0xd9a678, shirtD: 0xc08858, pants: 0x6a4a2a, collar: 0xd9a678, belt: 0x4a2a1a,
+           skin: 0xd9a678, iris: 0x3a2a1a, skirt: 0x6a4a2a, gold: 0x8a2a1a }),
+    hair: 'bald', eyes: { w: 0.24, h: 0.24 }, outfit: 'sport', acc: 'gloves' },
+
+  { n: '龙裔', sx: '男 · 高壮 · 1.12', sk: { hipY: 0.98, legW: 0.38, torsoH: 1.06, torsoW: 1.20, torsoD: 0.74, armLen: 1.02, armW: 0.36, headW: 1.06, headH: 1.00 },
+    c: C({ hair: 0x1a2a1a, shirt: 0x3a6a4a, shirtD: 0x2a5038, pants: 0x2a4a34, collar: 0xd8c060, belt: 0xd8c060,
+           skin: 0x8ab070, eye: 0xe8c040, iris: 0x3a3418, skirt: 0x2a4a34, gold: 0xd8c060 }),
+    hair: 'messy', eyes: { w: 0.26, h: 0.26 }, outfit: 'robe', acc: 'demonHorn' },
+
+  { n: '少年剑士', sx: '男 · 少年 · 0.88', sk: { hipY: 0.74, legW: 0.30, torsoH: 0.86, torsoW: 0.96, torsoD: 0.60, armLen: 0.82, armW: 0.26, headW: 1.14, headH: 1.10 },
+    c: C({ hair: 0x3a2a1a, shirt: 0xd8b060, shirtD: 0xb08a3a, pants: 0x6a5a3a, collar: 0xf0d890, belt: 0x6a4a2a,
+           iris: 0x2e2a26, skirt: 0x6a5a3a, gold: 0xffd166 }),
+    hair: 'topknot', eyes: { w: 0.28, h: 0.28 }, outfit: 'kendo' },
+
+  { n: '学园不良', sx: '男 · 少年 · 0.94', sk: { hipY: 0.86, legW: 0.30, torsoH: 0.96, torsoW: 1.00, torsoD: 0.62, armLen: 0.90, armW: 0.26, headW: 1.08, headH: 1.04 },
+    c: C({ hair: 0x2a2a30, shirt: 0x2a2e3a, shirtD: 0x1e222c, pants: 0x22262e, collar: 0x3a4050, belt: 0x15171c,
+           iris: 0x2a2630, skirt: 0x22262e, gold: 0xc03030 }),
+    hair: 'spiky', eyes: { w: 0.26, h: 0.26 }, outfit: 'sailor' },
+
+  { n: '和风武士', sx: '男 · 精瘦 · 1.04', sk: { hipY: 0.94, legW: 0.28, torsoH: 1.00, torsoW: 0.92, torsoD: 0.58, armLen: 0.98, armW: 0.24, headW: 1.04, headH: 1.00 },
+    c: C({ hair: 0x1a1a20, shirt: 0x2a3a5a, shirtD: 0x1e2a44, pants: 0x3a3a44, collar: 0xdfe8f4, belt: 0x8a1a1a,
+           iris: 0x26262e, skirt: 0x3a3a44, gold: 0xdfe8f4 }),
+    hair: 'topknot', eyes: { w: 0.24, h: 0.24 }, outfit: 'robe' },
+
+  { n: '忍者', sx: '男 · 精瘦 · 1.00', sk: { hipY: 0.90, legW: 0.26, torsoH: 0.98, torsoW: 0.88, torsoD: 0.56, armLen: 0.96, armW: 0.23, headW: 1.04, headH: 1.02 },
+    c: C({ hair: 0x1a1a22, shirt: 0x232a38, shirtD: 0x171c26, pants: 0x181e28, collar: 0x2e3a4e, belt: 0x6a2a2a,
+           iris: 0x232a32, skirt: 0x181e28, gold: 0x6a2a2a }),
+    hair: 'hood', eyes: { w: 0.24, h: 0.24 }, outfit: 'ninja', acc: 'visor' },
+
+  { n: '道士少年', sx: '男 · 瘦高 · 1.02', sk: { hipY: 0.94, legW: 0.26, torsoH: 1.00, torsoW: 0.90, torsoD: 0.56, armLen: 0.98, armW: 0.23, headW: 1.04, headH: 1.00 },
+    c: C({ hair: 0x2a2a32, shirt: 0xd8d4c4, shirtD: 0xb8b4a4, pants: 0x8a8a7a, collar: 0xf0ece0, belt: 0x6a8a6a,
+           iris: 0x2a2e24, skirt: 0x8a8a7a, gold: 0xc0a860 }),
+    hair: 'topknot', eyes: { w: 0.24, h: 0.24 }, outfit: 'robe' },
+
+  { n: '武僧', sx: '男 · 壮实 · 1.04', sk: { hipY: 0.88, legW: 0.36, torsoH: 1.00, torsoW: 1.14, torsoD: 0.72, armLen: 0.98, armW: 0.34, headW: 1.06, headH: 1.00 },
+    c: C({ hair: 0x2a1a14, shirt: 0xc8a050, shirtD: 0xa88038, pants: 0xa88038, collar: 0xe0c070, belt: 0x6a4a20,
+           skin: 0xd8a878, iris: 0x2e2620, skirt: 0xa88038, gold: 0xe0c070 }),
+    hair: 'bald', eyes: { w: 0.24, h: 0.24 }, outfit: 'monk' },
+
+  { n: '魔法师', sx: '男 · 瘦高 · 1.02', sk: { hipY: 0.94, legW: 0.26, torsoH: 1.02, torsoW: 0.88, torsoD: 0.56, armLen: 1.00, armW: 0.23, headW: 1.04, headH: 1.00 },
+    c: C({ hair: 0x8a7ab0, shirt: 0x3a2a5a, shirtD: 0x281c40, pants: 0x2a2040, collar: 0xc0a0e0, belt: 0x8a6ac0,
+           iris: 0x2a2434, skirt: 0x2a2040, gold: 0xe0c060 }),
+    hair: 'long', eyes: { w: 0.24, h: 0.24 }, outfit: 'robe' },
+
+  { n: '骑士', sx: '男 · 魁梧 · 1.08', sk: { hipY: 0.90, legW: 0.38, torsoH: 1.04, torsoW: 1.10, torsoD: 0.72, armLen: 1.00, armW: 0.34, headW: 1.06, headH: 1.00 },
+    c: C({ hair: 0x6a5a3a, shirt: 0xb8c2d0, shirtD: 0x8a94a4, pants: 0x5a6474, collar: 0xdfe8f4, belt: 0x3a4048,
+           iris: 0x2a3038, skirt: 0x5a6474, gold: 0xf0d070 }),
+    hair: 'short', eyes: { w: 0.24, h: 0.24 }, outfit: 'armorkirt', acc: 'cape' },
+
+  { n: '弓箭手', sx: '男 · 精瘦 · 1.00', sk: { hipY: 0.90, legW: 0.28, torsoH: 0.98, torsoW: 0.92, torsoD: 0.58, armLen: 0.98, armW: 0.24, headW: 1.04, headH: 1.00 },
+    c: C({ hair: 0x4a3a2a, shirt: 0x4a6a3a, shirtD: 0x35502a, pants: 0x3a4432, collar: 0x8ab070, belt: 0x6a4a2a,
+           iris: 0x2a2e26, skirt: 0x3a4432, gold: 0xc0a060 }),
+    hair: 'messy', eyes: { w: 0.24, h: 0.24 }, outfit: 'plain' },
+
+  { n: '机甲少年', sx: '男 · 偏高 · 1.04', sk: { hipY: 0.94, legW: 0.34, torsoH: 1.02, torsoW: 1.04, torsoD: 0.66, armLen: 0.98, armW: 0.30, headW: 1.04, headH: 1.00 },
+    c: C({ hair: 0x3a4a5a, shirt: 0x2a323c, shirtD: 0x1e262e, pants: 0x222a32, collar: 0x3aa0e0, belt: 0x1a2028,
+           iris: 0x22333a, skirt: 0x222a32, gold: 0x3ae0e0 }),
+    hair: 'short', eyes: { w: 0.24, h: 0.24 }, outfit: 'mech', acc: 'visor' },
+
+  { n: '吸血鬼少年', sx: '男 · 瘦高 · 1.02', sk: { hipY: 0.94, legW: 0.26, torsoH: 1.00, torsoW: 0.88, torsoD: 0.56, armLen: 0.98, armW: 0.23, headW: 1.04, headH: 1.00 },
+    c: C({ hair: 0x352236, shirt: 0x3a2436, shirtD: 0x241628, pants: 0x1a1020, collar: 0xc03040, belt: 0x6a1a2a,
+           skin: 0xf0e0e4, iris: 0x33202a, skirt: 0x1a1020, gold: 0xc03040 }),
+    hair: 'long', eyes: { w: 0.26, h: 0.26 }, outfit: 'robe', acc: 'batWing' },
+
+  { n: '天使少年', sx: '男 · 清瘦 · 1.02', sk: { hipY: 0.94, legW: 0.26, torsoH: 1.00, torsoW: 0.90, torsoD: 0.56, armLen: 0.98, armW: 0.23, headW: 1.04, headH: 1.00 },
+    c: C({ hair: 0xf0d060, shirt: 0xfdfdff, shirtD: 0xdfe4f2, pants: 0xf4f6fc, collar: 0xf0d060, belt: 0xd8c060,
+           iris: 0x2e2a20, skirt: 0xeef2fc, gold: 0xffe066 }),
+    hair: 'short', eyes: { w: 0.26, h: 0.26 }, outfit: 'robe', acc: 'halo' },
+
+  { n: '恶魔少年', sx: '男 · 瘦高 · 1.02', sk: { hipY: 0.92, legW: 0.28, torsoH: 1.00, torsoW: 0.92, torsoD: 0.58, armLen: 0.98, armW: 0.24, headW: 1.04, headH: 1.00 },
+    c: C({ hair: 0x3a2230, shirt: 0x4e2434, shirtD: 0x33182a, pants: 0x1e1018, collar: 0xd03050, belt: 0x6a1a2a,
+           iris: 0x352028, skirt: 0x1e1018, gold: 0xff5a6a }),
+    hair: 'spiky', eyes: { w: 0.26, h: 0.26 }, outfit: 'robe', acc: 'demonHorn' },
+
+  { n: '狼人', sx: '男 · 魁梧 · 1.06', sk: { hipY: 0.84, legW: 0.40, torsoH: 1.02, torsoW: 1.18, torsoD: 0.76, armLen: 1.08, armW: 0.36, headW: 1.10, headH: 1.02 },
+    c: C({ hair: 0x5a5048, shirt: 0x5a5048, shirtD: 0x453c34, pants: 0x3a342c, collar: 0x6a6058, belt: 0x2a241e,
+           skin: 0x8a7a68, eye: 0xe8c040, iris: 0x33301e, skirt: 0x3a342c, gold: 0xc0a060 }),
+    hair: 'messy', eyes: { w: 0.26, h: 0.26 }, outfit: 'plain', acc: 'gloves' },
+
+  { n: '亡灵法师', sx: '男 · 极瘦 · 0.98', sk: { hipY: 0.92, legW: 0.22, torsoH: 1.00, torsoW: 0.82, torsoD: 0.52, armLen: 1.00, armW: 0.20, headW: 1.04, headH: 1.02 },
+    c: C({ hair: 0x6a7a6a, shirt: 0x2a2c36, shirtD: 0x1c1e26, pants: 0x1a1c22, collar: 0x3a3a44, belt: 0x5a8a6a,
+           skin: 0xe0dcd0, iris: 0x2a3028, skirt: 0x1a1c22, gold: 0x6ae0a0 }),
+    hair: 'short', eyes: { w: 0.26, h: 0.26 }, outfit: 'robe', acc: 'blood' }
+];
+
+/* ★ 用 ?set=m 看男角色，默认看女角色 */
+var SET = (location.search.indexOf('set=m') >= 0) ? 'm' : 'f';
+var CHARS = (SET === 'm') ? CHARS_M : CHARS_F;
+
+/* ---------------- 基础 ---------------- */
+var matCache = {};
+function matOf(c) {
+  if (matCache[c]) { return matCache[c]; }
+  matCache[c] = new THREE.MeshLambertMaterial({ color: c });
+  return matCache[c];
+}
+function box(parent, w, h, d, c, x, y, z, rz) {
+  var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matOf(c));
+  m.position.set(x || 0, y || 0, z || 0);
+  if (rz) { m.rotation.z = rz; }
+  parent.add(m);
+  return m;
+}
+function taper(parent, wTop, wBot, h, c, x, y, z, seg) {
+  var m = new THREE.Mesh(new THREE.CylinderGeometry(wTop * 0.7071, wBot * 0.7071, h, 4, 1), matOf(c));
+  m.rotation.y = Math.PI / 4;
+  m.position.set(x || 0, y || 0, z || 0);
+  parent.add(m);
+  return m;
+}
+
+/* ---------------- 脸（v4：更多细节） ---------------- */
+function buildFace(headG, S, P, E) {
+  var ew = E.w, eh = E.h;
+  var hw = S.headW, hh = S.headH, hd = S.headD;
+  var ez = hd * 0.50 + 0.012;
+  var eyeX = hw * 0.215, eyeY = hh * 0.02;
+  var lashC = 0x241f2a;
+
+  for (var s = -1; s <= 1; s += 2) {
+    var bx = eyeX * s;
+    /* 眼白 */
+    box(headG, ew, eh, 0.025, 0xffffff, bx, eyeY, ez);
+    /* 虹膜（外深内亮，做一点渐变感）*/
+    box(headG, ew * 0.80, eh * 0.80, 0.030, P.iris2, bx, eyeY - eh * 0.04, ez + 0.012);
+    box(headG, ew * 0.62, eh * 0.60, 0.034, P.iris, bx, eyeY - eh * 0.02, ez + 0.020);
+    /* 瞳孔 */
+    box(headG, ew * 0.30, eh * 0.34, 0.038, 0x171219, bx, eyeY - eh * 0.02, ez + 0.030);
+    /* 高光：左上大一点 + 右下小一点 */
+    box(headG, ew * 0.22, eh * 0.20, 0.042, 0xffffff, bx - ew * 0.17, eyeY + eh * 0.16, ez + 0.044);
+    box(headG, ew * 0.11, eh * 0.10, 0.042, 0xffffff, bx + ew * 0.18, eyeY - eh * 0.22, ez + 0.044);
+    /* 上睫毛（两段，外侧高一点）*/
+    box(headG, ew * 0.60, eh * 0.13, 0.045, lashC, bx - ew * 0.20, eyeY + eh * 0.50, ez + 0.026);
+    box(headG, ew * 0.55, eh * 0.13, 0.045, lashC, bx + ew * 0.22, eyeY + eh * 0.46, ez + 0.026);
+    /* 下眼线（细）*/
+    box(headG, ew * 0.86, eh * 0.06, 0.040, shade(lashC, 1.5), bx, eyeY - eh * 0.52, ez + 0.020);
+    /* 眉毛（两段折线，比 v3 细）*/
+    box(headG, ew * 0.52, 0.032, 0.030, P.hairS, bx - ew * 0.22, eyeY + eh * 0.86, ez - 0.002);
+    box(headG, ew * 0.42, 0.030, 0.030, P.hairS, bx + ew * 0.26, eyeY + eh * 0.90, ez - 0.002, -0.10 * s);
+  }
+
+  /* ★ v6：眼睛四个角"削圆"（方块眼保留 ✗ 只把直角切掉一点 ✓）
+     ★ 位置必须【正好落在角上】✗ 上一版算偏了，结果在眼睛中间挖了两个缺口 ✓ */
+  var cw2 = ew * 0.32, ch2 = eh * 0.32;
+  for (var ts = -1; ts <= 1; ts += 2) {
+    for (var sy2 = -1; sy2 <= 1; sy2 += 2) {
+      box(headG, cw2, ch2, 0.02, P.skin,
+          ts * (eyeX + ew / 2 - cw2 / 2),
+          eyeY + sy2 * (eh / 2 - ch2 / 2),
+          ez + 0.052);
+    }
+  }
+  /* 鼻子（极小一块，靠阴影） */
+  box(headG, 0.05, 0.05, 0.03, P.skinS, 0, eyeY - eh * 0.55, ez + 0.004);
+  /* 嘴：一条线 + 两侧小弧，像微笑 */
+  box(headG, 0.09, 0.035, 0.028, 0xcf6b74, 0, -hh * 0.30, ez);
+  box(headG, 0.035, 0.030, 0.028, 0xcf6b74, -0.062, -hh * 0.285, ez);
+  box(headG, 0.035, 0.030, 0.028, 0xcf6b74, 0.062, -hh * 0.285, ez);
+  /* 腮红 */
+  if (E.blush) {
+    box(headG, 0.17, 0.06, 0.02, 0xf2a8ac, -hw * 0.33, -hh * 0.15, ez - 0.006);
+    box(headG, 0.17, 0.06, 0.02, 0xf2a8ac, hw * 0.33, -hh * 0.15, ez - 0.006);
+  }
+}
+
+/* ---------------- 头发（v4：分层） ---------------- */
+function buildHair(headG, S, P, style, pinColor) {
+  var hc = P.hair, hi = P.hair2, hs = P.hairS;
+  var hw = S.headW, hh = S.headH, hd = S.headD;
+
+  function cap() {
+    /* 头顶 + 后脑 + 两侧（三层，做出体积感）*/
+    box(headG, hw * 1.06, 0.30, hd * 1.06, hc, 0, hh * 0.50, 0);
+    box(headG, hw * 1.02, 0.12, 0.10, hc, 0, hh * 0.36, hd * 0.47);   /* 发际线（前额一条）*/
+    box(headG, hw * 0.92, 0.10, hd * 0.92, hi, 0, hh * 0.60, 0);              /* 顶部高光 */
+    box(headG, hw * 1.06, hh * 0.64, hd * 0.34, hc, 0, hh * 0.16, -hd * 0.48); /* 后脑 */
+    box(headG, hw * 1.06, hh * 0.40, hd * 0.30, hs, 0, hh * 0.02, -hd * 0.50); /* 后脑阴影 */
+    box(headG, hw * 0.11, hh * 0.72, hd * 1.02, hc, -hw * 0.505, hh * 0.18, 0);
+    box(headG, hw * 0.11, hh * 0.72, hd * 1.02, hc, hw * 0.505, hh * 0.18, 0);
+  }
+  function bangs() {
+    /* 主刘海 + 中间分缝 + 眼侧两撮 + 下面一层更深的短碎发（锯齿感）*/
+    box(headG, hw * 0.98, 0.30, 0.08, hc, 0, hh * 0.32, hd * 0.50);
+    box(headG, hw * 0.20, 0.14, 0.08, hi, 0, hh * 0.44, hd * 0.50);
+    box(headG, hw * 0.19, 0.34, 0.08, hc, -hw * 0.39, hh * 0.27, hd * 0.50);
+    box(headG, hw * 0.19, 0.34, 0.08, hc, hw * 0.39, hh * 0.27, hd * 0.50);
+    box(headG, hw * 0.13, 0.12, 0.078, hs, -hw * 0.20, hh * 0.17, hd * 0.505);
+    box(headG, hw * 0.11, 0.10, 0.078, hs, hw * 0.13, hh * 0.18, hd * 0.505);
+  }
+  function sidelocks(len) {
+    box(headG, 0.085, len, hd * 0.40, hc, -hw * 0.50, -len / 2 + hh * 0.20, hd * 0.24);
+    box(headG, 0.085, len, hd * 0.40, hc, hw * 0.50, -len / 2 + hh * 0.20, hd * 0.24);
+    /* 发梢（深一点）*/
+    box(headG, 0.085, 0.10, hd * 0.40, hs, -hw * 0.50, -len + hh * 0.20, hd * 0.24);
+    box(headG, 0.085, 0.10, hd * 0.40, hs, hw * 0.50, -len + hh * 0.20, hd * 0.24);
+  }
+  function back(len, c) {
+    box(headG, hw * 1.00, len, hd * 0.40, c || hc, 0, -len / 2 + hh * 0.30, -hd * 0.44);
+    box(headG, hw * 0.96, len * 0.16, hd * 0.42, hs, 0, -len + hh * 0.30 + len * 0.06, -hd * 0.44);
+  }
+
+  if (style === 'spiky') {
+    /* 刺头：头顶一圈斜方块 */
+    cap();
+    for (var q = -2; q <= 2; q++) {
+      box(headG, 0.14, 0.26, 0.14, hc, q * hw * 0.20, hh * 0.62, hd * 0.10, q * 0.22);
+      box(headG, 0.12, 0.20, 0.12, hc, q * hw * 0.22, hh * 0.58, -hd * 0.22, q * -0.18);
+    }
+    bangs();
+  } else if (style === 'messy') {
+    /* 乱毛：帽子 + 几个大小不一的块 */
+    cap(); bangs();
+    box(headG, hw * 0.22, 0.18, hw * 0.22, hc, -hw * 0.34, hh * 0.62, hd * 0.02, 0.20);
+    box(headG, hw * 0.18, 0.22, hw * 0.18, hc, hw * 0.30, hh * 0.66, -hd * 0.06, -0.24);
+    box(headG, hw * 0.14, 0.16, hw * 0.14, hs, hw * 0.06, hh * 0.70, hd * 0.12, 0.5);
+    sidelocks(0.34);
+  } else if (style === 'topknot') {
+    cap(); bangs(); sidelocks(0.30);
+    box(headG, 0.16, 0.14, 0.16, hc, 0, hh * 0.66, -hd * 0.04);      /* 发髻底 */
+    box(headG, 0.20, 0.16, 0.20, hc, 0, hh * 0.76, -hd * 0.06);      /* 发髻 */
+    box(headG, 0.18, 0.05, 0.18, hs, 0, hh * 0.70, -hd * 0.06);      /* 扎带阴影 */
+  } else if (style === 'short') { cap(); bangs(); sidelocks(0.30); }
+  else if (style === 'bob') { cap(); bangs(); sidelocks(0.54); back(0.58); }
+  else if (style === 'long') { cap(); bangs(); sidelocks(0.78); back(1.55); }
+  else if (style === 'hime') {
+    cap(); bangs(); sidelocks(0.64); back(1.45);
+    box(headG, hw * 1.02, 0.16, hd * 0.94, hc, 0, hh * 0.30, -hd * 0.16);   /* 姬发式的"齐" */
+    box(headG, hw * 1.02, 0.05, hd * 0.94, hs, 0, hh * 0.22, -hd * 0.16);
+  } else if (style === 'twintail') {
+    cap(); bangs(); sidelocks(0.36);
+    var tl = 0.92;
+    for (var s = -1; s <= 1; s += 2) {
+      box(headG, 0.20, 0.18, 0.20, hc, hw * 0.56 * s, hh * 0.42, -hd * 0.04);
+      /* 扎带 */
+      box(headG, 0.23, 0.07, 0.23, pinColor || hi, hw * 0.58 * s, hh * 0.36, -hd * 0.04);
+      box(headG, 0.18, tl * 0.62, 0.18, hc, hw * 0.62 * s, hh * 0.32 - tl * 0.30, -hd * 0.08);
+      box(headG, 0.16, tl * 0.44, 0.16, hc, hw * 0.63 * s, hh * 0.32 - tl * 0.74, -hd * 0.10);
+      box(headG, 0.15, 0.10, 0.15, hs, hw * 0.63 * s, hh * 0.32 - tl * 0.95, -hd * 0.10);
+    }
+  } else if (style === 'ponytail') {
+    cap(); bangs(); sidelocks(0.42);
+    box(headG, 0.22, 0.18, 0.22, hc, 0, hh * 0.48, -hd * 0.54);
+    box(headG, 0.26, 0.07, 0.26, pinColor || hi, 0, hh * 0.42, -hd * 0.54);
+    box(headG, 0.20, 0.70, 0.20, hc, 0, hh * 0.36 - 0.36, -hd * 0.62);
+    box(headG, 0.17, 0.52, 0.17, hc, 0, hh * 0.36 - 0.92, -hd * 0.66);
+    box(headG, 0.15, 0.10, 0.15, hs, 0, hh * 0.36 - 1.20, -hd * 0.66);
+  } else if (style === 'veil') {
+    box(headG, hw * 1.14, 0.30, hd * 1.14, 0xffffff, 0, hh * 0.52, 0);
+    box(headG, hw * 1.14, hh * 0.92, 0.14, 0xffffff, 0, -hh * 0.10, -hd * 0.56);
+    box(headG, 0.13, hh * 0.92, hd * 0.94, 0xffffff, -hw * 0.58, -hh * 0.10, 0);
+    box(headG, 0.13, hh * 0.92, hd * 0.94, 0xffffff, hw * 0.58, -hh * 0.10, 0);
+    box(headG, hw * 1.10, 0.05, 0.15, 0xd8dce6, 0, hh * 0.36, -hd * 0.56);
+  }
+
+  /* 发饰：蝴蝶结 / 小夹子（放在头顶一侧）*/
+  if (pinColor) {
+    var px = hw * 0.36, py = hh * 0.46, pz = hd * 0.30;
+    box(headG, 0.20, 0.10, 0.10, pinColor, px, py, pz);
+    box(headG, 0.10, 0.14, 0.10, pinColor, px - 0.13, py + 0.02, pz);
+    box(headG, 0.10, 0.14, 0.10, pinColor, px + 0.13, py + 0.02, pz);
+    box(headG, 0.06, 0.06, 0.11, shade(pinColor, 0.8), px, py, pz + 0.02);
+  }
+  /* 呆毛（放到最后，绝不插在 if 链里） */
+  if (style === 'twintail' || style === 'bob' || style === 'hime' || style === 'veil' || style === 'short') {
+    box(headG, 0.07, 0.18, 0.07, hc, hw * 0.06, hh * 0.60, hd * 0.10, 0.42);
+    box(headG, 0.05, 0.10, 0.05, hc, hw * 0.13, hh * 0.70, hd * 0.10, 0.75);
+  }
+}
+
+/* ---------------- 服装（v4：袖口/裙褶/袜口/鞋底/领结） ---------------- */
+function buildOutfit(g, S, P, ch, hipY, torsoTop) {
+  var kind = ch.outfit || 'plain';
+  var skirt = ch.skirt;
+
+  /* 领子 + 领结/徽章 */
+  if (kind === 'sailor') {
+    /* 水手领：肩上一圈 + 背后一片 + 胸前两条【短的 V 领】✗
+       （v4 第一版把 V 领写成了两条 0.6 长的竖条 → 看着像背带 ✗ 已改短并倾斜 ✓）*/
+    box(g, S.torsoW * 0.96, 0.14, S.torsoD * 1.06, P.collar, 0, torsoTop - 0.01, 0);
+    box(g, S.torsoW * 0.90, 0.26, S.torsoD * 0.26, P.collar, 0, torsoTop - 0.20, -S.torsoD * 0.44);
+    box(g, S.torsoW * 0.84, 0.04, S.torsoD * 0.26, 0xffffff, 0, torsoTop - 0.27, -S.torsoD * 0.46);
+    var vl = S.torsoH * 0.30;
+    box(g, S.torsoW * 0.17, vl, 0.06, P.collar, -S.torsoW * 0.19, torsoTop - 0.16 - vl / 2, S.torsoD * 0.50, 0.42);
+    box(g, S.torsoW * 0.17, vl, 0.06, P.collar, S.torsoW * 0.19, torsoTop - 0.16 - vl / 2, S.torsoD * 0.50, -0.42);
+    box(g, 0.15, 0.10, 0.09, P.gold, 0, torsoTop - 0.30, S.torsoD * 0.52);
+  } else if (kind === 'maid') {
+    box(g, S.torsoW * 0.94, 0.14, S.torsoD * 1.05, P.apron, 0, torsoTop - 0.02, 0);
+    box(g, S.torsoW * 0.56, S.torsoH * 0.48, 0.05, P.apron, 0, hipY + S.torsoH * 0.42, S.torsoD * 0.55);
+    box(g, S.torsoW * 0.62, 0.10, S.torsoD * 0.64, P.apron, 0, hipY + 0.24, 0);
+    box(g, 0.10, 0.10, 0.10, P.gold, 0, hipY + 0.36, S.torsoD * 0.56);
+    /* 荷叶边（裙下缘一圈小方块）*/
+    for (var i = -2; i <= 2; i++) {
+      box(g, 0.22, 0.10, 0.22, P.apron, i * 0.26, hipY - ch.skirt.len + 0.34, S.torsoD * 0.40);
+    }
+  } else if (kind === 'miko') {
+    box(g, S.torsoW * 0.92, 0.18, S.torsoD * 1.05, P.collar, 0, torsoTop - 0.04, 0);
+    box(g, 0.86, 0.10, 0.10, P.gold, 0, torsoTop - 0.22, S.torsoD * 0.50);
+    box(g, 0.30, 0.24, 0.05, P.gold, 0, torsoTop - 0.40, S.torsoD * 0.53);
+  } else if (kind === 'nun') {
+    box(g, 0.13, 0.34, 0.05, P.gold, 0, torsoTop - 0.34, S.torsoD * 0.55);
+    box(g, 0.34, 0.13, 0.05, P.gold, 0, torsoTop - 0.26, S.torsoD * 0.55);
+  } else if (kind === 'mech') {
+    box(g, S.torsoW * 1.06, 0.22, S.torsoD * 1.08, P.shirtD, 0, torsoTop - 0.10, 0);
+    box(g, 0.16, 0.16, 0.08, P.collar, -S.torsoW * 0.26, torsoTop - 0.32, S.torsoD * 0.54);
+    box(g, 0.09, 0.55, 0.09, P.gold, S.torsoW * 0.50, hipY + 0.26, -S.torsoD * 0.36);
+    box(g, S.torsoW * 0.30, 0.10, 0.10, P.collar, 0, hipY + 0.06, S.torsoD * 0.54);
+  } else if (kind === 'armorkirt') {
+    box(g, S.torsoW * 1.10, 0.32, S.torsoD * 1.08, P.shirtD, 0, torsoTop - 0.16, 0);
+    box(g, S.torsoW * 1.10, 0.05, S.torsoD * 1.10, P.gold, 0, torsoTop - 0.33, 0);
+    box(g, 0.46, 0.18, 0.52, P.shirtD, -S.armX, torsoTop - 0.06, 0);
+    box(g, 0.46, 0.18, 0.52, P.shirtD, S.armX, torsoTop - 0.06, 0);
+    box(g, 0.14, 0.14, 0.14, P.gold, 0, torsoTop - 0.05, S.torsoD * 0.52);
+  } else if (kind === 'ninja') {
+    box(g, S.torsoW * 1.02, 0.34, S.torsoD * 1.06, P.collar, 0, torsoTop - 0.16, 0);   /* 胸带 */
+    box(g, 0.10, S.torsoH * 0.5, 0.06, P.collar, 0, hipY + S.torsoH * 0.45, S.torsoD * 0.52);
+    box(g, S.torsoW * 1.04, 0.10, S.torsoD * 1.08, P.belt, 0, hipY + 0.22, 0);
+  } else if (kind === 'robe') {
+    box(g, S.torsoW * 0.98, 0.16, S.torsoD * 1.05, P.collar, 0, torsoTop - 0.02, 0);
+    box(g, 0.09, S.torsoH * 0.62, 0.06, shade(P.shirt, 0.78), 0, hipY + S.torsoH * 0.5, S.torsoD * 0.52);
+    box(g, S.torsoW * 1.06, 0.10, S.torsoD * 1.06, P.belt, 0, hipY + 0.20, 0);
+    box(g, 0.24, 0.16, 0.10, P.gold, 0, hipY + 0.20, S.torsoD * 0.54);
+  } else if (kind === 'monk') {
+    box(g, S.torsoW * 0.96, 0.16, S.torsoD * 1.06, P.collar, 0, torsoTop - 0.03, 0);
+    box(g, 0.90, 0.10, 0.10, P.gold, 0, torsoTop - 0.26, S.torsoD * 0.50);
+    box(g, 0.14, 0.14, 0.14, P.gold, 0, torsoTop - 0.40, S.torsoD * 0.52);
+  } else if (kind === 'sport' || kind === 'hoodie') {
+    box(g, S.torsoW * 0.94, 0.18, S.torsoD * 1.06, P.collar, 0, torsoTop - 0.04, 0);
+    box(g, 0.30, 0.10, S.torsoD * 0.98, P.collar, 0, torsoTop - 0.14, 0);
+  } else if (kind === 'frill' || kind === 'dress') {
+    box(g, S.torsoW * 0.96, 0.16, S.torsoD * 1.06, P.collar, 0, torsoTop - 0.02, 0);
+    box(g, S.torsoW * 0.34, 0.14, 0.06, P.gold, 0, torsoTop - 0.18, S.torsoD * 0.52);
+    box(g, S.torsoW * 0.20, 0.10, 0.06, P.gold, 0, torsoTop - 0.10, S.torsoD * 0.52);
+  } else if (kind === 'hanfu') {
+    box(g, S.torsoW * 0.96, 0.18, S.torsoD * 1.05, P.collar, 0, torsoTop - 0.03, 0);
+    box(g, 0.10, S.torsoH * 0.5, 0.06, P.collar, -S.torsoW * 0.20, hipY + S.torsoH * 0.45, S.torsoD * 0.52);
+    box(g, 0.10, S.torsoH * 0.5, 0.06, P.collar, S.torsoW * 0.20, hipY + S.torsoH * 0.45, S.torsoD * 0.52);
+    box(g, S.torsoW * 0.30, 0.14, 0.06, P.gold, 0, hipY + 0.16, S.torsoD * 0.54);
+  } else if (kind === 'kendo') {
+    box(g, S.torsoW * 0.94, 0.16, S.torsoD * 1.05, P.collar, 0, torsoTop - 0.02, 0);
+    box(g, S.torsoW * 0.16, 0.46, 0.08, P.collar, -S.torsoW * 0.24, torsoTop - 0.30, S.torsoD * 0.50);
+    box(g, S.torsoW * 0.16, 0.46, 0.08, P.collar, S.torsoW * 0.24, torsoTop - 0.30, S.torsoD * 0.50);
+  }
+
+  /* 裙子：三层（上窄下宽）+ 褶 + 下摆边 */
+  if (skirt) {
+    var hl = skirt.len;
+    /* ★ round484（用户："裙子看起来和腰不协调，腰细，把裙子上面的收口小点"）
+       → 裙子上口不再用写死的 skirt.top（0.9 左右，比腰宽一大截 ✗）
+         改成【跟着腰宽走】：约等于躯干宽的 0.80，最宽不超过腰围 ✓ */
+    var sTop = Math.min(skirt.top, S.torsoW * 0.80);
+    var sBot = Math.max(skirt.bot, sTop + 0.18);
+    taper(g, sTop, sBot, hl, P.skirt || P.shirt, 0, hipY - hl / 2 + 0.26, 0,
+          (skirt.seg | 0) || 4);
+    /* 裙子的明暗：两侧压暗 + 正面一条亮边（比"一排竖条"干净 ✓）*/
+    var sc2 = P.skirt || P.shirt;
+    box(g, sBot * 0.28, hl * 0.78, 0.04, shade(sc2, 0.78),
+        -sBot * 0.30, hipY - hl / 2 + 0.28, sBot * 0.30);
+    box(g, sBot * 0.28, hl * 0.78, 0.04, shade(sc2, 0.78),
+        sBot * 0.30, hipY - hl / 2 + 0.28, sBot * 0.30);
+    box(g, sBot * 0.15, hl * 0.72, 0.04, shade(sc2, 1.18),
+        0, hipY - hl / 2 + 0.30, sBot * 0.34);
+    /* 下摆边（亮一点）*/
+    taper(g, sBot * 0.99, sBot * 1.03, 0.07, shade(P.skirt || P.shirt, 1.25),
+          0, hipY - hl + 0.30, 0);
+    /* 内衬（防止从下往上看到空）*/
+    box(g, sBot * 0.7, 0.04, sBot * 0.7, P.skirtS || P.shirtS, 0, hipY - hl + 0.30, 0);
+  }
+}
+
+/* ---------------- 配件 ---------------- */
+function buildAcc(g, headG, armL, armR, legL, legR, S, P, kind, backG, hipY, torsoTop) {
+  if (!kind) { return; }
+  var hw = S.headW, hh = S.headH, hd = S.headD;
+  if (kind === 'catEar') {
+    for (var s = -1; s <= 1; s += 2) {
+      box(headG, 0.24, 0.28, 0.18, P.hair, hw * 0.34 * s, hh * 0.72, 0.02);
+      box(headG, 0.12, 0.14, 0.08, 0xf0a0b0, hw * 0.34 * s, hh * 0.70, 0.10);
+    }
+  } else if (kind === 'foxEar') {
+    for (var s2 = -1; s2 <= 1; s2 += 2) {
+      box(headG, 0.20, 0.38, 0.15, P.hair, hw * 0.33 * s2, hh * 0.80, 0.0);
+      box(headG, 0.10, 0.20, 0.09, 0xf6d8e6, hw * 0.33 * s2, hh * 0.78, 0.05);
+    }
+  } else if (kind === 'elfEar') {
+    box(headG, 0.09, 0.28, 0.09, P.skin, -hw * 0.56, hh * 0.10, -0.02, 0.38);
+    box(headG, 0.09, 0.28, 0.09, P.skin, hw * 0.56, hh * 0.10, -0.02, -0.38);
+  } else if (kind === 'demonHorn') {
+    for (var s3 = -1; s3 <= 1; s3 += 2) {
+      box(headG, 0.13, 0.30, 0.13, 0xd03050, hw * 0.33 * s3, hh * 0.76, 0.02, 0.28 * s3);
+      box(headG, 0.09, 0.24, 0.09, 0xb02040, hw * 0.40 * s3, hh * 0.94, 0.02, 0.5 * s3);
+    }
+  } else if (kind === 'halo') {
+    var ring = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.04, 8, 22), matOf(0xffe066));
+    ring.position.set(0, hh * 0.96, -0.06);
+    ring.rotation.x = Math.PI / 2;
+    headG.add(ring);
+  } else if (kind === 'lava') {
+    var lc = 0xff7a20, lc2 = 0xffc050;
+    for (var ls = -1; ls <= 1; ls += 2) {
+      box(headG, 0.13, 0.30, 0.13, 0xd03050, hw * 0.33 * ls, hh * 0.76, 0.02, 0.28 * ls);
+      box(headG, 0.09, 0.24, 0.09, 0xb02040, hw * 0.40 * ls, hh * 0.94, 0.02, 0.5 * ls);
+    }
+    box(g, 0.05, S.torsoH * 0.55, 0.04, lc, -S.torsoW * 0.18, hipY + S.torsoH * 0.45, S.torsoD * 0.52);
+    box(g, 0.04, S.torsoH * 0.30, 0.04, lc2, S.torsoW * 0.10, hipY + S.torsoH * 0.62, S.torsoD * 0.52);
+    box(g, 0.16, 0.05, 0.04, lc, S.torsoW * 0.02, hipY + S.torsoH * 0.30, S.torsoD * 0.52);
+    box(armR, 0.04, S.armLen * 0.45, 0.04, lc, 0, -S.armLen * 0.55, S.armW * 0.52);
+    box(armL, 0.04, S.armLen * 0.30, 0.04, lc2, 0, -S.armLen * 0.62, S.armW * 0.52);
+  } else if (kind === 'goggles') {
+    /* 护目镜：两条深色带 + 两个镜片 + 侧边扣 */
+    box(headG, hw * 1.06, 0.10, hd * 1.04, 0x2a2a30, 0, hh * 0.30, hd * 0.06);
+    box(headG, 0.22, 0.18, 0.06, 0x1e2a34, -hw * 0.22, hh * 0.30, hd * 0.52);
+    box(headG, 0.22, 0.18, 0.06, 0x1e2a34, hw * 0.22, hh * 0.30, hd * 0.52);
+    box(headG, 0.17, 0.13, 0.07, 0x8ae0ff, -hw * 0.22, hh * 0.30, hd * 0.545);
+    box(headG, 0.17, 0.13, 0.07, 0x8ae0ff, hw * 0.22, hh * 0.30, hd * 0.545);
+  } else if (kind === 'visor') {
+    box(headG, hw * 0.96, 0.13, 0.06, 0x0ae0e0, 0, hh * 0.05, hw * 0.52);
+    box(headG, 0.16, 0.07, 0.06, 0xff2fa0, -hw * 0.52, hh * 0.05, 0.02);
+  } else if (kind === 'glasses') {
+    box(headG, 0.22, 0.15, 0.03, 0x2a3038, -hw * 0.215, hh * 0.02, hd * 0.54);
+    box(headG, 0.22, 0.15, 0.03, 0x2a3038, hw * 0.215, hh * 0.02, hd * 0.54);
+    box(headG, 0.10, 0.03, 0.03, 0x2a3038, 0, hh * 0.03, hd * 0.54);
+  } else if (kind === 'headband') {
+    box(headG, hw * 1.06, 0.11, hd * 1.06, 0xffffff, 0, hh * 0.40, 0);
+    box(headG, 0.14, 0.16, 0.10, 0xffffff, hw * 0.30, hh * 0.34, -hd * 0.30);
+  } else if (kind === 'ribbon') {
+    box(headG, 0.46, 0.14, 0.10, 0xd8342c, 0, hh * 0.54, -hd * 0.28);
+    box(headG, 0.14, 0.12, 0.10, 0xd8342c, -0.22, hh * 0.58, -hd * 0.28);
+    box(headG, 0.14, 0.12, 0.10, 0xd8342c, 0.22, hh * 0.58, -hd * 0.28);
+    box(headG, 0.08, 0.08, 0.11, shade(0xd8342c, 0.8), 0, hh * 0.54, -hd * 0.28);
+  } else if (kind === 'gloves') {
+    var gc = P.belt || 0xd8342c;
+    box(armL, S.armW * 1.45, 0.24, S.armW * 1.45, gc, 0, -S.armLen + 0.14, 0);
+    box(armR, S.armW * 1.45, 0.24, S.armW * 1.45, gc, 0, -S.armLen + 0.14, 0);
+    box(armL, S.armW * 1.55, 0.05, S.armW * 1.55, 0xffffff, 0, -S.armLen + 0.02, 0);
+    box(armR, S.armW * 1.55, 0.05, S.armW * 1.55, 0xffffff, 0, -S.armLen + 0.02, 0);
+  } else if (kind === 'cape') {
+    box(backG, S.torsoW * 1.18, 1.10, 0.09, 0x8a2a3a, 0, -0.34, -0.05);
+    box(backG, S.torsoW * 1.18, 0.09, 0.10, 0xf0d070, 0, 0.18, -0.05);
+  } else if (kind === 'batWing') {
+    for (var s4 = -1; s4 <= 1; s4 += 2) {
+      box(backG, 0.26, 0.44, 0.07, 0x2a1a2a, 0.34 * s4, 0.16, -0.05, 0.3 * s4);
+      box(backG, 0.22, 0.34, 0.07, 0x2a1a2a, 0.56 * s4, -0.02, -0.05, 0.2 * s4);
+    }
+  } else if (kind === 'blood') {
+    box(headG, 0.09, 0.30, 0.03, 0x8a1a1a, -hw * 0.30, -hh * 0.26, hd * 0.52);
+    box(g, 0.12, 0.46, 0.03, 0x8a1a1a, S.torsoW * 0.18, hipY + S.torsoH * 0.30, S.torsoD * 0.55);
+    box(g, 0.06, 0.16, 0.04, 0x6a1212, S.torsoW * 0.18, hipY + S.torsoH * 0.05, S.torsoD * 0.55);
+  } else if (kind === 'snow') {
+    box(headG, 0.09, 0.09, 0.09, 0xffffff, hw * 0.42, hh * 0.36, 0.10);
+    box(headG, 0.05, 0.05, 0.05, 0xffffff, hw * 0.54, hh * 0.22, 0.06);
+  }
+}
+
+/* ---------------- 搭角色 ---------------- */
+function buildChar(ch) {
+  var g = new THREE.Group();
+  var S = {}; for (var k in DEF) { S[k] = DEF[k]; }
+  for (var k2 in (ch.sk || {})) { S[k2] = ch.sk[k2]; }
+  var P = ch.c;
+
+  /* ★ 肩宽自动跟随躯干宽 ✗ 不然手臂会飘在身体外面（v4 第一版就是这样）✓ */
+  S.armX = S.torsoW * 0.5 + S.armW * 0.55;
+  var hipY = S.hipY;
+  var torsoTop = hipY + S.torsoH;
+  var shoulderY = torsoTop - 0.06;
+  var headY = torsoTop + S.neck + S.headH / 2 + 0.05;
+
+  function limb(x, y, w, h, d, c) {
+    var p = new THREE.Group();
+    p.position.set(x, y, 0);
+    box(p, w, h, d, c, 0, -h / 2, 0);
+    g.add(p);
+    return p;
+  }
+
+  /* ---- 腿：大腿 + 小腿（两段，看得出膝盖）+ 袜口 + 鞋底 ---- */
+  var legL = new THREE.Group(), legR = new THREE.Group();
+  legL.position.set(-S.legW * 0.72, hipY, 0);
+  legR.position.set(S.legW * 0.72, hipY, 0);
+  g.add(legL); g.add(legR);
+  [legL, legR].forEach(function (lg) {
+    box(lg, S.legW, hipY * 0.52, S.legW, P.pants, 0, -hipY * 0.26, 0);            /* 大腿 */
+    box(lg, S.legW * 0.92, hipY * 0.46, S.legW * 0.92, P.sock || P.pants, 0, -hipY * 0.73, 0); /* 小腿 */
+    if (P.sock) {                                                                   /* 袜口 */
+      box(lg, S.legW * 1.02, 0.07, S.legW * 1.02, shade(P.sock, 1.1), 0, -hipY * 0.50, 0);
+    }
+    box(lg, S.legW * 1.10, 0.16, S.legW * 1.34, P.boot, 0, -hipY + 0.09, 0.03);     /* 鞋 */
+    box(lg, S.legW * 1.16, 0.05, S.legW * 1.40, shade(P.boot, 0.7), 0, -hipY + 0.01, 0.03); /* 鞋底 */
+  });
+
+  /* ---- 躯干：胸 / 腰 / 胯 三段 ---- */
+  box(g, S.torsoW, S.torsoH * 0.56, S.torsoD, P.shirt, 0, torsoTop - S.torsoH * 0.28, 0);
+  box(g, S.torsoW * 0.84, S.torsoH * 0.30, S.torsoD * 0.92, P.shirt, 0, hipY + S.torsoH * 0.35, 0);
+  box(g, S.torsoW * 0.95, S.torsoH * 0.22, S.torsoD * 0.98, P.shirt, 0, hipY + S.torsoH * 0.12, 0);
+  /* 侧面阴影（让身体不那么平）*/
+  box(g, 0.04, S.torsoH * 0.54, S.torsoD * 0.9, P.shirtS, -S.torsoW * 0.49, torsoTop - S.torsoH * 0.28, 0);
+  box(g, 0.04, S.torsoH * 0.54, S.torsoD * 0.9, P.shirtS, S.torsoW * 0.49, torsoTop - S.torsoH * 0.28, 0);
+  /* 腰带 */
+  box(g, S.torsoW * 0.92, 0.12, S.torsoD * 0.96, P.belt, 0, hipY + 0.14, 0);
+  box(g, 0.12, 0.12, 0.06, P.gold, 0, hipY + 0.14, S.torsoD * 0.50);
+  /* 胸口（轻微）*/
+  box(g, S.torsoW * 0.70, 0.14, S.torsoD * 1.00, P.shirt, 0, torsoTop - S.torsoH * 0.36, S.torsoD * 0.04);
+
+  /* ---- 手臂：袖子 + 袖口 + 手 ---- */
+  var armL = limb(-S.armX, shoulderY, S.armW, S.armLen, S.armW, P.shirtD);
+  var armR = limb(S.armX, shoulderY, S.armW, S.armLen, S.armW, P.shirt);
+  [armL, armR].forEach(function (ar, i) {
+    var sleeve = i === 0 ? P.shirtD : P.shirt;
+    box(ar, S.armW * 1.04, S.armLen * 0.52, S.armW * 1.04, sleeve, 0, -S.armLen * 0.26, 0);  /* 袖 */
+    box(ar, S.armW * 1.06, 0.06, S.armW * 1.06, shade(sleeve, 1.2), 0, -S.armLen * 0.52, 0);  /* 袖口 */
+    box(ar, S.armW * 0.86, S.armLen * 0.40, S.armW * 0.86, P.skin, 0, -S.armLen * 0.74, 0);    /* 小臂 */
+    box(ar, S.armW * 0.94, 0.12, S.armW * 0.94, P.skin, 0, -S.armLen + 0.05, 0);               /* 手 */
+  });
+
+  /* ---- 头 ---- */
+  var headG = new THREE.Group(); headG.position.set(0, headY, 0); g.add(headG);
+  box(headG, S.headW, S.headH, S.headD, P.skin, 0, 0, 0);
+  /* 下巴/脸颊阴影（一小条，增加立体）*/
+  box(headG, S.headW * 0.86, 0.06, S.headD * 0.9, P.skinS, 0, -S.headH * 0.48, S.headD * 0.04);
+  box(g, S.armW * 0.86, 0.10, S.armW * 0.86, P.skinS, 0, torsoTop + 0.03, 0);   /* 脖子 */
+
+  buildFace(headG, S, P, ch.eyes || { w: 0.26, h: 0.30 });
+  buildHair(headG, S, P, ch.hair, ch.hairpin);
+
+  var backG = new THREE.Group();
+  backG.position.set(0, torsoTop - 0.30, -S.torsoD * 0.5);
+  g.add(backG);
+
+  buildOutfit(g, S, P, ch, hipY, torsoTop);
+  buildAcc(g, headG, armL, armR, legL, legR, S, P, ch.acc, backG, hipY, torsoTop);
+
+  armL.rotation.x = 0.12; armR.rotation.x = -0.14;
+  legL.rotation.x = 0.03; legR.rotation.x = -0.03;
+  g.userData.h = headY + S.headH / 2;
+  return g;
+}
+
+/* ---------------- 场景 ---------------- */
+var cv = document.getElementById('cv');
+var renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+renderer.setPixelRatio(1);
+renderer.setSize(1500, 1400, false);
+renderer.setClearColor(0x0a0c11, 1);
+
+var scene = new THREE.Scene();
+var COLS = 5, ROWS = 4, SX = 3.5, SY = 3.9;
+var cam = new THREE.OrthographicCamera(-9, 9, 9, -9, 0.1, 300);
+cam.position.set(0, 0, 80); cam.lookAt(0, 0, 0);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x2a3242, 0.58));
+var d1 = new THREE.DirectionalLight(0xffffff, 0.52); d1.position.set(5, 9, 12); scene.add(d1);
+var d2 = new THREE.DirectionalLight(0x9ac0ff, 0.24); d2.position.set(-9, 5, -8); scene.add(d2);
+var d3 = new THREE.DirectionalLight(0xffe0c0, 0.14); d3.position.set(0, 2, 12); scene.add(d3);
+var d4 = new THREE.DirectionalLight(0xffffff, 0.16); d4.position.set(-3, 8, -12); scene.add(d4);  // 轮廓光
+
+var heroes = [];
+var PREVIEW_S = 0.80;
+for (var i = 0; i < CHARS.length; i++) {
+  var c2 = i % COLS, r2 = Math.floor(i / COLS);
+  var h = buildChar(CHARS[i]);
+  h.scale.multiplyScalar(PREVIEW_S);
+  var groundY = ((ROWS - 1) / 2 - r2) * SY - SY / 2 + 0.45;
+  h.position.set((c2 - (COLS - 1) / 2) * SX, groundY, 0);
+  h.rotation.y = -0.36;
+  scene.add(h);
+  heroes.push(h);
+}
+
+var bbox = new THREE.Box3();
+for (var bi = 0; bi < heroes.length; bi++) { bbox.expandByObject(heroes[bi]); }
+bbox.min.y -= 0.9;
+var bsize = bbox.getSize(new THREE.Vector3());
+var bcen = bbox.getCenter(new THREE.Vector3());
+var ASPECT = 1500 / 1400;
+var vh = Math.max(bsize.y, bsize.x / ASPECT) * 1.06;
+cam.left = -vh * ASPECT / 2; cam.right = vh * ASPECT / 2;
+cam.top = vh / 2; cam.bottom = -vh / 2;
+cam.position.set(bcen.x, bcen.y, 80);
+cam.lookAt(bcen.x, bcen.y, 0);
+cam.updateProjectionMatrix();
+
+var labelBox = document.getElementById('labels');
+var _pv = null;
+function placeLabels() {
+  for (var k = 0; k < heroes.length; k++) {
+    var hh = heroes[k];
+    var wp = new THREE.Vector3(hh.position.x, hh.position.y - 0.16, 0);
+    if (!_pv) { _pv = new THREE.Vector3(); }
+    _pv.copy(wp).project(cam);
+    var sx = (_pv.x * 0.5 + 0.5) * 1500;
+    var sy = (-_pv.y * 0.5 + 0.5) * 1400;
+    var el = hh.userData.lb;
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'lb';
+      el.innerHTML = '<b>' + CHARS[k].n + '</b><i>' + CHARS[k].sx + '</i>';
+      labelBox.appendChild(el);
+      hh.userData.lb = el;
+    }
+    el.style.left = sx.toFixed(1) + 'px';
+    el.style.top = sy.toFixed(1) + 'px';
+  }
+}
+placeLabels();
+
+document.getElementById('ttl').textContent =
+  '玩家皮肤 · ' + (SET === 'm' ? '男角色' : '女角色') + ' 20 款（v6：方眼 + 圆角细节）';
+var t0 = performance.now();
+function loop() {
+  var t = (performance.now() - t0) / 1000;
+  for (var i2 = 0; i2 < heroes.length; i2++) {
+    heroes[i2].rotation.y = -0.28 + Math.sin(t * 0.45 + i2 * 0.6) * 0.22;
+  }
+  renderer.render(scene, cam);
+  requestAnimationFrame(loop);
+}
+loop();
+window.__ready = true;
+</script>
+</body>
+</html>

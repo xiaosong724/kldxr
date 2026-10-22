@@ -1,0 +1,6 @@
+{
+  "versionCode": 4,
+  "versionName": "0.1.3-本地",
+  "apkUrl": "/downloads/xiuxian-local.apk",
+  "notes": "本地服版本 0.1.3：\n· 应用内更新检测与下载进度\n· APK 原生强制横屏\n· 游戏内可切横竖屏\n· 按钮位置按屏幕比例保存"
+}

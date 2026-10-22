@@ -165,6 +165,10 @@ async def main_async(token):
             await asyncio.sleep(0.8)
 
             # ③ 坐着时点交互 = 起身
+            #   刷新后玩家回到出生点（不再恢复座姿）→ 先挪回椅子旁边
+            await c.ev("P.x=%f; P.z=%f; P.air=false; return 1;"
+                       % (chair['x'], chair['z']))
+            await asyncio.sleep(0.5)
             seated = await c.ev(
                 "SEAT_NEAR = townSeatNear(P.x,P.z); trySit(); return 1;")
             await asyncio.sleep(1.2)

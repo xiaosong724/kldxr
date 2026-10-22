@@ -111,8 +111,10 @@ def is_stack(it):
     ★ 判据就是"有没有 slot"（材料/黄金没有 slot ✗ 装备一定有 ✓）
       —— 这正是 _save_pick / _add_item 用的那一条 ✓
         三处必须一致 ✗ 不然会出现"背包里堆着、交易所里按件卖"✓
+    ★ round597：皮肤卡/技能书是【一张一个效果】✗ 不能堆叠 ✓
     """
-    return not (isinstance(it, dict) and it.get('slot'))
+    return not (isinstance(it, dict) and (it.get('slot') or
+               it.get('kind') in ('skin', 'skillbook')))
 
 
 def row_of(lid, seller, price, it, ts, expire, stack=1, qty=1, iid=0):
@@ -179,12 +181,27 @@ def get(mkt, lid):
     return mkt['by_lid'].get(int(lid)) if _is_int(lid) else mkt['by_lid'].get(lid)
 
 
-def count_of(mkt, seller):
-    """这个卖家【在售】几件（不含过期的 ✓ 和库里的 COUNT(*) 口径一致 ✓）"""
+def count_of(mkt, seller, now=None):
+    """这个卖家【在售】几件（不含过期的 ✓ 和库里的 COUNT(*) 口径一致 ✓）
+
+    ★ round410（用户："到期没卖出的留在交易所显示已过期，点下架才回背包"）
+      → 过期的那几件不再自动退回背包 ✗ 会留在货架上等本人取回 ✓
+      → 这里必须排除它们 ✓ 不然"到期没取回"会把 10 件的上架额度吃满 ✓
+        （玩家会以为"我明明没挂东西却不让上架"✓）
+      ★ 别直接用 row['exp'] ✗ 内存里 ts/exp 有两个量级并存 ✓ 用 exp_s 归一化 ✓
+        （这是本文件 exp_s 那段注释里写过的坑 ✓）
+    """
+    _nowv = _now() if now is None else float(now)
     n = 0
     for row in mkt['by_lid'].values():
-        if row['seller'] == int(seller):
-            n += 1
+        if int(row['seller']) != int(seller):
+            continue
+        try:
+            if exp_s(row) <= _nowv:
+                continue
+        except Exception:
+            pass
+        n += 1
     return n
 
 

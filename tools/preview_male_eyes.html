@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>男生眼睛 · 5 个方案</title>
+<style>
+  html, body { margin: 0; overflow: hidden; background: #0e1116; color: #dfe8f2;
+               font-family: "Microsoft YaHei", system-ui, sans-serif; }
+  #wrap { display: flex; gap: 8px; padding: 12px 12px 4px; }
+  .cell { width: 272px; }
+  .cell canvas { display: block; width: 272px; height: 300px; border-radius: 10px;
+                 background: radial-gradient(circle at 50% 34%, #24303f, #0b0f14 72%); }
+  .cell .t { text-align: center; font-size: 15px; font-weight: 700; color: #ffd83d; margin-top: 6px; }
+  .cell .d { text-align: center; font-size: 11.5px; color: #8fa3b8; line-height: 1.5; margin-top: 2px; }
+</style>
+</head>
+<body>
+<div id="wrap"></div>
+<script src="../web/lib/three.min.js"></script>
+<script src="skin_rig_bundle.js"></script>
+<script>
+/* 测试页的两个依赖 */
+var _mc = {};
+function matOf(c) { var k = c | 0; if (!_mc[k]) { _mc[k] = new THREE.MeshLambertMaterial({ color: k }); } return _mc[k]; }
+function fillHeldWeapon(sw) { }
+
+var STYLES = [
+  { st: 1, t: '方案 1 · 窄长眼', d: '细长、无高光 · 最像"能打的人"' },
+  { st: 2, t: '方案 2 · 方眼', d: '方方正正、眼白多一点 · 憨直' },
+  { st: 3, t: '方案 3 · 上挑凶眼', d: '外眼角上挑 + 斜眉 · 凶' },
+  { st: 4, t: '方案 4 · 小圆眼', d: '小一号 + 一点高光 · 少年感' },
+  { st: 5, t: '方案 5 · 眯眼', d: '一条缝 + 粗眉压低 · 老练' }
+];
+var SKIN = 'm01';   /* 熔岩魔修（光头 ✗ 额头露出来 ✓ 眼睛和眉毛看得最清楚） */
+
+var wrap = document.getElementById('wrap');
+STYLES.forEach(function (o) {
+  /* ★ skBuildHero(钥匙) 是去 SKIN_DEFS 里查的 ✗ 不是收表格本身 ✓
+     → 临时改一下那张表的 st，建完再还原 ✓ */
+
+  var cell = document.createElement('div');
+  cell.className = 'cell';
+  var cv = document.createElement('canvas');
+  cv.width = 272 * 2; cv.height = 300 * 2;
+  cell.appendChild(cv);
+  var t = document.createElement('div');
+  t.className = 't'; t.textContent = o.t;
+  var d = document.createElement('div');
+  d.className = 'd'; d.textContent = o.d;
+  cell.appendChild(t); cell.appendChild(d);
+  wrap.appendChild(cell);
+
+  var r = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
+  r.setPixelRatio(2);
+  r.setSize(272, 300, false);
+  r.shadowMap.enabled = false;
+
+  var sc = new THREE.Scene();
+  sc.add(new THREE.HemisphereLight(0xd8e4f4, 0x3a3020, 1.05));
+  var dl = new THREE.DirectionalLight(0xfff3d8, 0.95);
+  dl.position.set(2.2, 3.4, 3.6);
+  sc.add(dl);
+  var dl2 = new THREE.DirectionalLight(0x8fb0ff, 0.35);
+  dl2.position.set(-2.6, 1.2, -1.6);
+  sc.add(dl2);
+
+  var _bak = SKIN_DEFS[SKIN].eyes;
+  SKIN_DEFS[SKIN].eyes = { w: (_bak && _bak.w) || 0.26, h: (_bak && _bak.h) || 0.30, st: o.st };
+  var hero = skBuildHero(SKIN);
+  SKIN_DEFS[SKIN].eyes = _bak;
+  sc.add(hero.g);
+  hero.g.rotation.y = 0.20;
+  hero.armL.rotation.x = 0.05; hero.armR.rotation.x = -0.05;
+
+  /* ★ 自动对准"头"：先算包围盒 ✗ 再从顶上往下取一个头的中心 ✓ */
+  hero.g.updateMatrixWorld(true);
+  var bb = new THREE.Box3().setFromObject(hero.g);
+  /* ★ 头发也算在包围盒里 ✗ 所以脸中心还要再往下一点 ✓
+     视野高度按"想看多高"反算距离：z = h / (2*tan(fov/2)) ✓ */
+  var faceY = bb.max.y - 0.36;
+  var wantH = 2.05;
+  var fov = 30;
+  var camZ = wantH / (2 * Math.tan(fov * Math.PI / 360));
+  var cam = new THREE.PerspectiveCamera(fov, 272 / 300, 0.1, 60);
+  cam.position.set(0, faceY + 0.02, camZ);
+  cam.lookAt(0, faceY, 0);
+  r.render(sc, cam);
+});
+</script>
+</body>
+</html>

@@ -40,7 +40,7 @@ class MainActivity : Activity() {
 
     companion object {
         /** ★ 改这里：跑服务器那台电脑的地址（末尾要带 / ） */
-        const val GAME_URL = "http://43.138.171.250:8899/"   // ★ 云服务器（2026-10-16 换）
+        const val GAME_URL = "http://192.168.31.180:8899/"
 
         /** 维护页上的自动重试间隔（秒）*/
         private const val RETRY_SEC = 15

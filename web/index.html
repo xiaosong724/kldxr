@@ -1442,6 +1442,14 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
 <div id="shopPrompt">按 E / 点击交互按钮 购买</div>
 <div id="orderPrompt">按 E / 点击交互按钮 点单</div>
 <div id="workPrompt">按 E / 点击交互按钮 打工</div>
+<!-- ★ 2026-10-22（用户："打工期间按钮要一直保持结算状态"）：固定 HUD，任何位置都能结算 -->
+<div id="jobHud" style="display:none;position:fixed;left:50%;top:12%;transform:translateX(-50%);
+     z-index:46;background:#130d08ee;border:1px solid #b98a42;border-radius:10px;
+     padding:8px 14px;color:#f1e3c6;font:14px system-ui,'Microsoft YaHei';text-align:center">
+  <div id="jobHudTxt" style="font-weight:800;margin-bottom:6px">打工中</div>
+  <button id="jobHudBtn" style="padding:6px 14px;border-radius:8px;border:1px solid #ffd83d;
+     background:#3a2a10;color:#ffd83d;font-weight:800;cursor:pointer">结算打工</button>
+</div>
 <div id="orderPanel"><div id="orderBox"><div id="orderHead"><div id="orderTitle">点单</div><div id="orderClose">✕</div></div><div id="orderBody"></div></div></div>
 <div id="fridgePanel"><div id="fridgeBox"><div id="fridgeHead"><div>冰箱</div><div id="fridgeClose">✕</div></div><div id="fridgeBody"></div></div></div>
 <div id="shopPanel"><div id="shopBox"><div id="shopHead"><div id="shopTitle">商店</div><div id="shopGold">金币 0</div><div id="shopClose">✕</div></div><div id="shopBody"></div></div></div>
@@ -2054,24 +2062,24 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
      那时 DOM 还没解析到它 → getElementById 全是 null →（有 null 保护）静默失败
      → 页面能跑，但登录浮层永远不出现，谁都进不去 ✗（第 26 轮发现）-->
 <script src="/ws-config.js"></script>
-<script src="/lib/three.min.js"></script>
-<script src="/icons.js"></script>
-<script src="/vfx.js"></script>
-<script src="/lib/annrender.js"></script>
-<script src="/platform/web.js"></script>
-<script src="/core/town_data.js"></script>
-<script src="/core/town.js"></script>
-<script src="/core/game.js"></script>
-<script src="/core/town_models.js"></script>
-<script src="/core/town_villas.js"></script>
-<script src="/core/town_hall.js"></script>
-<script src="/core/town_shops2.js"></script>
-<script src="/core/town_shops3.js"></script>
-<script src="/core/town_shops4.js"></script>
-<script src="/core/town_veg.js"></script>
-<script src="/core/town_props.js"></script>
-<script src="/platform/town_ui.js"></script>
-<script src="/platform/place.js"></script>
+<script src="/lib/three.min.js?v=20261022c"></script>
+<script src="/icons.js?v=20261022c"></script>
+<script src="/vfx.js?v=20261022c"></script>
+<script src="/lib/annrender.js?v=20261022c"></script>
+<script src="/platform/web.js?v=20261022c"></script>
+<script src="/core/town_data.js?v=20261022c"></script>
+<script src="/core/town.js?v=20261022c"></script>
+<script src="/core/game.js?v=20261022c"></script>
+<script src="/core/town_models.js?v=20261022c"></script>
+<script src="/core/town_villas.js?v=20261022c"></script>
+<script src="/core/town_hall.js?v=20261022c"></script>
+<script src="/core/town_shops2.js?v=20261022c"></script>
+<script src="/core/town_shops3.js?v=20261022c"></script>
+<script src="/core/town_shops4.js?v=20261022c"></script>
+<script src="/core/town_veg.js?v=20261022c"></script>
+<script src="/core/town_props.js?v=20261022c"></script>
+<script src="/platform/town_ui.js?v=20261022c"></script>
+<script src="/platform/place.js?v=20261022c"></script>
 
 
 

@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>技能动画调参台</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{margin:0;height:100%;background:#0b0f14;color:#dfe8f2;
+    font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;overflow:hidden}
+  #cv{position:absolute;inset:0;display:block}
+  #ui{position:absolute;left:14px;top:14px;width:290px;padding:12px 14px;border-radius:12px;
+    background:#131a23ee;border:1px solid #ffffff18;backdrop-filter:blur(6px);font-size:13px}
+  #ui h3{margin:0 0 10px;font-size:15px;color:#ffd83d}
+  select,button{font-family:inherit}
+  select{width:100%;padding:6px 8px;border-radius:8px;border:1px solid #ffffff22;
+    background:#0e141c;color:#dfe8f2;font-size:13px}
+  .row{display:flex;align-items:center;gap:8px;margin:8px 0}
+  .row label{width:64px;color:#9fb0c2;font-size:12px;flex:0 0 64px}
+  .row input[type=range]{flex:1 1 auto;height:14px;accent-color:#ffd83d}
+  .row .v{width:42px;text-align:right;font-size:11.5px;color:#ffd83d;
+    font-variant-numeric:tabular-nums}
+  button{padding:6px 12px;border-radius:8px;border:1px solid #ffffff22;background:#1c2836;
+    color:#dfe8f2;font-size:12.5px;cursor:pointer}
+  button:hover{background:#26374a}
+  button.on{background:#ffd83d;color:#1a1d18;border-color:#ffd83d;font-weight:700}
+  #json{width:100%;height:64px;margin-top:8px;border-radius:8px;border:1px solid #ffffff22;
+    background:#0b1118;color:#9fe0b0;font-size:11px;font-family:consolas,monospace;padding:6px}
+  #hint{margin-top:8px;font-size:11px;color:#7f8fa0;line-height:1.6}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<div id="ui">
+  <h3>技能动画调参台</h3>
+  <select id="pick"></select>
+
+  <div class="row" style="margin-top:10px">
+    <button id="play">▶ 播放</button>
+    <button id="loop">循环</button>
+    <button id="reset">复位</button>
+  </div>
+
+  <div class="row">
+    <label>目标体型</label>
+    <input id="dscale" type="range" min="0.6" max="5" step="0.1" value="1">
+    <span class="v" id="dscaleV">1.0</span>
+  </div>
+  <div class="row">
+    <label>效果高度</label>
+    <input id="hgt" type="range" min="0" max="6" step="0.1" value="0">
+    <span class="v" id="hgtV">0.0</span>
+  </div>
+  <div id="sliders"></div>
+
+  <textarea id="json" spellcheck="false"></textarea>
+  <div class="row" style="margin-top:6px">
+    <button id="save" style="background:#2b5c33;border-color:#8ee0a8">💾 保存（本机）</button>
+    <button id="copy">复制 JSON</button>
+  </div>
+  <!-- ★ round540：服务器同步（正式特效配置表 ✗ 所有人同步）-->
+  <div style="margin-top:8px;padding:8px;border-radius:9px;background:#0e141c;
+       border:1px solid #ffffff14">
+    <div style="font-size:11.5px;color:#9fb0c2;margin-bottom:5px">
+      服务器配置表 <span id="vfxSrv" style="color:#ff9a8a">未连接</span>
+    </div>
+    <div class="row" style="margin:4px 0">
+      <input id="admPw" type="password" placeholder="管理密码"
+             style="flex:1 1 auto;padding:5px 8px;border-radius:7px;border:1px solid #ffffff22;
+                    background:#0b1118;color:#dfe8f2;font-size:12px">
+      <button id="srvSave" style="background:#2b4a6b;border-color:#7fb3ff">↑ 上传</button>
+      <button id="srvLoad">↓ 读取</button>
+    </div>
+  </div>
+  <div class="row" style="margin-top:6px">
+    <button id="reload">热重载 vfx.js</button>
+  </div>
+  <div id="skNums" style="font-size:11.5px;color:#8ecbff;margin:6px 0 2px"></div>
+  <div class="row" style="margin-top:2px">
+    <button id="showSkill" class="on" style="font-size:11.5px">技能范围</button>
+    <button id="showAnim" class="on" style="font-size:11.5px">动画范围</button>
+  </div>
+  <div id="hint">
+    <b>拖动画面</b> = 转视角 · <b>滚轮/双指</b> = 远近<br>
+    拖滑条实时生效 ✓ 改完点「复制参数 JSON」贴给我<br>
+    或者直接改 <b>web/vfx.js</b> 再点「热重载」
+  </div>
+</div>
+
+<script src="/lib/three.min.js"></script>
+<script src="/vfx.js"></script>
+<script>
+/* ---- 极简场景：地面格 + 一个假人 ---- */
+const cv = document.getElementById('cv');
+const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0f14);
+scene.fog = new THREE.Fog(0x0b0f14, 30, 70);
+
+const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
+cam.position.set(9, 11, 13);
+cam.lookAt(0, 1.2, 0);
+
+scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x2a2418, 1.1));
+const dl = new THREE.DirectionalLight(0xfff2d8, 1.0); dl.position.set(6, 12, 8); scene.add(dl);
+
+/* 地面网格 */
+const grid = new THREE.GridHelper(60, 30, 0x22303f, 0x18222c);
+scene.add(grid);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(60, 60),
+  new THREE.MeshLambertMaterial({ color: 0x141c26 }));
+floor.rotation.x = -Math.PI / 2; floor.position.y = -0.01; scene.add(floor);
+
+/* 假人 */
+const dummyMat = new THREE.MeshLambertMaterial({ color: 0xd9a06a });
+const dummy = new THREE.Group();
+const body = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.7, 0.7), dummyMat);
+body.position.y = 1.0; dummy.add(body);
+const head = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.85, 0.85), dummyMat);
+head.position.y = 2.25; dummy.add(head);
+dummy.position.set(0, 0, 3.2);
+scene.add(dummy);
+
+/* ---- 范围显示（★ 只在调参台画 ✗ 游戏里不画 ✓）----
+   ★★ round542（用户："我要的是【技能本身】设置的半径/射程，
+      用来对比 anime 的范围；动画范围可以单独开关"）
+   → 两套圈分开画：蓝色 = 技能真实范围（服务端 skills.py 的 r / rg）
+                   橙色 = 当前动画半径（就是滑条 r）                */
+let rangeGroup = new THREE.Group();
+scene.add(rangeGroup);
+let SKD = [];                    /* 服务器发来的技能定义 */
+let curSkill = null;             /* 当前动画对应的技能定义 */
+
+function circleMesh(r, color, op, dash) {
+  if (dash) {
+    /* 虚线射程圈：用一圈短线段拼 */
+    const g2 = new THREE.Group();
+    const N = 48;
+    for (let i = 0; i < N; i += 2) {
+      const a0 = i / N * Math.PI * 2, a1 = (i + 1) / N * Math.PI * 2;
+      const geo = new THREE.RingGeometry(r - 0.07, r, 6, 1, a0, a1 - a0);
+      const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: color,
+        transparent: true, opacity: op, side: THREE.DoubleSide, depthWrite: false }));
+      m.rotation.x = -Math.PI / 2; m.position.y = 0.035;
+      g2.add(m);
+    }
+    return g2;
+  }
+  const m = new THREE.Mesh(new THREE.CircleGeometry(r, 64),
+    new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: op,
+      side: THREE.DoubleSide, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2; m.position.y = 0.02;
+  return m;
+}
+function ringMesh(r, color, op) {
+  const m = new THREE.Mesh(new THREE.RingGeometry(r - 0.07, r, 72),
+    new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: op,
+      side: THREE.DoubleSide, depthWrite: false }));
+  m.rotation.x = -Math.PI / 2; m.position.y = 0.04;
+  return m;
+}
+function clearRange() {
+  while (rangeGroup.children.length) {
+    const c = rangeGroup.children.pop();
+    c.traverse && c.traverse(z => { if (z.geometry) { z.geometry.dispose(); } if (z.material) { z.material.dispose(); } });
+    if (c.geometry) { c.geometry.dispose(); }
+    if (c.material) { c.material.dispose(); }
+  }
+}
+function drawRange(o) {
+  clearRange();
+  const box = document.getElementById('skNums');
+  const sk = curSkill;
+  if (box) {
+    box.innerHTML = sk
+      ? ('技能范围：半径 <b>' + (sk.r || 0) + 'm</b>' +
+         (sk.rg ? (' · 最远 <b>' + sk.rg + 'm</b>') : '') +
+         '　|　动画半径：<b>' + (o.r || 0) + 'm</b>')
+      : '这个动画没有对应的技能（纯特效）';
+  }
+  /* ① 技能真实范围（蓝）*/
+  if (sk && document.getElementById('showSkill').classList.contains('on')) {
+    if (sk.r > 0.1) {
+      rangeGroup.add(circleMesh(sk.r, 0x4fa3ff, 0.13));
+      rangeGroup.add(ringMesh(sk.r, 0x8ecbff, 0.85));
+    }
+    if (sk.rg > sk.r + 0.2) { rangeGroup.add(circleMesh(sk.rg, 0x4fa3ff, 0.9, true)); }
+  }
+  /* ② 动画范围（橙）*/
+  if (document.getElementById('showAnim').classList.contains('on')) {
+    const r2 = o.r || 0;
+    if (r2 > 0.1) {
+      rangeGroup.add(circleMesh(r2, 0xffa733, 0.10));
+      rangeGroup.add(ringMesh(r2, 0xffb85a, 0.8));
+    }
+    if (sk && sk.rg > 0.2 && document.getElementById('showSkill').classList.contains('on')) {
+      /* 不做重复 */
+    }
+  }
+}
+
+/* 拉技能定义 */
+fetch('/api/skills?t=' + Date.now()).then(r => r.json()).then(j => {
+  SKD = (j && j.defs) || [];
+  pickSkillForAnim();
+  paint();
+}).catch(() => { });
+function pickSkillForAnim() {
+  curSkill = SKD.find(d => d.vfx === cur) || SKD.find(d => d.k === cur) || null;
+}
+
+/* ---- 参数 UI ---- */
+const P = {};
+let cur = null, looping = false, last = performance.now();
+
+function buildSliders() {
+  const def = VFX[cur];
+  const box = document.getElementById('sliders');
+  box.innerHTML = '';
+  (def.tune || []).forEach(t => {
+    if (P[t.k] === undefined) { P[t.k] = (t.min + t.max) / 2; }
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `<label>${t.label}</label>
+      <input type="range" min="${t.min}" max="${t.max}" step="${t.step}" value="${P[t.k]}">
+      <span class="v">${P[t.k]}</span>`;
+    const inp = row.querySelector('input'), vv = row.querySelector('.v');
+    inp.addEventListener('input', () => {
+      P[t.k] = +inp.value; vv.textContent = (+inp.value).toFixed(t.step < 0.1 ? 2 : 1);
+      paint();
+      /* ★ 自动存本机草稿 ✗ 刷新/关掉再打开也还在 ✓ */
+      VFX.saveParams(cur, params());
+      const h = document.getElementById('hint');
+      if (h) { h.innerHTML = '<b style="color:#8ee0a8">已存本机草稿</b>（刷新不会丢）· 点「↑ 上传」才会同步给别人'; }
+    });
+    box.appendChild(row);
+  });
+  paint();
+}
+let H = 0;
+function params() {
+  const o = Object.assign({}, P);
+  o.h = (P.h == null ? H : P.h);
+  o.seed = 12345; o.x = 0; o.z = 0;
+  return o;
+}
+document.getElementById('hgt').addEventListener('input', e => {
+  H = +e.target.value;
+  P.h = H;                                  /* ★ round544：高度也进参数表 ✗ 才会被保存 ✓ */
+  document.getElementById('hgtV').textContent = H.toFixed(1);
+  paint();
+  VFX.saveParams(cur, params());
+});
+function paint() {
+  const o = params();
+  document.getElementById('json').value = JSON.stringify(o);
+  drawRange(o);
+}
+let pulling = null;
+/* ★ 体型：模拟坦克引擎变大（self 类动画跟着一起放大 ✓ 性能无影响 ✓）*/
+document.getElementById('dscale').addEventListener('input', e => {
+  const k = +e.target.value;
+  dummy.scale.setScalar(k);
+  document.getElementById('dscaleV').textContent = k.toFixed(1);
+});
+
+function play() {
+  VFX.clear();
+  const o = params();
+  const def = VFX[cur] || {};
+  /* self 类：挂到假人身上（跟着体型缩放）；ground 类：放地上 */
+  const inst = (def.target === 'self')
+    ? VFX.spawn(cur, Object.assign({ attach: dummy }, o), scene)
+    : VFX.spawn(cur, o, scene);
+  /* ★ 黑洞：假人被吸过去（预览用）*/
+  pulling = null;
+  if (cur === 'blackhole' && inst) {
+    const dur = o.dur || 1;
+    pulling = { t: 0, dur: dur, x0: dummy.position.x, z0: dummy.position.z };
+  }
+}
+
+/* 技能下拉 */
+VFX.list().forEach(k => {
+  const op = document.createElement('option');
+  op.value = k; op.textContent = VFX[k].label || k;
+  document.getElementById('pick').appendChild(op);
+});
+/* 先塞选项再取当前值 */
+cur = document.getElementById('pick').value;
+loadDefaults();
+buildSliders();
+
+function loadDefaults() {
+  const def = VFX[cur];
+  for (const k in P) { delete P[k]; }
+  (def.tune || []).forEach(t => { P[t.k] = (t.def != null ? t.def : (t.min + t.max) / 2); });
+  /* ★★ round543（用户："我改的怎么没保存，刷新就没了"）
+     顺序：默认值 → 服务器表 → 本机草稿（本机最后，所以是"最新的"）*/
+  const srv = (VFX.remote && VFX.remote()[cur]) || null;
+  if (srv) { for (const k in srv) { if (srv[k] != null) { P[k] = srv[k]; } } }
+  const loc = (VFX.params && VFX.params()[cur]) || null;
+  if (loc) { for (const k in loc) { if (loc[k] != null) { P[k] = loc[k]; } } }
+  /* ★★ round548（用户："效果高度肯定是每个技能单独"）
+     → 高度【按技能独立存】✗ 没存过就是 0 ✓
+       以前 P.h 缺失时会回退到全局 H ✗ 于是上一个技能的高度会串到下一个 ✓ 已修 */
+  if (P.h == null) { P.h = 0; }
+  H = +P.h;
+  const hh = document.getElementById('hgt');
+  if (hh) { hh.value = String(H); }
+  const hv = document.getElementById('hgtV');
+  if (hv) { hv.textContent = H.toFixed(1); }
+}
+document.getElementById('pick').addEventListener('change', e => {
+  cur = e.target.value;
+  loadDefaults();
+  pickSkillForAnim();
+  buildSliders(); play();
+});
+document.getElementById('play').addEventListener('click', play);
+document.getElementById('loop').addEventListener('click', e => {
+  looping = !looping;
+  e.target.classList.toggle('on', looping);
+  if (looping) { play(); }
+});
+document.getElementById('reset').addEventListener('click', () => {
+  for (const k in P) { delete P[k]; }
+  buildSliders(); play();
+});
+/* ---- 服务器同步 ---- */
+function srvToken() { return localStorage.getItem('vfxAdm') || ''; }
+async function srvLogin() {
+  const pw = (document.getElementById('admPw').value || '').trim() ||
+    (localStorage.getItem('vfxPw') || '');
+  if (!pw) { return ''; }
+  try {
+    const r = await fetch('/api/admin/login', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw }) });
+    const j = await r.json();
+    if (j && j.token) {
+      localStorage.setItem('vfxAdm', j.token);
+      localStorage.setItem('vfxPw', pw);
+      return j.token;
+    }
+  } catch (e) { }
+  return '';
+}
+async function srvRefresh(tag) {
+  try {
+    const r = await fetch('/api/vfx?t=' + Date.now());
+    const j = await r.json();
+    const n = Object.keys((j && j.params) || {}).length;
+    const el = document.getElementById('vfxSrv');
+    el.textContent = (tag || '已连接') + ' · 表里 ' + n + ' 个技能';
+    el.style.color = '#8ee0a8';
+  } catch (e) { }
+}
+document.getElementById('srvSave').addEventListener('click', async () => {
+  let tk = srvToken() || await srvLogin();
+  if (!tk) { document.getElementById('hint').textContent = '要填管理密码'; return; }
+  const body = { key: cur, data: params() };
+  const r = await fetch('/api/vfx', { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Admin': tk },
+    body: JSON.stringify(body) });
+  const j = await r.json();
+  document.getElementById('hint').innerHTML = j.ok
+    ? '<b style="color:#8ee0a8">已上传到服务器 ✓ 所有人同步</b>'
+    : ('上传失败：' + (j.error || '?'));
+  srvRefresh('已上传');
+});
+document.getElementById('srvLoad').addEventListener('click', async () => {
+  await srvRefresh('已读取');
+  const r = await fetch('/api/vfx?t=' + Date.now());
+  const j = await r.json();
+  const p = ((j && j.params) || {})[cur];
+  if (p) {
+    Object.assign(P, p);
+    buildSliders(); play();
+    document.getElementById('hint').innerHTML = '<b style="color:#8ee0a8">已从服务器载入 ✓</b>';
+  } else {
+    document.getElementById('hint').textContent = '服务器还没有这个技能的参数';
+  }
+});
+srvRefresh();
+
+document.getElementById('save').addEventListener('click', () => {
+  VFX.saveParams(cur, params());
+  document.getElementById('hint').innerHTML =
+    '<b style="color:#8ee0a8">已保存 ✓</b> 游戏里释放这个技能时就用这套参数';
+});
+document.getElementById('showSkill').addEventListener('click', e => {
+  e.target.classList.toggle('on'); paint();
+});
+document.getElementById('showAnim').addEventListener('click', e => {
+  e.target.classList.toggle('on'); paint();
+});
+document.getElementById('copy').addEventListener('click', async () => {
+  const txt = JSON.stringify(params());
+  try { await navigator.clipboard.writeText(txt); } catch (e) { }
+  document.getElementById('json').select();
+  document.getElementById('hint').textContent = '已复制：' + txt;
+});
+document.getElementById('reload').addEventListener('click', () => {
+  /* 热重载：换个 query 重新拉 vfx.js */
+  const old = document.querySelector('script[src^="/vfx.js"]');
+  const sc = document.createElement('script');
+  sc.src = '/vfx.js?t=' + Date.now();
+  sc.onload = () => {
+    if (old) { old.remove(); }
+    buildSliders();
+    document.getElementById('hint').innerHTML =
+      'vfx.js 已重载 ✓ 当前参数：<code>' + JSON.stringify(params()) + '</code>';
+  };
+  document.head.appendChild(sc);
+});
+
+/* 渲染循环 */
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  cam.aspect = w / h; cam.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+/* ---- 视角：拖动旋转 + 滚轮/双指缩放（round541）---- */
+let camDist = 20, camYaw = 0.62, camPitch = 0.62;
+function applyCam() {
+  const cx = Math.sin(camYaw) * Math.cos(camPitch) * camDist;
+  const cz = Math.cos(camYaw) * Math.cos(camPitch) * camDist;
+  const cy = Math.sin(camPitch) * camDist + 1.0;
+  cam.position.set(cx, cy, cz);
+  cam.lookAt(0, 1.2, 0);
+}
+applyCam();
+
+let dragCam = null;
+cv.addEventListener('pointerdown', e => {
+  dragCam = { x: e.clientX, y: e.clientY, yaw: camYaw, pitch: camPitch };
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove', e => {
+  if (!dragCam) { return; }
+  camYaw = dragCam.yaw - (e.clientX - dragCam.x) * 0.006;
+  camPitch = Math.max(-0.15, Math.min(1.35, dragCam.pitch + (e.clientY - dragCam.y) * 0.005));
+  applyCam();
+});
+cv.addEventListener('pointerup', e => { dragCam = null; try { cv.releasePointerCapture(e.pointerId); } catch (e2) { } });
+cv.addEventListener('pointercancel', () => { dragCam = null; });
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  camDist = Math.max(6, Math.min(60, camDist * (1 + (e.deltaY > 0 ? 0.1 : -0.1))));
+  applyCam();
+}, { passive: false });
+/* 手机上双指缩放 */
+let pinch = 0;
+cv.addEventListener('touchstart', e => {
+  if (e.touches.length === 2) { pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+    e.touches[0].clientY - e.touches[1].clientY); } }, { passive: true });
+cv.addEventListener('touchmove', e => {
+  if (e.touches.length === 2 && pinch) {
+    const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY);
+    camDist = Math.max(6, Math.min(60, camDist * (pinch / Math.max(1, d))));
+    pinch = d; applyCam();
+  } }, { passive: true });
+
+let acc = 0;
+let shakeT = 0, shakeAmp = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  VFX.tick(dt);
+  /* ★ 震屏（地裂/天罚用）*/
+  if (window.__VFX_SHAKE__) { shakeAmp = window.__VFX_SHAKE__; shakeT = 0.5; window.__VFX_SHAKE__ = 0; }
+  if (shakeT > 0) {
+    shakeT -= dt;
+    const a = shakeAmp * Math.max(0, shakeT / 0.5);
+    cam.position.x += (Math.random() - 0.5) * a;
+    cam.position.y += (Math.random() - 0.5) * a;
+    cam.position.z += (Math.random() - 0.5) * a;
+    cam.lookAt(0, 1.2, 0);
+  }
+  if (looping) {
+    acc += dt;
+    if (acc > ((P.dur || 1) + 0.9)) { acc = 0; play(); }
+  }
+  /* ★ 黑洞吸假人：向中心收 + 升起，炸开后落地 */
+  if (pulling) {
+    pulling.t += dt;
+    const k = Math.min(1, pulling.t / pulling.dur);
+    const rr = 1 - Math.pow(k, 1.6);
+    dummy.position.x = pulling.x0 * rr;
+    dummy.position.z = pulling.z0 * rr;
+    dummy.position.y = Math.min(2.4, k * 2.4);
+    if (pulling.t > pulling.dur + 0.35) {
+      dummy.position.y = Math.max(0, dummy.position.y - dt * 18);
+      if (dummy.position.y <= 0) { pulling = null; }
+    }
+  }
+  dummy.rotation.y += dt * 0.35;
+  renderer.render(scene, cam);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+play();
+</script>
+</body>
+</html>

@@ -213,6 +213,22 @@ _bad = [ln.strip() for ln in _body_src.split(chr(10))
 ok(not _bad,
    '★★★ 服务端 equip_weapon 里已经没有【代码级】的等级拦截了 ✓（能装 ✓ 只是发挥度打折 ✓）', _bad)
 print('')
+print('== ⑨ ★ 长枪挑飞的概率曲线（round409 用户指定：最低 8% · 12 阶 20%）==')
+# ★ 为什么钉死这条：上一轮踩过"中间品阶对不上"（代码 20%、文案 17%）
+#   → 文案里的数字必须和 FX 表算出来的【同一个 chance】✓
+_pr = [W.fx_of('spear', t) for t in range(12)]
+_pct = [f['pct'] for f in _pr]
+print('   12 个品阶的显示概率: %s' % _pct)
+ok(_pct[0] == 8, '★ 1 阶（内部 t=0）= 8%', _pct[0])
+ok(_pct[11] == 20, '★ 12 阶（内部 t=11）= 20%（用户要的上限）', _pct[11])
+ok(_pct == sorted(_pct), '★ 单调不降（不会中间掉下去 ✓）', _pct)
+ok(all(f['text'].startswith('%d%%' % f['pct']) for f in _pr),
+   '★★ 12 条文案里的概率【都等于】算出来的概率（不会再出现"代码 20%、文案 17%"✓）',
+   [f['text'][:6] for f in _pr])
+ok(abs(_pr[0]['chance'] - 0.08) < 1e-9 and abs(_pr[11]['chance'] - 0.20) < 2e-3,
+   '★ 内部 chance：%.4f → %.4f（12 阶落在 20%% 上 ✓）'
+   % (_pr[0]['chance'], _pr[11]['chance']))
+print('')
 if fails:
     print('FAILED: %d 条 ✗' % len(fails))
     for f in fails:

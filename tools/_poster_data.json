@@ -1,0 +1,214 @@
+{
+  "weapons": [
+    {
+      "look": "dagger",
+      "name": "匕首",
+      "speed": 1.45,
+      "interval": 0.43,
+      "windup": 0.31,
+      "reach": 1.8,
+      "arcDeg": 69,
+      "coeff": [
+        0.66,
+        0.78
+      ],
+      "ranged": false,
+      "tip": "最快的手，贴脸缠斗；奇数刀是投掷，等于自带一发远程。",
+      "fxName": "投掷",
+      "fxText": "双持·奇数刀左手投掷（80% 伤害，射程同箭）· 偶数刀右手近身刺（100%）",
+      "fxChance": 100.0
+    },
+    {
+      "look": "sword",
+      "name": "单手剑",
+      "speed": 1.15,
+      "interval": 0.54,
+      "windup": 0.39,
+      "reach": 2.4,
+      "arcDeg": 60,
+      "coeff": [
+        0.92,
+        1.08
+      ],
+      "ranged": false,
+      "tip": "数值最稳的万金油，连刺一出就是双倍结算。",
+      "fxName": "连刺",
+      "fxText": "50% 概率连刺 · 本次伤害结算两次",
+      "fxChance": 50.0
+    },
+    {
+      "look": "saber",
+      "name": "刀",
+      "speed": 1.2,
+      "interval": 0.52,
+      "windup": 0.38,
+      "reach": 2.3,
+      "arcDeg": 66,
+      "coeff": [
+        0.87,
+        1.03
+      ],
+      "ranged": false,
+      "tip": "刀数随品阶暴涨，高阶砍起来像绞肉机。",
+      "fxName": "连砍",
+      "fxText": "20% 概率连砍 8 刀 · 每刀 60% 伤害，每砍一刀向前一步",
+      "fxChance": 20.0
+    },
+    {
+      "look": "staff",
+      "name": "长棍",
+      "speed": 1.05,
+      "interval": 0.59,
+      "windup": 0.43,
+      "reach": 2.9,
+      "arcDeg": 57,
+      "coeff": [
+        0.94,
+        1.1
+      ],
+      "ranged": false,
+      "tip": "一条直线扫过去，清一片还能把人推开。",
+      "fxName": "横扫",
+      "fxText": "55% 概率横扫 · 前方 10.0 米直线伤害并击退",
+      "fxChance": 55.0
+    },
+    {
+      "look": "spear",
+      "name": "长枪",
+      "speed": 1.0,
+      "interval": 0.62,
+      "windup": 0.45,
+      "reach": 3.6,
+      "arcDeg": 40,
+      "coeff": [
+        0.97,
+        1.13
+      ],
+      "ranged": false,
+      "tip": "最远的近战，一枪把怪挑到半空再砸下来。",
+      "fxName": "挑飞",
+      "fxText": "20% 概率挑飞 · 挑到 6 格高，落地时砸出范围伤害",
+      "fxChance": 20.0
+    },
+    {
+      "look": "axe",
+      "name": "双手斧",
+      "speed": 0.75,
+      "interval": 0.83,
+      "windup": 0.6,
+      "reach": 3.0,
+      "arcDeg": 89,
+      "coeff": [
+        1.33,
+        1.57
+      ],
+      "ranged": false,
+      "tip": "慢，但一下能扫到一大片——人堆里最爽。",
+      "fxName": "溅射",
+      "fxText": "命中时溅射 1.5 米内最多 2~13 个（品阶越高越多，1 阶 2 个 · 每阶 +1 · 12 阶 13 个）· 各 57% 伤害",
+      "fxChance": 100.0
+    },
+    {
+      "look": "hammer",
+      "name": "锤",
+      "speed": 0.72,
+      "interval": 0.86,
+      "windup": 0.62,
+      "reach": 2.8,
+      "arcDeg": 74,
+      "coeff": [
+        1.47,
+        1.73
+      ],
+      "ranged": false,
+      "tip": "单下最狠，旋击一转让周围全部吃伤害。",
+      "fxName": "旋击",
+      "fxText": "40% 概率旋击 · 转一圈攻击周围全部敌人",
+      "fxChance": 40.0
+    },
+    {
+      "look": "bow",
+      "name": "弓",
+      "speed": 0.85,
+      "interval": 0.73,
+      "windup": 0.53,
+      "reach": 14.0,
+      "arcDeg": 0,
+      "coeff": [
+        0.54,
+        0.66
+      ],
+      "ranged": true,
+      "tip": "唯一的远程，站安全距离点名；自动战斗会自己保持 8 米放箭。",
+      "fxName": "远程射击",
+      "fxText": "射出箭矢，飞行途中命中；射程 14 米，被近身就没有优势",
+      "fxChance": 100
+    }
+  ],
+  "tiers": [
+    {
+      "i": 1,
+      "name": "锈蚀",
+      "col": "#bfa88a"
+    },
+    {
+      "i": 2,
+      "name": "破旧",
+      "col": "#8fd28a"
+    },
+    {
+      "i": 3,
+      "name": "精铁",
+      "col": "#8fc4ff"
+    },
+    {
+      "i": 4,
+      "name": "镔铁",
+      "col": "#c08fff"
+    },
+    {
+      "i": 5,
+      "name": "玄铁",
+      "col": "#ffd83d"
+    },
+    {
+      "i": 6,
+      "name": "灵纹",
+      "col": "#ff9a5c"
+    },
+    {
+      "i": 7,
+      "name": "秘银",
+      "col": "#ff6a5c"
+    },
+    {
+      "i": 8,
+      "name": "灵器",
+      "col": "#ff5cf0"
+    },
+    {
+      "i": 9,
+      "name": "宝器",
+      "col": "#5cf0ff"
+    },
+    {
+      "i": 10,
+      "name": "灵宝",
+      "col": "#ffffff"
+    },
+    {
+      "i": 11,
+      "name": "仙器",
+      "col": "#ffe08a"
+    },
+    {
+      "i": 12,
+      "name": "神品",
+      "col": "#ff4a4a"
+    }
+  ],
+  "clamp": [
+    0.95,
+    1.2
+  ]
+}

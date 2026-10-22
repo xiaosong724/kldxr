@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>双马尾剑士 · 裙子改圆（对比）</title>
+<style>
+  html, body { margin:0; background:#0a0c11; color:#dfe8f2;
+               font-family:"Microsoft YaHei", system-ui, sans-serif; }
+  #stage { position:relative; width:1200px; height:760px; }
+  canvas { display:block; width:1200px; height:760px; }
+  .cap { position:absolute; bottom:18px; font-size:15px; color:#eaf2fb; text-align:center; }
+  .sub { position:absolute; bottom:0; font-size:11px; color:#8fa3b8; text-align:center; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="cv"></canvas>
+  <div class="cap" style="left:0;width:400px">以前：4 段（太方）</div>
+  <div class="sub" style="left:0;width:400px">f01 · 正面</div>
+  <div class="cap" style="left:400px;width:400px;color:#ffd83d">现在：8 边形 ✓</div>
+  <div class="sub" style="left:400px;width:400px">f01 · 正面</div>
+  <div class="cap" style="left:800px;width:400px">上一版：14 边形（太圆）</div>
+  <div class="sub" style="left:800px;width:400px">f01 · 正面</div>
+</div>
+<script src="../web/lib/three.min.js"></script>
+<script src="skin_rig_bundle.js"></script>
+<script>
+var _mc = {};
+function matOf(c) { var k = c|0; if (!_mc[k]) { _mc[k] = new THREE.MeshLambertMaterial({ color:k }); } return _mc[k]; }
+function fillHeldWeapon(sw) { }
+
+var cv = document.getElementById('cv');
+var r = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+r.setPixelRatio(1); r.setSize(1200, 760, false); r.setClearColor(0x0a0c11, 1);
+var sc = new THREE.Scene();
+sc.add(new THREE.HemisphereLight(0xffffff, 0x2a3242, 0.62));
+var d1 = new THREE.DirectionalLight(0xffffff, 0.55); d1.position.set(5,9,12); sc.add(d1);
+var d2 = new THREE.DirectionalLight(0x9ac0ff, 0.24); d2.position.set(-9,5,-8); sc.add(d2);
+var d3 = new THREE.DirectionalLight(0xffe0c0, 0.14); d3.position.set(0,2,12); sc.add(d3);
+
+var cam = new THREE.OrthographicCamera(-1.2, 1.2, 0.76, -0.76, 0.1, 100);
+cam.position.set(0, 0, 40);
+cam.lookAt(0, 0, 0);
+
+function mk(key, x, rotY, seg) {
+  var def = JSON.parse(JSON.stringify(SKIN_DEFS[key]));
+  if (seg !== undefined) { def.skirt.seg = seg; }
+  var h = skBuildHero2(def);
+  h.g.scale.set(0.42, 0.42, 0.42);
+  h.g.position.set(x, -0.62, 0);
+  h.g.rotation.y = rotY;
+  sc.add(h.g);
+}
+/* 用 skBuildHero 只能按 key 取数据 ✗ 所以临时替换 SKIN_DEFS 里的 seg ✓ */
+function skBuildHero2(def) {
+  var bak = SKIN_DEFS[def.k];
+  SKIN_DEFS[def.k] = def;
+  var h = skBuildHero(def.k);
+  SKIN_DEFS[def.k] = bak;
+  return h;
+}
+
+mk('f01', -0.80, 0, 4);       // 旧：4 段
+mk('f01', 0, 0, 8);            // 新：8 边形
+mk('f01', 0.80, 0, 14);        // 太圆那版
+
+r.render(sc, cam);
+window.__ready = true;
+</script>
+</body>
+</html>

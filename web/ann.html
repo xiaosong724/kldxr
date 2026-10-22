@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>更新公告</title>
+<style>
+  html, body { margin:0; background:#0b0c0a; }
+  #wrap { width:1180px; margin:0 auto; }
+  .bar { display:flex; gap:10px; align-items:center; padding:10px 14px; color:#8f9a84;
+         font-family:system-ui,"Microsoft YaHei",sans-serif; font-size:12px; }
+  .bar a, .bar button { color:#ffd83d; background:#1b1e18; border:1px solid #ffffff22;
+         border-radius:7px; padding:4px 10px; font-size:12px; cursor:pointer; text-decoration:none; }
+  /* 截图模式：?shot=1 → 把工具栏藏掉 ✓ */
+  body.shot .bar { display:none; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <span id="tip">加载中…</span>
+  <button id="btnShot">截图模式（隐藏这条栏）</button>
+  <a href="/admin/announce">公告管理 →</a>
+</div>
+<div id="wrap"></div>
+<script src="/lib/annrender.js"></script>
+<script>
+function qs(k) {
+  var m = new RegExp('[?&]' + k + '=([^&]*)').exec(location.search || '');
+  return m ? decodeURIComponent(m[1]) : '';
+}
+if (qs('shot') === '1') { document.body.classList.add('shot'); }
+var tip = document.getElementById('tip');
+var id = qs('id');
+var url = id ? '/api/announce/latest' : '/api/announce/latest';
+
+fetch(url, { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (j) {
+  var a = (j && j.ann) || null;
+  if (!a) {
+    tip.textContent = '现在没有已发布的公告';
+    document.getElementById('wrap').innerHTML =
+      '<div style="color:#8f9a84;padding:40px;font-family:system-ui">还没有发布任何公告</div>';
+    return;
+  }
+  tip.textContent = '#' + a.id + ' · ' + (a.date || '') + ' · ' + (a.headline || '');
+  document.getElementById('wrap').innerHTML = AnnRender.html(a, { scale: 1 });
+  document.title = a.title || '更新公告';
+}).catch(function (e) {
+  tip.textContent = '读取失败：' + e;
+});
+document.getElementById('btnShot').onclick = function () {
+  document.body.classList.toggle('shot');
+};
+</script>
+</body>
+</html>

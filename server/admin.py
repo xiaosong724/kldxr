@@ -11,19 +11,46 @@
 
 设计（够用就好，不引第三方）：
    · 密码放 config.json 的 admin_password ✓（不落库、不进版本库的示例里用占位符 ✓）
-   · 登录成功发一个随机 token，存在内存里（重启即失效 ✓ 这正合适）
+   · 登录成功发一个随机 token，落本地会话文件（重启后仍有效 ✓ 过期自动清 ✓）
    · token 有有效期（默认 12 小时 ✓）—— 过期要重新登录
    · ★ 登录失败要限速（防在线爆破 ✓）—— 和账号登录用同一套思路（简单计数 ✓）
 """
 
+import json
+import os
 import secrets
 import threading
 import time
 
 # token -> 到期时间戳
+# ★ round602：管理登录不能因为服务重启就丢；落一个本地 JSON（token 本身就是随机凭据）
+_STORE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '_admin_sessions.json')
 _sessions = {}
 _lock = threading.Lock()
 TTL = 12 * 3600.0            # 会话有效期：12 小时
+
+
+def _load_sessions():
+    try:
+        with open(_STORE, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+        now = time.time()
+        return {str(k): float(v) for k, v in (raw or {}).items() if float(v) > now}
+    except Exception:
+        return {}
+
+
+def _write_sessions_locked():
+    try:
+        tmp = _STORE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(_sessions, f, ensure_ascii=False)
+        os.replace(tmp, _STORE)
+    except Exception:
+        pass
+
+
+_sessions = _load_sessions()
 
 # 登录限速：ip -> [失败时间戳...]
 _fails = {}
@@ -71,6 +98,7 @@ def login(cfg, password, ip='-'):
     tk = secrets.token_urlsafe(32)
     with _lock:
         _sessions[tk] = time.time() + TTL
+        _write_sessions_locked()
     return True, tk
 
 
@@ -85,6 +113,7 @@ def check(cfg, token):
             return False
         if exp < now:
             _sessions.pop(token, None)
+            _write_sessions_locked()
             return False
         return True
 
@@ -92,6 +121,7 @@ def check(cfg, token):
 def logout(token):
     with _lock:
         _sessions.pop(token, None)
+        _write_sessions_locked()
 
 
 def session_count():

@@ -118,8 +118,8 @@ C2S = {
         'doc': '打工动画阶段播报（服务端广播）',
     },
     'jobdone': {
-        'req': ['exp', 'pay'], 'opt': [],
-        'doc': '一次打工结算（服务端校验后给经验/金币）',
+        'req': [], 'opt': [],
+        'doc': '一轮打工完成（经验/金币由服务端 _work_settle 发，客户端不报数）',
     },
     'fridge_open': {
         'req': ['id'], 'opt': [],
@@ -187,8 +187,8 @@ C2S = {
     },
     # ★ 第 116 轮：天赋加点（方案 docs/天赋方案.md §7.1）
     'talent': {
-        'req': ['op'],              # 'add' | 'reset'
-        'opt': ['stat', 'n'],       # stat=12 个 key 之一 · n=1~50
+        'req': ['op'], 'opt': ['stat', 'n'],
+        'doc': '属性加点：op=add|reset，stat=属性名，n=点数',
     },
     # ★ round466：装备自动出售阈值（0 = 关，N = 低于 N 阶自动卖）✓
     'autosell': {
@@ -452,10 +452,6 @@ C2S = {
         'req': [], 'opt': ['defs', 'learn', 'load', 'cd', 'qi'],
         'doc': '技能定义 + 我的学习（key→{tier}）+ 装配（kind→[5 槽]）+ 冷却剩余',
     },
-    'skillfx': {
-        'req': ['k'], 'opt': ['x', 'z', 'r', 'yaw', 'seed', 'dur'],
-        'doc': '技能特效广播（所有人看到同一套动画 ✓ seed 保证随机数一致）',
-    },
     'skillcd': {
         'req': [], 'opt': ['cd'],
         'doc': '我的技能冷却（{技能key: 剩余秒}）',
@@ -485,21 +481,9 @@ C2S = {
         'req': ['hp'], 'opt': ['by', 'kind', 'x', 'z'],
         'doc': '自己掉血',
     },
-    'dead': {
-        'req': [], 'opt': ['by'],
-        'doc': '自己死了',
-    },
     'revived': {
         'req': [], 'opt': ['x', 'z', 'hp'],
         'doc': '复活了',
-    },
-    'team': {
-        'req': ['members'], 'opt': ['action'],
-        'doc': '队伍状态变化',
-    },
-    'chat': {
-        'req': ['from', 'text'], 'opt': ['ch'],
-        'doc': '收到聊天',
     },
     'houses': {
         'req': ['list'], 'opt': [],
@@ -521,10 +505,6 @@ C2S = {
         'req': [], 'opt': ['ok', 'msg', 'id', 'name', 'items', 'gold', 'table', 'order'],
         'doc': '点单/上菜结果（table = 桌位状态，含杯位）',
     },
-    'tablecups': {
-        'req': ['table'], 'opt': [],
-        'doc': '一张桌子的当前杯位（上菜后广播给附近的人）',
-    },
     'towncleared': {
         'req': ['x', 'z'], 'opt': ['r', 'town'],
         'doc': '小镇被冻结/解散：把以 (x,z) 为圆心、半径 r 内的放置物从客户端撤掉',
@@ -540,10 +520,6 @@ C2S = {
     'work': {
         'req': [], 'opt': ['ok', 'msg', 'id', 'slot', 'on'],
         'doc': '打工开始/结束',
-    },
-    'jobstep': {
-        'req': ['cid'], 'opt': ['job', 't', 'x', 'z'],
-        'doc': '别人正在打工的动画阶段',
     },
     'fridge': {
         'req': [], 'opt': ['ok', 'msg', 'house', 'mine', 'cap', 'items'],
@@ -643,6 +619,30 @@ S2C = {
     'removed': {
         'req': ['id'], 'opt': [],
         'doc': '移除成功',
+    },
+    'chat': {
+        'req': ['from', 'text'], 'opt': ['ch'],
+        'doc': '收到聊天',
+    },
+    'team': {
+        'req': ['members'], 'opt': ['action'],
+        'doc': '队伍状态变化',
+    },
+    'dead': {
+        'req': [], 'opt': ['by'],
+        'doc': '自己死了',
+    },
+    'jobstep': {
+        'req': ['cid'], 'opt': ['job', 't', 'x', 'z'],
+        'doc': '别人正在打工的动画阶段',
+    },
+    'skillfx': {
+        'req': ['k'], 'opt': ['x', 'z', 'r', 'yaw', 'seed', 'dur'],
+        'doc': '技能特效广播（所有人看到同一套动画 ✓ seed 保证随机数一致）',
+    },
+    'tablecups': {
+        'req': ['table'], 'opt': [],
+        'doc': '一张桌子的当前杯位（上菜后广播给附近的人）',
     },
 }
 

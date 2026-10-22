@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>女生长腿化 · 对比</title>
+<style>
+  html, body { margin: 0; overflow: hidden; background: #0d1015; color: #dfe8f2;
+               font-family: "Microsoft YaHei", system-ui, sans-serif; }
+  #hd { padding: 10px 16px 2px; font-size: 17px; font-weight: 800; color: #ffd83d; letter-spacing: 2px; }
+  #hd i { font-style: normal; font-size: 12px; color: #8fa3b8; letter-spacing: 0; margin-left: 10px; font-weight: 400; }
+  #wrap { display: grid; grid-template-columns: repeat(4, 236px); gap: 2px 8px; padding: 4px 16px 10px; }
+  .cell { position: relative; width: var(--cw, 236px); }
+  .cell canvas { display: block; width: var(--cw, 236px); height: var(--ch, 268px); border-radius: 10px;
+                 background: radial-gradient(circle at 50% 30%, #232e3c, #0a0e13 76%); }
+  .cell .cap { text-align: center; font-size: 12px; color: #cbd6e2; margin-top: 2px; }
+  .cell .cap b { color: #ffd83d; }
+  .cell .cap s { color: #7ee08a; text-decoration: none; }
+  .rowlab { position: absolute; left: 4px; top: 4px; font-size: 11px; color: #8fa3b8;
+            background: #0b0f14aa; padding: 1px 6px; border-radius: 6px; }
+  .same { position: absolute; left: 0; right: 0; top: 22px; border-top: 1px dashed #ffd83d55; }
+  .same span { position: absolute; right: 4px; top: -13px; font-size: 9px; color: #ffd83d99; }
+  .hip { position: absolute; left: 0; right: 0; border-top: 1px solid #3ec6ff88; }
+  .hip span { position: absolute; left: 4px; top: -12px; font-size: 9px; color: #3ec6ffbb; }
+</style>
+</head>
+<body>
+<div id="hd">女生长腿化 · 对比<i>（总高度一模一样 · 蓝线 = 腰线 · 金线 = 头顶 · 腰线往上抬 = 腿变长）</i></div>
+<div id="wrap"></div>
+<script src="../web/lib/three.min.js"></script>
+<script src="skin_rig_bundle.js"></script>
+<script>
+var _mc = {};
+function matOf(c) { var k = c | 0; if (!_mc[k]) { _mc[k] = new THREE.MeshLambertMaterial({ color: k }); } return _mc[k]; }
+function fillHeldWeapon() { }
+
+var BIG = (location.search || '').indexOf('big=1') >= 0;
+var SKINS = BIG ? [{ k: 'f01', n: '双马尾剑士' }] : [
+  { k: 'f01', n: '双马尾剑士' },
+  { k: 'f06', n: '水手服少女' },
+  { k: 'f13', n: '狐仙（自己写过 hipY=0.96）' }
+];
+/* 每一列：腿加长多少（上身同步缩短同样的量 ✓ 和不变）*/
+var COLS = BIG ? [
+  { d: 0.00, t: '现在' },
+  { d: 0.12, t: '+0.12 腿' },
+  { d: 0.18, t: '+0.18 腿' }
+] : [
+  { d: 0.00, t: '现在' },
+  { d: 0.08, t: '+0.08 腿' },
+  { d: 0.12, t: '+0.12 腿' },
+  { d: 0.18, t: '+0.18 腿' }
+];
+/* 默认骨架（没写的皮肤走它）*/
+var D = { hipY: 0.92, torsoH: 1.00 };
+
+var wrap = document.getElementById('wrap');
+if (BIG) {
+  wrap.style.gridTemplateColumns = 'repeat(3, 320px)';
+  wrap.style.setProperty('--cw', '320px');
+  wrap.style.setProperty('--ch', '380px');
+  document.getElementById('hd').innerHTML = '双马尾剑士 · 大图对比' +
+    '<i>（金线 = 头顶 · 蓝线 = 腰线 · 下面写了腿长/上身/总高）</i>';
+}
+SKINS.forEach(function (sk) {
+  COLS.forEach(function (col) {
+    var bak = JSON.parse(JSON.stringify(SKIN_DEFS[sk.k].sk || {}));
+    var cur = {};
+    for (var kk in D) { cur[kk] = (bak[kk] !== undefined) ? bak[kk] : D[kk]; }
+
+    var cell = document.createElement('div');
+    cell.className = 'cell';
+    if (col.d === 0) {
+      var lab = document.createElement('div');
+      lab.className = 'rowlab';
+      lab.textContent = sk.k + ' ' + sk.n;
+      cell.appendChild(lab);
+    }
+    var SW = BIG ? 320 : 236, SH = BIG ? 380 : 268;
+    var cv = document.createElement('canvas');
+    cv.width = SW * 2; cv.height = SH * 2;
+    cell.appendChild(cv);
+    var legLen = (cur.hipY + col.d), upLen = (cur.torsoH - col.d);
+    var cap = document.createElement('div');
+    cap.className = 'cap';
+    /* ★ 字要等 hh 算出来才写 ✗ 先摆着（之前在这里用 hh 直接崩了 ✓）*/
+    cell.appendChild(cap);
+    wrap.appendChild(cell);
+
+
+    var r = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
+    r.setPixelRatio(2);
+    r.setSize(SW, SH, false);
+    r.shadowMap.enabled = false;
+    var sc = new THREE.Scene();
+    sc.add(new THREE.HemisphereLight(0xd8e4f4, 0x3a3020, 1.05));
+    var d1 = new THREE.DirectionalLight(0xfff3d8, 0.95); d1.position.set(2.2, 3.4, 3.6); sc.add(d1);
+    var d2 = new THREE.DirectionalLight(0x8fb0ff, 0.38); d2.position.set(-2.6, 1.2, -1.6); sc.add(d2);
+
+
+    SKIN_DEFS[sk.k].sk.hipY = cur.hipY + col.d;
+    SKIN_DEFS[sk.k].sk.torsoH = cur.torsoH - col.d;
+    var hero = skBuildHero(sk.k);
+    SKIN_DEFS[sk.k].sk = bak;
+
+    sc.add(hero.g);
+    hero.g.rotation.y = 0.30;
+    hero.armL.rotation.x = 0.06; hero.armR.rotation.x = -0.06;
+
+    var hh = hero.h;                 /* 头顶高度（应该每格都一样 ✓）*/
+    var fov = 30;
+    var wantH = hh * (BIG ? 1.30 : 1.52);
+    var z = wantH / (2 * Math.tan(fov * Math.PI / 360));
+    var cam = new THREE.PerspectiveCamera(fov, SW / SH, 0.1, 80);
+    var camMid = hh * 0.50;
+    cam.position.set(0, camMid, z);
+    cam.lookAt(0, camMid, 0);
+    r.render(sc, cam);
+
+    /* ★ 把【腰线】和【头顶】画到像素上 ✗ "上身短了、腿长了、总高没变"一眼可见 ✓
+       相机是水平看的 → 直接按比例换算最稳（不用 project()）✓ */
+    var pxPerUnit = SH / wantH;
+    function py(worldY) { return SH / 2 - (worldY - camMid) * pxPerUnit; }
+    var hipPx = py(cur.hipY + col.d);
+    var headPx = py(hh);
+
+    cap.innerHTML = (col.d === 0 ? '<b>现在</b> <s>（原样）</s>' : '<b>' + col.t + '</b> <s>（上身 -' + col.d.toFixed(2) + '）</s>') +
+      '<br><s style="color:#8fa3b8">腿 ' + (cur.hipY + col.d).toFixed(2) +
+      ' · 上身 ' + (cur.torsoH - col.d).toFixed(2) + ' · 总高 ' + hh.toFixed(2) + '</s>';
+
+    var lnHip = document.createElement('div');
+    lnHip.className = 'hip';
+    lnHip.style.top = Math.round(hipPx) + 'px';
+    lnHip.innerHTML = '<span>腰线</span>';
+    cell.appendChild(lnHip);
+
+    var lnTop = document.createElement('div');
+    lnTop.className = 'same';
+    lnTop.style.top = Math.round(headPx) + 'px';
+    lnTop.style.borderTopColor = '#ffd83d88';
+    if (col.d === 0) { lnTop.innerHTML = '<span>头顶（同高）</span>'; }
+    cell.appendChild(lnTop);
+  });
+});
+</script>
+</body>
+</html>

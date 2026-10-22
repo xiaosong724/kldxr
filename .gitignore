@@ -54,3 +54,17 @@ desktop.ini
 *.bak
 *.orig
 docs/_backup/
+
+# 管理登录会话（本地随机 token，不入库）
+server/_admin_sessions.json
+
+# ★ 2026-10-22：今天新增的运行时/备份产物（别进库）
+ffmpeg.zip
+server/backups/
+server/*.db.bak*
+server/_merge/
+server/_skill_port.json
+
+# ★ 2026-10-22：这俩是工具运行产生的东西（浏览器 profile / 临时），绝不能进库
+.videotools/
+tmp/

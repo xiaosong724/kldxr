@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>皮肤骨架测试（游戏内同一套构建器）</title>
+<style>
+  html, body { margin: 0; background: #0a0c11; color: #dfe8f2;
+               font-family: "Microsoft YaHei", system-ui, sans-serif; }
+  #stage { position: relative; width: 1500px; height: 1500px; }
+  canvas { display: block; width: 1500px; height: 1500px; }
+  #labels { position: absolute; left: 0; top: 0; width: 1500px; height: 1500px; pointer-events: none; }
+  .lb { position: absolute; transform: translate(-50%, 0); text-align: center; white-space: nowrap;
+        text-shadow: 0 1px 3px #000; }
+  .lb b { display: block; font-size: 13px; }
+  .lb i { display: block; font-style: normal; font-size: 10px; color: #8fa3b8; }
+  #rep { position: absolute; left: 8px; top: 8px; font-size: 11px; color: #9fe0a0; white-space: pre; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="cv"></canvas>
+  <div id="labels"></div>
+  <div id="rep"></div>
+</div>
+<script src="../web/lib/three.min.js"></script>
+<script src="skin_rig_bundle.js"></script>
+<script>
+/* 测试页自己补上 game.js 里的两个依赖（不加载整个游戏） */
+var _matCache = {};
+function matOf(c) {
+  var k = c | 0;
+  var m = _matCache[k];
+  if (!m) { m = new THREE.MeshLambertMaterial({ color: k }); _matCache[k] = m; }
+  return m;
+}
+function fillHeldWeapon(sw, look, tier, swL) {
+  /* 测试页只放一个标记方块，表示"剑的挂点" */
+  var b = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.6, 0.1), matOf(0xffe066));
+  b.position.y = 0.3;
+  sw.add(b);
+}
+
+var cv = document.getElementById('cv');
+var renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+renderer.setPixelRatio(1);
+renderer.setSize(1500, 1500, false);
+renderer.setClearColor(0x0a0c11, 1);
+var scene = new THREE.Scene();
+scene.add(new THREE.HemisphereLight(0xffffff, 0x2a3242, 0.60));
+var d1 = new THREE.DirectionalLight(0xffffff, 0.55); d1.position.set(5, 9, 12); scene.add(d1);
+var d2 = new THREE.DirectionalLight(0x9ac0ff, 0.25); d2.position.set(-9, 5, -8); scene.add(d2);
+var d3 = new THREE.DirectionalLight(0xffe0c0, 0.14); d3.position.set(0, 2, 12); scene.add(d3);
+
+/* ?p=1 女 / ?p=2 男 / 不带 = 40 个一起 ✓ */
+var PAGE = (location.search.indexOf('p=2') >= 0) ? 2 : ((location.search.indexOf('p=1') >= 0) ? 1 : 0);
+var LIST = (PAGE === 0) ? SKIN_ORDER : SKIN_ORDER.filter(function (k) {
+  return (PAGE === 1) ? (k.charAt(0) === 'f') : (k.charAt(0) === 'm');
+});
+var COLS = (PAGE === 0) ? 8 : 5, SX = 3.4, SY = 3.9, HERO_SCALE = 0.42;
+var rows = Math.ceil(LIST.length / COLS);
+var cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 300);
+cam.position.set(0, 0, 80);
+
+var heroes = [], report = [];
+for (var i = 0; i < LIST.length; i++) {
+  var key = LIST[i];
+  var h = skBuildHero(key);
+  if (!h) { report.push(key + ' 构建失败'); continue; }
+  h.g.scale.set(HERO_SCALE, HERO_SCALE, HERO_SCALE);
+  var c = i % COLS, r = Math.floor(i / COLS);
+  var gx = (c - (COLS - 1) / 2) * SX;
+  var gy = ((rows - 1) / 2 - r) * SY - SY / 2 + 0.45;
+  h.g.position.set(gx, gy, 0);
+  h.g.rotation.y = -0.34;
+  scene.add(h.g);
+  heroes.push({ key: key, h: h, gx: gx, gy: gy });
+
+  /* ---- 数值校验 ---- */
+  var box = new THREE.Box3().setFromObject(h.g);
+  var footY = box.min.y - gy;               /* 相对地面：应该 ≈ 0 ✓ */
+  var topY = box.max.y;
+  var hand = new THREE.Vector3(0, 0, 0);
+  h.sw.getWorldPosition(hand);
+  var armEnd = new THREE.Vector3(0, -(SK_DEF.armLen || 0.96), 0);
+  report.push(key + ' ' + (SKIN_NAME[key] || '') +
+    ' 脚底=' + footY.toFixed(3) + ' 头顶=' + (h.h).toFixed(2) +
+    ' 身高=' + (box.max.y - box.min.y).toFixed(2));
+}
+
+/* 相机自动取景 */
+var bbox = new THREE.Box3();
+heroes.forEach(function (o) { bbox.expandByObject(o.h.g); });
+bbox.min.y -= 0.5;
+var size = bbox.getSize(new THREE.Vector3());
+var cen = bbox.getCenter(new THREE.Vector3());
+var ASPECT = 1500 / 1500;
+var vh = Math.max(size.y, size.x / ASPECT) * 1.05;
+cam.left = -vh * ASPECT / 2; cam.right = vh * ASPECT / 2;
+cam.top = vh / 2; cam.bottom = -vh / 2;
+cam.position.set(cen.x, cen.y, 80);
+cam.lookAt(cen.x, cen.y, 0);
+cam.updateProjectionMatrix();
+
+/* 名字标在脚下 */
+var lbBox = document.getElementById('labels');
+var pv = new THREE.Vector3();
+heroes.forEach(function (o) {
+  pv.set(o.gx, o.gy - 0.1, 0).project(cam);
+  var el = document.createElement('div');
+  el.className = 'lb';
+  el.innerHTML = '<b>' + (SKIN_NAME[o.key] || o.key) + '</b><i>' + o.key + '</i>';
+  el.style.left = ((pv.x * 0.5 + 0.5) * 1500).toFixed(0) + 'px';
+  el.style.top = ((-pv.y * 0.5 + 0.5) * 1500).toFixed(0) + 'px';
+  lbBox.appendChild(el);
+});
+
+/* 脚底误差统计 */
+var badFeet = report.filter(function (s) { return Math.abs(parseFloat(s.split('脚底=')[1])) > 0.01; });
+document.getElementById('rep').textContent =
+  '皮肤 ' + heroes.length + ' / ' + LIST.length + ' 个 · 脚底偏离 ' + badFeet.length + ' 个';
+
+renderer.render(scene, cam);
+window.__rigDone = true;
+window.__rigReport = report;
+</script>
+</body>
+</html>

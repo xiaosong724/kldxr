@@ -302,6 +302,27 @@ UI.plate = {
   },
   /* 称号：国服在线top1（前三名前面加金/银/铜牌 ✓）
      text 空 = 隐藏 ✗ medal = 1/2/3 ✓ */
+  /* ★ 2026-10-22（用户："头上的信息框要能看见经验这些，需要同步显示"）
+     打工进度行：打工中 00:23 · +3194金 +13经验
+     ★ 和称号/魔气一样走 _top 容器 ✓ 不拼进名字（避免互相覆盖 ✓）*/
+  job: function (ui, text) {
+    if (!ui || !ui.wrap) { return; }
+    var t = String(text || '');
+    if (!t) {
+      if (ui.jobEl) { ui.jobEl.style.display = 'none'; }
+      return;
+    }
+    if (!ui.jobEl) {
+      var el = document.createElement('div');
+      el.style.cssText = 'font-size:10px;font-weight:700;line-height:1.25;color:#ffd83d;'
+        + 'text-shadow:0 1px 2px #000,0 0 4px #000;letter-spacing:.2px';
+      var box = this._top(ui);
+      box.appendChild(el);
+      ui.jobEl = el;
+    }
+    if (ui.jobEl.textContent !== t) { ui.jobEl.textContent = t; }
+    if (ui.jobEl.style.display === 'none') { ui.jobEl.style.display = 'block'; }
+  },
   title: function (ui, text, medal) {
     if (!ui || !ui.wrap) { return; }
     var t = String(text || '');
@@ -1088,9 +1109,9 @@ UI.autoSkill = function (tgt, now) {
       if (d.rg > 0 && (!tgt || dist > d.rg)) { continue; }
       _autoSkAt = now;
       if (d.cast === 'self') {
-        wsSend('skillcast', { key: k });
+        if (typeof MY_JOB === 'undefined' || !MY_JOB) { wsSend('skillcast', { key: k }); }
       } else if (tgt) {
-        wsSend('skillcast', { key: k, x: tgt.x, z: tgt.z });
+        if (typeof MY_JOB === 'undefined' || !MY_JOB) { wsSend('skillcast', { key: k, x: tgt.x, z: tgt.z }); }
       }
       return;
     }
@@ -1155,6 +1176,12 @@ function bindInput() {
   document.addEventListener('touchstart', firstTouch, { passive: true });
   document.addEventListener('mousedown', firstTouch);
   function atkDown(e) { if (e) { e.preventDefault(); } if (UI_EDIT) { return; }
+  /* ★ 2026-10-22（用户："按钮要一直保持交互状态，不然万一出现无法结算的情况"）
+     打工期间按钮【永远是结算打工】✗ 不看距离/其它交互 ✓ */
+  if (typeof MY_JOB !== 'undefined' && MY_JOB) {
+    try { jobStop(); } catch (eJ0) { }
+    return;
+  }
   /* ★ 2026-10-22：坐着 / 躺着时，按钮就是【起身 / 起床】—— 不能先弹交互菜单 */
   if (typeof MY_SLEEP !== 'undefined' && MY_SLEEP) { tryWake(); return; }
   if (typeof MY_SEAT !== 'undefined' && MY_SEAT) {
@@ -2386,6 +2413,13 @@ function doNearAction(c) {
   if (c.kind === 'fridge') { fridgeOpen(c.ref && c.ref.id); return; }
   if (c.kind === 'shop') { shopOpen(); return; }
   if (c.kind === 'warehouse') { try { whOpen(); } catch (e) { } return; }
+  if (c.kind === 'work') {
+    /* ★ 2026-10-22：打工入口（以前 jobStart 没人调 → 按钮都不存在）*/
+    try {
+      if (typeof MY_JOB !== 'undefined' && MY_JOB) { jobStop(); } else { jobStart(); }
+    } catch (eJ) { }
+    return;
+  }
 }
 
 /* 0 个：清空；1 个：沿用单项提示；多个：合并提示 + 按钮变"交互 N" */
@@ -2413,7 +2447,7 @@ UI.interactNear = function (list) {
   if (!NEAR_CANDS.length) {
     ids.forEach(function (id) { showPrompt(id, ''); });
     if (atk) {
-      atk.classList.remove('seat', 'shop', 'sleep', 'house', 'teleport', 'interact');
+      atk.classList.remove('seat', 'shop', 'sleep', 'house', 'teleport', 'interact', 'fridge', 'work');
       atk.title = '';
       var badge = document.getElementById('atkBadge');
       if (badge) { badge.style.display = 'none'; }
@@ -2426,7 +2460,7 @@ UI.interactNear = function (list) {
     ids.forEach(function (id) { if (id !== c.prompt) { showPrompt(id, ''); } });
     if (_changed && c.prompt) { showPrompt(c.prompt, c.text); }
     if (atk) {
-      atk.classList.remove('seat', 'shop', 'sleep', 'house', 'teleport', 'interact');
+      atk.classList.remove('seat', 'shop', 'sleep', 'house', 'teleport', 'interact', 'fridge', 'work');
       if (c.cls) { atk.classList.add(c.cls); }
       atk.title = c.title || '';
       var b1 = document.getElementById('atkBadge');
@@ -2441,7 +2475,7 @@ UI.interactNear = function (list) {
     showPrompt('sitPrompt', '附近可交互：' + names.join(' · ') + '（点按钮选择）');
   }
   if (atk) {
-    atk.classList.remove('seat', 'shop', 'sleep', 'house', 'teleport');
+    atk.classList.remove('seat', 'shop', 'sleep', 'house', 'teleport', 'interact', 'fridge', 'work');
     atk.classList.add('interact');
     atk.title = '交互：' + names.join(' / ');
     var b2 = document.getElementById('atkBadge');
@@ -3059,8 +3093,8 @@ function skBarRender() {
       var pt = isTap ? null : skIndicatorMove(e.clientX, e.clientY);
       skIndicatorHide();
       try {
-        if (isTap) { wsSend('skillcast', { key: d.key }); }
-        else if (pt) { wsSend('skillcast', { key: d.key, x: pt.x, z: pt.z }); }
+        if (isTap) { if (typeof MY_JOB === 'undefined' || !MY_JOB) { wsSend('skillcast', { key: d.key }); } }
+        else if (pt) { if (typeof MY_JOB === 'undefined' || !MY_JOB) { wsSend('skillcast', { key: d.key, x: pt.x, z: pt.z }); } }
         else { wsSend('skillcast', { key: d.key }); }
       } catch (e3) { }
     }
@@ -5895,6 +5929,10 @@ function whMoveMany(to) {
     if (k === 'e' || k === 'E') {
       if (typeof MY_SLEEP !== 'undefined' && MY_SLEEP) { tryWake(); e.preventDefault(); return; }
       if (typeof SLEEP_NEAR !== 'undefined' && SLEEP_NEAR) { trySleep(); e.preventDefault(); return; }
+      if (typeof MY_JOB !== 'undefined' && MY_JOB) {
+        try { jobStop(); } catch (eJ1) { }
+        e.preventDefault(); return;
+      }
       if (typeof FRIDGE_NEAR !== 'undefined' && FRIDGE_NEAR) { fridgeOpen(FRIDGE_NEAR.id); e.preventDefault(); return; }
       if (typeof SHOP_NEAR !== 'undefined' && SHOP_NEAR) { shopOpen(); e.preventDefault(); return; }
       if (typeof MY_SEAT !== 'undefined' && MY_SEAT) {
@@ -6355,13 +6393,17 @@ function orderRender() {
   if (!h) { h = '<div id="orderMsg">' + (ORDER_MSG || '选好的菜会由传菜员送到你桌上。') + '</div>'; }
   for (var i = 0; i < ORDER_ITEMS.length; i++) {
     var it = ORDER_ITEMS[i];
-    h += '<div class="shopRow"><div class="shopIco">' + (it.icon || '🍽') + '</div>' +
+    h += '<div class="shopRow" data-key="' + (it.key || '') + '" data-fx="' +
+      String(it.fx || it.desc || '').replace(/"/g, '&quot;') + '" data-nm="' +
+      String(it.name || '').replace(/"/g, '&quot;') + '" data-pr="' + (it.price || 0) +
+      '"><div class="shopIco">' + (it.icon || '🍽') + '</div>' +
       '<div class="shopMain"><div class="shopName">' + (it.name || '') + '</div>' +
       '<div class="shopDesc">' + (it.desc || '') + '</div></div>' +
       '<div><span class="shopPrice">' + (it.price || 0) + '</span>' +
       '<button class="shopBuy" onclick="orderBuy(\'' + it.key + '\')">点单</button></div></div>';
   }
   body.innerHTML = h;
+  try { bindShopTip(body); } catch (eOT) { }
 }
 function orderApply(d) {
   if (!d) { return; }
@@ -6695,6 +6737,21 @@ function renderTownZones() {
 }
 function townZonesApply(d) {
   TOWN_ZONES = (d && d.list) || [];
+  /* ★ 2026-10-22：把最大的一座镇同步给 core 的旧兜底常量
+     （TOWN_DATA 已经不用了 → TOWN_HALF 之前是默认 35 米 ✗ 导致"镇外"误判）*/
+  try {
+    var best = null;
+    for (var i = 0; i < TOWN_ZONES.length; i++) {
+      var t = TOWN_ZONES[i];
+      if (!t || String(t.status || 'active') !== 'active') { continue; }
+      if (!best || (+t.size || 0) > (+best.size || 0)) { best = t; }
+    }
+    if (best) {
+      if (typeof TOWN_HALF !== 'undefined') { TOWN_HALF = (+best.size || 0) / 2; }
+      if (typeof TOWN_CX !== 'undefined') { TOWN_CX = +best.x || 0; }
+      if (typeof TOWN_CZ !== 'undefined') { TOWN_CZ = +best.z || 0; }
+    }
+  } catch (e2) { }
   try { renderTownZones(); } catch (e1) { }
 }
 
@@ -6763,12 +6820,50 @@ function jobStart() {
 function jobStop() {
   try { wsSend('work_stop', {}); } catch (e) { }
 }
+/* ★ 2026-10-22（用户："离线也继续挂机" / "按钮要一直保持结算状态"）
+   打工点 + 累计开始时刻（存档里那个时间已经由服务端算好 ✓ 这里只管显示）*/
+var MY_JOB_X = 0, MY_JOB_Z = 0, MY_JOB_T0 = 0, MY_JOB_REF = null, _JOB_SETTLED_AT = 0;
+var MY_JOB_EXPH = 0, MY_JOB_PAYH = 0, MY_JOB_BASE = 0;
+function jobHudSync() {
+  var el = document.getElementById('jobHud');
+  if (!el) { return; }
+  if (!(typeof MY_JOB !== 'undefined' && MY_JOB)) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  /* ★ 2026-10-22（用户："打工中能看到已获得多少、打了多久"）
+     sec = 服务端给的已累计（含离线）+ 本次在线时长 ✓ */
+  var sec = Math.max(0, Math.floor((Date.now() - MY_JOB_T0) / 1000)) + (MY_JOB_BASE || 0);
+  var h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s2 = sec % 60;
+  var t = (h > 0 ? (h + ':') : '') + (m < 10 ? '0' + m : m) + ':' + (s2 < 10 ? '0' + s2 : s2);
+  var pay = Math.round((MY_JOB_PAYH || 0) * sec / 3600);
+  var exp = Math.round((MY_JOB_EXPH || 0) * sec / 3600);
+  var txt = document.getElementById('jobHudTxt');
+  if (txt) {
+    txt.innerHTML = '打工中 · <b>' + t + '</b><br>' +
+      '<span style="color:#ffd83d">已赚 ' + pay.toLocaleString() + ' 金币</span> · ' +
+      '<span style="color:#9fe8ff">' + exp.toLocaleString() + ' 经验</span>' +
+      '<div style="opacity:.65;font-size:11px;margin-top:2px">点【结算打工】才会真正到手</div>';
+  }
+}
+function jobHudBind() {
+  var b = document.getElementById('jobHudBtn');
+  if (b && !b._b) { b._b = true; b.onclick = function (e) { if (e) { e.preventDefault(); } jobStop(); }; }
+}
+function jobHudTick() { try { jobHudSync(); } catch (e) { } }
+
 function workApply(d) {
   if (!d) { return; }
   if (d.ok && d.on) {
     MY_JOB = d.slot || 'serve';
     JOB_T = 0; JOB_DONE_N = 0;
-    toast(d.msg || '开始打工');
+    /* ★ 记住打工点：人物会被钉在这里（不能离开建筑 ✓）*/
+    MY_JOB_X = (typeof d.x === 'number') ? +d.x : 0;
+    MY_JOB_Z = (typeof d.z === 'number') ? +d.z : 0;
+    MY_JOB_T0 = Date.now();
+    MY_JOB_EXPH = +((d && d.expH) || 0);
+    MY_JOB_PAYH = +((d && d.payH) || 0);
+    MY_JOB_BASE = +((d && d.sec) || 0);
+    try { jobHudBind(); jobHudSync(); } catch (eH) { }
+    toast(d.msg === 'WORK_RESTORED' ? '继续打工中（只能点结算）' : (d.msg || '开始打工'));
     if (JOB_LOOP < 0 && typeof setInterval === 'function') {
       JOB_LOOP = setInterval(function () {
         if (!MY_JOB) { clearInterval(JOB_LOOP); JOB_LOOP = -1; return; }
@@ -6777,13 +6872,17 @@ function workApply(d) {
         /* 每 12 秒一轮：回柜台 -> 出餐口 -> 巡视 -> 回柜台 */
         if (JOB_T >= 12) {
           JOB_T = 0; JOB_DONE_N++;
-          try { wsSend('jobdone', { exp: 30, pay: 20 }); } catch (e) { }
+          try { wsSend('jobdone', {}); } catch (e) { }
         }
       }, 250);
     }
   } else if (d.ok && d.on === 0) {
     MY_JOB = '';
-    toast(d.msg || '已结束打工');
+    MY_JOB_X = 0; MY_JOB_Z = 0; MY_JOB_T0 = 0; MY_JOB_EXPH = 0; MY_JOB_PAYH = 0; MY_JOB_BASE = 0;
+    try { jobHudSync(); } catch (eH2) { }
+    if (Date.now() - (typeof _JOB_SETTLED_AT === 'number' ? _JOB_SETTLED_AT : 0) > 2500) {
+      toast(d.msg === 'WORK_STOPPED' ? '已结束打工' : (d.msg || '已结束打工'));
+    }
   } else if (d.msg) { toast(d.msg); }
 }
 function jobRemote(d) {
@@ -6811,6 +6910,13 @@ function fridgeOpen(id) {
   var p = document.getElementById('fridgePanel');
   if (p) { p.style.display = 'block'; }
   try { wsSend('fridge_open', { id: id }); } catch (e) { }
+  /* ★ 2026-10-22（用户："打开冰箱时没有同时打开背包，怎么存放东西"）
+     → 打开冰箱先把背包拉一次，再把面板画出来 ✓（面板下半截就是背包里的食品/饮料）*/
+  try {
+    if (typeof bagFetch === 'function') {
+      bagFetch(function () { try { fridgeRender(); } catch (e2) { } });
+    }
+  } catch (e1) { }
   fridgeRender();
 }
 function fridgeClose() {
@@ -6875,6 +6981,7 @@ function fridgeTake(slot) {
 })();
 
 /* ---------- 商店 ---------- */
+var SHOP_WORKERS = {};
 var SHOP_OPEN = false, SHOP_ID = '', SHOP_ITEMS = [], SHOP_GOLD = 0, SHOP_MSG = '', SHOP_NEAR = null;
 function shopNearApply(s) {
   SHOP_NEAR = s || null;
@@ -6900,6 +7007,7 @@ function shopOpen() {
   SHOP_OPEN = true;
   SHOP_ID = SHOP_NEAR.id;
   SHOP_ITEMS = SHOP_NEAR.items || [];
+  SHOP_WORKERS = {};
   SHOP_GOLD = +(WSC.role && WSC.role.gold) || 0;
   SHOP_MSG = '';
   var p = document.getElementById('shopPanel');
@@ -6907,6 +7015,32 @@ function shopOpen() {
   try { wsSend('shop_open', { id: SHOP_ID }); } catch (e) { }
   shopRender();
 }
+/* ★ 2026-10-22（用户："悬浮窗口说明效果"）：商店/点单的商品行 → 悬浮显示说明
+   以前这段绑错了函数（绑到点单面板）✗ 而且只绑一次 ✗ 换店就不生效 ✓ */
+function bindShopTip(body) {
+  if (!body || body._tipBound) { return; }
+  body._tipBound = true;
+  body.addEventListener('mouseover', function (e) {
+    var t2 = e.target;
+    while (t2 && t2 !== body && !(t2.getAttribute && t2.getAttribute('data-key'))) { t2 = t2.parentNode; }
+    if (!t2 || t2 === body) { return; }
+    var nm = t2.getAttribute('data-nm') || '';
+    var fx = t2.getAttribute('data-fx') || '';
+    var pr = t2.getAttribute('data-pr') || '0';
+    var html = '<div style="font-weight:800;color:#ffd83d;margin-bottom:4px">' + nm + '</div>' +
+      '<div style="color:#cfd8e4">' + fx + '</div>' +
+      '<div style="margin-top:4px;color:#8ee0ff">价格 ' + pr + ' 金币</div>';
+    try { bagTipShowAt(e.clientX, e.clientY, html); } catch (e3) { }
+  });
+  body.addEventListener('mouseout', function (e) {
+    var t3 = e.target;
+    if (t3 && t3.getAttribute && t3.getAttribute('data-key')) {
+      try { bagTipHide(); } catch (e4) { }
+    }
+  });
+  body.addEventListener('scroll', function () { try { bagTipHide(); } catch (e5) { } }, true);
+}
+
 function shopRender() {
   var body = document.getElementById('shopBody');
   var title = document.getElementById('shopTitle');
@@ -6916,10 +7050,28 @@ function shopRender() {
   if (title) { title.textContent = (s ? s.name : '商店') + (s && s.keeper ? ' · ' + s.keeper : ''); }
   if (gold) { gold.textContent = '金币 ' + Math.round(SHOP_GOLD); }
   var h = '<div id="shopMsg">' + (SHOP_MSG || '') + '</div>';
+  /* ★ 2026-10-22（用户："下线了也可以看到"）：岗位占用写在店铺面板顶上
+     离线的工人也算（服务端 dyn_shops.workers 里带名字 ✓）*/
+  try {
+    var _wk = SHOP_WORKERS || (s && s.workers) || {};
+    var _wkNames = [];
+    for (var _ks in _wk) {
+      var _wv = _wk[_ks] || {};
+      _wkNames.push((_wv.name || '有人') + (_wv.off ? '（离线打工中）' : '（打工中）'));
+    }
+    if (_wkNames.length) {
+      h += '<div style="margin:6px 0;padding:6px 10px;border-radius:8px;' +
+        'background:#1b2733;color:#9fe8ff;font-size:13px">岗位：' +
+        _wkNames.join(' · ') + '</div>';
+    }
+  } catch (eWk) { }
   for (var i = 0; i < SHOP_ITEMS.length; i++) {
     var it = SHOP_ITEMS[i];
     var can = SHOP_GOLD >= (+it.price || 0);
-    h += '<div class="shopRow"><div class="shopIco">' + (it.icon || '🛒') + '</div>' +
+    var _fx = String(it.fx || it.desc || '');
+    h += '<div class="shopRow" data-key="' + (it.key || '') + '" data-fx="' + _fx.replace(/"/g, '&quot;') +
+      '" data-nm="' + String(it.name || '').replace(/"/g, '&quot;') +
+      '" data-pr="' + (it.price || 0) + '"><div class="shopIco">' + (it.icon || '🛒') + '</div>' +
       '<div class="shopMain"><div class="shopName">' + (it.name || '') + '</div>' +
       '<div class="shopDesc">' + (it.desc || '') + '</div></div>' +
       '<div><span class="shopPrice">' + (it.price || 0) + '</span>' +
@@ -6927,11 +7079,14 @@ function shopRender() {
       'onclick="shopBuy(\'' + it.key + '\')">购买</button></div></div>';
   }
   body.innerHTML = h;
+  try { bindShopTip(body); } catch (eST) { }
 }
 function shopApply(d) {
   if (!d) { return; }
   if (typeof d.gold === 'number') { SHOP_GOLD = d.gold; }
   if (d.items) { SHOP_ITEMS = d.items; }
+  /* ★ 2026-10-22（用户："下线了也可以看到"）：岗位占用从服务端来（离线也带名字）*/
+  if (d.workers && typeof d.workers === 'object') { SHOP_WORKERS = d.workers; }
   if (d.msg) { SHOP_MSG = d.msg; }
   if (d.ok === 0 && d.msg) { SHOP_MSG = d.msg; }
   if (SHOP_OPEN) { shopRender(); }
@@ -9855,6 +10010,10 @@ function bagTipBtnsHTML(it, id, acts, seller) {
       h += '<button class="bagB" data-tipact="useskin">使 用</button>';
     }
   }
+  /* ★ 2026-10-22（用户："悬浮窗口上加上使用的按钮"）食物/饮料在浮窗里直接能用 */
+  if (!isW && it.kind === 'food' && id && !it.locked && !it.locked_by) {
+    h += '<button class="bagB" data-tipact="usefood">使 用</button>';
+  }
   /* ★ round557（用户："技能书的悬浮窗口没有学习按钮"）
      ★ 之前把【皮肤】那条改成了 useskillbook ✗ 技能书反而没有按钮 ✓ 已修 */
   /* ★ round560（用户："背包里技能书的浮窗要有技能效果说明"）*/
@@ -10054,6 +10213,18 @@ function bagTipBind() {
     }
     if (act === 'sell') { sellItems([id], false); bagTipHide(); return; }
     if (act === 'use') { bagEquip(id); bagTipHide(); return; }
+    if (act === 'usefood') {
+      /* ★ 2026-10-22：浮窗里直接吃喝（和详情区那个按钮走同一条路）*/
+      var _uRec = null;
+      for (var _ui2 = 0; _ui2 < (BAG.items || []).length; _ui2++) {
+        if (String(BAG.items[_ui2].id) === String(id)) { _uRec = BAG.items[_ui2]; break; }
+      }
+      var _uMdl = (_uRec && _uRec.item && _uRec.item.model) || 'cup';
+      try { wsSend('useitem', { iid: id }); } catch (eUF2) { }
+      try { if (typeof eatStart === 'function') { eatStart(_uMdl); } } catch (eEF2) { }
+      bagTipHide();
+      return;
+    }
     if (act === 'useskillbook') {
       var _bkId = null;
       for (var _bi = 0; _bi < (BAG.items || []).length; _bi++) {
@@ -11630,6 +11801,50 @@ function wsOnMessage(raw) {
   }
   if (t === 'mobcap') {          // ★ 2026-10-22：自己刷怪上限（1~100）
     try { ptMobCapApply(d); } catch (eMc) { }
+    return;
+  }
+  if (t === 'worksettle') {
+    /* ★ 2026-10-22：打工结算（服务端早就发这个包 ✗ 客户端没人接 → 结算看不到）*/
+    var _wsec = +(d && d.sec) || 0;
+    var _wpay = +(d && d.pay) || 0;
+    var _wexp = +(d && d.exp) || 0;
+    var _wtxt;
+    if ((d && d.msg) === 'TIME_TOO_SHORT') {
+      _wtxt = '打工时间太短（不足 30 秒），这次没有结算';
+    } else {
+      var _mm = Math.floor(_wsec / 60), _ss = _wsec % 60;
+      _wtxt = '打工结算：' + (_mm > 0 ? (_mm + ' 分 ') : '') + (_ss > 0 ? (_ss + ' 秒 ') : '') +
+              '· 工资 ' + _wpay + ' · 经验 ' + _wexp;
+    }
+    _JOB_SETTLED_AT = Date.now();       /* 紧接着的 WORK_STOPPED 提示就别再刷了 ✓ */
+    try { toast(_wtxt); } catch (eW1) { }
+    try {
+      if (_wpay > 0 && typeof fxNum === 'function') { fxNum('+' + _wpay + ' 金币', '#ffd83d', P.x, 2.9, P.z); }
+    } catch (eW2) { }
+    return;
+  }
+  if (t === 'jobround') {
+    /* 打工轮次（每 12 秒一轮）：只弹小字，不刷屏 */
+    try {
+      var _wr = +(d && d.n) || 0;
+      if (_wr > 0 && typeof fxNum === 'function') { fxNum('第 ' + _wr + ' 轮', '#9fe8ff', P.x, 3.2, P.z); }
+    } catch (eW3) { }
+    return;
+  }
+  if (t === 'eatfx') {
+    /* ★ 2026-10-22（用户："使用后有效果提示，例如恢复了多少血"）
+       服务端发的是【实际】恢复量（受上限影响后）*/
+    var _en = String((d && d.name) || '食物');
+    var _parts = [];
+    if (+(d && d.hp) > 0) { _parts.push('生命 +' + d.hp); }
+    if (+(d && d.qi) > 0) { _parts.push('灵气 +' + d.qi); }
+    if (+(d && d.exp) > 0) { _parts.push('经验 +' + d.exp); }
+    var _line = _en + (_parts.length ? ('：' + _parts.join(' · ')) : '（已满，没变化）');
+    try { toast(_line); } catch (eEat1) { }
+    try {
+      if (typeof fxNum === 'function') { fxNum(_line, '#7ee08a', P.x, 2.9, P.z); }
+    } catch (eEat2) { }
+    try { if (typeof eatStart === 'function') { eatStart((d && d.model) || 'cup'); } } catch (eEat3) { }
     return;
   }
   if (t === 'skin') {              // ★ round485：服务器说"你的皮肤换了"

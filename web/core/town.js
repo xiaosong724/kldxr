@@ -80,6 +80,24 @@ var TOWN_STATS = { meshes: 0, instanced: 0, seats: 0, solids: 0 };
 })();
 
 function townIn(x, z) {
+  /* ★ 2026-10-22：以前只认 TOWN_HALF（TOWN_DATA 没了 → 默认 35 米）✗
+     结果建筑区（−195..−99）全在"镇外" → 体型不归一、武器不收。
+     → 优先用【服务器下发的小镇范围】(TOWN_ZONES)，没有才退回方形判断 ✓ */
+  try {
+    if (typeof TOWN_ZONES !== 'undefined' && TOWN_ZONES && TOWN_ZONES.length) {
+      for (var i = 0; i < TOWN_ZONES.length; i++) {
+        var t = TOWN_ZONES[i];
+        if (!t) { continue; }
+        var st = String(t.status || 'active');
+        if (st !== 'active') { continue; }
+        var h = (+t.size || 0) / 2;
+        if (h > 0 && Math.abs(x - (+t.x || 0)) <= h && Math.abs(z - (+t.z || 0)) <= h) {
+          return true;
+        }
+      }
+      return false;
+    }
+  } catch (e) { }
   return Math.abs(x) <= TOWN_HALF && Math.abs(z) <= TOWN_HALF;
 }
 function townNearWarehouse(x, z) {

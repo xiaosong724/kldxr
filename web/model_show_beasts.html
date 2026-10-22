@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>异种精英 / BOSS 白模</title>
+<style>
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0b1112;
+    font-family:"Microsoft YaHei","PingFang SC",sans-serif}
+  #cv{display:block;width:100%;height:100%}
+  #hud{position:fixed;left:32px;bottom:24px;z-index:2;pointer-events:none}
+  #hud b{display:block;color:#ffd76a;font-size:24px;letter-spacing:3px;text-shadow:0 2px 8px #000}
+  #hud span{display:block;margin-top:6px;color:#8fa6a3;font-size:12px;letter-spacing:1px}
+  #tip{position:fixed;right:28px;bottom:20px;z-index:2;color:#667a76;font-size:11px;letter-spacing:1px}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="hud"><b>异 种 · 白 模 方 向 图</b><span>非人型物种 · 同一世界观 · 最终再加贴图</span></div>
+<div id="tip">BEAST SHEET / 2026-10-20</div>
+<script src="./lib/three.min.js"></script>
+<script>
+(function(){
+'use strict';
+var Q = new URLSearchParams(location.search);
+var GROUP = Q.get('g') || 'elite2';
+var IS_BOSS = GROUP === 'boss2';
+
+var cv=document.getElementById('cv');
+var rd=new THREE.WebGLRenderer({canvas:cv,antialias:true});
+rd.setPixelRatio(1); rd.setSize(innerWidth,innerHeight,false);
+rd.shadowMap.enabled=true; rd.shadowMap.type=THREE.PCFSoftShadowMap;
+rd.outputEncoding=THREE.sRGBEncoding; rd.toneMapping=THREE.ACESFilmicToneMapping;
+rd.toneMappingExposure=0.95;
+
+var scene=new THREE.Scene();
+scene.background=new THREE.Color(0x080d0e);
+scene.fog=new THREE.Fog(0x080d0e, 16, 32);
+var cam=new THREE.PerspectiveCamera(38, innerWidth/innerHeight, 0.1, 80);
+if (IS_BOSS) { cam.position.set(0,3.8,12.2); cam.lookAt(0,2.2,0); }
+else { cam.position.set(0,2.7,8.6); cam.lookAt(0,1.2,0); }
+
+scene.add(new THREE.HemisphereLight(0x9fc6c0,0x120d0b,0.52));
+var key=new THREE.DirectionalLight(0xffe2bd,1.1); key.position.set(5,9,7);
+key.castShadow=true; key.shadow.mapSize.set(2048,2048);
+key.shadow.camera.left=-10; key.shadow.camera.right=10; key.shadow.camera.top=10;
+key.shadow.camera.bottom=-6; key.shadow.camera.near=1; key.shadow.camera.far=32; scene.add(key);
+var fill=new THREE.DirectionalLight(0x7bb6d8,0.45); fill.position.set(-7,4,3); scene.add(fill);
+var rim=new THREE.DirectionalLight(0xff7a3a,0.7); rim.position.set(-2,5,-8); scene.add(rim);
+var pt=new THREE.PointLight(0x54d6c0,0.55,18); pt.position.set(0,2,6); scene.add(pt);
+
+var ground=new THREE.Mesh(new THREE.PlaneGeometry(40,22),
+  new THREE.MeshStandardMaterial({color:new THREE.Color(0x0d1413).convertSRGBToLinear(),roughness:0.98}));
+ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; scene.add(ground);
+var grid=new THREE.GridHelper(40,40,0x2c4a45,0x1a2a28); grid.position.y=0.012; scene.add(grid);
+
+function mat(color,o){
+  o=o||{};
+  return new THREE.MeshStandardMaterial({
+    color:new THREE.Color(color).convertSRGBToLinear(),
+    emissive:new THREE.Color(o.emissive===undefined?0:o.emissive).convertSRGBToLinear(),
+    emissiveIntensity:o.ei===undefined?1:o.ei,
+    roughness:o.rough===undefined?0.78:o.rough,
+    metalness:o.metal===undefined?0.08:o.metal,
+    flatShading:!!o.flat,
+    transparent:!!o.transparent,
+    opacity:o.opacity===undefined?1:o.opacity,
+    side:o.side||THREE.FrontSide
+  });
+}
+function add(parent,geo,material,x,y,z,rx,ry,rz,sx,sy,sz){
+  var m=new THREE.Mesh(geo,material);
+  m.position.set(x||0,y||0,z||0); m.rotation.set(rx||0,ry||0,rz||0);
+  m.scale.set(sx===undefined?1:sx,sy===undefined?1:sy,sz===undefined?1:sz);
+  m.castShadow=true; m.receiveShadow=true; parent.add(m); return m;
+}
+function box(p,w,h,d,m,x,y,z,rx,ry,rz){ return add(p,new THREE.BoxGeometry(w,h,d),m,x,y,z,rx,ry,rz); }
+function sph(p,r,m,x,y,z,sx,sy,sz){ return add(p,new THREE.SphereGeometry(r,16,12),m,x,y,z,0,0,0,sx,sy,sz); }
+function cyl(p,rt,rb,h,m,x,y,z,seg){ return add(p,new THREE.CylinderGeometry(rt,rb,h,seg||10),m,x,y,z); }
+function cone(p,r,h,m,x,y,z,rx,ry,rz,seg){ return add(p,new THREE.ConeGeometry(r,h,seg||8),m,x,y,z,rx,ry,rz); }
+function torus(p,r,t,m,x,y,z,rx,ry,rz){ return add(p,new THREE.TorusGeometry(r,t,8,24),m,x,y,z,rx,ry,rz); }
+var UP=new THREE.Vector3(0,1,0);
+function bone(p,a,b,r,m){
+  var va=new THREE.Vector3(a[0],a[1],a[2]), vb=new THREE.Vector3(b[0],b[1],b[2]);
+  var d=vb.clone().sub(va), len=d.length(); if(len<0.001) return null;
+  var mm=new THREE.Mesh(new THREE.CylinderGeometry(r,r,len,8),m);
+  mm.position.copy(va).add(vb).multiplyScalar(0.5);
+  mm.quaternion.setFromUnitVectors(UP,d.normalize());
+  mm.castShadow=true; mm.receiveShadow=true; p.add(mm); return mm;
+}
+function label(rank,name,role,color){
+  var c=document.createElement('canvas'); c.width=512; c.height=160;
+  var g=c.getContext('2d');
+  var grd=g.createLinearGradient(0,20,0,140);
+  grd.addColorStop(0,'rgba(12,18,18,.9)'); grd.addColorStop(1,'rgba(8,12,12,.55)');
+  g.fillStyle=grd; g.strokeStyle='rgba(255,255,255,.12)'; g.lineWidth=2;
+  g.beginPath(); if(g.roundRect){g.roundRect(8,20,496,120,16);}else{g.rect(8,20,496,120);} g.fill(); g.stroke();
+  g.textAlign='center';
+  g.font='700 22px "Microsoft YaHei"'; g.fillStyle=color; g.fillText(rank,256,58);
+  g.font='800 34px "Microsoft YaHei"'; g.fillStyle='#eef5ee'; g.fillText(name,256,102);
+  g.font='400 18px "Microsoft YaHei"'; g.fillStyle='#92a49e'; g.fillText(role,256,130);
+  var tex=new THREE.CanvasTexture(c); tex.encoding=THREE.sRGBEncoding;
+  var sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,depthWrite:false}));
+  sp.scale.set(3.4,1.06,1); return sp;
+}
+function base(x,z,r){
+  var disk=new THREE.Mesh(new THREE.CylinderGeometry(r,r*1.12,0.09,36),
+    new THREE.MeshStandardMaterial({color:new THREE.Color(0x202b29).convertSRGBToLinear(),roughness:.65,metalness:.45}));
+  disk.position.set(x,0.045,z); disk.receiveShadow=true; disk.castShadow=true; scene.add(disk);
+}
+
+/* ---------------- 精英：毒沼蟾 ---------------- */
+function toad(){
+  var g=new THREE.Group(); g.scale.setScalar(0.98);
+  var skin=mat(0x5f7a38,{rough:.95});
+  var belly=mat(0x9caf61,{rough:.98});
+  var spot=mat(0x33441f,{rough:.95});
+  var eye=mat(0xffdd55,{emissive:0xd9b52b,ei:1.2,rough:.3});
+  var pupil=mat(0x111609,{rough:.3});
+  var sac=mat(0x79d34a,{emissive:0x3d8d2f,ei:1.1,transparent:true,opacity:.82,rough:.4});
+  sph(g,.78,skin,0,.82,0,1.22,.82,1.05);
+  sph(g,.56,belly,0,.60,.34,1.18,.62,.9);
+  var head=new THREE.Group(); head.position.set(0,1.02,.62); g.add(head);
+  sph(head,.52,skin,0,0,0,1.25,.78,1.05);
+  box(head,.62,.07,.06,mat(0x16200f),0,-.16,.50);
+  sph(head,.19,eye,-.28,.25,.34,1,1.1,1);
+  sph(head,.19,eye,.28,.25,.34,1,1.1,1);
+  sph(head,.075,pupil,-.28,.27,.49);
+  sph(head,.075,pupil,.28,.27,.49);
+  /* 毒囊 */
+  sph(g,.24,sac,-.68,.95,-.1); sph(g,.24,sac,.68,.95,-.1);
+  /* 疣 */
+  for(var i=0;i<9;i++){
+    var a=i*2.4, rr=.45+ (i%3)*.12;
+    sph(g,.055+ (i%2)*.02,spot,Math.cos(a)*rr,.98+ (i%3)*.1,Math.sin(a)*rr);
+  }
+  /* 四足 */
+  function leg(x,z,big){
+    var y=.66, hip=[x,y,z], knee=[x*1.35,y-.34,z+.1], foot=[x*1.55,.08,z+.28];
+    bone(g,hip,knee,big?.11:.085,skin); bone(g,knee,foot,big?.09:.07,skin);
+    sph(g,big?.13:.10,skin,knee[0],knee[1],knee[2]);
+    box(g,big?.28:.20,.08,big?.34:.26,skin,foot[0],.06,foot[2]);
+  }
+  leg(-.52,.42,false); leg(.52,.42,false); leg(-.58,-.32,true); leg(.58,-.32,true);
+  /* 舌头 */
+  box(g,.10,.05,.74,mat(0xc95d68),0,.78,1.20,0.10,0,0);
+  return g;
+}
+
+/* ---------------- 精英：刃甲虫 ---------------- */
+function beetle(){
+  var g=new THREE.Group();
+  var shell=mat(0x3c403a,{rough:.42,metal:.35});
+  var edge=mat(0x9a6b32,{rough:.5,metal:.35});
+  var dark=mat(0x191b18,{rough:.6});
+  var eye=mat(0xff5a3a,{emissive:0xff2a0a,ei:1.5});
+  var wing=mat(0x6b7a66,{rough:.3,transparent:true,opacity:.35,side:THREE.DoubleSide});
+  sph(g,.72,shell,0,.72,0,1.05,.56,1.30);
+  /* 甲片 */
+  for(var i=0;i<3;i++){
+    var z=.55-i*.34;
+    add(g,new THREE.SphereGeometry(.62-i*.08,14,8),edge,0,.86,z,0,0,0,1.0,.16,1.05);
+  }
+  /* 头 */
+  var h=new THREE.Group(); h.position.set(0,.63,.92); g.add(h);
+  sph(h,.34,shell,0,0,0,1.1,.8,1.0);
+  cone(h,.11,.42,dark,-.22,.05,.30,.35,0,.22,7);
+  cone(h,.11,.42,dark,.22,.05,.30,.35,0,-.22,7);
+  cone(h,.09,.62,edge,0,.30,.18,-.28,0,0,8);
+  sph(h,.07,eye,-.15,.10,.30); sph(h,.07,eye,.15,.10,.30);
+  /* 六足 */
+  function leg(x,z,side){
+    var hip=[x,.62,z], knee=[x+side*.48,.36,z+.05], foot=[x+side*.70,.06,z+.22];
+    bone(g,hip,knee,.075,dark); bone(g,knee,foot,.06,dark);
+    sph(g,.075,dark,knee[0],knee[1],knee[2]);
+  }
+  leg(-.50,.38,-1); leg(-.58,0,-1); leg(-.50,-.38,-1);
+  leg(.50,.38,1); leg(.58,0,1); leg(.50,-.38,1);
+  /* 翅 */
+  add(g,new THREE.PlaneGeometry(.8,.9),wing,-.36,1.05,-.25,0.2,0.2,0.55);
+  add(g,new THREE.PlaneGeometry(.8,.9),wing,.36,1.05,-.25,0.2,-0.2,-0.55);
+  return g;
+}
+
+/* ---------------- 精英：影狼 ---------------- */
+function wolf(){
+  var g=new THREE.Group();
+  var fur=mat(0x252b31,{rough:.98});
+  var dark=mat(0x101418,{rough:.95});
+  var claw=mat(0x9a9489,{rough:.8});
+  var eye=mat(0x7fe8ff,{emissive:0x3bbfd8,ei:2.2});
+  /* 躯干横着 */
+  add(g,new THREE.SphereGeometry(.62,16,12),fur,0,1.02,.05,0,0,0,1.0,.75,1.55);
+  sph(g,.45,fur,0,1.06,.72,1.05,.9,.9);
+  /* 颈/头 */
+  var neck=new THREE.Group(); neck.position.set(0,1.15,.95); g.add(neck);
+  neck.rotation.x=-0.28;
+  cyl(neck,.22,.28,.55,fur,0,.20,0,10);
+  var head=new THREE.Group(); head.position.set(0,.48,.08); neck.add(head);
+  sph(head,.30,fur,0,0,0,1.0,.85,1.05);
+  box(head,.24,.18,.52,fur,0,-.08,.40);
+  box(head,.18,.07,.20,dark,0,-.15,.62);
+  sph(head,.055,eye,-.14,.06,.26); sph(head,.055,eye,.14,.06,.26);
+  cone(head,.10,.34,dark,-.19,.24,-.02,.1,0,.18,7);
+  cone(head,.10,.34,dark,.19,.24,-.02,.1,0,-.18,7);
+  /* 四腿 */
+  function leg(x,z,front){
+    var hip=[x,.92,z], knee=[x*1.15,.50,z+(front?.10:-.08)], foot=[x*1.25,.06,z+(front?.22:.05)];
+    bone(g,hip,knee,.10,fur); bone(g,knee,foot,.075,fur);
+    sph(g,.10,fur,knee[0],knee[1],knee[2]);
+    box(g,.22,.07,.34,dark,foot[0],.05,foot[2]);
+    for(var c=0;c<3;c++) cone(g,.025,.14,claw,foot[0]+(c-1)*.055,.05,foot[2]+.20,-1.2,0,0,5);
+  }
+  leg(-.40,.42,true); leg(.40,.42,true); leg(-.42,-.46,false); leg(.42,-.46,false);
+  /* 尾巴/鬃毛 */
+  bone(g,[0,1.1,-.55],[0,1.35,-1.25],.09,fur);
+  cone(g,.14,.42,dark,0,1.48,-1.30,.5,0,0,7);
+  for(var i=0;i<7;i++){
+    var a=i*.8;
+    sph(g,.15+ (i%2)*.04, i%2?dark:fur, Math.cos(a)*.36,1.35+Math.sin(a*.7)*.12,-.45+ (i%3)*.10,1.0,.8,.7);
+  }
+  return g;
+}
+
+/* ---------------- BOSS：骨龙 ---------------- */
+function boneDragon(){
+  var g=new THREE.Group(); g.scale.setScalar(1.12);
+  var boneMat=mat(0xbfb6a1,{rough:.72});
+  var bone2=mat(0x857d6b,{rough:.8});
+  var dark=mat(0x1b1712,{rough:.9});
+  var eye=mat(0x7fe8ff,{emissive:0x2bbcd8,ei:2.6});
+  var membrane=mat(0x30233f,{rough:.9,transparent:true,opacity:.72,side:THREE.DoubleSide});
+  /* 身体/脊椎 */
+  var spine=[];
+  for(var i=0;i<8;i++){
+    var z=1.15-i*.28, y=1.65+Math.sin(i*.55)*.12;
+    spine.push([0,y,z]);
+    sph(g,.17-i*.01,boneMat,0,y,z,1,.8,1);
+  }
+  /* 肋骨 */
+  for(var r=0;r<5;r++){
+    var z=.95-r*.24;
+    for(var s=-1;s<=1;s+=2){
+      bone(g,[0,1.60,z],[s*.48,1.28,z+.12],.045,bone2);
+      bone(g,[s*.48,1.28,z+.12],[s*.32,1.03,z+.28],.04,bone2);
+    }
+  }
+  /* 颈/头 */
+  var neck=new THREE.Group(); neck.position.set(0,1.95,1.18); g.add(neck);
+  bone(neck,[0,0,0],[0,.42,.35],.12,boneMat);
+  bone(neck,[0,.42,.35],[0,.78,.62],.11,boneMat);
+  var head=new THREE.Group(); head.position.set(0,.88,.68); neck.add(head);
+  box(head,.48,.30,.70,boneMat,0,0,.18);
+  box(head,.34,.12,.62,bone2,0,-.16,.24);
+  cone(head,.10,.34,boneMat,-.20,.14,-.02,.2,0,0,7);
+  cone(head,.10,.34,boneMat,.20,.14,-.02,.2,0,0,7);
+  sph(head,.08,eye,-.13,.05,.27); sph(head,.08,eye,.13,.05,.27);
+  /* 牙 */
+  for(var t=0;t<6;t++) cone(head,.025,.14,boneMat,(t-2.5)*.07,-.24,.42,3.14,0,0,5);
+  /* 前肢 */
+  function leg(x,z,front){
+    var hip=[x,1.50,z], knee=[x*1.35,.85,z+(front?.18:-.08)], foot=[x*1.55,.10,z+(front?.36:.15)];
+    bone(g,hip,knee,.09,boneMat); bone(g,knee,foot,.07,boneMat);
+    sph(g,.10,boneMat,knee[0],knee[1],knee[2]);
+    for(var c=0;c<3;c++) cone(g,.03,.16,boneMat,foot[0]+(c-1)*.07,.08,foot[2]+.20,-1.2,0,0,5);
+  }
+  leg(-.52,1.0,true); leg(.52,1.0,true); leg(-.56,-.55,false); leg(.56,-.55,false);
+  /* 尾巴 */
+  var tx=0,tz=-1.3,ty=1.55;
+  for(var q=0;q<7;q++){
+    var nx=tx+Math.sin(q*.8)*.10, nz=tz-.28, ny=ty-.08;
+    bone(g,[tx,ty,tz],[nx,ny,nz],.07-q*.006,bone2); tx=nx;ty=ny;tz=nz;
+  }
+  /* 翼：三角膜 + 骨指 */
+  function wing(side){
+    var w=new THREE.Group(); w.position.set(side*.18,1.80,.30); w.rotation.y=side*0.25; g.add(w);
+    var sh=new THREE.Shape();
+    sh.moveTo(0,0); sh.lineTo(side*2.5,.65); sh.lineTo(side*2.0,-.7); sh.lineTo(side*.55,-.45); sh.closePath();
+    var mesh=new THREE.Mesh(new THREE.ShapeGeometry(sh),membrane);
+    mesh.position.set(0,0,0.02); mesh.castShadow=true; w.add(mesh);
+    bone(w,[0,0,0],[side*1.3,.55,.12],.045,boneMat);
+    bone(w,[0,0,0],[side*2.0,.15,-.15],.04,boneMat);
+    bone(w,[0,0,0],[side*1.65,-.38,-.25],.035,boneMat);
+    for(var i=0;i<3;i++) bone(w,[side*.45,-.02,-.05],[side*(1.2+i*.4),-.25-i*.1,-.15-i*.05],.025,bone2);
+  }
+  wing(-1); wing(1);
+  return g;
+}
+
+/* ---------------- BOSS：熔岩巨蟒 ---------------- */
+function magmaSerpent(){
+  var g=new THREE.Group(); g.scale.setScalar(1.05);
+  var rock=mat(0x2b2622,{rough:.92});
+  var rock2=mat(0x4a3a2f,{rough:.9});
+  var lava=mat(0xff5a1f,{emissive:0xff2a00,ei:2.0,rough:.35});
+  var eye=mat(0xffd34a,{emissive:0xff9d1f,ei:2.3});
+  /* 盘起来的身体：螺旋上升 */
+  var pts=[];
+  for(var i=0;i<26;i++){
+    var t=i/25, a=t*Math.PI*3.4, r=1.35*(1-t*.78);
+    pts.push([Math.cos(a)*r,.16+t*1.55,Math.sin(a)*r*.82]);
+  }
+  for(var p=0;p<pts.length;p++){
+    var rr=.30-.011*p;
+    sph(g,rr,p%4===0?rock2:rock,pts[p][0],pts[p][1],pts[p][2],1,1.05,1);
+    if(p>2 && p%3===0){
+      var prev=pts[p-2];
+      bone(g,prev,pts[p],.035,lava);
+    }
+  }
+  /* 颈/头：抬到镜头前，别被盘身挡住 */
+  var head=new THREE.Group(); head.position.set(0,2.02,1.05); g.add(head);
+  cyl(head,.24,.34,.62,rock,0,.22,0,12);
+  var h=new THREE.Group(); h.position.set(0,.58,.05); head.add(h);
+  sph(h,.34,rock,0,0,.18,1.15,.9,1.25);
+  box(h,.34,.08,.48,rock2,0,-.17,.32);
+  sph(h,.075,eye,-.15,.10,.39); sph(h,.075,eye,.15,.10,.39);
+  for(var f=0;f<2;f++) cone(h,.035,.22,mat(0xffe8b0), (f?1:-1)*.11,-.28,.43,3.0,0,0,6);
+  box(h,.07,.035,.38,mat(0xc04a55),0,-.22,.56,0.12,0,0);
+  /* 眼镜蛇兜帽：放在头后面，不挡脸 */
+  var hood=new THREE.Group(); hood.position.set(0,.08,-.18); h.add(hood);
+  add(hood,new THREE.SphereGeometry(.62,16,10),mat(0x3a2b25,{rough:.9}),0,.05,0,0,0,0,1.1,.95,.18);
+  /* 熔岩裂纹 */
+  for(var c=0;c<10;c++){
+    var pp=pts[3+c*2]||pts[3];
+    box(g,.03,.20,.03,lava,pp[0]+.12,pp[1]+.1,pp[2]+.02,0,0,c*.4);
+  }
+  var glow=new THREE.PointLight(0xff5a1f,1.0,5); glow.position.set(0,1.8,0); g.add(glow);
+  return g;
+}
+
+/* ---------------- BOSS：虚空之眼 ---------------- */
+function voidEye(){
+  var g=new THREE.Group(); g.scale.setScalar(1.12);
+  var flesh=mat(0x3b234c,{rough:.8});
+  var flesh2=mat(0x6f3e8e,{rough:.7});
+  var sclera=mat(0xd8c8ff,{rough:.35});
+  var iris=mat(0x5bd8ff,{emissive:0x2a9bc8,ei:1.4,rough:.2});
+  var pupil=mat(0x090711,{rough:.2});
+  var rune=mat(0xb06cff,{emissive:0x6b2ed8,ei:2.0,transparent:true,opacity:.8});
+  /* 主眼 */
+  var eyeG=new THREE.Group(); eyeG.position.set(0,2.05,0); g.add(eyeG);
+  sph(eyeG,.78,flesh,0,0,-.06,1.05,1.0,1.0);
+  /* 眼白/虹膜要凸出在肉球前面，不能埋进去 */
+  sph(eyeG,.64,sclera,0,0,.48,1.0,1.0,.42);
+  sph(eyeG,.31,iris,0,0,.76,1,1,.25);
+  sph(eyeG,.13,pupil,0,0,.86,1,1,.25);
+  torus(eyeG,.36,.035,flesh2,0,0,.78,0,0,0);
+  for(var i=0;i<5;i++){
+    var a=i/5*6.28;
+    bone(g,[Math.cos(a)*.55,1.95+Math.sin(a)*.45,-.15],[Math.cos(a)*.95,2.0+Math.sin(a)*.65,-.55],.045,flesh2);
+  }
+  /* 触手 */
+  for(var t=0;t<6;t++){
+    var a=t/6*6.28, x0=Math.cos(a)*.55, z0=Math.sin(a)*.55;
+    var p0=[x0,1.45,z0], p1=[x0*1.35,.95,z0*1.35], p2=[x0*1.55,.35,z0*1.55], p3=[x0*1.7,.08,z0*1.7];
+    bone(g,p0,p1,.08,flesh); bone(g,p1,p2,.06,flesh2); bone(g,p2,p3,.04,flesh);
+    sph(g,.08,flesh2,p1[0],p1[1],p1[2]);
+    sph(g,.05,rune,p3[0],p3[1]+.03,p3[2],1,1,1);
+  }
+  /* 符文环 */
+  torus(g,1.0,.035,rune,0,1.95,0,1.2,.3,0);
+  torus(g,.82,.025,rune,0,2.15,0,.35,1.0,.5);
+  /* 漂浮碎片 */
+  for(var s=0;s<6;s++){
+    var aa=s/6*6.28;
+    cone(g,.07,.30,flesh2,Math.cos(aa)*1.15,2.0+Math.sin(aa*2)*.45,Math.sin(aa)*1.15,aa,0,aa,6);
+  }
+  var light=new THREE.PointLight(0x8a5aff,1.0,5); light.position.set(0,2.0,.5); g.add(light);
+  return g;
+}
+
+var defs = IS_BOSS ? [
+  {make:boneDragon,name:'骨 龙',role:'骨翼 · 龙息 · 亡者领域',color:'#8fe8ff',rank:'BOSS'},
+  {make:magmaSerpent,name:'熔岩巨蟒',role:'熔岩 · 盘绞 · 地火',color:'#ff8a4a',rank:'BOSS'},
+  {make:voidEye,name:'虚空之眼',role:'触手 · 符文 · 精神冲击',color:'#b58cff',rank:'BOSS'}
+] : [
+  {make:toad,name:'毒沼蟾',role:'毒囊 · 舌击 · 沼泽',color:'#b6e85a',rank:'精英'},
+  {make:beetle,name:'刃甲虫',role:'甲壳 · 冲锋 · 锯颚',color:'#ffc45a',rank:'精英'},
+  {make:wolf,name:'影 狼',role:'影袭 · 撕咬 · 群猎',color:'#8fe8ff',rank:'精英'}
+];
+var xs=[-3.5,0,3.5];
+for(var i=0;i<defs.length;i++){
+  var d=defs[i], g=d.make();
+  g.position.set(xs[i],0.10,0.2);
+  g.rotation.y=IS_BOSS?[-.10,0,.10][i]:[-.06,0,.06][i];
+  scene.add(g);
+  base(xs[i],.2,IS_BOSS?1.35:1.0);
+  var lab=label(d.rank,d.name,d.role,d.color);
+  lab.position.set(xs[i],IS_BOSS?4.65:3.55,.2); scene.add(lab);
+}
+
+function resize(){ rd.setSize(innerWidth,innerHeight,false); cam.aspect=innerWidth/innerHeight; cam.updateProjectionMatrix(); }
+addEventListener('resize',resize); resize();
+function frame(){ rd.render(scene,cam); requestAnimationFrame(frame); }
+frame(); window.__ready=true;
+})();
+</script>
+</body>
+</html>

@@ -54,6 +54,10 @@ TYPE_MUL = {'weapon': 1.2, 'armor': 1.0, 'other': 1.1}
 
 # 状态系数
 BROKEN_MUL = 0.3               # 破损装备只值三成
+# ★ round409（用户："坏掉的武器只能出售给系统，并且只值 10 金币"）
+#   ★ 不分品阶 ✗ 12 阶的坏斧头也只值 10 ✓（它已经是一块废铁 ✓）
+# ★ round410（用户："防具也和武器一样"）→ 武器和防具都是 10 ✓
+BROKEN_SCRAP = 10
 AFFIX_BONUS = 0.15             # 每条附加属性 +15%
 
 # 材料基础价（按稀有度 ✗ 从 drops.py 的稀有度定义读 ✓ 这里给兜底）
@@ -135,11 +139,19 @@ def value_of(it, n=1):
         base = MAT_RARITY_BASE.get(rar, MAT_DEFAULT_BASE)
         cnt = max(1, _i(n, 1))
         return max(0, int(base * cnt))
+    # ---------- 皮肤卡（★ round487：用户要"可以出售"）----------
+    #   ★ 定价：5000 金币（起拍价 20000 的 1/4 → 卖系统不划算，但能出手 ✓）
+    if it.get('kind') == 'skin':
+        return max(0, int(5000 * max(1, _i(n, 1))))
     # ---------- 黄金（可堆叠 ✗ 1 个 = 1 亿 ✓）----------
     if it.get('name') == BULLION_NAME:
         cnt = max(1, _i(n, 1))
         return max(0, int(GOLD_PER_BULLION * cnt))
     # ---------- 装备 ----------
+    # ★ round409：坏掉的【武器】一律 10 金币（用户定的 ✓）
+    # ★ round410（用户："防具也和武器一样，坏了就只能卖 10 金币"）→ 防具一起 ✓
+    if it.get('broken'):
+        return max(0, int(BROKEN_SCRAP * max(1, _i(n, 1))))
     tier = _i(it.get('tier'), 0)
     if tier <= 0:
         # 既不是材料也不是装备（认不出的东西）→ 给个底价，别报错 ✓

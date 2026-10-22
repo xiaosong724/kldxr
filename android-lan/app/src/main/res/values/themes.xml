@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 全屏、无标题栏、深色底（游戏自己画界面） -->
+    <style name="AppTheme" parent="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        <item name="android:windowBackground">#1a1208</item>
+        <!-- 第 180 轮：允许内容铺到刘海/挖孔区（横屏时那一侧不留黑边）
+             ★ 这是 API 27+ 的属性，低版本会被忽略，不会报错 -->
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <!-- 导航条透明（配合 Activity 里的 immersive 全屏）-->
+        <item name="android:navigationBarColor">#00000000</item>
+        <item name="android:statusBarColor">#00000000</item>
+    </style>
+</resources>

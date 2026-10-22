@@ -129,7 +129,13 @@ def roll_coeff(look, rng=None):
 #   用户要求："高阶一定比低阶好，只是不用好太多" ✓
 #   → 下限提到 0.90：只是"没练熟"，不再反过来惩罚高阶 ✓
 #   （"等级不够发挥不出来"改由【封顶】来表达 ✓ 见 player_atk_with）
-MASTERY_FLOOR = 0.90
+# ★★★ round472（用户："等级不适配要按差距降低发挥度，
+#   不然玩家 1 级拿 1000 级装备就太强了"）★★★
+#   旧：FLOOR=0.90 ✗ 差 999 级也只打 9 折 ✗✗（等于没惩罚）
+#   新：发挥度 = 1 / (1 + 等级差 / 10) ，下限 0.02 ✓
+#     差 1 级 0.91 · 差 10 级 0.50 · 差 50 级 0.17 · 差 1000 级 0.01→地板 0.02 ✓
+MASTERY_FLOOR = 0.02
+MASTERY_K = 10.0
 
 
 def req_level_of(tier):
@@ -143,18 +149,23 @@ def req_level_of(tier):
     return max(1, int(tier) * 3 + 1)
 
 
-def mastery_of(w, level):
-    """这件武器在这个等级手里能发挥多少（0.35 ~ 1.0）
+def mastery_for_gap(req, lv):
+    """按【等级差】算发挥度（0.02 ~ 1.0）—— 武器和防具共用 ✓
 
-    ★ 不是"不能装"—— 能装、能看、能拿来打，只是打不出它的上限 ✓
-      （方案 §7.8 原来写的是"不能装"✗，按用户要求改成"发挥度" ✓）
+    ★ 用差值而不用比值 ✗：比值在低等级时太狠（差 3 级就耍不动）✗
+      差值剖面：差 1→0.91 · 3→0.77 · 5→0.67 · 10→0.50 · 30→0.25 · 100→0.09 ✓
     """
-    req = int((w or {}).get('reqLevel') or 1)
-    lv = int(level or 1)
+    req = int(req or 1)
+    lv = int(lv or 1)
     if req <= 1 or lv >= req:
         return 1.0
-    v = MASTERY_FLOOR + (1.0 - MASTERY_FLOOR) * (float(lv) / float(req))
-    return max(MASTERY_FLOOR, min(1.0, v))
+    gap = float(req - lv)
+    return max(MASTERY_FLOOR, min(1.0, 1.0 / (1.0 + gap / MASTERY_K)))
+
+
+def mastery_of(w, level):
+    """这件装备在这个等级手里能发挥多少 ✓（武器/防具通用）"""
+    return mastery_for_gap((w or {}).get('reqLevel') or 1, level)
 
 
 def player_atk_with(inherent, look, coeff, tier, item_lv=1, mastery=1.0, flat=None,
@@ -232,12 +243,27 @@ FIST = {
 }
 
 
-def flat_full(w):
-    """这件武器【自己】的平伤（含它自己的物品等级加成 ✓ 和玩家等级无关 ✓）"""
+def eff_level(w, level):
+    """★ round472：【有效装备等级】= min(装备等级, 玩家等级)
+
+    超过你等级的部分【不算数】✗ 不然 1 级拿 1000 级防具
+    就算发挥度只剩 2%，也能加几百血 ✗（实测过 ✓）
+    """
+    il = int((w or {}).get('itemLv') or 1) if isinstance(w, dict) else 1
+    lvv = int(level or 1)
+    return max(1, min(il, lvv))
+
+
+def flat_full(w, level=None):
+    """这件武器【自己】的平伤 ✓
+
+    ★ level 传了就按【有效等级】算（等级不够时平伤不会爆表 ✓）
+    """
     w = w or {}
     if w.get('flat0'):
         return 0.0                       # ★ 空手没有平伤（第 58 轮 ✓）
-    return flat_of(w.get('tier') or 0, int(w.get('itemLv') or 1))
+    il = eff_level(w, level) if level is not None else int(w.get('itemLv') or 1)
+    return flat_of(w.get('tier') or 0, il)
 
 
 def weapon_damage(w):
@@ -301,7 +327,11 @@ WEAPON_FX = {
     'staff':  ('横扫',   0.10, 0.0409, 4.0, 0.545, 'flat',  '{p}% 概率横扫 · 前方 {v} 米直线伤害并击退'),
     # round404: 长枪改为挑飞（用户要求）
     #   概率 5% -> 17%（每阶 +1.09%）· 挑到 6 格高，1.5 秒后落地
-    'spear':  ('挑飞',   0.05, 0.0109, 6,   0.000, 'int',  '{p}% 概率挑飞 · 挑到 {v} 格高，落地时砸出范围伤害'),
+    # ★ round409（用户："最低 8%，最高 12 阶 20%"）
+    #   只改【起点】✗ 每阶增量不动（0.0109）✓
+    #   8% + 0.0109 × 11 = 19.99% → 文案显示 20%（12 阶封顶 ✓ 0 阶 8% ✓）
+    #   ★ 文案 p 是 fx_of 用同一个 chance 算的 ✗ 不会出现"代码 20%、文案 17%"✓
+    'spear':  ('挑飞',   0.08, 0.0109, 6,   0.000, 'int',  '{p}% 概率挑飞 · 挑到 {v} 格高，落地时砸出范围伤害'),
     'axe':    ('溅射',   1.00, 0.000, 0.35, 0.020, 'pct',  '命中时溅射 1.5 米内最多 2~13 个（品阶越高越多，1 阶 2 个 · 每阶 +1 · 12 阶 13 个）· 各 {v}% 伤害'),
     # round381: 锤子改为旋击（用户要求）
     #   概率：基础 10% · 每阶 +2.73% · 12 阶（t 封顶 11）到 40%
@@ -440,7 +470,10 @@ def make_weapon(look, tier, coeff, item_lv=1, rng=None):
         'affixes': affixes.roll_affixes(t, ('weapon',), rng),
         'effect': None,
         'look': look,
-        'reqLevel': req_level_of(t),               # ★ 第 56 轮：改成平缓曲线（见 req_level_of）
+        # ★★ round472（用户："装备等级就等于建议等级"）★★
+        #   旧：tier*3+1（和装备等级无关 ✗ 且有上限 34 ✗）
+        #   新：就是装备级本身 ✗ 无上限 ✓
+        'reqLevel': max(1, int(item_lv)),
         # ★ 第 59 轮：耐久（写进物品 JSON ✓ 每次挥砍扣 1 ✓ 归零消失）
         'dur': dur_max_of(t), 'durMax': dur_max_of(t),
         # ★ 第 59 轮：把机制也写进物品（客户端直接显示 ✓ 不用在 JS 里再抄一份表 ✗）
@@ -507,9 +540,18 @@ def roll_weapon(mob_lv, killer_lv, rng=None):
     #     → 1 级怪永远出不了 12 阶 ✗（用户要求改掉 ✓）
     #   ★ 一句话就换完了 ✓ 别的什么都不用动 ✓
     tier = roll_tier(mob_lv, killer_lv, r)
-    keys = [k for k in TYPES if k not in RANGED]    # 远程这期不掉（还没有投射物 ✗）
+    # ★★★ round420（用户："我发现打怪不会掉弓，是不是有问题"）★★★
+    #   病根：这里把【弓】从掉落表里排除了 ✗
+    #     注释写的是"还没有投射物" ✗ 但那是第 69 轮之前的事 ✓
+    #     现在弓的箭、飞行、命中、伤害、客户端模型全都做完了 ✓
+    #     → 弓一直拿不到（只能管理员发）✗ 玩家当然会觉得"有问题" ✓
+    #   ★ 现在：弓也跟其它七种一样随机掉 ✗ 概率和它们平分 ✓
+    keys = list(TYPES.keys())
     look = r.choice(keys)
-    item_lv = max(1, int(mob_lv) // 4)
+    # ★★ round472（用户："获取到的装备等级和人物等级差不多、没有上限"）★★
+    #   旧：item_lv = 怪等级 ÷ 4 ✗（10 级怪只掉 2 级装备 ✗）
+    #   新：item_lv = 击杀者等级 ✗ 无上限 ✓（你多少级就掉多少级装备 ✓）
+    item_lv = max(1, int(killer_lv))
     return make_weapon(look, tier, roll_coeff(look, r), item_lv, r)
 
 

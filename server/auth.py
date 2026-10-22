@@ -130,6 +130,7 @@ def _new_role(c, account_id, name):
     for i in range(SKILL_PAGES):
         c.execute('INSERT INTO skill_pages(role_id, page_index, actives, passives)'
                   ' VALUES(?,?,?,?)', (role_id, i, '[]', '[]'))
+    # ★ round487（用户："注册时用现在的默认皮肤吧"）→ 不送皮肤，skin 留空 = 老外观 ✓
     return role_id
 
 
@@ -148,6 +149,8 @@ def role_public(row):
         'z': row['z'],
         'yaw': row['yaw'],
         'talentFree': row['talent_free'],
+        # ★ round466：自动出售阈值（客户端要显示"当前设置"✓）
+        'autosell': int(row['autosell'] or 0) if 'autosell' in row.keys() else 0,
         'playedAt': row['updated_at'],
         # ★★★ 第 164 轮修的真 bug（用户：刷新一下就没了）★★★
         #   这里是【挑过字段】的（只给客户端该看的 ✓ 设计正确 ✗）
@@ -164,6 +167,13 @@ def role_public(row):
         # Exactly the same trap as the 'mq' line above: row[col] exists, but this
         # picking layer drops it.
         'gold': int(row['gold'] or 0),
+        # ★★ round424：头顶称号选哪个榜（'' = 不显示）
+        #   ★ 这里又是一层「挑字段」✗ 漏了就会「重启后称号没了」✓
+        'titleBoard': (row['title_board'] if 'title_board' in row.keys() else '') or '',
+        # ★ round485：当前皮肤（'' = 老外观；客户端拿它搭模型 ✓）
+        'skin': (row['skin'] if 'skin' in row.keys() else '') or '',
+        # ★ round496：公告看到哪儿了（客户端不用它 ✗ 但 welcome 要判断 ✓）
+        'announceSeen': int(row['announce_seen'] or 0) if 'announce_seen' in row.keys() else 0,
     }
 
 
@@ -268,15 +278,95 @@ _SORT_KIND = {
 }
 
 
+def _bag_sort_key(it):
+    """一键整理的排序键（★ 抽出来是为了能单独测 ✗ 不用真库 ✓）
+
+    ★★★ round416（用户："一键整理把最高品质的装备放前面，其次再按类型分类"）★★★
+      旧规则：大类在前（武器→防具→材料）✗ 同类里才看品阶 ✓
+        → 12 阶的甲排在 5 阶的刀【前面】是做不到的 ✓（甲永远在刀后面）
+      新规则：**品阶第一**（高在前）✗ 同品阶再看类型（大类 → 小类）✓
+        → 12 阶的武器和 12 阶的甲会挨在一起 ✓ 但都排在 11 阶之前 ✓
+      材料（tier=0）自然落到最后 ✓ 黄金也是 ✓
+      ★ 兜底顺序不变：同阶同类同小类 → 物品等级高的在前 → 名字 → id
+    """
+    slot = it.get('slot') or None
+    cat = _SORT_CAT.get(slot, 3) if slot else 2
+    # ★ 武器的"小类"在 look 里（sword/staff/axe… ✓）✗ 不是 kind
+    kind = str(it.get('look') or it.get('kind') or '')
+    return (-int(it.get('tier') or 0),
+            cat,
+            _SORT_KIND.get(kind, 50),
+            -int(it.get('itemLv') or 0),
+            str(it.get('name') or ''))
+
+
+def stats_of(cfg, role_id):
+    """排行榜的计数器（登录时读 ✗ 没有就全 0 ✓）"""
+    out = {'kills': 0, 'deaths': 0, 'pvp': 0, 'sec': 0}
+    try:
+        with dbmod.db(cfg) as c:
+            r = c.execute('SELECT kills, deaths, pvp_kills, play_sec FROM role_stats'
+                          ' WHERE role_id=?', (int(role_id),)).fetchone()
+        if r:
+            out = {'kills': int(r['kills'] or 0), 'deaths': int(r['deaths'] or 0),
+                   'pvp': int(r['pvp_kills'] or 0), 'sec': int(r['play_sec'] or 0)}
+    except Exception:
+        pass
+    return out
+
+
+def title_board_of(cfg, role_id):
+    """玩家选的头顶称号榜（'' = 不显示）"""
+    try:
+        with dbmod.db(cfg) as c:
+            r = c.execute('SELECT title_board FROM roles WHERE id=?',
+                          (int(role_id),)).fetchone()
+        return (r['title_board'] or '') if r else ''
+    except Exception:
+        return ''
+
+
+def set_title_board(cfg, role_id, board):
+    """改头顶称号选哪个榜（'' = 关）→ (ok, err)
+
+    ★ round489：也允许皮肤称号（'skin:<key>'）✗ 独占才生效 ✓
+      ★ 这里只做【格式】校验 ✗ 独占状态由 tick 线程判定 ✓
+        （库是共享的，独占榜在内存里 ✓ 所以不在这里判）
+    """
+    import rankboard
+    b = str(board or '')
+    if b.startswith('skin:'):
+        import skins as skinsmod
+        if not skinsmod.valid(b[5:]):
+            return False, '没有这个皮肤'
+        try:
+            with dbmod.db(cfg) as c:
+                c.execute('UPDATE roles SET title_board=? WHERE id=?', (b, int(role_id)))
+                c.commit()
+            return True, ''
+        except Exception as e:
+            return False, '保存失败：%r' % (e,)
+    if b and b not in rankboard.KEYS:
+        return False, '不认识的排行榜'
+    try:
+        with dbmod.db(cfg) as c:
+            c.execute('UPDATE roles SET title_board=? WHERE id=?', (b, int(role_id)))
+            c.commit()
+        return True, ''
+    except Exception as e:
+        return False, '保存失败：%r' % (e,)
+
+
 def bag_sort(cfg, role_id):
     """一键整理：给背包排个序 ✗ 把顺序写进 items.slot_index ✓
 
     ★★ round304v（用户："增加一个一键整理的按钮，按分类和种类品质进行排序"）★★
-    ★ 顺序规则（都是"一眼能找到"优先 ✓）：
-        ① 大类：武器 → 防具 → 材料 → 其它
-        ② 小类：剑/刀/棍…（武器）· 甲/盔/靴（防具）· 材料按名字
-        ③ 品质：同一小类里【品阶高的在前】✗ 同阶按物品等级 ✓
-        ④ 品阶等级都一样：按名字（稳定 ✗ 不会每次整理都变顺序 ✓）
+    ★★ round416（用户："把最高品质的装备放前面，其次再按类型分类"）★★
+    ★ 顺序规则（改后的）：
+        ① 品质：品阶【高的在前】✗ 不分类型先比品阶 ✓
+        ② 同品阶：大类 武器 → 防具 → 材料 → 其它
+        ③ 同大类：小类（剑/刀/棍… · 甲/盔/靴 · 材料按名字）
+        ④ 还一样：物品等级高的在前 → 名字 → id（稳定 ✗ 不会每次整理都跳 ✓）
     ★ 为什么用 slot_index 而不是每次读的时候现算：
         现算的话玩家【自己摆的顺序】就没了 ✗ 而且"整理"这个词本身就是"存下来"✓
       （slot_index 这个列一直在写 -1 ✗ 但从来没人读 ✓ 正好拿来用 ✓）
@@ -298,20 +388,11 @@ def bag_sort(cfg, role_id):
                 if not isinstance(it, dict):
                     continue
                 items.append((int(rid), it, int(stack or 1)))
+
             def _key(rec):
                 rid, it, _st = rec
-                slot = it.get('slot') or None
-                cat = _SORT_CAT.get(slot, 3) if slot else 2
-                # ★ 武器的"小类"在 look 里（sword/staff/axe… ✓）✗ 不是 kind
-                #   （kind 只有材料才有 ✓ 自测抓到的：拿 kind 当小类会把所有武器
-                #     都归成同一类 ✗ 于是品阶高的反而排到后面 ✓）
-                kind = str(it.get('look') or it.get('kind') or '')
-                return (cat,
-                        _SORT_KIND.get(kind, 50),
-                        -int(it.get('tier') or 0),
-                        -int(it.get('itemLv') or 0),
-                        str(it.get('name') or ''),
-                        rid)
+                return _bag_sort_key(it) + (rid,)
+
             items.sort(key=_key)
             n = 0
             for idx, rec in enumerate(items):
@@ -340,7 +421,7 @@ def bag_of(cfg, role_id, cap=2000):
         是挂机刷怪把数据量打上去之后才暴露的 ✓
       ★ 上限提到 2000：够用（他 797 件 ✓）而且数据量还能接受
         （800 件 × 每件约 300 字节 ≈ 240KB ✗ 局域网/手机上 1~2 秒内 ✓）
-      ★★ 更好的做法是【服务器分页】（一次只取一页 35 件 ✓）
+      ★★ 更好的做法是【服务器分页】（一次只取一页 30 件 ✓）
          但那要改协议 ✗ 现在先不动 ✗ 记在这里以后再优化 ✓
     """
     import json
@@ -353,6 +434,11 @@ def bag_of(cfg, role_id, cap=2000):
                 'SELECT id, item_json, stack FROM items WHERE role_id=? AND in_storage=0'
                 ' ORDER BY (slot_index IS NULL), slot_index, id DESC LIMIT ?',
                 (role_id, int(cap))).fetchall()
+            try:
+                skin_owned = set(str(r[0]) for r in c.execute(
+                    'SELECT key FROM skin_unlocks WHERE role_id=?', (role_id,)).fetchall())
+            except Exception:
+                skin_owned = set()
     except Exception:
         return out
     for rid, js, stack in rows:
@@ -364,6 +450,9 @@ def bag_of(cfg, role_id, cap=2000):
             # ★ 第 74 轮：老武器（第 59 轮之前掉的）没有 dur/durMax
             #   → 读到就补上 ✓ 不然背包里那条"耐久"根本不显示 ✗
             weapons.ensure_dur(it)
+            # ★ round598：皮肤卡带上"是否已解锁"✗ 浮窗和按钮不用猜 ✓
+            if it.get('kind') == 'skin':
+                it['_unlocked'] = 1 if str(it.get('key') or '') in skin_owned else 0
             # ★ 第 54 轮：把数量带上（材料会堆叠 ✓ 武器永远是 1 ✓）
             out.append({'id': rid, 'item': it, 'stack': int(stack or 1)})
     return out
@@ -623,7 +712,9 @@ def sell_item(cfg, role_id, item_id):
             if not isinstance(it, dict):
                 return False, '\u8fd9\u4ef6\u4e1c\u897f\u574f\u4e86', ''
             # \u2605 \u9501\u5b9a\u4e2d\uff08\u4ea4\u6613\u6240\u4e0a\u67b6\u4e2d\uff09\u4e0d\u80fd\u5356
-            if it.get('locked_by') or it.get('locked'):
+            if it.get('locked'):
+                return False, '这件锁住了，先解锁才能卖', ''
+            if it.get('locked_by'):
                 return False, '\u8fd9\u4ef6\u4e1c\u897f\u6b63\u5728\u4ea4\u6613\u6240\u4e0a\u67b6\uff0c\u4e0d\u80fd\u5356', ''
             n = max(1, int(row[1] or 1))
             try:

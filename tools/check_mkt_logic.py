@@ -499,19 +499,46 @@ W._mkt_do(buyer, 'buyitem', {'lid': exp_lid})
 ok(d_of('listres')['ok'] is False and '过期' in d_of('listres')['msg'],
    'buying an expired listing is refused: %s' % d_of('listres')['msg'])
 W._mkt_sweep()
-ok(exp_lid not in W.mkt['by_lid'], 'the sweep took the expired row off the shelf')
+# ★★ round410（用户："到期没卖出 → 在交易所显示过期，点下架才回背包"）★★
+#   旧规矩：扫一次就下架 + 自动退回背包 ✗
+#   新规矩：过期后【留在货架上】等本人取回 ✗
+#            取回走 _mkt_claim（listclaim）才真的回背包 ✓
+ok(exp_lid in W.mkt['by_lid'],
+   'the expired row STAYS on the shelf until the seller takes it back')
+_rows_e, _n_on_e = W._mkt_rows_of(W.mkt, seller.role_id)
+_states = {r['row']['lid']: r['state'] for r in _rows_e}
+ok(_states.get(exp_lid) == 'expired', "the seller's list shows it as expired")
 run_saves()
 tick()
+_back0 = None
 with dbmod.db(cfg) as c:
     st = c.execute('SELECT state FROM listings WHERE lid=?', (exp_lid,)).fetchone()[0]
+    _back0 = c.execute('SELECT COUNT(*) FROM items WHERE role_id=? AND'
+                       " json_extract(item_json,'$.name')=?", (seller.role_id,
+                                                               exp_name)).fetchone()[0]
+ok(st == 'on', "它还在货架上（state='on' ✗ 没提前标成过期）")
+ok(_back0 == 0, 'the expired item did NOT jump back into the bag by itself')
+sent[:] = []
+W._mkt_do(seller, 'mylists', {})
+_mine_rows = d_of('listpage')['rows']
+ok(any(x['lid'] == exp_lid and x['state'] == 'expired' for x in _mine_rows),
+   'the seller sees it in my-listings marked expired')
+sent[:] = []
+W._mkt_do(seller, 'listclaim', {'lid': exp_lid})
+run_saves()
+tick()
+ok(exp_lid not in W.mkt['by_lid'], 'clicking take-back removes it from the shelf')
+with dbmod.db(cfg) as c:
     back = c.execute('SELECT COUNT(*) FROM items WHERE role_id=? AND'
                      " json_extract(item_json,'$.name')=?", (seller.role_id,
                                                              exp_name)).fetchone()[0]
-ok(st == 'expired', "the listing is state='expired'")
-ok(back == 1, 'the expired item came back to the bag (%d)' % back)
+ok(back == 1, 'after take-back the item is back in the bag (%d)' % back)
 sent[:] = []
-W._mkt_do(seller, 'mylists', {})
-ok(not [x for x in d_of('listpage')['rows'] if x['lid'] == exp_lid],
+W._mkt_do(buyer, 'lists', {})
+_blp = d_of('listpage')
+_browsed = _blp.get('rows') or []
+# ★ 列表页的行是【数组】✗ 不是 dict（第 0 格就是 lid ✓）
+ok(not [x for x in _browsed if int(x[0]) == int(exp_lid)],
    'the expired row is not offered for buying any more')
 
 print('--- 11. browsing (memory only) ---')

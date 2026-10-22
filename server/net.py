@@ -437,7 +437,17 @@ class Net(object):
                     if it.get('kind') != 'food':
                         conn.push_text(P.pack('notice', text='这件东西不能吃'))
                         return
+                    # ★ 2026-10-22：食物效果可能写在【顶层】(商店商品) 也可能在 use 里
+                    #   （以前只读 use ✗ → 买的咖啡喝下去 0 效果 ✓）
                     use = it.get('use') or {}
+                    def _uf(k):
+                        v = use.get(k)
+                        if v is None or v == 0:
+                            v = it.get(k)
+                        try:
+                            return float(v or 0)
+                        except Exception:
+                            return 0.0
                     _st = int((row['stack'] if hasattr(row, 'keys') else row[1]) or 1)
                     if _st > 1:
                         c.execute('UPDATE items SET stack = stack - 1 WHERE id=? AND role_id=?',
@@ -448,9 +458,10 @@ class Net(object):
                 conn.push_text(P.pack('bagrefresh'))
                 self.world.post_intent(conn.cid, 'usefood',
                                        {'name': it.get('name') or '食物',
-                                        'hp_pct': float(use.get('hp_pct') or 0),
-                                        'qi_pct': float(use.get('qi_pct') or 0),
-                                        'exp': int(use.get('exp') or 0)})
+                                        'model': it.get('model') or 'cup',
+                                        'hp_pct': _uf('hp_pct'), 'qi_pct': _uf('qi_pct'),
+                                        'hp': int(_uf('hp')), 'qi': int(_uf('qi')),
+                                        'exp': int(_uf('exp'))})
                 return
 
             # ★★★ 2026-10-22（用户："皮肤卡没有堆叠，堆叠后使用多少消耗多少"）★★★
@@ -850,6 +861,12 @@ class Net(object):
             # ★★ round424：排行榜的计数器 + 头顶称号选择（读库在网络线程 ✓）
             #   ★ 不读就会「重启后击杀数归 0」" ✗ 和当年 mq / gold 同一个坑 ✓
             role['stats'] = authmod2.stats_of(self.cfg, role.get('id'))
+            # ★ 2026-10-22（用户："离线后也继续挂机"）：在岗记录也在网络线程读
+            try:
+                import work as workmod2
+                role['workRow'] = workmod2.load_worker(self.cfg, role.get('id'))
+            except Exception:
+                role['workRow'] = None
             role['titleBoard'] = authmod2.title_board_of(self.cfg, role.get('id'))
         except Exception as _e:
             # ★ 第 162 轮：不再静默吞异常 ✗

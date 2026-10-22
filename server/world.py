@@ -233,7 +233,8 @@ class Player(object):
                  'seat', 'tpEnd', 'tpAt',
                  'sleepHouse', 'sleepAcc', 'sleepYaw',
                  'running', 'runAcc', 'footY', 'posePad',
-                 'job', 'jobShop', 'jobT', 'jobAcc', 'qiAcc', 'qiLast', 'qiSync',
+                 'job', 'jobShop', 'jobT', 'jobAcc', 'jobX', 'jobZ', 'jobExpH', 'jobPayH',
+                 'qiAcc', 'qiLast', 'qiSync',
                  # ★ 2026-10-22：主动技能（冷却 / 护盾 / 增益）
                  'skCd', 'shieldAmt', 'shieldT', 'skBuff',
                  'skLoad', 'skBT', 'skTA', 'skProf', 'skProfTick', 'skCloneN',
@@ -303,11 +304,17 @@ class Player(object):
         self.downT = 0.0
         self.qiMaxC = 100
         self.omniC = 0.0
-        self.st_kills = 0
-        self.st_deaths = 0
-        self.st_pvp = 0
-        self.st_play = 0.0
-        self.st_play0 = 0.0
+        # ★ 2026-10-22（用户："一直没推送过击杀统计"）—— 根因就在这四行
+        #   以前一律从 0 开始 ✗ 而 net.py 明明把 role_stats 读进 role['stats'] 了 ✓
+        #   后果：一上线 st_kills=0 → 下一秒存档把它写回 0 → 【历史击杀被清零】
+        _st0 = (role or {}).get('stats') or {}
+        if not isinstance(_st0, dict):
+            _st0 = {}
+        self.st_kills = int(_st0.get('kills') or 0)
+        self.st_deaths = int(_st0.get('deaths') or 0)
+        self.st_pvp = int(_st0.get('pvp') or 0)
+        self.st_play = float(_st0.get('sec') or 0)
+        self.st_play0 = int(self.st_play)
         self.titleBoard = str((role or {}).get('titleBoard')
                               or (role or {}).get('title_board') or '')
         self.shieldAmt = 0
@@ -326,6 +333,10 @@ class Player(object):
         self.jobShop = ''
         self.jobT = 0.0
         self.jobAcc = 0.0
+        self.jobX = 0.0
+        self.jobZ = 0.0
+        self.jobExpH = 0
+        self.jobPayH = 0
         self.qiAcc = 0.0
         self.qiLast = -1
         self.qiSync = 0.0
@@ -428,7 +439,13 @@ class World(object):
 
     def __init__(self, cfg):
         self.cfg = cfg
-        self.qq = None      # ★ 2026-10-22：app.py 启动时挂上来；没挂就是 None（不发）
+        self.qq = None
+        # ★ 2026-10-22：离线也在打工 → 他们照样占着岗位（登录时只用花名册查一次）
+        try:
+            self.work_rows = workmod.load_workers(self.cfg)
+        except Exception as _wl:
+            print('[work] roster load failed: %r' % (_wl,))
+            self.work_rows = {}      # ★ 2026-10-22：app.py 启动时挂上来；没挂就是 None（不发）
         self.houses = {}
         try:
             housemod.ensure_seed(cfg)
@@ -814,6 +831,37 @@ class World(object):
             except Exception:
                 pass
             _np = Player(conn.cid, role)
+            # ★ 2026-10-22（用户："离线后也继续挂机"）
+            #   网络线程把在岗记录读进 role['workRow']（含 last_settle 时间戳）
+            #   → 上线就把【离线那段也累计上】✗ 人还被钉在店里 ✓
+            try:
+                _wr = (role or {}).get('workRow')
+                if _wr:
+                    _np.job = str(_wr.get('slot') or 'serve')
+                    _np.jobShop = str(_wr.get('shop') or '')
+                    _np.jobAcc = float(workmod.worked_seconds(_wr.get('last') or 0))
+                    _shop = (self.dyn_shops or {}).get(_np.jobShop) or {}
+                    _np.jobX = float(_shop.get('x') or _np.x)
+                    _np.jobZ = float(_shop.get('z') or _np.z)
+                    try:
+                        _lvl1 = int((_np.role or {}).get('level') or 1)
+                        _eh1 = int(workmod.hourly_exp(_lvl1))
+                        _ph1 = int(workmod.hourly_pay())
+                        _np.jobExpH, _np.jobPayH = _eh1, _ph1
+                    except Exception:
+                        _eh1, _ph1 = 0, 0
+                    self._send_cid(conn.cid, P.pack('work', ok=1, id=_np.jobShop,
+                                                   slot=_np.job, on=1,
+                                                   msg='WORK_RESTORED',
+                                                   x=_np.jobX, z=_np.jobZ,
+                                                   sec=int(_np.jobAcc),
+                                                   expH=_eh1, payH=_ph1))
+                    if _np.jobAcc > 0:
+                        self._add_pend(conn.cid, 'notice', {
+                            'text': '你还在打工（已累计 %.1f 小时），只能点【结算打工】'
+                                    % (_np.jobAcc / 3600.0)})
+            except Exception as _wre:
+                print('[work] restore failed: %r' % (_wre,))
             try:
                 self._send_houses(_np)
             except Exception as _hse:
@@ -936,6 +984,13 @@ class World(object):
         for _q in self.players.values():
             if _q.invulnT > 0:
                 _q.invulnT = max(0.0, _q.invulnT - (1.0 / max(1, TICK_HZ)))
+            # ★ 2026-10-22（用户："一直没推送过击杀统计"）—— 在线时长以前压根没累加 ✗
+            #   st_play 永远 0 → _save_player 里 `_sec != st_play0` 永远不成立
+            #   → role_stats 一次都不写 → 击杀榜/称号永远是旧数据 ✓（就是这个根因）
+            try:
+                _q.st_play = float(getattr(_q, 'st_play', 0.0) or 0.0) + TICK_DT
+            except Exception:
+                pass
 
         # ② 处理意图（有上限，防一条连接把 tick 打饿）
         n = 0
@@ -1941,7 +1996,8 @@ class World(object):
             self._send_cid(p.cid, P.pack('shop', ok=0, msg='COME_CLOSER'))
             return
         self._send_cid(p.cid, P.pack('shop', ok=1, id=s['id'], name=s['name'],
-                                     gold=int(getattr(p, 'gold', 0) or 0), items=s['items']))
+                                     gold=int(getattr(p, 'gold', 0) or 0), items=s['items'],
+                                     workers=self._shop_workers_of(sid) or s.get('workers') or {}))
 
     def _shop_buy(self, p, d):
         sid = str((d or {}).get('id') or '')
@@ -1984,17 +2040,25 @@ class World(object):
         d = d or {}
         hpm = self._hp_max(p)
         qm = self._qi_max(p)
-        hp = int(round(hpm * float(d.get('hp_pct') or 0)))
-        qi = int(round(qm * float(d.get('qi_pct') or 0)))
+        hp = int(round(hpm * float(d.get('hp_pct') or 0))) + int(d.get('hp') or 0)
+        qi = int(round(qm * float(d.get('qi_pct') or 0))) + int(d.get('qi') or 0)
+        _hp0, _qi0 = int(p.hp or 0), int(p.qi or 0)
         if hp:
-            p.hp = min(hpm, int(p.hp or 0) + hp)
+            p.hp = min(hpm, _hp0 + hp)
         if qi:
-            p.qi = min(qm, int(p.qi or 0) + qi)
+            p.qi = min(qm, _qi0 + qi)
         exp = int(d.get('exp') or 0)
         if exp:
             self._gain_exp(p, exp)
+        # ★ 2026-10-22（用户："使用后有效果提示，例如恢复了多少血"）
+        #   → 发【实际】恢复量（受上限影响后），客户端才能说"恢复了 55 点"
+        _dhp = max(0, int(p.hp or 0) - _hp0)
+        _dqi = max(0, int(p.qi or 0) - _qi0)
         self._send_cid(p.cid, P.pack('eatfx', name=d.get('name') or 'FOOD',
-                                     model=d.get('model') or 'cup', hp=hp, qi=qi))
+                                     model=d.get('model') or 'cup',
+                                     hp=_dhp, qi=_dqi, exp=exp,
+                                     hpm=int(self._hp_max(p)), hp2=int(p.hp or 0),
+                                     qimax=int(self._qi_max(p)), qi2=int(p.qi or 0)))
 
     def _fridge_house(self, p, hid):
         h = self._house_lookup(str(hid))
@@ -2032,9 +2096,12 @@ class World(object):
     def _work_start(self, p, d):
         sid = str((d or {}).get('id') or '')
         slot = str((d or {}).get('slot') or '')
-        s = shopmod.shop_by_id(sid)
+        # ★ 2026-10-22：以前只认静态店（shops.py 的 cafe/tea…）✗
+        #   现在店里都是【放置建筑】(obj<id>) → shop_by_id 返回 None → 永远 NO_SHOP
+        #   → 用 _shop_ok 解析（它认识 obj<id>，也带距离校验）
+        s = self._shop_ok(p, sid)
         if not s:
-            self._send_cid(p.cid, P.pack('work', ok=0, msg='NO_SHOP'))
+            self._send_cid(p.cid, P.pack('work', ok=0, msg='COME_CLOSER'))
             return
         if (p.x - s['x']) ** 2 + (p.z - s['z']) ** 2 > 4.6 * 4.6:
             self._send_cid(p.cid, P.pack('work', ok=0, msg='COME_CLOSER'))
@@ -2045,19 +2112,56 @@ class World(object):
         if not self._work_slot_free(sid, slot):
             self._send_cid(p.cid, P.pack('work', ok=0, msg='SLOT_TAKEN'))
             return
+        # ★ 2026-10-22：离线工人也在岗 → 同样不能抢
         try:
-            _ok, _msg = workmod.start(self.cfg, p.role_id, sid, slot)
-            if not _ok:
-                self._send_cid(p.cid, P.pack('work', ok=0, msg='SLOT_TAKEN'))
-                return
+            for _rid2, _w2 in (self.work_rows or {}).items():
+                if int(_rid2) != int(p.role_id) and \
+                        str(_w2.get('shop')) == str(sid) and str(_w2.get('slot')) == str(slot):
+                    self._send_cid(p.cid, P.pack('work', ok=0, msg='SLOT_TAKEN'))
+                    return
+        except Exception:
+            pass
+        # ★ 2026-10-22：占岗落库也走 post_save（tick 线程不碰磁盘 ✓）
+        try:
+            self.post_save('INSERT OR REPLACE INTO work_state'
+                           '(role_id, shop_id, slot_id, started_at, last_settle, carry_sec, active)'
+                           ' VALUES(?,?,?,?,?,0,1)',
+                           (int(p.role_id), str(sid), str(slot),
+                            dbmod.now_ms() // 1000, dbmod.now_ms() // 1000))
         except Exception as _we:
-            print('[work] start db failed: %r' % (_we,))
+            print('[work] start queue failed: %r' % (_we,))
         p.job = slot
         p.jobShop = sid
         p.jobT = 0.0
         p.jobAcc = 0.0
+        try:
+            self.work_rows[int(p.role_id)] = {'shop': str(sid), 'slot': str(slot),
+                                              'last': dbmod.now_ms() // 1000,
+                                              'name': str(getattr(p, 'name', '') or '')}
+            _ds = (self.dyn_shops or {}).get(str(sid))
+            if _ds is not None:
+                _ds['workers'] = self._shop_workers_of(sid)
+        except Exception:
+            pass
+        # ★ 2026-10-22：记住打工点（客户端会把人钉在这里，不能乱跑）
+        try:
+            p.jobX = float(s.get('x') or p.x)
+            p.jobZ = float(s.get('z') or p.z)
+        except Exception:
+            p.jobX, p.jobZ = p.x, p.z
         p.seat = -1
-        self._send_cid(p.cid, P.pack('work', ok=1, id=sid, slot=slot, on=1, msg='WORK_STARTED'))
+        # ★ 2026-10-22（用户："打工中要能看到已赚多少、打了多久"）
+        #   费率直接下发 ✗ 客户端不用自己算（等级不同费率不同 ✓）
+        try:
+            _lvl0 = int((p.role or {}).get('level') or 1)
+            _eh = int(workmod.hourly_exp(_lvl0))
+            _ph = int(workmod.hourly_pay())
+            p.jobExpH, p.jobPayH = _eh, _ph
+        except Exception:
+            _eh, _ph = 0, 0
+        self._send_cid(p.cid, P.pack('work', ok=1, id=sid, slot=slot, on=1,
+                                     msg='WORK_STARTED', x=p.jobX, z=p.jobZ,
+                                     sec=0, expH=_eh, payH=_ph))
         self._send_cid(p.cid, P.pack('notice', text='WORK_STARTED'))
 
     def _work_stop(self, p):
@@ -2065,13 +2169,25 @@ class World(object):
             return
         self._work_settle(p)
         try:
-            workmod.stop(self.cfg, p.role_id)
+            self.post_save('UPDATE work_state SET active=0 WHERE role_id=?', (int(p.role_id),))
         except Exception as _we2:
-            print('[work] stop db failed: %r' % (_we2,))
+            print('[work] stop queue failed: %r' % (_we2,))
         p.job = ''
         p.jobShop = ''
         p.jobT = 0.0
         p.jobAcc = 0.0
+        try:
+            _sid0 = str(p.jobShop or '')
+            self.work_rows.pop(int(p.role_id), None)
+            _ds0 = (self.dyn_shops or {}).get(_sid0)
+            if _ds0 is not None:
+                _ds0['workers'] = self._shop_workers_of(_sid0)
+        except Exception:
+            pass
+        p.jobX = 0.0
+        p.jobZ = 0.0
+        p.jobExpH = 0
+        p.jobPayH = 0
         self._send_cid(p.cid, P.pack('work', ok=1, on=0, msg='WORK_STOPPED'))
 
     def _job_step(self, p, d):
@@ -2091,31 +2207,40 @@ class World(object):
                 pass
 
     def _work_settle(self, p):
+        """★ 2026-10-22（用户）：每小时 10% 经验 + 50 万金币，按实际时长比例给。
+        不足一小时按百分比算 ✓ 上限 72 小时 ✓
+        """
         if not getattr(p, 'job', ''):
             return 0
-        hours = float(getattr(p, 'jobAcc', 0.0) or 0.0)
-        n_h = int(hours)
-        if n_h <= 0:
-            return 0
-        p.jobAcc = hours - n_h
+        sec = float(getattr(p, 'jobAcc', 0.0) or 0.0)
         lvl = int((p.role or {}).get('level') or 1)
-        exp = workmod.hourly_exp(lvl) * n_h
-        pay = workmod.hourly_pay() * n_h
-        self._gain_exp(p, int(exp))
-        self._gain_gold(p, int(pay), 'work')
+        exp, pay, sec = workmod.prorate(lvl, sec)
+        if exp:
+            self._gain_exp(p, int(exp))
+        if pay:
+            self._gain_gold(p, int(pay), 'work')
+        # ★ 2026-10-22：落库走 post_save（tick 线程不碰磁盘 ✓）
         try:
-            workmod.settle(self.cfg, p.role_id, p.jobShop, p.job, lvl, n_h, pay, exp)
+            self.post_save('UPDATE work_state SET last_settle=?, carry_sec=0'
+                           ' WHERE role_id=? AND shop_id=? AND slot_id=? AND active=1',
+                           (dbmod.now_ms() // 1000, int(p.role_id),
+                            str(p.jobShop), str(p.job)))
         except Exception as _se:
-            print('[work] settle db failed: %r' % (_se,))
-        self._send_cid(p.cid, P.pack('worksettle', hours=n_h, exp=int(exp), pay=int(pay)))
+            print('[work] settle queue failed: %r' % (_se,))
+        _msg = 'TIME_TOO_SHORT' if int(sec) < int(workmod.MIN_SETTLE_SEC) else 'SETTLED'
+        self._send_cid(p.cid, P.pack('worksettle', hours=round(sec / 3600.0, 2),
+                                     sec=int(sec), exp=int(exp), pay=int(pay), msg=_msg))
+        return int(exp)
 
     def _work_tick(self):
+        _cap = float(workmod.OFFLINE_CAP_H) * 3600.0
         for p in list(self.players.values()):
             if not getattr(p, 'job', ''):
                 continue
-            p.jobAcc = float(getattr(p, 'jobAcc', 0.0) or 0.0) + TICK_DT
-            if p.jobAcc >= 3600.0:
-                self._work_settle(p)
+            # ★ 2026-10-22（用户）：不再每小时自动结算 → 一直累计，玩家点【结算打工】才发
+            #   上限 72 小时（和离线同一个上限 ✓）
+            _a = float(getattr(p, 'jobAcc', 0.0) or 0.0) + TICK_DT
+            p.jobAcc = min(_cap, _a)
 
     def _job_done(self, p, d):
         if not getattr(p, 'job', ''):
@@ -2497,6 +2622,28 @@ class World(object):
         rad = float(r.get('size_m') or 60.0) / 2.0 + 25.0
         return fn(self.cfg, int(tid), cx, cz, rad)
 
+    def _shop_workers_of(self, sid):
+        """这家店的岗位占用 → {slot: {'rid':.., 'name':.., 'off':0/1}}
+        ★ 2026-10-22（用户："下线了也可以看到"）：离线的工人也算（花名册里带着名字）"""
+        out = {}
+        try:
+            for _p in self.players.values():
+                if str(getattr(_p, 'jobShop', '')) == str(sid) and getattr(_p, 'job', ''):
+                    out[str(_p.job)] = {'rid': int(_p.role_id),
+                                        'name': str(getattr(_p, 'name', '') or ''),
+                                        'off': 0}
+        except Exception:
+            pass
+        try:
+            for _rid, _w in (self.work_rows or {}).items():
+                if str(_w.get('shop')) == str(sid) and str(_w.get('slot')) not in out:
+                    out[str(_w.get('slot'))] = {'rid': int(_rid),
+                                                'name': str(_w.get('name') or ''),
+                                                'off': 1}
+        except Exception:
+            pass
+        return out
+
     def _rebuild_dyn_shops(self):
         """按已放置的建筑生成商店数据（交互点 = 门口，不是中心）；顺带算桌位。"""
         out = {}
@@ -2539,6 +2686,8 @@ class World(object):
                         # 点单判定用建筑中心和"半对角线 + 1.5m"，坐店里都能点到
                         'bx': float(o['x']), 'bz': float(o['z']),
                         'br': math.hypot(w, dd) / 2.0 + 1.5,
+                        # ★ 2026-10-22：岗位占用（在线 + 离线打工的都算）
+                        'workers': self._shop_workers_of(sid),
                     }
                 # ---- 桌位：桌子 + 附近的椅子（家具对象）----
                 seats = []
@@ -2789,12 +2938,105 @@ class World(object):
         }
         return n.get(catalog_id, '商店')
 
+    # ★ 2026-10-22（用户："把小镇买的商品加上图标"）
+    #   商品来自静态店模板 / 默认表，大多没有 icon → 这里按【模型】补一个像样的图标
+    _ITEM_ICONS = {
+        'cup': '🥤', 'bowl': '🍜', 'plate': '🍽️', 'cake': '🍰', 'bread': '🍞',
+        'bottle': '🍶', 'scroll': '📜', 'crate': '📦', 'stone': '🪨', 'brick': '🧱',
+        'crystal': '💎', 'ticket': '🎫', 'flower': '💐', 'fish': '🐟', 'meat': '🍖',
+        'tea': '🍵', 'coffee': '☕', 'noodle': '🍜', 'oven': '🔥',
+    }
+    _KIND_ICONS = {
+        'book': '📖', 'post': '✉️', 'smith': '⚒️', 'clinic': '💊', 'flower': '💐',
+        'cafe': '☕', 'tea': '🍵', 'ramen': '🍜', 'izakaya': '🍶', 'bakery': '🥐',
+        'mart': '🛒', 'warehouse': '📦', 'inn': '🏨', 'bookstore': '📚',
+    }
+
+    # ★ 2026-10-22（用户："小镇的商品要做对应名称的图标"）
+    #   名称关键词优先：拿铁/美式 → ☕、蛋糕 → 🍰，而不是笼统的按模型 ✗
+    _NAME_ICONS = (
+        ('冰美式', '🧊'), ('美式', '☕'), ('拿铁', '☕'), ('咖啡', '☕'), ('摩卡', '☕'),
+        ('奶茶', '🧋'), ('牛奶', '🥛'), ('酸奶', '🥛'), ('豆浆', '🥛'),
+        ('清茶', '🍵'), ('绿茶', '🍵'), ('红茶', '🍵'), ('茶', '🍵'), ('抹茶', '🍵'),
+        ('矿泉水', '💧'), ('水', '💧'), ('果汁', '🧃'), ('汽水', '🥤'), ('可乐', '🥤'),
+        ('蛋糕', '🍰'), ('甜品', '🍮'), ('布丁', '🍮'), ('面包', '🍞'), ('吐司', '🍞'),
+        ('拉面', '🍜'), ('面', '🍜'), ('饭', '🍚'), ('寿司', '🍣'), ('饭团', '🍙'),
+        ('点心', '🥮'), ('月饼', '🥮'), ('蛋', '🥚'), ('肉', '🍖'), ('串', '🍢'),
+        ('鱼', '🐟'), ('水果', '🍎'), ('苹果', '🍎'), ('包子', '🥟'), ('饺子', '🥟'),
+        ('清酒', '🍶'), ('酒', '🍶'), ('汤', '🍲'), ('粥', '🥣'),
+        ('灵石', '💎'), ('晶石', '💎'), ('矿', '⛏️'), ('铁锭', '🔩'), ('铁', '⚒️'),
+        ('磨刀石', '🪨'), ('石', '🪨'), ('木材', '🪵'), ('木', '🪵'), ('布', '🧵'),
+        ('药', '💊'), ('丹', '💊'), ('丸', '💊'), ('解毒', '🧪'), ('药水', '🧪'),
+        ('心法', '📖'), ('拳谱', '📖'), ('书', '📖'), ('卷轴', '📜'), ('秘籍', '📕'),
+        ('信纸', '✉️'), ('信', '✉️'), ('包裹', '📦'), ('箱', '📦'), ('票', '🎫'),
+        ('澡票', '♨️'), ('温泉', '♨️'), ('花', '💐'), ('玫瑰', '🌹'), ('草', '🌿'),
+        ('鱼竿', '🎣'), ('种子', '🌱'), ('灯笼', '🏮'), ('蜡烛', '🕯️'),
+    )
+
+    def _item_icon(self, it, kind=''):
+        """给一件商品配图标：名称关键词 → 自带 → model → 店铺类型 → 通用规则"""
+        try:
+            _nm = str(it.get('name') or '')
+            for _kw, _ico in self._NAME_ICONS:
+                if _kw and _kw in _nm:
+                    return _ico
+            if it.get('icon'):
+                return it['icon']
+            _mdl = str(it.get('model') or '')
+            if _mdl in self._ITEM_ICONS:
+                return self._ITEM_ICONS[_mdl]
+            if kind in self._KIND_ICONS:
+                return self._KIND_ICONS[kind]
+            return townreg.icon_for(_nm, 'goods')
+        except Exception:
+            return '🛒'
+
+    def _item_fx(self, it):
+        """商品效果的【人话】说明（悬浮窗显示用）"""
+        try:
+            out = []
+            def _pct(v):
+                try:
+                    return int(round(float(v or 0) * 100))
+                except Exception:
+                    return 0
+            _hp = _pct(it.get('hp_pct'))
+            _qi = _pct(it.get('qi_pct'))
+            _hpf = int(it.get('hp') or 0)
+            _qif = int(it.get('qi') or 0)
+            _exp = int(it.get('exp') or 0)
+            if _hp:
+                out.append('生命 +%d%%' % _hp)
+            if _qi:
+                out.append('灵气 +%d%%' % _qi)
+            if _hpf:
+                out.append('生命 +%d' % _hpf)
+            if _qif:
+                out.append('灵气 +%d' % _qif)
+            if _exp:
+                out.append('经验 +%d' % _exp)
+            if it.get('dur'):
+                out.append('耐久 +%d' % int(it.get('dur') or 0))
+            if not out:
+                out.append(str(it.get('desc') or '没有特殊效果'))
+            return ' · '.join(out)
+        except Exception:
+            return ''
+
+
     def _shop_items_of(self, kind):
         """按店铺类型给商品。复用静态店里的 list 作为模板。"""
         try:
             for s2 in shopmod.shop_list():
                 if s2.get('id') == kind and s2.get('items'):
-                    return s2['items']
+                    # ★ 补图标（同一份模板可能被多家店共用 ✗ 复制一份再改 ✓）
+                    _out = []
+                    for _it in s2['items']:
+                        _c = dict(_it)
+                        _c['icon'] = self._item_icon(_c, kind)
+                        _c['fx'] = self._item_fx(_c)
+                        _out.append(_c)
+                    return _out
         except Exception:
             pass
         # 新店种：没有静态模板，这里给默认商品
@@ -2824,7 +3066,13 @@ class World(object):
                  'icon': '🥚', 'model': 'plate', 'desc': '生命 +20%'},
             ],
         }
-        return extra.get(kind, [])
+        _ex = extra.get(kind) or []
+        # ★ 2026-10-22：默认商品也统一补图标（没写 icon 的按 model 推）
+        _ex = [dict(_i) for _i in _ex]
+        for _i in _ex:
+            _i['icon'] = self._item_icon(_i, kind)
+            _i['fx'] = self._item_fx(_i)
+        return _ex
 
     # ---------- v4 multi-town ----------
     def _town_of_owner(self, role_id):
@@ -4862,7 +5110,8 @@ class World(object):
             dist = random.uniform(40.0, 70.0)
             x = p.x + math.sin(ang) * dist
             z = p.z + math.cos(ang) * dist
-            if x * x + z * z < SPAWN_SAFE * SPAWN_SAFE:
+            # ★ 2026-10-22：用【多小镇版】安全区判断（云端是单个方块 → BOSS 会刷在镇里）
+            if self._in_safe_zone(x, z):
                 self._boss_next_at = now_s() + 60.0
                 return
             self.mob_seq += 1
@@ -6249,6 +6498,11 @@ class World(object):
             self._launch_player(p, q, dv)
 
     def _handle_intent(self, p, t, d):
+        # ★ 2026-10-22（用户："打工后不能离开建筑，也不能进行任何操作，只能结算打工"）
+        #   → 打工期间除了收尾/聊天，别的一律丢掉（服务端硬锁 ✓ 客户端也锁 ✓）
+        if getattr(p, 'job', ''):
+            if t not in ('work_stop', 'work_start', 'jobstep', 'jobdone', 'chat'):
+                return
         _TP = ('house_info', 'house_buy', 'house_leave', 'house_sleep', 'house_wake',
                # ★ 2026-10-22：换皮肤 / 保存自定义以前【不在白名单】→ 包直接被丢掉，
                #   表现就是"点了换肤没反应""别人看不到我的自定义"。
@@ -8285,7 +8539,9 @@ class World(object):
         if act == 'mobcap':
             who = str(d.get('name') or '').strip()
             if 'per' in d and d.get('per') is not None:
-                v = max(1, min(30, int(d.get('per'))))
+                # ★ 2026-10-22（用户："把个人刷新 30 的上限解开"）
+                #   这里和玩家自己的滑块现在【同一个值】✗ 上限统一 100 ✓
+                v = max(1, min(100, int(d.get('per'))))
                 if who:
                     q = self._find_player(who)
                     if q is None:
@@ -8349,7 +8605,8 @@ class World(object):
             return
         if act == 'spawn':
             n = max(0, min(int(d.get('n') or 5), mobs.MOB_CAP))
-            self._debug_spawn(q, n, bool(d.get('clear')), d.get('kind') or None, d.get('lv'))
+            self._debug_spawn(q, n, bool(d.get('clear')), d.get('kind') or None, d.get('lv'),
+                              d.get('rank'), d.get('skin') or '')
             if n:
                 self._send_cid(q.cid, P.pack('notice',
                                              text='管理员在你附近放了 %d 只僵尸' % n))
@@ -8367,7 +8624,7 @@ class World(object):
             q.hp = self._hp_max(q)     # 满血（★ 第 67 轮：含防具加成 ✓）
             self._send_cid(q.cid, P.pack('notice', text='管理员把你治好了'))
 
-    def _debug_spawn(self, p, n, clear, kind=None, lv=None):
+    def _debug_spawn(self, p, n, clear, kind=None, lv=None, rank=0, skin=''):
         """调试：在我附近直接刷 n 只 / 清空（不做安全区判断 —— 就是要能立刻试 ✓）
 
         ★ 第 46 轮加了 kind：可以指定职业（不指定就随机 ✓）
@@ -8377,11 +8634,11 @@ class World(object):
         if clear:
             self.mobs.clear()
             return
-        n = max(0, min(int(n), int(getattr(self, 'mob_cap', 0) or mobs.MOB_CAP)))
+        n = max(0, min(int(n), mobs.MOB_CAP))
         for _ in range(n):
             # ★ 调试刷怪不受上限"挡住"：满了就淘汰最远的那只腾位置 ✓
             #   （以前这里是 break → 上限被远处的僵尸占满时，调试按钮点了没反应 ✗）
-            if len(self.mobs) >= (int(getattr(self, 'mob_cap', 0) or mobs.MOB_CAP)) and not self._evict_far():
+            if len(self.mobs) >= mobs.MOB_CAP and not self._evict_far():
                 break
             ang = random.random() * math.pi * 2
             dist = 3.0 + random.random() * 6.0
@@ -8390,9 +8647,15 @@ class World(object):
             #   为什么需要：验证"打残 → 医生回血"时，怪的血量必须落在
             #   【一刀打不死、但能打到 85% 以下】那个区间里 —— 随机刷做不到 ✓
             _lv = int(lv) if lv else mobs.roll_level(p.role.get('level', 1) or 1)
+            _rk = int(rank or 0)
+            if _rk and not skin:
+                skin = random.choice(mob_ranks.ELITE_SKINS if _rk == 1 else mob_ranks.BOSS_SKINS)
             self.mobs[str(self.mob_seq)] = mobs.Mob(
                 self.mob_seq, _lv, p.x + math.sin(ang) * dist, p.z + math.cos(ang) * dist,
-                kind=kind)
+                kind=kind, rank=_rk, skin=skin,
+                name=(mob_ranks.name_of(skin, _rk) if _rk else None))
+            if _rk:
+                self._special_spawn_send(self.mobs[str(self.mob_seq)])
 
     def _hp_max_hint(self, role):
         """给 HTTP 线程用的血量上限估算（第 102 轮）
@@ -11453,6 +11716,16 @@ class World(object):
                               self.party_of.get(o.role_id) == self.party_of.get(p.role_id)) else 0,
                 # ★ 第 152 轮：头顶要显示魔气 → 快照里带上它 ✓
                 #   （只有 >0 才有意义 ✗ 客户端拿不到就是 0 ✓）
+                # ★ 2026-10-22（用户："打工状态要同步广播，头上能看到"）
+                'job': (str(getattr(o, 'job', '') or '') if getattr(o, 'job', '') else ''),
+                # ★ 2026-10-22（用户："头上的信息框要能看见经验这些"）
+                'js': (int(getattr(o, 'jobAcc', 0) or 0) if getattr(o, 'job', '') else 0),
+                'je': (int(round(float(getattr(o, 'jobExpH', 0) or 0) *
+                                 float(getattr(o, 'jobAcc', 0) or 0) / 3600.0))
+                       if getattr(o, 'job', '') else 0),
+                'jp': (int(round(float(getattr(o, 'jobPayH', 0) or 0) *
+                                 float(getattr(o, 'jobAcc', 0) or 0) / 3600.0))
+                       if getattr(o, 'job', '') else 0),
                 'mq': (int(o.mq or 0) if int(o.mq or 0) > 0 else 0),
                 'n': o.name,
                 'x': round(o.x, 3),
