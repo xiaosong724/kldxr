@@ -12,6 +12,20 @@ var TOWN_NEAR_R = TOWN_DATA ? TOWN_DATA.warehouseR : 2.8;
 var TOWN_SOLIDS = [];
 /* ★ 2026-10-22：放置物件（建筑墙/家具）的碰撞，和旧静态镇的 solids 分开管理 */
 var TOWN_OBJ_SOLIDS = [];
+/* ★ 2026-10-22：建筑室内地板高度（解决"走进屋里踩到地下"）
+   客户端按放置建筑的外框生成矩形，terrainV 里取 max(地形, 地板)。 */
+var TOWN_FLOORS = [];
+function townSetObjectFloors(list) {
+  TOWN_FLOORS = list || [];
+}
+function townFloorAt(x, z) {
+  for (var i = 0; i < TOWN_FLOORS.length; i++) {
+    var f = TOWN_FLOORS[i];
+    if (x >= f.x0 && x <= f.x1 && z >= f.z0 && z <= f.z1) { return f.y; }
+  }
+  return -Infinity;
+}
+
 function townSetObjectSolids(boxes) {
   var i;
   for (i = 0; i < TOWN_OBJ_SOLIDS.length; i++) {

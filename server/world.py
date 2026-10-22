@@ -2529,7 +2529,9 @@ class World(object):
         # 用 260m 覆盖整个主城，避免“看不到建筑”的错觉
         rows = objreg.nearby(self.cfg, town_row['id'], p.x, p.z, 260.0)[:limit]
         self._send_cid(p.cid, P.pack('objects', town=int(town_row['id']),
-                                     list=[self._obj_pub(o) for o in rows]))
+                                     list=[self._obj_pub(o) for o in rows],
+                                     # ★ 2026-10-22：目录一起下发（客户端要用 size 算室内地板）
+                                     catalog=self.town_catalog))
 
     def _intent_town_objects(self, p, d=None):
         r = self._obj_town_ok(p)

@@ -11125,7 +11125,12 @@ function wsOnMessage(raw) {
   }
   if (t === 'towns') {
     try {
-      if (d.catalog && d.catalog.length) { window.MY_TOWN_CATALOG = d.catalog; }
+      if (d.catalog && d.catalog.length) {
+        window.MY_TOWN_CATALOG = d.catalog;
+        try {
+          if (window.PlaceMode && window.PlaceMode.refreshAux) { window.PlaceMode.refreshAux(); }
+        } catch (eAux) { }
+      }
       if (d.list) { window.MY_TOWNS = d.list; }
       if (d.perms) { window.MY_TOWN_PERMS = d.perms; }
       if (typeof window.townRender === 'function') { window.townRender(); }
@@ -11144,6 +11149,12 @@ function wsOnMessage(raw) {
     try {
       window.MY_OBJECTS = d.list || [];
       try { TOWN_OBJECTS_CACHE = window.MY_OBJECTS; } catch (eC) { }
+      if (d.catalog && d.catalog.length) {
+        window.MY_TOWN_CATALOG = d.catalog;
+      }
+      try {
+        if (window.PlaceMode && window.PlaceMode.refreshAux) { window.PlaceMode.refreshAux(); }
+      } catch (eAux2) { }
       if (typeof window.onObjects === 'function') { window.onObjects(window.MY_OBJECTS, d.town); }
     } catch (eO) { }
     return;

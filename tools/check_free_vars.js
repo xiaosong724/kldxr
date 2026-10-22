@@ -34,7 +34,7 @@ const BUILTIN = new Set(('window document navigator location localStorage sessio
   'parseInt parseFloat isNaN isFinite NaN Infinity undefined null true false this ' +
   'innerWidth innerHeight devicePixelRatio screen history fetch WebSocket XMLHttpRequest Image Audio Blob File FileReader URL ' +
   'encodeURIComponent decodeURIComponent encodeURI decodeURI alert confirm prompt atob btoa ' +
-  'THREE UI E ' +
+  'THREE UI E SKI VFX ' +
   'var let const function return if else for while do break continue new typeof instanceof in of delete void switch case default try catch finally throw class extends super yield await async ' +
   'get set static import export from as ' +
   'arguments eval globalThis Intl Promise Proxy Reflect TextDecoder TextEncoder AbortController ' +
@@ -145,6 +145,20 @@ const items = FILES.map(function (f) {
 // 顶层声明两个文件共享（core / platform 互相调用是设计的一部分）
 const globalTop = new Set();
 items.forEach(function (it) { it.top.forEach(function (x) { globalTop.add(x); }); });
+// ★ 2026-10-22：core 的其它文件（town.js / town_models.js …）也是全局，
+//   game.js 会调用它们（例如 townFloorAt）；把这些文件的顶层声明也算进来
+try {
+  const extra = [
+    path.join(ROOT, 'web', 'core', 'town.js'),
+    path.join(ROOT, 'web', 'core', 'town_models.js'),
+  ];
+  extra.forEach(function (fp) {
+    if (!fs.existsSync(fp)) { return; }
+    const code2 = stripCommentsAndStrings(fs.readFileSync(fp, 'utf8'));
+    const d2 = collectDecls(code2);
+    d2.top.forEach(function (x) { globalTop.add(x); });
+  });
+} catch (e) { }
 
 let bad = 0;
 for (const it of items) {

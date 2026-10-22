@@ -106,6 +106,31 @@
 
   /* ★ 2026-10-22：把放置物件的碰撞（服务端算好的世界 AABB）注册进 core 的 solids，
      这样墙真的挡人、门洞能进（以前放置物件完全没有客户端碰撞） */
+  /* ★ 2026-10-22：建筑室内地板（走进屋里不再踩到地形） */
+  function syncFloors() {
+    try {
+      if (typeof townSetObjectFloors !== 'function') { return; }
+      var cats = {};
+      (W().MY_TOWN_CATALOG || []).forEach(function (c) { cats[c.id] = c; });
+      var out = [];
+      for (var k in P.objs) {
+        var e = P.objs[k];
+        if (!e || !e.data) { continue; }
+        var d = e.data, c = cats[d.catalog];
+        if (!c || c.category !== 'building') { continue; }
+        var hw = (+c.size_w || 0) / 2 - 0.2;
+        var hd = (+c.size_d || 0) / 2 - 0.2;
+        if (hw <= 0 || hd <= 0) { continue; }
+        var r = +d.rot || 0;
+        var ca = Math.abs(Math.cos(r)), sa = Math.abs(Math.sin(r));
+        var ex = hw * ca + hd * sa, ez = hw * sa + hd * ca;
+        out.push({ x0: +d.x - ex, x1: +d.x + ex,
+                   z0: +d.z - ez, z1: +d.z + ez, y: 0.28 });
+      }
+      townSetObjectFloors(out);
+    } catch (e2) { }
+  }
+
   function syncSolids() {
     try {
       if (typeof townSetObjectSolids !== 'function') { return 0; }
@@ -135,6 +160,7 @@
     grp.add(mesh);
     P.objs[o.id] = { mesh: mesh, data: o };
     syncSolids();
+    syncFloors();
   }
 
   function clearAll() {
@@ -146,6 +172,7 @@
     }
     P.objs = {};
     syncSolids();
+    syncFloors();
   }
 
   /* ---------- ghost preview ---------- */
@@ -576,6 +603,8 @@
       placeAt(o);
       if (EDIT.on && EDIT.id != null && String(EDIT.id) === String(o.id)) { editSelect(EDIT.id); }
     },
+    /* 目录后到（towns 包）时重算一遍碰撞和地板 */
+    refreshAux: function () { syncSolids(); syncFloors(); },
     startEdit: editEnter,
     selectById: function (id) { editSelect(id); return EDIT.id; },
     objPos: function (id) {
@@ -616,6 +645,7 @@
       if (e && e.mesh && e.mesh.parent) { e.mesh.parent.remove(e.mesh); }
       delete P.objs[id];
       syncSolids();
+      syncFloors();
       if (EDIT.on && String(EDIT.id) === String(id)) { editSelect(null); }
     },
     /* 小镇被冻结/解散：把这块区域里的物件全部撤掉（服务端 towncleared） */
@@ -630,6 +660,7 @@
         delete P.objs[k];
       }
       syncSolids();
+      syncFloors();
     },
     isPlacing: function () { return P.placing; }
   };

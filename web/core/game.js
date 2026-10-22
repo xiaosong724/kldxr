@@ -1155,6 +1155,19 @@ function terYAt(wx, wz) {
   return terH(Math.floor(wx / TER.LEVEL_H), Math.floor(wz / TER.LEVEL_H)) * TER.LEVEL_H;
 }
 
+/* ★ 2026-10-22：脚下"支撑面" = max(地形, 建筑室内地板)
+   解决"走进屋里踩到地下"：屋里地板比地形高 0.28m，站上去要抬起来 */
+function supportYAt(wx, wz) {
+  var gy = terYAt(wx, wz);
+  try {
+    if (typeof townFloorAt === 'function') {
+      var fy = townFloorAt(wx, wz);
+      if (fy > gy + 0.01) { return fy; }
+    }
+  } catch (e) { }
+  return gy;
+}
+
 /* ★ 第 307 轮（用户："画面有点暗"）：整体提亮约 35%
    ★ 为什么是"顶点色提亮"而不是"调环境光"：
      地形用的是 MeshBasicMaterial（不吃光照 ✓）✗ 调灯没用 ✓
@@ -2305,7 +2318,7 @@ function findOpenSpot(x, z, hw, hd) {
    ★ 掉落伤害先由客户端算（P3 挪到服务端 ✓ 见方案 §4.1）
    ============================================================================ */
 function terrainV(dt) {
-  var gy = terYAt(P.x, P.z);
+  var gy = supportYAt(P.x, P.z);
   if (jumpCD > 0) { jumpCD = Math.max(0, jumpCD - dt); }
 
   /* ① 起跳（只在地面 + 冷却好了 ✓） */
