@@ -6423,6 +6423,12 @@ class World(object):
                 except Exception:
                     pass
             p.weapon = w or dict(weapons.FIST)   # ★ 第 58 轮：空手 ✓
+            # ★ 2026-10-22：换了武器 → 属性面板刷新（攻击/攻速/吸血/寻宝都变了）
+            self._invalidate_stats(p)
+            try:
+                self._tal_send(p)
+            except Exception:
+                pass
             p.weaponItemId = d.get('itemId')
             # ★★ 第 59 轮：读出手上这把的耐久（没记录就从上限开始 ✓）
             p.wDurMax = int((w or {}).get('durMax') or 0)
@@ -7556,6 +7562,12 @@ class World(object):
         # ★ 第 132 轮：打上【替谁刷的】标记 ✓（硬配额的依据 ✓）
         _m.owner = getattr(p, 'role_id', None)
         self.mobs[str(self.mob_seq)] = _m
+        # ★ 2026-10-22：精英/Boss 出生包
+        try:
+            if int(getattr(_m, 'rank', 0) or 0) > 0:
+                self._special_spawn_send(_m)
+        except Exception as _sse:
+            print('[mob] spawn send failed: %r' % (_sse,))
 
     def _cap_of(self, q):
         """这个玩家的僵尸上限（第 133 轮）—— 单人覆盖优先，否则用全局值 ✓"""
@@ -10274,6 +10286,11 @@ class World(object):
         # ★ 掉落（第 38 轮）：地上生成一件，走过去自动捡 ✓
         self._roll_loot(p, m)
         # ★ 2026-10-22：击杀类被动（坦克引擎 +1% 生命上限 / 嗜血 等）
+        try:
+            if int(getattr(m, 'rank', 0) or 0) >= 2:
+                self._mob_evt(m, 'death', 1000.0)
+        except Exception:
+            pass
         try:
             self._sk_b_on_kill(p, m)
         except Exception as _bke:
