@@ -369,6 +369,11 @@ def shrink_boxes(cj, k=0.85):
 # ★ 2026-10-22：只有这些建筑模型内部【真的铺了一块抬高地板】
 #   （web/core/town_models.js 里画了 interior_floor 的：咖啡店/超市/小平房/别墅）
 #   其它建筑室内就是原地形 → 不能抬，否则人会飘在半空
+#   ★ 2026-10-22 修正（用户实测）：**所有建筑都有抬高的地面** ——
+#   通用构建器里每栋楼都画了 foundation（顶面 0.18）和 floor（顶面 0.26）；
+#   有些模型另外画了 interior_floor（顶面 0.28）。
+#   之前只给 5 个模型抬高是错的 → 其它建筑里的人会陷进地板。
+FLOOR_Y_DEFAULT = 0.26
 FLOOR_Y_BY_MODEL = {
     'shop_cafe_v1': 0.28,
     'shop_cafe_v2': 0.28,
@@ -379,7 +384,7 @@ FLOOR_Y_BY_MODEL = {
 
 
 def floor_y_of(model_id):
-    return float(FLOOR_Y_BY_MODEL.get(str(model_id or ''), 0.0))
+    return float(FLOOR_Y_BY_MODEL.get(str(model_id or ''), FLOOR_Y_DEFAULT))
 
 
 def wall_boxes(w, d, h, door_w=1.7, t=0.26):
