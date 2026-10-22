@@ -85,11 +85,14 @@ function propLamp(g, add) {
 /* ---------- 长椅 ---------- */
 function propBench(g, add) {
   var P = tmPiece(g, 'prop_bench', '长椅');
-  P.add(add(tmBox(g, 1.7, 0.09, 0.5, 0x8a6a48, 0, 0.45, 0), 'seat'));
-  P.add(add(tmBox(g, 1.7, 0.45, 0.08, 0x8a6a48, 0, 0.72, -0.22), 'back'));
+  /* ★ 2026-10-22（用户："所有椅子的模型都改了吗"）：长椅的座面原来是 0.45+0.045=0.495，
+     和椅子/沙发的 0.48 不一致 → 座面中心改 0.435（顶面 0.48），靠背/腿一起下移 0.015。 */
+  var _bs = 0.015;
+  P.add(add(tmBox(g, 1.7, 0.09, 0.5, 0x8a6a48, 0, 0.435, 0), 'seat'));
+  P.add(add(tmBox(g, 1.7, 0.45, 0.08, 0x8a6a48, 0, 0.72 - _bs, -0.22), 'back'));
   [-0.7, 0.7].forEach(function (x) {
-    P.add(add(tmBox(g, 0.09, 0.45, 0.09, 0x4a3423, x, 0.22, -0.2), 'leg_a'));
-    P.add(add(tmBox(g, 0.09, 0.45, 0.09, 0x4a3423, x, 0.22, 0.2), 'leg_b'));
+    P.add(add(tmBox(g, 0.09, 0.45, 0.09, 0x4a3423, x, 0.22 - _bs, -0.2), 'leg_a'));
+    P.add(add(tmBox(g, 0.09, 0.45, 0.09, 0x4a3423, x, 0.22 - _bs, 0.2), 'leg_b'));
   });
   tmPieceEnd(g, P);
 }
