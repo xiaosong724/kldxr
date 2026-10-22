@@ -1519,10 +1519,12 @@ initGlowLights();          // ★ 第 45 轮：2 盏发光灯在启动时就建�
     var bmat = new THREE.MeshBasicMaterial({ color: 0x00ff88, wireframe: true, transparent: true, opacity: 0.8 });
     H.boxDbg = new THREE.Mesh(bgeo, bmat);
     H.boxDbg.scale.set(G.BODY_W, 1, G.BODY_D);
+    H.boxDbg.userData.isBoxDbg = true;   // ★ 打标记，方便全场景清扫
     scene.add(H.boxDbg);
     for (var bi = 0; bi < mobs.length; bi++) {
       var bb = new THREE.Mesh(bgeo, bmat);
       bb.scale.set(G.MOB_W, 1, G.MOB_D);
+      bb.userData.isBoxDbg = true;
       mobs[bi].boxDbg = bb; scene.add(bb);
     }
   }
@@ -2206,6 +2208,8 @@ function fxTick(dt) {
 }
 
 
+/* ★ 2026-10-22（用户连续报"看不见的墙"）：记录这次是被谁挡住的 */
+var BLOCK_TAG = null;
 function blocked(x, z, hw, hd, byMob, skipMob, fromX, fromZ) {
   var hasFrom = (fromX !== undefined && fromZ !== undefined);
   // ① 静态物件
@@ -2216,6 +2220,11 @@ function blocked(x, z, hw, hd, byMob, skipMob, fromX, fromZ) {
     if (x + hw > s.x - s.hw && x - hw < s.x + s.hw && z + hd > s.z - s.hd && z - hd < s.z + s.hd) {
       if (hasFrom && fromX + hw > s.x - s.hw && fromX - hw < s.x + s.hw &&
           fromZ + hd > s.z - s.hd && fromZ - hd < s.z + s.hd) { continue; }   // 本来就在里面 → 放行让他出去 ✓
+      BLOCK_TAG = {
+        kind: (typeof TOWN_OBJ_SOLIDS !== 'undefined' && TOWN_OBJ_SOLIDS.indexOf(s) >= 0)
+          ? '物件碰撞' : '静态碰撞',
+        x: s.x, z: s.z, hw: s.hw, hd: s.hd
+      };
       return true;
     }
   }
@@ -2230,6 +2239,7 @@ function blocked(x, z, hw, hd, byMob, skipMob, fromX, fromZ) {
           z + hd > m.g.position.z - mhd && z - hd < m.g.position.z + mhd) {
         if (hasFrom && fromX + hw > m.g.position.x - mhw && fromX - hw < m.g.position.x + mhw &&
             fromZ + hd > m.g.position.z - mhd && fromZ - hd < m.g.position.z + mhd) { continue; }
+        BLOCK_TAG = { kind: '妖兽', x: m.g.position.x, z: m.g.position.z, hw: mhw, hd: mhd };
         return true;
       }
     }
@@ -2244,6 +2254,7 @@ function blocked(x, z, hw, hd, byMob, skipMob, fromX, fromZ) {
         if (x + hw > ox - phw && x - hw < ox + phw && z + hd > oz - phd && z - hd < oz + phd) {
           if (hasFrom && fromX + hw > ox - phw && fromX - hw < ox + phw &&
               fromZ + hd > oz - phd && fromZ - hd < oz + phd) { continue; }
+          BLOCK_TAG = { kind: '其他玩家', x: ox, z: oz, hw: phw, hd: phd };
           return true;
         }
       }
@@ -2255,6 +2266,7 @@ function blocked(x, z, hw, hd, byMob, skipMob, fromX, fromZ) {
         if (x + hw > wx2 - wmhw && x - hw < wx2 + wmhw && z + hd > wz2 - wmhd && z - hd < wz2 + wmhd) {
           if (hasFrom && fromX + hw > wx2 - wmhw && fromX - hw < wx2 + wmhw &&
               fromZ + hd > wz2 - wmhd && fromZ - hd < wz2 + wmhd) { continue; }
+          BLOCK_TAG = { kind: '公共妖兽', x: wx2, z: wz2, hw: wmhw, hd: wmhd };
           return true;
         }
       }
@@ -5660,6 +5672,53 @@ function clearMobs() {
   }
   toast('已清除（剩 3 只）');
 }
+/* ★ 2026-10-22（用户报"看不见的墙"）：站到卡住的位置点一下，
+   把周围 8 个方向挡人的盒子【画成红框】并报出它属于哪张表。 */
+var STUCK_MARKS = [];
+function stuckClear() {
+  for (var i = 0; i < STUCK_MARKS.length; i++) {
+    try { scene.remove(STUCK_MARKS[i]); if (STUCK_MARKS[i].geometry) STUCK_MARKS[i].geometry.dispose(); } catch (e) { }
+  }
+  STUCK_MARKS = [];
+}
+function stuckReport() {
+  stuckClear();
+  var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [0.7, 0.7], [-0.7, 0.7], [0.7, -0.7], [-0.7, -0.7]];
+  var found = [], seen = {};
+  var hw = G.BODY_W / 2, hd = G.BODY_D / 2;
+  for (var d = 0; d < dirs.length; d++) {
+    BLOCK_TAG = null;
+    var nx = P.x + dirs[d][0] * 0.36, nz = P.z + dirs[d][1] * 0.36;
+    if (!blocked(nx, nz, hw, hd, true, null, P.x, P.z)) { continue; }
+    var t = BLOCK_TAG;
+    if (!t) { continue; }
+    var key = t.kind + '|' + Math.round(t.x) + '|' + Math.round(t.z);
+    if (seen[key]) { continue; }
+    seen[key] = 1;
+    found.push(t);
+    try {
+      var g2 = new THREE.BoxGeometry(Math.max(0.3, t.hw * 2), 3.0, Math.max(0.3, t.hd * 2));
+      var m2 = new THREE.MeshBasicMaterial({ color: 0xff3030, wireframe: true, transparent: true, opacity: 0.9 });
+      var box2 = new THREE.Mesh(g2, m2);
+      box2.position.set(t.x, 1.5, t.z);
+      box2.userData.isBoxDbg = true;
+      scene.add(box2);
+      STUCK_MARKS.push(box2);
+    } catch (e2) { }
+  }
+  if (!found.length) {
+    toast('周围 8 个方向都能走 —— 这里没有碰撞箱');
+    return [];
+  }
+  var msg = found.map(function (t) {
+    return t.kind + ' @(' + t.x.toFixed(1) + ',' + t.z.toFixed(1) + ') ' +
+      (t.hw * 2).toFixed(1) + '×' + (t.hd * 2).toFixed(1);
+  }).join(' / ');
+  toast('挡住你的东西：' + msg + '（红框已画出，5 秒后消失）');
+  setTimeout(stuckClear, 5000);
+  return found;
+}
+
 function toggleBox() {
   _boxOn = !_boxOn;
   if (_boxOn) {
@@ -5668,15 +5727,18 @@ function toggleBox() {
       var bm = new THREE.MeshBasicMaterial({ color: 0x00ff88, wireframe: true, transparent: true, opacity: 0.85 });
       H.boxDbg = new THREE.Mesh(bg, bm);
       H.boxDbg.scale.set(G.BODY_W, 1, G.BODY_D);
+      H.boxDbg.userData.isBoxDbg = true;
       scene.add(H.boxDbg);
       for (var i = 0; i < mobs.length; i++) {
         var bb = new THREE.Mesh(bg, bm);
         bb.scale.set(G.MOB_W, 1, G.MOB_D);
+        bb.userData.isBoxDbg = true;
         mobs[i].boxDbg = bb; scene.add(bb);
       }
       for (var wmi in NET.rmobs) {                    // ★ 公共妖兽也要有线框 ✓
         var wbb = new THREE.Mesh(bg, bm);
         wbb.scale.set(G.MOB_W, 1, G.MOB_D);
+        wbb.userData.isBoxDbg = true;
         NET.rmobs[wmi].boxDbg = wbb; scene.add(wbb);
       }
     }
@@ -5685,6 +5747,12 @@ function toggleBox() {
     if (H.boxDbg) { scene.remove(H.boxDbg); H.boxDbg = null; }
     for (var j = 0; j < mobs.length; j++) { if (mobs[j].boxDbg) { scene.remove(mobs[j].boxDbg); mobs[j].boxDbg = null; } }
     for (var wmj in NET.rmobs) { if (NET.rmobs[wmj].boxDbg) { scene.remove(NET.rmobs[wmj].boxDbg); NET.rmobs[wmj].boxDbg = null; } }
+    /* ★ 2026-10-22：全场景清扫 —— 以前妖兽消失时没删框，会残留一地的"空绿框" */
+    try {
+      var _orphan = [];
+      scene.traverse(function (o) { if (o.userData && o.userData.isBoxDbg) { _orphan.push(o); } });
+      for (var _oi = 0; _oi < _orphan.length; _oi++) { scene.remove(_orphan[_oi]); }
+    } catch (eSweep) { }
     toast('碰撞箱：关');
   }
 }
@@ -6172,6 +6240,7 @@ function netGoOnline() {
       var m = mobs[i];
       if (m.g) { scene.remove(m.g); }
       if (m.shadow) { scene.remove(m.shadow); }
+      if (m.boxDbg) { scene.remove(m.boxDbg); m.boxDbg = null; }   // ★ 同上：绿框一起清
       UI.plate.remove(m.ui);
     }
     mobs.length = 0;
@@ -6775,6 +6844,7 @@ function removeWorldMob(mid) {
   try { limbFree(rm); } catch (e0) { }
   scene.remove(rm.g);
   if (rm.shadow) { scene.remove(rm.shadow); }
+  if (rm.boxDbg) { scene.remove(rm.boxDbg); rm.boxDbg = null; }   // ★ 2026-10-22：绿框一起清
   UI.plate.remove(rm.ui);
   delete NET.rmobs[mid];
 }
@@ -9835,6 +9905,10 @@ function frame(ts) {
           m2.dying = -3;
           scene.remove(m2.g);
           if (m2.shadow) { scene.remove(m2.shadow); }
+          /* ★ 2026-10-22（用户："-193-60 有个碰撞箱没有删除"）：
+             妖兽消失时【忘了删调试绿框】→ 原地留一个什么都没有的框。
+             下面所有移除妖兽的路径都要一起清。 */
+          if (m2.boxDbg) { scene.remove(m2.boxDbg); m2.boxDbg = null; }
           UI.plate.remove(m2.ui);   // ★ 移除 UI ✓
           var idx2 = mobs.indexOf(m2);
           if (idx2 >= 0) { mobs.splice(idx2, 1); }

@@ -4785,6 +4785,9 @@ function openSet(wantTab) {
     addBtn('持续生成（每秒+5）', function () { toggleGrow(); openSet(); }, _growTimer);
     addBtn('清除多余僵尸', function () { clearMobs(); openSet(); });
     addBtn('碰撞箱线框', function () { toggleBox(); openSet(); }, _boxOn);
+    /* ★ 2026-10-22（用户连续报"看不见的墙"）：站到卡住的位置点这个，
+       会把挡人的盒子画成红框并报出它属于哪张表 */
+    addBtn('诊断卡住（红框标出挡路的东西）', function () { stuckReport(); openSet(); });
     addBtn('地面贴图调试', function () { cycleTex(); openSet(); });
     /* ★ 第 48 轮：发武器也是【管理页的能力】了（玩家端默认被拒 ✓）
        留这个按钮是为了本地调试：把 config 的 allow_player_debug 改成 true 就能用 ✓
