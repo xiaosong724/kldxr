@@ -7544,9 +7544,8 @@ function netUpdate(dt) {
         o.hh.legL.rotation.x = 0; o.hh.legR.rotation.x = 0;
       } else {
         var _y3c = (typeof o.fy === 'number') ? o.fy : 0;
-        /* ★ 按这把他坐的那款椅子的坐垫高度 */
-        var _padR = (typeof o.ppad === 'number') ? o.ppad : 0.48;
-        _gs0.position.set(_pX, _y3c + _padR, _pZ);
+        /* 和自己完全一致：地板高度 − 0.06（aca247d 那版的观感值） */
+        _gs0.position.set(_pX, _y3c - 0.06, _pZ);
         _gs0.rotation.set(0, o.cur.yaw || 0, 0);
         o.hh.legL.rotation.x = -1.35; o.hh.legR.rotation.x = -1.35;
         o.hh.armL.rotation.x = 0.15; o.hh.armR.rotation.x = 0.15;
@@ -9382,12 +9381,11 @@ function frame(ts) {
     SIT_K = Math.min(1, SIT_K + dt * 9);
     var sk2 = SIT_K;
     P.x = +st.x; P.z = +st.z; P.yaw = +st.yaw;
-    /* ★ 2026-10-22（用户：坐下的高度应该和地板一样）：以前这里减了 0.36 让人往下沉，
-       现在和别人看到的一致 —— 直接用脚下地板高度。 */
-    /* ★ 2026-10-22：按这把他坐的椅子的坐垫高度（木椅 0.565 / 沙发 0.60 …） */
-    var _padMine = (typeof st.pad === 'number') ? st.pad
-      : ((typeof townPadOf === 'function') ? townPadOf(st.k, 0.48) : 0.48);
-    H.g.position.set(st.x, P.y + _padMine, st.z);
+    /* ★ 2026-10-22（用户确认："调好了"的是 aca247d 那版）
+       sitY = 座位记录高度(0.30) − 0.36 = **−0.06** → 坐姿 = 地板高度 − 0.06。
+       这一版是实测调出来的观感值，不再改成"加坐垫高度"。 */
+    var sitY = (+st.y || 0.30) - 0.36;
+    H.g.position.set(st.x, P.y + sitY, st.z);
     H.g.rotation.set(0, st.yaw, 0);
     H.legL.rotation.x = -1.34 * sk2;
     H.legR.rotation.x = -1.34 * sk2;
@@ -10158,7 +10156,7 @@ function frame(ts) {
         /* ★ 2026-10-22（用户：坐下高度不对）：这里原来写死 _gy - 0.06（沉到地面下），
            改成和服务端一致的"地板高度 + 坐高"。 */
         var _seatY = (typeof _fo.fy === 'number') ? _fo.fy : _gy;
-        _mg.position.set(_os.x, _seatY + ((typeof _fo.ppad === 'number') ? _fo.ppad : 0.48), _os.z);
+        _mg.position.set(_os.x, _seatY - 0.06, _os.z);
         _mg.rotation.set(0, _os.yaw, 0);
         if (_fo.hh) {
           _fo.hh.legL.rotation.x = -1.34;
