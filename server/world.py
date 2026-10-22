@@ -686,6 +686,9 @@ class World(object):
                         _np.sleepAcc = 0.0
                 else:
                     self.last_pose.pop(int(role.get('id') or 0), None)
+                print('[pose] join restore: role=%r pose=%r -> seat=%r sleep=%r'
+                      % (role.get('id'), _pose, getattr(_np, 'seat', None),
+                         getattr(_np, 'sleepHouse', '')))
             except Exception as _pe:
                 print('[pose] restore failed: %r' % (_pe,))
             try:
@@ -1439,6 +1442,11 @@ class World(object):
         if not getattr(p, 'sleepHouse', ''):
             return
         p.sleepHouse = ''
+        # ★ 2026-10-22：起床了就把"上次的姿态"清掉，否则 90 秒内刷新还会恢复成在睡觉
+        try:
+            self.last_pose.pop(int(p.role_id), None)
+        except Exception:
+            pass
         try:
             self._send_cid(p.cid, P.pack('sleep_state', on=0, x=p.x, z=p.z))
         except Exception:
@@ -7280,6 +7288,7 @@ class World(object):
                 #   pose: '' 站 / 'sit' 坐 / 'sleep' 躺
                 'pose': ('sit' if str(getattr(o, 'seat', '-1')) != '-1'
                          else ('sleep' if getattr(o, 'sleepHouse', '') else '')),
+
                 'job': getattr(o, 'job', ''),
                 'sk': str((o.role or {}).get('skin') or ''),
                 'skc': (((o.role or {}).get('skcMap') or {}).get(

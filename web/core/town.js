@@ -127,7 +127,7 @@ function townObjName(cid) {
 }
 
 function townSeatFromObjects(x, z) {
-  var best = null, bd = 1.9 * 1.9;
+  var best = null, bd = 1.4 * 1.4;
   var list = (typeof TOWN_OBJECTS_CACHE !== 'undefined' && TOWN_OBJECTS_CACHE) || [];
   for (var i = 0; i < list.length; i++) {
     var o = list[i];
@@ -154,7 +154,7 @@ function townSeatFromObjects(x, z) {
 }
 
 function townSeatNear(x, z) {
-  var best = null, bd = 1.9 * 1.9;
+  var best = null, bd = 1.4 * 1.4;
   for (var i = 0; i < TOWN_SEATS.length; i++) {
     var s = TOWN_SEATS[i];
     var dx = s.x - x, dz = s.z - z;
@@ -391,6 +391,35 @@ function townSeatById(id) {
   for (var i = 0; i < TOWN_SEATS.length; i++) {
     if (String(TOWN_SEATS[i].idx) === String(id) || String(TOWN_SEATS[i].id) === String(id)) {
       return TOWN_SEATS[i];
+    }
+  }
+  /* ★ 2026-10-22：放置的家具椅子（id 形如 'obj527' 或 'obj411#1'）也要能查到 ——
+     以前只查静态座位表，所以刷新后恢复坐姿时找不到椅子、人就没坐下 */
+  var sid = String(id);
+  if (sid.indexOf('obj') === 0) {
+    var base = sid, slot = 0;
+    var hp = sid.indexOf('#');
+    if (hp >= 0) {
+      base = sid.slice(0, hp);
+      slot = parseInt(sid.slice(hp + 1), 10) || 0;
+    }
+    var oid = base.slice(3);
+    var list = (typeof TOWN_OBJECTS_CACHE !== 'undefined' && TOWN_OBJECTS_CACHE) || [];
+    for (var k = 0; k < list.length; k++) {
+      var o = list[k];
+      if (!o || String(o.id) !== oid) { continue; }
+      if (!TOWN_SEAT_CATALOG[o.catalog]) { return null; }
+      var rot = +(o.rot || 0);
+      var offs = TOWN_SEAT_SLOTS[o.catalog] || [0];
+      if (slot < 0 || slot >= offs.length) { slot = 0; }
+      var off = offs[slot];
+      return {
+        idx: sid, id: sid,
+        x: +o.x + off * Math.cos(rot),
+        z: +o.z - off * Math.sin(rot),
+        y: 0.30, yaw: rot,
+        label: townObjName(o.catalog), placed: true
+      };
     }
   }
   return null;

@@ -182,6 +182,8 @@ var MY_SLEEP = '';         /* 正在睡的住宅 id */
 var SLEEP_OFF = 0.55;      /* 躺下时沿床朝向的偏移（脚放床尾，头不要伸出床头） */
 /* 2026-10-22: run toggle - tap to keep running, tap again to stop, 1 qi per second */
 var RUN = { on: false, want: false };
+/* 2026-10-22：坐姿在 objects 到达前先记着，到了再应用（刷新恢复用） */
+var PENDING_SEAT = null;
 var SHOP_NEAR = null;      /* 离我最近的商店 */
 var FRIDGE_NEAR = null;    /* 离我最近的自家冰箱 */
 var SIT_K = 0;             /* 坐下动画混合 0→1 */
@@ -5802,6 +5804,8 @@ function wsApplyWorld(d) {
                  四层都要改 ✗ 少一层就静默失效 ✓ */
       jy: Math.max(0, +w.jy || 0),
       fy: (typeof w.fy === 'number') ? w.fy : null,   // ★ 脚下高度（服务端广播）
+      px: (typeof w.x === 'number') ? w.x : null,     // ★ 服务端坐标（坐/躺吸附用）
+      pz: (typeof w.z === 'number') ? w.z : null,
       pose: (typeof w.pose === 'string') ? w.pose : '',   // ★ '' 站 / 'sit' 坐 / 'sleep' 躺
       seat: (w.seat != null ? String(w.seat) : '-1'),
       sleep: !!w.sleep,                                        // ★ 他躺下了没有
@@ -6096,8 +6100,16 @@ function wsApplyWorld(d) {
     if (_mySeat !== '-1' && _mySeat !== '') {
       if (!MY_SEAT || String(MY_SEAT.idx) !== _mySeat) {
         try { townSeatApply({ id: _mySeat }); } catch (eMS) { }
+        /* ★ 2026-10-22：刷新后 objects 还没到 → townSeatById 找不到这张椅子，
+           townSeatApply 会直接 return。记下来，等 objects 到了再试一次。 */
+        if (!MY_SEAT || String(MY_SEAT.idx) !== _mySeat) {
+          PENDING_SEAT = _mySeat;
+        }
+      } else {
+        PENDING_SEAT = null;
       }
     } else if (MY_SEAT) {
+      PENDING_SEAT = null;
       try { townSeatClear(null); } catch (eMT) { }
     }
   }
@@ -6516,6 +6528,8 @@ function addOther(w, t) {
       downT: +w.downT || 0,                    // ★ round593：击倒剩余
       _galeAcc: 0, _galeLX: null, _galeLZ: null,
       fy: (typeof w.fy === 'number') ? w.fy : null,
+      px: (typeof w.x === 'number') ? w.x : null,
+      pz: (typeof w.z === 'number') ? w.z : null,
       pose: (typeof w.pose === 'string') ? w.pose : '',
       seat: (w.seat != null ? String(w.seat) : '-1'),   // ★ 他坐哪张椅子
       seated: (typeof w.seated === 'number') ? !!w.seated : (w.seat != null && String(w.seat) !== '-1'),
@@ -6572,6 +6586,8 @@ function addOther(w, t) {
      所以两处都要写 ✓（不然"别人看你死亡还是站着"永远修不好 ✗）*/
   o.dead = !!w.dead;
   if (typeof w.fy === 'number') { o.fy = w.fy; }
+  if (typeof w.x === 'number') { o.px = w.x; }
+  if (typeof w.z === 'number') { o.pz = w.z; }
   /* ★ 2026-10-22：pose 不能被"没带这个字段的包"覆盖掉，
      也不能出现"pose='' 但 seated=1"的自相矛盾。以布尔为准。 */
   if (w.seated != null && w.seated) { o.pose = 'sit'; }
@@ -6581,8 +6597,9 @@ function addOther(w, t) {
   /* ★ 2026-10-22：每包都把模型高度对齐到服务端广播的 fy（含室内地板）。
      放在这里最稳 —— 不依赖 netUpdate 里哪条分支跑没跑到。 */
   try {
-    if (o.hh && o.hh.g && typeof o.fy === 'number' && !o.dead) {
-      var _fySet = o.fy + ((o.pose === 'sit' || o.pose === 'sleep') ? 0.30 : 0);
+    /* ★ 注意用【本包的 w.fy】，不是 o.fy —— o.fy 要到下面才赋值，这里读到的是旧值（一直是 0） */
+    if (o.hh && o.hh.g && typeof w.fy === 'number' && !o.dead) {
+      var _fySet = w.fy + ((o.pose === 'sit' || o.pose === 'sleep') ? 0.30 : 0);
       if (Math.abs(o.hh.g.position.y - _fySet) > 0.0005) {
         o.hh.g.position.y = _fySet;
       }
@@ -6591,6 +6608,8 @@ function addOther(w, t) {
   o.seat = (w.seat != null ? String(w.seat) : '-1');
   o.seated = (typeof w.seated === 'number') ? !!w.seated : (o.seat !== '-1');
   o.sleep = !!w.sleep;
+  o.pose = (o.seat !== '-1') ? 'sit' : (o.sleep ? 'sleep' : '');
+  if (typeof w.fy === 'number') { o.fy = w.fy; }
   o.snapYaw = (typeof w.syaw === 'number') ? w.syaw : (o.snapYaw || 0);
   o.galeT = +w.galeT || 0;
   o.downT = +w.downT || 0;
@@ -7537,6 +7556,12 @@ function netUpdate(dt) {
     var _sleep0 = (_pose === 'sleep');
     if ((_seated0 || _sleep0) && o.hh && o.hh.g) {
       var _gs0 = o.hh.g;
+      /* ★ 2026-10-22（用户：坐/睡的位置不对）：
+         坐/躺的坐标必须用【服务端给的椅子/床坐标】（o.px/o.pz），
+         不能用插值出来的 o.cur —— 服务端是瞬移过去的，插值要追好几秒，
+         那段时间人在半路上，看着就是"没坐在椅子上"。 */
+      var _pX = (typeof o.px === 'number') ? o.px : o.cur.x;
+      var _pZ = (typeof o.pz === 'number') ? o.pz : o.cur.z;
       o.walkT = 0;
       _gs0.rotation.z = 0;
       _gs0.rotation.order = 'YXZ';
@@ -7544,19 +7569,19 @@ function netUpdate(dt) {
         var _sy3 = +((o.snapYaw != null) ? o.snapYaw : (o.cur.yaw || 0));
         var _so3 = (typeof SLEEP_OFF !== 'undefined') ? SLEEP_OFF : 0.55;
         var _y3b = (typeof o.fy === 'number') ? o.fy : 0;
-        _gs0.position.set(o.cur.x + Math.sin(_sy3) * _so3, _y3b + 0.62,
-                          o.cur.z + Math.cos(_sy3) * _so3);
+        _gs0.position.set(_pX + Math.sin(_sy3) * _so3, _y3b + 0.62,
+                          _pZ + Math.cos(_sy3) * _so3);
         _gs0.rotation.set(-1.45, _sy3, 0);
         o.hh.legL.rotation.x = 0; o.hh.legR.rotation.x = 0;
       } else {
         var _y3c = (typeof o.fy === 'number') ? o.fy : 0;
-        _gs0.position.set(o.cur.x, _y3c + 0.30, o.cur.z);
+        _gs0.position.set(_pX, _y3c + 0.30, _pZ);
         _gs0.rotation.set(0, o.cur.yaw || 0, 0);
         o.hh.legL.rotation.x = -1.35; o.hh.legR.rotation.x = -1.35;
         o.hh.armL.rotation.x = 0.15; o.hh.armR.rotation.x = 0.15;
       }
       if (o.hh.sw) { o.hh.sw.visible = false; }
-      o.last.x = o.cur.x; o.last.z = o.cur.z;
+      o.last.x = _pX; o.last.z = _pZ;
     }
     /* ★ 2026-10-22：坐姿/躺姿已经在上面处理过了 */
     if (_seated0 || _sleep0) { continue; }

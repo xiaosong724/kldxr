@@ -5871,19 +5871,15 @@ UI.setSafeMode = function (on) {
 
 /* ★ 2026-10-22：记住"我正坐在哪 / 睡在哪"，刷新页面后自动恢复 */
 /* 重连后恢复上次的坐/睡（服务端已经没这个状态了 → 重新发一次请求） */
+/* ★ 2026-10-22（用户：刷新后明明没睡却显示在睡觉）：
+   以前这里只要 localStorage 里有记录就【重放】一次 sit/house_sleep ——
+   可是起身时如果没走到那条清记录的路径（比如直接关页面/断线），
+   下次刷新就会把人重新塞回床上。
+   现在【不再重放】：坐/睡状态完全由服务端在登录时恢复（world.last_pose，90 秒内有效），
+   服务端记的是"离开那一刻的真实状态"，起身了就是没在睡。 */
 function tryRestorePose() {
   try {
-    if (typeof WSC !== 'undefined' && WSC && WSC.ready === false) { return; }
-    if (typeof MY_SEAT !== 'undefined' && MY_SEAT) { return; }
-    if (typeof MY_SLEEP !== 'undefined' && MY_SLEEP) { return; }
-    var seat = (UI.getPose ? UI.getPose('seat') : '') || '';
-    var sleep = (UI.getPose ? UI.getPose('sleep') : '') || '';
-    if (sleep) {
-      try { wsSend('house_sleep', { id: sleep }); return; } catch (e1) { }
-    }
-    if (seat) {
-      try { wsSend('sit', { id: seat }); } catch (e2) { }
-    }
+    if (UI.savePose) { UI.savePose('seat', ''); UI.savePose('sleep', ''); }
   } catch (e) { }
 }
 
@@ -11313,6 +11309,14 @@ function wsOnMessage(raw) {
         if (window.PlaceMode && window.PlaceMode.refreshAux) { window.PlaceMode.refreshAux(); }
       } catch (eAux2) { }
       if (typeof window.onObjects === 'function') { window.onObjects(window.MY_OBJECTS, d.town); }
+      /* ★ 2026-10-22：坐姿在 objects 之前就到的话，这里补应用一次 */
+      try {
+        var _ps = (typeof PENDING_SEAT !== 'undefined') ? PENDING_SEAT : null;
+        if (_ps && typeof townSeatApply === 'function') {
+          townSeatApply({ id: _ps });
+          if (typeof MY_SEAT !== 'undefined' && MY_SEAT) { PENDING_SEAT = null; }
+        }
+      } catch (ePS) { }
     } catch (eO) { }
     return;
   }
