@@ -1492,7 +1492,8 @@ var TOWN_FURNITURE_SPECS = {
   promo_board:     { w: 1.10, d: 0.05, h: 0.55, label: '促销牌' },
   umbrella:        { w: 2.70, d: 2.70, h: 2.80, label: '遮阳伞' },
   plant_pot:       { w: 0.44, d: 0.44, h: 0.80, label: '盆栽' },
-  ceiling_lamp:    { w: 0.22, d: 0.22, h: 0.30, label: '吊灯' }
+  ceiling_lamp:    { w: 0.22, d: 0.22, h: 0.30, label: '吊灯' },
+  bed_lamp:        { w: 0.26, d: 0.26, h: 0.52, label: '床头灯' }
 };
 
 /* 把每件家具包成一个可独立构建的规格（带 build 钩子） */
@@ -1558,6 +1559,242 @@ function buildFurnitureModel(spec, opts) {
     /* ★ 2026-10-22：遮阳伞原来走到下面的"简单盒体"兜底 → 被画成一个 2.7m 的大方块。
        这里接上真正的伞模型（杆 + 圆锥伞面 + 底座）。 */
     buildUmbrella(g, add, 0, 0);
+  }
+  else if (id === 'wardrobe') {
+    /* 衣柜：柜体 + 两扇门 + 门把（2026-10-22 新增，之前是方块） */
+    var fw = TOWN_FURNITURE_SPECS[id] || { w: 1.2, d: 0.6, h: 2.1 };
+    var W0 = fw.w, D0 = fw.d, H0 = fw.h;
+    add(tmBox(g, W0, H0 - 0.08, D0, 0x8a6a48, 0, (H0 - 0.08) / 2 + 0.08, 0), id + '_body');
+    add(tmBox(g, W0 + 0.04, 0.08, D0 + 0.04, 0x5a4433, 0, 0.04, 0), id + '_base');
+    add(tmBox(g, W0 + 0.04, 0.06, D0 + 0.04, 0x5a4433, 0, H0 - 0.03, 0), id + '_top');
+    /* 两扇门（中间留 1cm 缝） */
+    var dw = (W0 - 0.06) / 2;
+    add(tmBox(g, dw, H0 - 0.22, 0.03, 0x9a7a58, -dw / 2 - 0.015, H0 / 2 + 0.04, D0 / 2), id + '_door_l');
+    add(tmBox(g, dw, H0 - 0.22, 0.03, 0x9a7a58, dw / 2 + 0.015, H0 / 2 + 0.04, D0 / 2), id + '_door_r');
+    /* 门把 */
+    add(tmBox(g, 0.03, 0.14, 0.03, 0xd8d2c4, -0.05, H0 * 0.52, D0 / 2 + 0.03), id + '_knob_l');
+    add(tmBox(g, 0.03, 0.14, 0.03, 0xd8d2c4, 0.05, H0 * 0.52, D0 / 2 + 0.03), id + '_knob_r');
+  }
+  else if (id === 'bookshelf') {
+    /* 书架：侧板 + 背板 + 五层隔板 + 书 */
+    /* ★ spec 里的 h 是"单层高度"，整体高度这里固定 1.9m */
+    var fb = TOWN_FURNITURE_SPECS[id] || { w: 1.0, d: 0.35 };
+    var BW = fb.w, BD = fb.d, BH = 1.90;
+    add(tmBox(g, 0.05, BH, BD, 0x6b4a32, -BW / 2 + 0.025, BH / 2, 0), id + '_side_l');
+    add(tmBox(g, 0.05, BH, BD, 0x6b4a32, BW / 2 - 0.025, BH / 2, 0), id + '_side_r');
+    add(tmBox(g, BW, BH, 0.03, 0x5a3e2a, 0, BH / 2, -BD / 2 + 0.015), id + '_back');
+    add(tmBox(g, BW, 0.04, BD, 0x6b4a32, 0, BH - 0.02, 0), id + '_top');
+    add(tmBox(g, BW, 0.04, BD, 0x6b4a32, 0, 0.02, 0), id + '_bottom');
+    var shelves = 4;
+    for (var bs = 1; bs <= shelves; bs++) {
+      var by = BH * (bs / (shelves + 1));
+      add(tmBox(g, BW - 0.1, 0.03, BD - 0.03, 0x8a6a48, 0, by, 0), id + '_shelf_' + bs);
+      /* 每层放几本书（不同颜色） */
+      var cols = [0xa84a4a, 0x4a6aa8, 0x4a8a5a, 0xa8a04a, 0x7a4aa8];
+      for (var bk = 0; bk < 3; bk++) {
+        var bh = 0.16 + (bk % 2) * 0.05;
+        add(tmBox(g, 0.06, bh, BD * 0.7, cols[(bs + bk) % cols.length],
+                  -BW / 2 + 0.14 + bk * 0.09, by + 0.015 + bh / 2, 0),
+            id + '_book_' + bs + '_' + bk);
+      }
+    }
+  }
+  else if (id === 'desk') {
+    /* 书桌：桌面 + 四条腿 + 抽屉 */
+    var fd = TOWN_FURNITURE_SPECS[id] || { w: 1.4, d: 0.7, h: 0.76 };
+    var DW = fd.w, DD = fd.d, DH = fd.h;
+    add(tmBox(g, DW, 0.08, DD, 0x8a6a48, 0, DH - 0.04, 0), id + '_top');
+    var dlx = DW / 2 - 0.06, dlz = DD / 2 - 0.06;
+    [[-dlx, -dlz], [dlx, -dlz], [-dlx, dlz], [dlx, dlz]].forEach(function (q, qi) {
+      add(tmBox(g, 0.07, DH - 0.08, 0.07, 0x5a4433, q[0], (DH - 0.08) / 2, q[1]), id + '_leg_' + qi);
+    });
+    /* 右侧抽屉柜 */
+    add(tmBox(g, DW * 0.34, DH * 0.42, DD * 0.92, 0x7a5a3a, DW / 2 - DW * 0.17 - 0.02, DH * 0.21, 0), id + '_drawer_box');
+    add(tmBox(g, DW * 0.28, 0.03, 0.03, 0xd8d2c4, DW / 2 - DW * 0.17 - 0.02, DH * 0.32, DD * 0.46), id + '_drawer_h1');
+    add(tmBox(g, DW * 0.28, 0.03, 0.03, 0xd8d2c4, DW / 2 - DW * 0.17 - 0.02, DH * 0.16, DD * 0.46), id + '_drawer_h2');
+  }
+  else if (id === 'bathtub') {
+    /* 浴缸：外缸 + 内侧水 + 龙头 */
+    var ft2 = TOWN_FURNITURE_SPECS[id] || { w: 1.7, d: 0.8, h: 0.6 };
+    var TW = ft2.w, TD = ft2.d, TH = ft2.h;
+    add(tmBox(g, TW, TH - 0.06, TD, 0xe8e4dc, 0, (TH - 0.06) / 2 + 0.06, 0), id + '_outer');
+    add(tmBox(g, TW - 0.14, 0.10, TD - 0.14, 0xc8dbe8, 0, TH - 0.12, 0), id + '_water');
+    add(tmBox(g, TW - 0.14, 0.04, TD - 0.14, 0xdfeef5, 0, TH - 0.20, 0), id + '_inner');
+    /* 四条小脚 */
+    var btx = TW / 2 - 0.12, btz = TD / 2 - 0.10;
+    [[-btx, -btz], [btx, -btz], [-btx, btz], [btx, btz]].forEach(function (q, qi) {
+      add(tmBox(g, 0.09, 0.06, 0.09, 0xb8b0a4, q[0], 0.03, q[1]), id + '_foot_' + qi);
+    });
+    /* 龙头 */
+    add(tmBox(g, 0.05, 0.18, 0.05, 0xb8c4c8, TW / 2 - 0.10, TH + 0.09, 0), id + '_tap');
+    add(tmBox(g, 0.05, 0.05, 0.18, 0xb8c4c8, TW / 2 - 0.10, TH + 0.16, -0.06), id + '_tap_arm');
+  }
+  else if (id === 'toilet') {
+    /* 马桶：底座 + 坐圈 + 水箱 + 盖 */
+    var fo = TOWN_FURNITURE_SPECS[id] || { w: 0.45, d: 0.7, h: 0.8 };
+    var OW = fo.w, OD = fo.d, OH = fo.h;
+    add(tmBox(g, OW * 0.62, OH * 0.42, OD * 0.55, 0xf2f0ea, 0, OH * 0.21, OD * 0.10), id + '_pedestal');
+    add(tmBox(g, OW, 0.07, OD * 0.62, 0xf8f6f0, 0, OH * 0.44, OD * 0.10), id + '_bowl');
+    /* 坐圈 */
+    add(tmBox(g, OW * 0.94, 0.04, OD * 0.56, 0xe8e4dc, 0, OH * 0.48, OD * 0.10), id + '_seat');
+    /* 水箱 */
+    add(tmBox(g, OW * 0.92, OH * 0.44, OD * 0.26, 0xf2f0ea, 0, OH * 0.78, -OD * 0.30), id + '_tank');
+    add(tmBox(g, 0.10, 0.03, 0.10, 0xb8b0a4, 0, OH * 1.00, -OD * 0.30), id + '_flush');
+  }
+  else if (id === 'bath_vanity') {
+    /* 洗手台：柜体 + 台面 + 台盆 + 镜子 + 龙头 */
+    var fv = TOWN_FURNITURE_SPECS[id] || { w: 0.9, d: 0.5, h: 0.85 };
+    var VW = fv.w, VD = fv.d, VH = fv.h;
+    add(tmBox(g, VW, VH - 0.06, VD, 0x8a6a48, 0, (VH - 0.06) / 2 + 0.06, 0), id + '_cabinet');
+    add(tmBox(g, VW + 0.04, 0.06, VD + 0.04, 0xf0ece4, 0, VH, 0), id + '_top');
+    add(tmBox(g, VW * 0.5, 0.10, VD * 0.5, 0xdfeef5, 0, VH + 0.06, VD * 0.05), id + '_basin');
+    add(tmBox(g, 0.04, 0.16, 0.04, 0xb8c4c8, 0, VH + 0.16, -VD * 0.20), id + '_tap');
+    /* 镜子（挂墙） */
+    add(tmBox(g, VW * 0.7, VH * 0.45, 0.03, 0xc8d8e0, 0, VH + VH * 0.34, -VD / 2 + 0.03), id + '_mirror');
+  }
+  else if (id === 'shower_tray') {
+    /* 淋浴间：底盘 + 玻璃三面 + 花洒 */
+    var fs2 = TOWN_FURNITURE_SPECS[id] || { w: 0.9, d: 0.9, h: 2.0 };
+    var SW = fs2.w, SD = fs2.d, SH = fs2.h;
+    add(tmBox(g, SW, 0.08, SD, 0xdfe4e8, 0, 0.04, 0), id + '_tray');
+    add(tmBox(g, 0.03, SH, SD, 0xcfe0e8, -SW / 2 + 0.015, SH / 2, 0), id + '_glass_l');
+    add(tmBox(g, SW, SH, 0.03, 0xcfe0e8, 0, SH / 2, -SD / 2 + 0.015), id + '_glass_back');
+    add(tmBox(g, 0.03, SH, SD * 0.6, 0xcfe0e8, SW / 2 - 0.015, SH / 2, -SD * 0.2), id + '_glass_r');
+    add(tmBox(g, 0.06, 0.06, 0.06, 0xb8c4c8, 0, SH - 0.20, -SD / 2 + 0.10), id + '_head');
+  }
+  else if (id === 'kitchen_counter' || id === 'kitchen_island') {
+    /* 厨房台面 / 中岛：柜体 + 台面 + 踢脚 */
+    var fk = TOWN_FURNITURE_SPECS[id] || { w: 1.6, d: 0.6, h: 0.9 };
+    var KW = fk.w, KD = fk.d, KH = fk.h;
+    add(tmBox(g, KW, KH - 0.12, KD - 0.08, 0xb8a890, 0, (KH - 0.12) / 2 + 0.12, 0.04), id + '_body');
+    add(tmBox(g, KW, 0.10, KD, 0xd8d2c4, 0, KH - 0.05, 0), id + '_top');
+    add(tmBox(g, KW - 0.10, 0.12, KD - 0.22, 0x4a4038, 0, 0.06, 0.10), id + '_kick');
+    /* 门线 */
+    add(tmBox(g, 0.02, KH - 0.24, 0.02, 0x8a8078, 0, (KH - 0.12) / 2 + 0.12, -KD / 2 + 0.05), id + '_split');
+  }
+  else if (id === 'kitchen_cabinet') {
+    /* 厨房吊柜：柜体 + 两扇门 + 门把 */
+    var fc = TOWN_FURNITURE_SPECS[id] || { w: 1.4, d: 0.35, h: 0.75 };
+    var CW = fc.w, CD = fc.d, CH = fc.h;
+    var CY = 1.55;                       /* 吊柜底部离地高度 */
+    add(tmBox(g, CW, CH, CD, 0xc8bca8, 0, CY + CH / 2, 0), id + '_body');
+    add(tmBox(g, (CW - 0.04) / 2, CH - 0.06, 0.03, 0xd8d0c0, -CW / 4 - 0.01, CY + CH / 2, CD / 2), id + '_door_l');
+    add(tmBox(g, (CW - 0.04) / 2, CH - 0.06, 0.03, 0xd8d0c0, CW / 4 + 0.01, CY + CH / 2, CD / 2), id + '_door_r');
+    add(tmBox(g, 0.03, 0.12, 0.03, 0x9a9488, -0.04, CY + CH * 0.45, CD / 2 + 0.03), id + '_knob_l');
+    add(tmBox(g, 0.03, 0.12, 0.03, 0x9a9488, 0.04, CY + CH * 0.45, CD / 2 + 0.03), id + '_knob_r');
+  }
+  else if (id === 'kitchen_sink') {
+    /* 水槽：台面 + 双槽 + 龙头 */
+    /* ★ spec 的 h=0.15 是槽深，台面高度固定 0.9m */
+    var fs3 = TOWN_FURNITURE_SPECS[id] || { w: 0.8, d: 0.6 };
+    var SKW = fs3.w || 0.8, SKD = fs3.d || 0.6, SKH = 0.90;
+    add(tmBox(g, SKW, SKH - 0.12, SKD - 0.08, 0xb8a890, 0, (SKH - 0.12) / 2 + 0.12, 0.04), id + '_body');
+    add(tmBox(g, SKW, 0.10, SKD, 0xd8d2c4, 0, SKH - 0.05, 0), id + '_top');
+    add(tmBox(g, SKW * 0.40, 0.08, SKD * 0.55, 0x9aa4a8, -SKW * 0.22, SKH - 0.10, 0), id + '_basin_l');
+    add(tmBox(g, SKW * 0.40, 0.08, SKD * 0.55, 0x9aa4a8, SKW * 0.22, SKH - 0.10, 0), id + '_basin_r');
+    add(tmBox(g, 0.05, 0.26, 0.05, 0xb8c4c8, 0, SKH + 0.13, -SKD * 0.32), id + '_tap');
+    add(tmBox(g, 0.05, 0.05, 0.16, 0xb8c4c8, 0, SKH + 0.25, -SKD * 0.22), id + '_spout');
+  }
+  else if (id === 'kitchen_stove') {
+    /* 灶台：台面 + 两个灶眼 + 旋钮 + 后挡板 */
+    /* ★ spec 的 h=0.10 是面板厚，台面高度固定 0.9m */
+    var fs4 = TOWN_FURNITURE_SPECS[id] || { w: 0.8, d: 0.6 };
+    var STW = fs4.w || 0.8, STD = fs4.d || 0.6, STH = 0.90;
+    add(tmBox(g, STW, STH - 0.12, STD - 0.08, 0xb8a890, 0, (STH - 0.12) / 2 + 0.12, 0.04), id + '_body');
+    add(tmBox(g, STW, 0.08, STD, 0x3a3a3a, 0, STH - 0.04, 0), id + '_top');
+    add(tmCyl(g, 0.11, 0.11, 0.03, 0x606468, -STW * 0.22, STH + 0.02, 0), id + '_burner_l');
+    add(tmCyl(g, 0.11, 0.11, 0.03, 0x606468, STW * 0.22, STH + 0.02, 0), id + '_burner_r');
+    add(tmBox(g, STW, 0.30, 0.05, 0x4a4a4a, 0, STH + 0.15, -STD / 2 + 0.03), id + '_backsplash');
+    add(tmBox(g, 0.04, 0.04, 0.04, 0xd8d2c4, -0.20, STH - 0.10, STD / 2 - 0.04), id + '_knob_1');
+    add(tmBox(g, 0.04, 0.04, 0.04, 0xd8d2c4, -0.10, STH - 0.10, STD / 2 - 0.04), id + '_knob_2');
+  }
+  else if (id === 'kitchen_oven') {
+    /* 烤箱：柜体 + 炉门 + 把手 + 观察窗 */
+    var fo2 = TOWN_FURNITURE_SPECS[id] || { w: 0.7, d: 0.6, h: 0.6 };
+    var OVW = fo2.w, OVD = fo2.d, OVH = fo2.h;
+    add(tmBox(g, OVW, OVH, OVD, 0x505458, 0, OVH / 2, 0), id + '_body');
+    add(tmBox(g, OVW - 0.08, OVH * 0.62, 0.03, 0x6a7074, 0, OVH * 0.42, OVD / 2), id + '_door');
+    add(tmBox(g, OVW * 0.6, OVH * 0.34, 0.02, 0x2a2e30, 0, OVH * 0.44, OVD / 2 + 0.02), id + '_window');
+    add(tmBox(g, OVW * 0.72, 0.04, 0.04, 0xc8ccd0, 0, OVH * 0.80, OVD / 2 + 0.04), id + '_handle');
+  }
+  else if (id === 'tv_stand') {
+    /* 电视柜：柜体 + 隔层 + 两条腿 */
+    var fts = TOWN_FURNITURE_SPECS[id] || { w: 1.5, d: 0.4, h: 0.45 };
+    var TSW = fts.w, TSD = fts.d, TSH = fts.h;
+    add(tmBox(g, TSW, TSH - 0.10, TSD, 0x6b4a32, 0, (TSH - 0.10) / 2 + 0.10, 0), id + '_body');
+    add(tmBox(g, TSW + 0.04, 0.05, TSD + 0.04, 0x8a6a48, 0, TSH - 0.03, 0), id + '_top');
+    add(tmBox(g, TSW - 0.10, 0.03, TSD - 0.04, 0x5a3e2a, 0, TSH * 0.44, 0), id + '_shelf');
+    add(tmBox(g, 0.06, 0.10, 0.06, 0x4a3423, -TSW / 2 + 0.10, 0.05, TSD / 2 - 0.06), id + '_leg_l');
+    add(tmBox(g, 0.06, 0.10, 0.06, 0x4a3423, TSW / 2 - 0.10, 0.05, TSD / 2 - 0.06), id + '_leg_r');
+  }
+  else if (id === 'tv_wall') {
+    /* 壁挂电视：屏幕 + 边框 + 支架 */
+    var ftv = TOWN_FURNITURE_SPECS[id] || { w: 1.2, d: 0.1, h: 0.7 };
+    var TVW = ftv.w, TVH = ftv.h;
+    add(tmBox(g, TVW, TVH, 0.06, 0x1a1e22, 0, 1.35, 0), id + '_frame');
+    add(tmBox(g, TVW - 0.06, TVH - 0.06, 0.02, 0x2a3a4a, 0, 1.35, 0.04), id + '_screen');
+    add(tmBox(g, 0.12, 0.12, 0.06, 0x33383c, 0, 1.35, -0.06), id + '_mount');
+  }
+  else if (id === 'bed_nightstand') {
+    /* 床头柜：柜体 + 两个抽屉 + 台面 */
+    var fns = TOWN_FURNITURE_SPECS[id] || { w: 0.45, d: 0.42, h: 0.55 };
+    var NSW = fns.w, NSD = fns.d, NSH = fns.h;
+    add(tmBox(g, NSW, NSH - 0.06, NSD, 0x8a6a48, 0, (NSH - 0.06) / 2 + 0.06, 0), id + '_body');
+    add(tmBox(g, NSW + 0.03, 0.05, NSD + 0.03, 0x6b4a32, 0, NSH - 0.02, 0), id + '_top');
+    add(tmBox(g, NSW - 0.06, 0.03, NSD - 0.04, 0x7a5a3a, 0, NSH * 0.62, NSD / 2 - 0.02), id + '_drawer_1');
+    add(tmBox(g, NSW - 0.06, 0.03, NSD - 0.04, 0x7a5a3a, 0, NSH * 0.34, NSD / 2 - 0.02), id + '_drawer_2');
+    add(tmBox(g, 0.10, 0.02, 0.02, 0xd8d2c4, 0, NSH * 0.62, NSD / 2), id + '_knob_1');
+    add(tmBox(g, 0.10, 0.02, 0.02, 0xd8d2c4, 0, NSH * 0.34, NSD / 2), id + '_knob_2');
+  }
+  else if (id === 'bed_lamp') {
+    /* 床头灯：底座 + 灯杆 + 灯罩 */
+    add(tmCyl(g, 0.09, 0.11, 0.05, 0x6b4a32, 0, 0.025, 0), id + '_base');
+    add(tmBox(g, 0.03, 0.30, 0.03, 0x8a6a48, 0, 0.20, 0), id + '_pole');
+    add(tmCyl(g, 0.13, 0.10, 0.18, 0xf0e0c0, 0, 0.42, 0), id + '_shade');
+  }
+  else if (id === 'cash_register') {
+    /* 收银机：底座 + 屏幕 + 按键 + 钱箱 */
+    var fcr = TOWN_FURNITURE_SPECS[id] || { w: 0.42, d: 0.4, h: 0.42 };
+    var CRW = fcr.w, CRD = fcr.d;
+    add(tmBox(g, CRW, 0.10, CRD, 0x3a3e42, 0, 0.05, 0), id + '_drawer');
+    add(tmBox(g, CRW * 0.9, 0.12, CRD * 0.7, 0x505458, 0, 0.16, 0), id + '_keys');
+    add(tmBox(g, CRW * 0.7, 0.20, 0.05, 0x2a2e30, 0, 0.32, -CRD * 0.28), id + '_screen');
+  }
+  else if (id === 'shopping_cart') {
+    /* 购物车：车筐（框线）+ 四个轮子 + 推手 */
+    var fsc = TOWN_FURNITURE_SPECS[id] || { w: 0.6, d: 0.9, h: 1.0 };
+    var SCW = fsc.w, SCD = fsc.d;
+    add(tmBox(g, SCW, 0.35, SCD * 0.8, 0xc8ccd0, 0, 0.55, 0), id + '_basket');
+    add(tmBox(g, SCW + 0.02, 0.04, SCD * 0.82, 0x9aa0a4, 0, 0.73, 0), id + '_rim');
+    [[-SCW / 2 + 0.06, -SCD * 0.3], [SCW / 2 - 0.06, -SCD * 0.3],
+     [-SCW / 2 + 0.06, SCD * 0.3], [SCW / 2 - 0.06, SCD * 0.3]].forEach(function (q, qi) {
+      add(tmCyl(g, 0.05, 0.05, 0.04, 0x2a2e30, q[0], 0.05, q[1]), id + '_wheel_' + qi);
+    });
+    add(tmBox(g, SCW, 0.03, 0.03, 0x9aa0a4, 0, 0.90, -SCD * 0.36), id + '_handle');
+  }
+  else if (id === 'basket_stack') {
+    /* 购物篮堆：三个叠起来的篮子 */
+    var fbk = TOWN_FURNITURE_SPECS[id] || { w: 0.5, d: 0.38, h: 0.45 };
+    for (var bsi = 0; bsi < 3; bsi++) {
+      add(tmBox(g, fbk.w, 0.13, fbk.d, bsi % 2 ? 0xa84a4a : 0x4a6aa8, 0, 0.07 + bsi * 0.14, 0),
+          id + '_basket_' + bsi);
+    }
+  }
+  else if (id === 'menu_board' || id === 'promo_board') {
+    /* 菜单牌 / 促销牌：板面 + 两条腿 + 顶栏 */
+    /* ★ spec 的 h 是板面高，整体（带腿）固定 1.1m */
+    var fmb = TOWN_FURNITURE_SPECS[id] || { w: 0.6, d: 0.3 };
+    var MBW = fmb.w || 0.6, MBH = (id === 'promo_board') ? 0.95 : 1.10;
+    add(tmBox(g, MBW, MBH * 0.62, 0.05, 0x2f3438, 0, MBH * 0.62, 0), id + '_panel');
+    add(tmBox(g, MBW * 0.92, MBH * 0.16, 0.06, 0xd8b04a, 0, MBH * 0.94, 0), id + '_header');
+    add(tmBox(g, 0.05, MBH * 0.62, 0.05, 0x4a3423, -MBW * 0.42, MBH * 0.31, 0), id + '_leg_l');
+    add(tmBox(g, 0.05, MBH * 0.62, 0.05, 0x4a3423, MBW * 0.42, MBH * 0.31, 0), id + '_leg_r');
+  }
+  else if (id === 'wall_menu') {
+    /* 墙菜单：竖长板面 + 边框 */
+    var fwm = TOWN_FURNITURE_SPECS[id] || { w: 0.85, d: 0.06, h: 1.05 };
+    add(tmBox(g, fwm.w, fwm.h, 0.04, 0x2f3438, 0, 1.65, 0), id + '_panel');
+    add(tmBox(g, fwm.w + 0.06, fwm.h + 0.06, 0.02, 0x8a6a48, 0, 1.65, -0.03), id + '_frame');
   }
   else if (id === 'fridge_display') { buildFridgeAt(g, add, 0, 0, 0); }
   else if (id === 'coffee_machine') { buildCoffeeMachine(g, add, 0, 0, 0); }

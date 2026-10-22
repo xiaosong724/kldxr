@@ -373,7 +373,18 @@
 
   /* ---------- ghost preview ---------- */
   function makeGhost(spec) {
-    var g = buildTownModel(spec, {});
+    /* ★ 2026-10-22：预览必须和实际放置出来的一致 ——
+       prop_* 现在走 buildPropModel（精细模型），预览也要走同一条路，
+       否则会出现"预览是方块、放下变成模型"的错位。 */
+    var g = null;
+    try {
+      var _cid = spec && (spec.furnitureId || spec.propId || spec.id || spec.catalog);
+      if (_cid && typeof PROP_SPECS !== 'undefined' && PROP_SPECS[_cid] &&
+          typeof buildPropModel === 'function') {
+        g = buildPropModel(PROP_SPECS[_cid]);
+      }
+    } catch (eGhostProp) { }
+    if (!g) { g = buildTownModel(spec, {}); }
     g.traverse(function (o) {
       if (!o.isMesh || !o.material) { return; }
       o.material = o.material.clone();
