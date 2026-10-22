@@ -542,8 +542,17 @@ class World(object):
                 continue
             p.tpEnd = 0.0
             # 挪到安全区中心附近（±3 随机一点，免得所有人叠在一起）
-            p.x = round(random.uniform(-3, 3), 2)
-            p.z = round(random.uniform(-3, 3), 2)
+            # ★ 2026-10-22：落点改成【中央广场】（主城整体平移到对象镇坐标后，
+            #   原来写死的 (-3..3) 已经落在广场外面了）
+            try:
+                _pcx, _pcz = float(town.TOWN_CX), float(town.TOWN_CZ)
+            except Exception:
+                _pcx, _pcz = -130.0, 130.0
+            # 广场正中是喷泉（半径 1.95 的碰撞箱）→ 落点放到外围 3.5~4.5m
+            _ang = random.uniform(0.0, 6.283185)
+            _rad = random.uniform(3.5, 4.5)
+            p.x = round(_pcx + math.cos(_ang) * _rad, 2)
+            p.z = round(_pcz + math.sin(_ang) * _rad, 2)
             p.invulnT = max(float(getattr(p, 'invulnT', 0) or 0), 1.5)   # 落地给 1.5 秒无敌 ✓
             self._send_cid(p.cid, P.pack('tp', x=p.x, z=p.z))
             self._send_cid(p.cid, P.pack('notice', text='已传送回安全区'))
