@@ -10,6 +10,26 @@ var TOWN_COUNTER = TOWN_DATA ? { x: TOWN_DATA.warehouseCounter[0], z: TOWN_DATA.
                              : { x: 13.1, z: 17.0 };
 var TOWN_NEAR_R = TOWN_DATA ? TOWN_DATA.warehouseR : 2.8;
 var TOWN_SOLIDS = [];
+/* ★ 2026-10-22：放置物件（建筑墙/家具）的碰撞，和旧静态镇的 solids 分开管理 */
+var TOWN_OBJ_SOLIDS = [];
+function townSetObjectSolids(boxes) {
+  var i;
+  for (i = 0; i < TOWN_OBJ_SOLIDS.length; i++) {
+    var at = TOWN_SOLIDS.indexOf(TOWN_OBJ_SOLIDS[i]);
+    if (at >= 0) { TOWN_SOLIDS.splice(at, 1); }
+  }
+  TOWN_OBJ_SOLIDS = [];
+  var list = boxes || [];
+  for (i = 0; i < list.length; i++) {
+    var b = list[i];
+    if (!b || b.length < 4) { continue; }
+    var s = { x: (b[0] + b[2]) / 2, z: (b[1] + b[3]) / 2,
+              hw: Math.max(0.05, (b[2] - b[0]) / 2),
+              hd: Math.max(0.05, (b[3] - b[1]) / 2) };
+    TOWN_SOLIDS.push(s);
+    TOWN_OBJ_SOLIDS.push(s);
+  }
+}
 var TOWN_ROOFS = [];
 var TOWN_GROUP = null;
 var TOWN_SEATS = TOWN_DATA ? TOWN_DATA.seats : [];
@@ -159,7 +179,7 @@ function townHouseFridgeNear(x, z) {
 function townPlacedShopInfo(o) {
   var cat = null;
   try {
-    var cats = (typeof window !== 'undefined' && window.MY_TOWN_CATALOG) || [];
+    var cats = (typeof MY_TOWN_CATALOG !== 'undefined' && MY_TOWN_CATALOG) || [];
     for (var i = 0; i < cats.length; i++) { if (cats[i] && cats[i].id === o.catalog) { cat = cats[i]; break; } }
   } catch (e) { cat = null; }
   if (cat) {

@@ -345,6 +345,23 @@ DEAD_CATALOG_IDS = (
 )
 
 
+def wall_boxes(w, d, h, door_w=1.7, t=0.26):
+    """建筑碰撞：四面墙 + 南墙留门洞（所有新模型的门都朝 +Z）。
+
+    ★ 2026-10-22：以前是一整块实心盒子 ✗ 门口进不去、屋里也走不进去 ✓
+      现在墙是墙、门是门；家具/玩家可以从门洞进室内。
+    """
+    hw, hd = float(w) / 2.0, float(d) / 2.0
+    hd_door = min(float(door_w) / 2.0, hw - 0.4)
+    return [
+        [-hw, 0.0, -hd, hw, h, -hd + t],
+        [-hw, 0.0, hd - t, -hd_door, h, hd],
+        [hd_door, 0.0, hd - t, hw, h, hd],
+        [-hw, 0.0, -hd, -hw + t, h, hd],
+        [hw - t, 0.0, -hd, hw, h, hd],
+    ]
+
+
 def seed_catalog(cfg):
     now = now_ms()
     with dbmod.db(cfg) as c:
@@ -369,6 +386,7 @@ def seed_catalog(cfg):
         # buildings: bind model + default furniture layout
         for (cid, name, cat, w, d, h, price, fn, fj, cj, mid, lk) in BUILDING_SEED:
             layout = LAYOUTS.get(lk, {})
+            cj = json.dumps(wall_boxes(w, d, h), ensure_ascii=False)
             c.execute('INSERT OR IGNORE INTO town_catalog'
                       '(id,name,category,size_w,size_d,height,price,function_type,'
                       'function_json,collision_json,enabled,sort,updated_at,'
@@ -386,6 +404,10 @@ def seed_catalog(cfg):
             layout = json.dumps(LAYOUTS.get(lk, {}), ensure_ascii=False)
             c.execute('UPDATE town_catalog SET layout_json=? WHERE id=? AND layout_json<>?',
                       (layout, cid, layout))
+            # ★ 碰撞盒也按新规则（四面墙 + 门洞）覆盖一次
+            walls = json.dumps(wall_boxes(w, d, h), ensure_ascii=False)
+            c.execute('UPDATE town_catalog SET collision_json=? WHERE id=? AND collision_json<>?',
+                      (walls, cid, walls))
         c.commit()
 
 

@@ -203,11 +203,34 @@ def move_object(cfg, town_row, obj_id, x, z, rot=None):
     hit = overlaps_existing(cfg, town_row['id'], boxes, ignore_id=obj_id)
     if hit:
         return False, '和已有物件重叠', None
+    dx = float(x) - float(row['x'])
+    dz = float(z) - float(row['z'])
+    dr = r - float(row['rot'] or 0.0)
     with dbmod.db(cfg) as c:
         c.execute('UPDATE town_objects SET x=?,z=?,rot=?,collision_json=?,updated_at=? WHERE id=?',
                   (float(x), float(z), r, json.dumps(boxes), now_ms(), int(obj_id)))
+        # ★ 2026-10-22：建筑移动 → 它的家具一起走（同位移；旋转时绕建筑中心转）
+        kids = c.execute('SELECT id,catalog_id,x,z,rot,collision_json,floor'
+                         ' FROM town_objects WHERE parent_id=? AND state="active"',
+                         (int(obj_id),)).fetchall()
+        import math as _m
+        for k in kids:
+            kx, kz = float(k['x']) + dx, float(k['z']) + dz
+            kr = float(k['rot'] or 0.0) + dr
+            if abs(dr) > 1e-6:
+                lx = float(k['x']) - float(row['x'])
+                lz = float(k['z']) - float(row['z'])
+                ca, sa = _m.cos(dr), _m.sin(dr)
+                kx = float(x) + (lx * ca + lz * sa)
+                kz = float(z) + (-lx * sa + lz * ca)
+            kcat = _catalog(cfg, str(k['catalog_id']))
+            kboxes = world_boxes(kcat, kx, kz, kr, 0.0) if kcat else []
+            c.execute('UPDATE town_objects SET x=?,z=?,rot=?,collision_json=?,updated_at=?'
+                      ' WHERE id=?',
+                      (kx, kz, kr, json.dumps(kboxes), now_ms(), int(k['id'])))
         c.commit()
-    return True, '', {'id': int(obj_id), 'x': float(x), 'z': float(z), 'rot': r}
+    return True, '', {'id': int(obj_id), 'x': float(x), 'z': float(z), 'rot': r,
+                      'children': len(kids)}
 
 
 def remove_object(cfg, obj_id, cascade=True):

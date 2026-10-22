@@ -104,6 +104,23 @@
     return false;
   }
 
+  /* ★ 2026-10-22：把放置物件的碰撞（服务端算好的世界 AABB）注册进 core 的 solids，
+     这样墙真的挡人、门洞能进（以前放置物件完全没有客户端碰撞） */
+  function syncSolids() {
+    try {
+      if (typeof townSetObjectSolids !== 'function') { return 0; }
+      var out = [];
+      for (var k in P.objs) {
+        var e = P.objs[k];
+        if (!e || !e.mesh) { continue; }
+        var col = e.data && e.data.col;
+        if (col && col.length) { out = out.concat(col); }
+      }
+      townSetObjectSolids(out);
+      return out.length;
+    } catch (e2) { return -1; }
+  }
+
   function placeAt(o) {
     var grp = ensureGroup();
     if (!grp) { return; }
@@ -117,6 +134,7 @@
     mesh.userData.objId = o.id;          /* 2026-10-22：编辑模式拾取用 */
     grp.add(mesh);
     P.objs[o.id] = { mesh: mesh, data: o };
+    syncSolids();
   }
 
   function clearAll() {
@@ -127,6 +145,7 @@
       }
     }
     P.objs = {};
+    syncSolids();
   }
 
   /* ---------- ghost preview ---------- */
@@ -559,6 +578,11 @@
     },
     startEdit: editEnter,
     selectById: function (id) { editSelect(id); return EDIT.id; },
+    objPos: function (id) {
+      var e = P.objs[id];
+      return e && e.mesh ? { x: +e.mesh.position.x.toFixed(2), z: +e.mesh.position.z.toFixed(2),
+                             vis: !!e.mesh.visible } : null;
+    },
     objVisible: function (id) {
       var e = P.objs[id];
       return e && e.mesh ? !!e.mesh.visible : null;
@@ -591,6 +615,7 @@
       var e = P.objs[id];
       if (e && e.mesh && e.mesh.parent) { e.mesh.parent.remove(e.mesh); }
       delete P.objs[id];
+      syncSolids();
       if (EDIT.on && String(EDIT.id) === String(id)) { editSelect(null); }
     },
     /* 小镇被冻结/解散：把这块区域里的物件全部撤掉（服务端 towncleared） */
@@ -604,6 +629,7 @@
         if (e.mesh && e.mesh.parent) { e.mesh.parent.remove(e.mesh); }
         delete P.objs[k];
       }
+      syncSolids();
     },
     isPlacing: function () { return P.placing; }
   };

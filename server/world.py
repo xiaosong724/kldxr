@@ -2487,11 +2487,30 @@ class World(object):
                 return r
         return None
 
+    def _obj_boxes(self, o):
+        try:
+            raw = '[]'
+            if hasattr(o, 'keys'):
+                raw = o['collision_json'] if 'collision_json' in o.keys() else '[]'
+            elif isinstance(o, dict):
+                raw = o.get('collision_json') or '[]'
+            data = json.loads(raw) if isinstance(raw, str) else (raw or [])
+            out = []
+            for b in data:
+                if isinstance(b, (list, tuple)) and len(b) == 6:
+                    out.append([round(float(b[0]), 2), round(float(b[2]), 2),
+                                round(float(b[3]), 2), round(float(b[5]), 2)])
+            return out
+        except Exception:
+            return []
+
     def _obj_pub(self, o):
         d = {
             'id': int(o['id']), 'catalog': str(o['catalog_id']),
             'x': round(float(o['x']), 3), 'z': round(float(o['z']), 3),
             'rot': round(float(o['rot']), 4),
+            # ★ 2026-10-22：世界 AABB（客户端注册碰撞用）——墙有门洞，人能进店
+            'col': self._obj_boxes(o),
             'model': str(o.get('model_id') or ''),
             'ver': str(o.get('model_version') or 'v1'),
             'parent': int(o.get('parent_id') or 0),
@@ -2674,7 +2693,25 @@ class World(object):
         if not ok:
             self._town_result(p, False, err)
             return
-        self._send_cid(p.cid, P.pack('moved', object=res))
+        # ★ 2026-10-22：回包要带完整物件（catalog/model），
+        #   不然客户端拿 {id,x,z,rot} 重建模型时没有 catalog → 画不出来
+        try:
+            with dbmod.db(self.cfg) as c:
+                fresh = c.execute('SELECT * FROM town_objects WHERE id=?', (oid,)).fetchone()
+            if fresh is not None:
+                pub = self._obj_pub({k: fresh[k] for k in fresh.keys()})
+            else:
+                pub = self._obj_pub(_row)
+        except Exception:
+            pub = self._obj_pub(_row)
+        self._send_cid(p.cid, P.pack('moved', object=pub))
+        self._rebuild_dyn_shops()
+        # ★ 家具跟着建筑走了 → 直接重发整份 objects，客户端一次性对齐
+        try:
+            if int(res.get('children') or 0) > 0:
+                self._send_objects(p, r)
+        except Exception as _oe:
+            print('[town] resend objects failed: %r' % (_oe,))
 
     def _intent_remove_object(self, p, d):
         d = d or {}

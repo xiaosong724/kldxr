@@ -11157,12 +11157,29 @@ function wsOnMessage(raw) {
   }
   if (t === 'moved') {
     try {
-      if (typeof window.onMoved === 'function') { window.onMoved(d.object); }
+      /* ★ 2026-10-22：同步池子 + 重建模型（以前只回调，缓存还是旧坐标） */
+      var _mo = d.object || null;
+      if (_mo && _mo.id != null) {
+        var _l = window.MY_OBJECTS || [];
+        for (var _i = 0; _i < _l.length; _i++) {
+          if (String(_l[_i].id) === String(_mo.id)) {
+            _l[_i] = Object.assign({}, _l[_i], _mo);
+            break;
+          }
+        }
+        window.MY_OBJECTS = _l;
+        try { TOWN_OBJECTS_CACHE = window.MY_OBJECTS; } catch (eC3) { }
+      }
+      if (typeof window.onMoved === 'function') { window.onMoved(_mo); }
     } catch (eM) { }
     return;
   }
   if (t === 'removed') {
     try {
+      window.MY_OBJECTS = (window.MY_OBJECTS || []).filter(function (o) {
+        return String(o.id) !== String(d.id);
+      });
+      try { TOWN_OBJECTS_CACHE = window.MY_OBJECTS; } catch (eC4) { }
       if (typeof window.onRemoved === 'function') { window.onRemoved(d.id); }
     } catch (eR) { }
     return;
