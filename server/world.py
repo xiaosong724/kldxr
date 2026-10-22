@@ -1242,6 +1242,13 @@ class World(object):
         return bool(h and str(h.get('id')) == str(hid))
 
     def _house_send(self, p, hid=None):
+        # ★ 2026-10-22（用户："-203，195 还可以继续房屋交互、购买住宅"）：
+        #   静态房屋（villa_1 / yard_2 / flat_3…）早就不渲染了，
+        #   但服务端还在按它的 id 回房屋信息 → 空地上能弹购买面板。
+        #   房屋现在只认已放置的建筑物件（obj<id>）。
+        if hid and not str(hid).startswith('obj'):
+            self._send_cid(p.cid, P.pack('house', ok=0, msg='NO_HOUSE'))
+            return
         h = None
         if hid:
             h = self.houses.get(str(hid))
@@ -1257,6 +1264,10 @@ class World(object):
     def _house_buy(self, p, d):
         hid = str((d or {}).get('id') or '')
         want = int((d or {}).get('days') or 1)
+        if not hid.startswith('obj'):
+            # ★ 2026-10-22：静态房屋已下线，别再让旧 id 买得到
+            self._send_cid(p.cid, P.pack('house', ok=0, msg='NO_HOUSE'))
+            return
         h = self.houses.get(hid)
         if not h:
             self._send_cid(p.cid, P.pack('house', ok=0, msg='NO_HOUSE'))
@@ -1890,10 +1901,12 @@ class World(object):
     }
 
     def _seat_lookup(self, sid):
-        """座位解析：静态座位用数字 id；已放置的家具椅子用 'obj<id>'。"""
-        seat = town.seat_by_id(sid)
-        if seat:
-            return seat
+        """座位解析：只认已放置的家具椅子（'obj<id>' / 'obj<id>#槽'）。
+
+        ★ 2026-10-22（用户："-124，124 有一个隐藏的椅子，走过去能坐下"）：
+          静态座位表里的椅子早就不渲染了，但服务端还认它的 id →
+          地上空的也能坐。默认不再解析静态座位（?legacydeco 时代的东西已下线）。
+        """
         if not str(sid).startswith('obj'):
             return None
         base, slot = str(sid), 0
@@ -2220,7 +2233,7 @@ class World(object):
         key = self.seat_table.get(str(sid))
         if not key:
             try:
-                st = town.seat_by_id(sid)
+                st = None            # ★ 静态座位已下线（见 _seat_lookup）
                 if st:
                     key = self.seat_table.get(str(st.get('id') or ''))
             except Exception:

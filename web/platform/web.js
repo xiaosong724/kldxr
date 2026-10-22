@@ -5430,7 +5430,7 @@ function tpBarRender() {
      而"初始化那一段"实测【根本没执行到】✗（按钮的 onclick 一直是空 ✓）
      ★ tpBind 自己是幂等的（document._tpBound 挡着 ✓）→ 放心每帧调 ✓
      ★ 这是"把初始化挂在一个必然会发生的事件上"✗ 比去追查初始化顺序稳得多 ✓ */
-  tpBind();
+  safeTpBind();
   var btn = document.getElementById('safeTp');
   var fill = document.getElementById('safeTpFill');
   var txt = document.getElementById('safeTpTxt');
@@ -7014,6 +7014,11 @@ function tpClose() {
 }
 function tpOpen() {
   if (!TP_NEAR) { return; }
+  /* ★ 2026-10-22（用户："传送菜单只能选择传送点后才能关闭，不能点 X 关闭"）：
+     根因 = 右上角 X 的点击事件【从来没绑定过】。
+     tpBind() 原来只在 UI.teleportNear() 里调，传送阵改成放置物件后那条路不走了，
+     面板却是直接 tpOpen() 打开的 → X 是个死按钮。这里打开时强制绑定一次。 */
+  tpBind();
   TP.open = true;
   var p = document.getElementById('tpPanel');
   if (p) { p.style.display = 'block'; }
@@ -7849,7 +7854,11 @@ function tpDo(e) {
 /* ★ 两条路一起挂（用户报过"点了没反应"✗ 一条路出问题还有另一条 ✓）
    ① 事件委托（挂在 document 上 ✓ 不怕元素重建 ✓）
    ② 直接挂 onclick（在 tpEnsureBtn 里每 100ms 检查一次 ✓ 挂上为止 ✓）*/
-function tpBind() {
+/* ★ 2026-10-22（用户："传送菜单只能选择传送点后才能关闭，不能点 X"）：
+   这里原来也叫 tpBind —— 和上面【传送面板】的 tpBind 同名。
+   JS 里后定义的覆盖先定义的 → 面板右上角 X 的 click 永远绑不上。
+   改名 safeTpBind（只管安全区那个传送按钮）。 */
+function safeTpBind() {
   if (window._tpBound) { return; }
   window._tpBound = true;
   document.addEventListener('click', function (e) {
@@ -12092,7 +12101,7 @@ function bindLogin() {
   function go() {
     if (window.TP_BOOT_DONE) { return; }
     window.TP_BOOT_DONE = true;
-    try { tpBind(); } catch (e) { }
+    try { safeTpBind(); } catch (e) { }
     TPCAST.at = performance.now() / 1000;
     setInterval(function () { tpEnsureBtn(); tpBarRender(); autoBindAtk(); jumpBind(); runBind(); autoUiUpd();
       if (typeof uiDragInit === 'function') { uiDragInit(); }

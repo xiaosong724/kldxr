@@ -183,7 +183,10 @@ function townSeatFromObjects(x, z) {
 
 function townSeatNear(x, z) {
   var best = null, bd = 1.4 * 1.4;
-  for (var i = 0; i < TOWN_SEATS.length; i++) {
+  /* ★ 2026-10-22（用户："-124，124 有一个隐藏的椅子，走过去能坐下"）：
+     静态座位表 TOWN_SEATS 里的椅子早就不渲染了，但这里还在拿它做交互 →
+     地上是空的却能坐。默认不再参与，只有 ?legacydeco=1 时才查。 */
+  for (var i = 0; _legacyDecoOn() && i < TOWN_SEATS.length; i++) {
     var s = TOWN_SEATS[i];
     var dx = s.x - x, dz = s.z - z;
     var d2 = dx * dx + dz * dz;
@@ -363,7 +366,10 @@ function townHouseDoor(h) {
 }
 function townHouseNear(x, z) {
   var best = null, bd = 4.2 * 4.2;
-  for (var i = 0; i < TOWN_HOUSES.length; i++) {
+  /* ★ 2026-10-22（用户："-203，195 还可以继续房屋交互、购买住宅"）：
+     静态房屋表 TOWN_HOUSES 的房子早就不渲染了，这里还在给交互点 →
+     空地上弹"购买住宅"。默认不再参与；房屋现在是放置的建筑物件。 */
+  for (var i = 0; _legacyDecoOn() && i < TOWN_HOUSES.length; i++) {
     var h = TOWN_HOUSES[i];
     var d = townHouseDoor(h);
     var dx = d[0] - x, dz = d[1] - z;
@@ -431,6 +437,7 @@ function isBedCatalog(cid) {
   return c === 'bed_single' || c === 'bed_double' || c === 'bed_king';
 }
 function townHouseById(id) {
+  if (!_legacyDecoOn()) { return null; }   /* ★ 静态房屋已移除，见 townHouseNear */
   for (var i = 0; i < TOWN_HOUSES.length; i++) {
     if (String(TOWN_HOUSES[i].id) === String(id)) { return TOWN_HOUSES[i]; }
   }
