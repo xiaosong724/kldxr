@@ -52,6 +52,7 @@ import town_objects as objreg
 import work as workmod
 import terrain as termod   # ★ round306：僵尸也要认地形高度 ✓
 import protocol as P
+import rankboard                 # ★ 2026-10-22：头顶称号榜
 
 TICK_HZ = 30
 TICK_DT = 1.0 / TICK_HZ
@@ -296,7 +297,8 @@ class Player(object):
         self.st_pvp = 0
         self.st_play = 0.0
         self.st_play0 = 0.0
-        self.titleBoard = 0
+        self.titleBoard = str((role or {}).get('titleBoard')
+                              or (role or {}).get('title_board') or '')
         self.shieldAmt = 0
         self.shieldT = 0.0
         self.skBuff = {}
@@ -707,7 +709,10 @@ class World(object):
         """
         ps = []
         for q in self.players.values():
-            ps.append({'name': q.name, 'level': int(q.role.get('level') or 1),
+            
+            _tt_q, _tm_q = self._title_of(q)      # ★ 只算一次（每帧每个玩家）
+
+            ps.append({'tt': _tt_q, 'tm': _tm_q, 'name': q.name, 'level': int(q.role.get('level') or 1),
                        'hp': int(q.hp), 'x': round(q.x, 1), 'z': round(q.z, 1),
                        'gold': int(getattr(q, 'gold', 0) or 0),
                        'weapon': ((q.weapon or {}).get('name') or '（默认单手剑）')})
@@ -6352,6 +6357,18 @@ class World(object):
                 self._send_cid(p.cid, P.pack('tpcast', t=TELEPORT_CAST))
                 self._send_cid(p.cid, P.pack(
                     'notice', text='开始传送回安全区（%.0f 秒，期间受伤会中断）' % TELEPORT_CAST))
+        elif t == 'ranktitle':
+            # ★ 2026-10-22：用户选「头顶显示哪个榜」（'' = 关）
+            #   写库由 net.py 做（tick 不碰磁盘）✗ 这里只改内存
+            _b = str((d or {}).get('board') or '')
+            if _b and _b not in rankboard.KEYS:
+                return
+            p.titleBoard = _b
+            try:
+                if isinstance(p.role, dict):
+                    p.role['titleBoard'] = _b
+            except Exception:
+                pass
         elif t == 'chat':
             txt = str(d.get('text') or '')[:200]
             if txt:
@@ -6413,6 +6430,12 @@ class World(object):
             # ★ 第 67 轮：穿/脱防具（网络线程已经查库校验完了 ✓）
             self._flush_adur(p)                     # ★ 换防具前先把旧的落库 ✓
             p.armor = d.get('armor') or None
+            # ★ 2026-10-22：换了防具 → 生命上限/减伤变了 → 属性页要刷新
+            self._invalidate_stats(p)
+            try:
+                self._tal_send(p)
+            except Exception:
+                pass
             p.armorItemId = d.get('itemId')
             _ar = p.armor or {}
             p.aDurMax = int(_ar.get('durMax') or 0)
