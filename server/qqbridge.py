@@ -57,6 +57,7 @@ class QqBridge(object):
         self.drops = 0
         self.last_err = ''
         self.last_at = 0.0
+        self.last_text = ''
         self._stop = False
         self._th = None
         self._sent_times = []      # ★ 最近 60 秒发了哪几条（算每分钟上限用 ✓）
@@ -130,7 +131,10 @@ class QqBridge(object):
         return {'on': self.on, 'sent': self.sent, 'fails': self.fails,
                 'drops': self.drops, 'queued': self.q.qsize(),
                 'lastErr': self.last_err, 'group': self.group,
-                'lastAt': int(self.last_at)}
+                'lastAt': int(self.last_at),
+                # ★ 2026-10-22：把最后一条发出去的内容也报出来，
+                #   以后群里没消息时一眼能看出"根本没发"还是"发了但格式不对"
+                'lastText': self.last_text}
 
     # ---------------------------------------------------------------- 内部
     def _run(self):
@@ -163,6 +167,7 @@ class QqBridge(object):
                 r.read(512)
             self.sent += 1
             self.last_at = time.time()
+            self.last_text = text          # ★ 最后一条成功发出的内容（排障用）
             self._sent_times.append(self.last_at)
         except Exception as e:
             self.fails += 1

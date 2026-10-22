@@ -735,7 +735,13 @@ class World(object):
             #   → sent 永远是 0。上线播报本来就不存在，这里补上（kind='join'）。
             try:
                 if getattr(self, 'qq', None):
-                    self.qq.post('%s 上线了' % _np.name, 'join')
+                    # ★ 2026-10-22（用户给的原文格式）：
+                    #   🟢 fangou 上线了（炼气 78 层 · 当前在线 1 人）
+                    # 等级存在 role 字典里（Player 上没有 level 属性）
+                    _lv = int((getattr(_np, 'role', {}) or {}).get('level') or 1)
+                    _on = len(self.players)
+                    self.qq.post('🟢 %s 上线了（炼气 %d 层 · 当前在线 %d 人）'
+                                 % (_np.name, _lv, _on), 'join')
             except Exception as _qqe:
                 print('[qq] join post failed: %r' % (_qqe,))
             self._town_zones_send(_np)
