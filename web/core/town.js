@@ -242,6 +242,15 @@ function townTeleportNear(x, z) {
   return best;
 }
 function townVillaAt(x, z) {
+  /* ★★★ 2026-10-22（用户："-193,80 走过来就会变高，不会被挡住"）★★★
+     病根：这里遍历【静态别墅表】，那些别墅早就不渲染了。
+     走进它们原来的范围 → townVillaFloor() 返回 2.8（二楼高度）
+     → game.js 直接把 P.y 顶到 2.8，人就凭空"上楼"了。
+     实测：(-194,81) 地形 0、地板矩形没有，但 P.y=2.8。
+     现在静态别墅默认不参与（?legacydeco=1 回滚）。
+     注：目前镇上没有放置的 house_villa_v1（只有小平房/旅店），
+     以后要放别墅需要另做"按放置建筑算二楼"的版本。 */
+  if (!_legacyDecoOn()) { return null; }
   for (var i = 0; i < TOWN_HOUSES.length; i++) {
     var h = TOWN_HOUSES[i];
     if (h.tier !== 'villa') { continue; }
