@@ -217,13 +217,23 @@ function townHouseFridgeNear(x, z) {
     if (!f) { continue; }
     var info = (typeof TOWN_HOUSE_INFO !== 'undefined' && TOWN_HOUSE_INFO) ? TOWN_HOUSE_INFO[h.id] : null;
     if (!info || +info.owner_id !== me) { continue; }
+    /* ★ 2026-10-22：冰箱要贴近才能开（以前 2.2m 太远） */
     var dx = f[0] - x, dz = f[1] - z;
-    if (dx * dx + dz * dz <= 2.2 * 2.2) { return h; }
+    if (dx * dx + dz * dz <= 1.4 * 1.4) { return h; }
   }
-  /* 已放置的建筑：6m 内即可（owner 校验在服务端做） */
-  var ph = (typeof townPlacedHouseNear === 'function') ? townPlacedHouseNear(x, z) : null;
-  if (ph) { return ph; }
-  return null;
+  /* ★ 2026-10-22：放置的房屋也改成"贴着它自己的冰箱"（以前整栋 6m 都算） */
+  var list = (typeof TOWN_OBJECTS_CACHE !== 'undefined' && TOWN_OBJECTS_CACHE) || [];
+  var bb = 1.4 * 1.4;
+  var best = null;
+  for (var i2 = 0; i2 < list.length; i2++) {
+    var b = list[i2];
+    if (!b || !b.parent) { continue; }
+    if (String(b.catalog || '').indexOf('fridge') < 0) { continue; }
+    var dx2 = b.x - x, dz2 = b.z - z;
+    var d22 = dx2 * dx2 + dz2 * dz2;
+    if (d22 <= bb) { bb = d22; best = { id: 'obj' + b.parent, placed: true, x: +b.x, z: +b.z }; }
+  }
+  return best;
 }
 
 /* ★ 2026-10-22：TOWN_SHOP_CATALOG 从来没定义过（放置商店一被扫到就 ReferenceError）。

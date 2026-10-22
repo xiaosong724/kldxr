@@ -6502,6 +6502,7 @@ function addOther(w, t) {
       downT: +w.downT || 0,                    // ★ round593：击倒剩余
       _galeAcc: 0, _galeLX: null, _galeLZ: null,
       seat: (w.seat != null ? String(w.seat) : '-1'),   // ★ 他坐哪张椅子
+      seated: (typeof w.seated === 'number') ? !!w.seated : (w.seat != null && String(w.seat) !== '-1'),
       sleep: !!w.sleep,                                   // ★ 他躺下了没有
       snapYaw: (typeof w.syaw === 'number') ? w.syaw : 0,
       dead: !!w.dead,                         // ★ 第 57 轮：他倒下了没有
@@ -6555,6 +6556,7 @@ function addOther(w, t) {
      所以两处都要写 ✓（不然"别人看你死亡还是站着"永远修不好 ✗）*/
   o.dead = !!w.dead;
   o.seat = (w.seat != null ? String(w.seat) : '-1');
+  o.seated = (typeof w.seated === 'number') ? !!w.seated : (o.seat !== '-1');
   o.sleep = !!w.sleep;
   o.snapYaw = (typeof w.syaw === 'number') ? w.syaw : (o.snapYaw || 0);
   o.galeT = +w.galeT || 0;
@@ -7496,7 +7498,8 @@ function netUpdate(dt) {
        以前这里只管走路 → 坐下那一刻服务端把他瞬移到椅子上，
        插值一路追、姿态又是站姿 → 别人看着一直在抽动。
        现在坐/躺直接吸附到服务端坐标，并摆出对应姿势。 */
-    var _seated = (o.seat != null && String(o.seat) !== '-1' && String(o.seat) !== '');
+    var _seated = (o.seated != null) ? !!o.seated
+      : (o.seat != null && String(o.seat) !== '-1' && String(o.seat) !== '');
     if (_seated || o.sleep) {
       var _gs = o.hh.g;
       o.walkT = 0;
@@ -7524,6 +7527,12 @@ function netUpdate(dt) {
     o.hh.g.position.set(px, 0, pz);
     o.hh.g.rotation.y = o.cur.yaw;
     o.hh.g.rotation.z = 0;
+    /* ★ 2026-10-22：小镇里不显示别人拿的武器（和"自己在镇上不举剑"保持一致） */
+    if (o.hh.sw) {
+      var _inTownO = (typeof townIn === 'function') ? townIn(px, pz) : false;
+      var _visW = !_inTownO;
+      if (o.hh.sw.visible !== _visW) { o.hh.sw.visible = _visW; }
+    }
     // ★ 走路动画按"这一帧真的走了多远"算 ✓（原来按到目标点的距离 ✗ 会一抽一抽）
     var spd = Math.hypot(px - o.last.x, pz - o.last.z) / Math.max(dt, 0.0001);
     o.last.x = px; o.last.z = pz;

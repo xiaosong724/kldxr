@@ -2281,6 +2281,7 @@ window.showPrompt = showPrompt;
                  同时提示信息也合并显示"
    ★ 候选列表由 core/game.js 每帧算好（NEAR_LIST），这里只负责显示与派发。 */
 var NEAR_CANDS = [];
+var NEAR_SIG = '';        /* 上一次的候选签名：只在变化时弹提示 */
 var NEAR_PICK_OPEN = false;
 var NEAR_KIND_LABEL = {
   sit: '坐下', tp: '传送阵', sleep: '睡觉', house: '房屋',
@@ -2343,6 +2344,14 @@ UI.interactNear = function (list) {
   if (typeof MY_SEAT !== 'undefined' && MY_SEAT) { return; }
   if (typeof MY_SLEEP !== 'undefined' && MY_SLEEP) { return; }
   NEAR_CANDS = (list || []).slice();
+  /* ★ 2026-10-22（用户：走近时提示"显示 3 秒后消失，再走近要重新出现"）：
+     只在【候选集合变化】那一刻弹提示（进入范围 / 换成别的东西），3 秒后自己消失；
+     站着不动不反复刷。 */
+  var _sig = NEAR_CANDS.map(function (x) {
+    return (x.kind || '') + ':' + (x.title || '');
+  }).join('|');
+  var _changed = (_sig !== NEAR_SIG);
+  NEAR_SIG = _sig;
   var atk = document.getElementById('atk');
   var ids = ['sitPrompt', 'tpPrompt', 'shopPrompt', 'sleepPrompt',
              'housePrompt', 'whPrompt'];
@@ -2360,7 +2369,7 @@ UI.interactNear = function (list) {
     var c = NEAR_CANDS[0];
     /* 单项：只留它自己的那个提示（其它统一关掉），行为保持原样 */
     ids.forEach(function (id) { if (id !== c.prompt) { showPrompt(id, ''); } });
-    if (c.prompt) { showPrompt(c.prompt, c.text, true); }
+    if (_changed && c.prompt) { showPrompt(c.prompt, c.text); }
     if (atk) {
       atk.classList.remove('seat', 'shop', 'sleep', 'house', 'teleport', 'interact');
       if (c.cls) { atk.classList.add(c.cls); }
@@ -2373,7 +2382,9 @@ UI.interactNear = function (list) {
   /* 多个：统一一条提示，按钮显示"交互 N"，点击弹选择 */
   ids.forEach(function (id) { showPrompt(id, ''); });
   var names = NEAR_CANDS.map(function (x) { return x.title || NEAR_KIND_LABEL[x.kind] || '交互'; });
-  showPrompt('sitPrompt', '附近可交互：' + names.join(' · ') + '（点按钮选择）', true);
+  if (_changed) {
+    showPrompt('sitPrompt', '附近可交互：' + names.join(' · ') + '（点按钮选择）');
+  }
   if (atk) {
     atk.classList.remove('seat', 'shop', 'sleep', 'house', 'teleport');
     atk.classList.add('interact');

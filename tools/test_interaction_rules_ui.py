@@ -128,7 +128,21 @@ async def main_async(token):
                               "return e?getComputedStyle(e).display:'none';")
             txt = await c.ev("return (document.getElementById('sitPrompt')||{}).textContent||'';")
             print('  prompt now/4s later: %s / %s  text=%r' % (vis0, vis1, txt[:40]))
-            assert vis0 != 'none' and vis1 != 'none', 'prompt disappeared after 3s'
+            # ★ 用户要求：走近时显示，3 秒后消失；走开再走近要重新出现
+            assert vis0 != 'none', 'prompt did not appear on approach'
+            assert vis1 == 'none', 'prompt should fade after 3s'
+            # 走开 → 提示消失；再走回来 → 重新出现
+            await c.ev("P.x=%f; P.z=%f; return 1;" % (chair['x'] + 12, chair['z'] + 12))
+            await asyncio.sleep(0.6)
+            away = await c.ev("var e=document.getElementById('sitPrompt');"
+                              "return e?getComputedStyle(e).display:'none';")
+            await c.ev("P.x=%f; P.z=%f; return 1;" % (chair['x'], chair['z']))
+            await asyncio.sleep(0.6)
+            back = await c.ev("var e=document.getElementById('sitPrompt');"
+                              "return e?getComputedStyle(e).display:'none';")
+            print('  away/back:', away, back)
+            assert away == 'none', 'prompt still shown after walking away'
+            assert back != 'none', 'prompt did not reappear when walking back'
 
             # ② 刷新后坐姿要恢复
             await c.ev("SEAT_NEAR = townSeatNear(P.x,P.z); trySit(); return 1;")

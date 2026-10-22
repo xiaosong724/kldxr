@@ -100,10 +100,12 @@
        进屋时只淡化墙、藏掉屋顶，屋里的地板/家具/柜台/招牌保持正常显示。
        （以前整栋建筑一起淡化 → 屋里的东西也跟着变透明，看不见了） */
     try {
-      var roofParts = [], wallParts = [];
+      var roofParts = [], wallParts = [], upperFloorParts = [];
       g.traverse(function (o) {
         if (!o.isMesh) { return; }
         var nm = String(o.name || '').toLowerCase();
+        /* ★ 2026-10-22：只有【二楼地板】进屋时透明；一楼地面永远不透明、不隐藏 */
+        if (nm.indexOf('balcony_floor') >= 0) { upperFloorParts.push(o); return; }
         if (nm.indexOf('roof') >= 0 || nm.indexOf('ridge') >= 0) { roofParts.push(o); return; }
         if (objIsWallPart(nm)) { wallParts.push(o); }
       });
@@ -128,6 +130,17 @@
           walls.add(wp);
         }
         g.add(walls);
+      }
+      if (upperFloorParts.length) {
+        var uf = new THREE.Group();
+        uf.name = '__upperFloor';
+        uf.userData.noBatch = true;
+        for (var ui = 0; ui < upperFloorParts.length; ui++) {
+          var up = upperFloorParts[ui];
+          if (up.parent) { up.parent.remove(up); }
+          uf.add(up);
+        }
+        g.add(uf);
       }
     } catch (eRoof) { }
     return batchModel(g);
@@ -282,9 +295,17 @@
           e.mesh.traverse(function (mm) { if (mm.name === '__walls') { _wg = mm; } });
           e.mesh.userData.walls = _wg;
         }
+        if (e.mesh.userData.upperFloor == null) {
+          var _ug = null;
+          e.mesh.traverse(function (mm) { if (mm.name === '__upperFloor') { _ug = mm; } });
+          e.mesh.userData.upperFloor = _ug;
+        }
+        var _fadeRoots = [];
+        if (e.mesh.userData.walls) { _fadeRoots.push(e.mesh.userData.walls); }
+        if (e.mesh.userData.upperFloor) { _fadeRoots.push(e.mesh.userData.upperFloor); }
         var _wallRoot = e.mesh.userData.walls;
-        if (_wallRoot) {
-          _wallRoot.traverse(function (m) {
+        _fadeRoots.forEach(function (root) {
+          root.traverse(function (m) {
             if (!m.isMesh || !m.material) { return; }
             var u = m.material.userData || {};
             if (fade) {
@@ -298,7 +319,7 @@
             }
             m.material.needsUpdate = true;
           });
-        }
+        });
       }
     } catch (e2) { }
   }

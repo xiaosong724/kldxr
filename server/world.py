@@ -7193,6 +7193,8 @@ class World(object):
                 # ★ round330：离地高度 ✗ 别人的客户端拿它还原跳跃动作 ✓
                 'jy': round(getattr(o, 'jy', 0.0) or 0.0, 3),
                 'seat': str(getattr(o, 'seat', -1)),
+                # ★ 2026-10-22：明确的布尔（客户端不用再猜字符串）
+                'seated': 1 if str(getattr(o, 'seat', '-1')) != '-1' else 0,
                 'sleep': 1 if getattr(o, 'sleepHouse', '') else 0,
                 # ★ 2026-10-22：别人躺下时的朝向（客户端躺姿要用）
                 'syaw': round(float(getattr(o, 'sleepYaw', 0.0) or 0.0), 3),
