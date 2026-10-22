@@ -158,13 +158,22 @@ async def main_async(token):
             print('  after choose (%s):' % first, after)
             assert after['vis'] == 'none', 'picker did not close'
 
-            # 3 秒自动消失
-            await c.ev("showPrompt('sitPrompt','自动消失测试'); return 1;")
+            # ★ 2026-10-22：交互提示改成【常驻】（用户要求：不要 3 秒就消失）
+            await c.ev("showPrompt('sitPrompt','常驻测试', true); return 1;")
             vis0 = await c.ev("return getComputedStyle(document.getElementById('sitPrompt')).display;")
             await asyncio.sleep(3.4)
             vis1 = await c.ev("return getComputedStyle(document.getElementById('sitPrompt')).display;")
-            print('  prompt now/later:', vis0, vis1)
-            assert vis0 != 'none' and vis1 == 'none', 'prompt did not auto hide'
+            print('  sticky prompt now/later:', vis0, vis1)
+            assert vis0 != 'none' and vis1 != 'none', 'sticky prompt should stay visible'
+            # 非 sticky 的提示仍然会 3 秒自动消失（换个没人管的提示框测，避免被主循环覆盖）
+            await c.ev("window.__t=document.createElement('div');window.__t.id='__probe';"
+                       "document.body.appendChild(window.__t);"
+                       "showPrompt('__probe','一次性测试'); return 1;")
+            t0 = await c.ev("return getComputedStyle(document.getElementById('__probe')).display;")
+            await asyncio.sleep(3.4)
+            t1 = await c.ev("return getComputedStyle(document.getElementById('__probe')).display;")
+            print('  one-shot prompt now/later:', t0, t1)
+            assert t0 != 'none' and t1 == 'none', 'one-shot prompt did not auto hide'
 
             errs = [e for e in c.events if e.get('method') == 'Runtime.exceptionThrown']
             assert not errs, 'JS exceptions: %r' % ([e['params'] for e in errs][:2],)

@@ -332,7 +332,8 @@ function townPlacedHouseNear(x, z) {
 }
 
 function townHouseSleepNear(x, z) {
-  var best = null, bd = 2.6 * 2.6;
+  /* ★ 2026-10-22：睡觉要贴近床（以前 2.6m + 建筑 6m 外都能触发，太远） */
+  var best = null, bd = 1.4 * 1.4;
   for (var i = 0; i < TOWN_HOUSES.length; i++) {
     var h = TOWN_HOUSES[i];
     var d = townHouseBed(h);
@@ -343,10 +344,26 @@ function townHouseSleepNear(x, z) {
     if (!info || +info.owner_id !== _me) { continue; }
     if (d2 <= bd) { bd = d2; best = h; }
   }
-  /* 已放置的建筑：任何 6m 内的都可睡（放置者校验在服务端做） */
-  var ph = townPlacedHouseNear(x, z);
-  if (ph && !best) { best = ph; }
+  /* ★ 2026-10-22：放置的房屋也要贴着【它自己的床】才提示睡觉（不再整栋 6m 都算） */
+  if (!best) {
+    var list = (typeof TOWN_OBJECTS_CACHE !== 'undefined' && TOWN_OBJECTS_CACHE) || [];
+    var bb = 1.4 * 1.4;
+    for (var i2 = 0; i2 < list.length; i2++) {
+      var b = list[i2];
+      if (!b || !b.parent || !isBedCatalog(b.catalog)) { continue; }
+      var dx2 = b.x - x, dz2 = b.z - z;
+      var d22 = dx2 * dx2 + dz2 * dz2;
+      if (d22 <= bb) {
+        bb = d22;
+        best = { id: 'obj' + b.parent, placed: true, x: +b.x, z: +b.z, bedX: +b.x, bedZ: +b.z };
+      }
+    }
+  }
   return best;
+}
+function isBedCatalog(cid) {
+  var c = String(cid || '');
+  return c === 'bed_single' || c === 'bed_double' || c === 'bed_king';
 }
 function townHouseById(id) {
   for (var i = 0; i < TOWN_HOUSES.length; i++) {

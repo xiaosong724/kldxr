@@ -90,7 +90,11 @@ async def actor(token, chair_x, chair_z, chair_id, snap):
         r = await ws_wait(ws, lambda m: m['t'] in ('seated', 'seaterr'))
         snap['sit'] = r['t'] if r else None
         snap['sit_ready'] = True
-        await asyncio.sleep(6.0)
+        # ★ 模拟客户端坐下后仍然每帧上报位置（真实客户端就是这么干的）
+        for _i in range(60):
+            await ws.send(json.dumps({'t': 'move', 'd': {
+                'x': chair_x + 0.9, 'z': chair_z + 0.9, 'jy': 0}}))
+            await asyncio.sleep(0.15)
         await ws.send(json.dumps({'t': 'stand', 'd': {}}))
         await ws_wait(ws, lambda m: m['t'] == 'stood')
         await asyncio.sleep(0.5)
@@ -172,7 +176,7 @@ async def observer(token, snap):
                     break
                 await asyncio.sleep(0.2)
             await asyncio.sleep(1.0)
-            await asyncio.sleep(1.2)
+            await asyncio.sleep(1.0)
             dbg = await c.ev(
                 "return {keys:Object.keys(NET.others), target:%s,"
                 " me:(WSC&&WSC.role)?WSC.role.id:null};" % json.dumps(snap.get('uid')))

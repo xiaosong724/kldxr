@@ -201,6 +201,8 @@ function townSeatApply(d) {
   try { if (UI.seatNear) { UI.seatNear(null); } } catch (e1) { }
   try { if (UI.seatState) { UI.seatState(true); } } catch (e2) { }
   try { if (UI.seatedUpdate) { UI.seatedUpdate(s); } } catch (e3) { }
+  /* ★ 2026-10-22：记住坐姿，刷新后恢复 */
+  try { if (UI.savePose) { UI.savePose('seat', s.idx != null ? s.idx : ''); } } catch (e4) { }
 }
 function townSeatClear(d) {
   if (!MY_SEAT) { return; }
@@ -212,6 +214,7 @@ function townSeatClear(d) {
   }
   try { if (UI.seatState) { UI.seatState(false); } } catch (e3) { }
   try { if (UI.seatedUpdate) { UI.seatedUpdate(null); } } catch (e4) { }
+  try { if (UI.savePose) { UI.savePose('seat', ''); } } catch (e5) { }
 }
 var townNearWarehouse = (typeof townNearWarehouse !== 'undefined') ? townNearWarehouse : null;
 var townSeatNear = (typeof townSeatNear !== 'undefined') ? townSeatNear : null;
@@ -6082,13 +6085,31 @@ function wsApplyWorld(d) {
     updHP();
   }
 
-  if (d.me && typeof d.me.seat === 'number') {
-    if (d.me.seat >= 0) {
-      if (!MY_SEAT || String(MY_SEAT.idx) !== String(d.me.seat)) {
-        try { townSeatApply({ id: d.me.seat }); } catch (eMS) { }
+  if (d.me && d.me.seat != null) {
+    /* ★ 2026-10-22：服务端发的是字符串（'obj334' / '-1'），以前按 number 判断永远不生效
+       → 刷新页面后坐姿/睡姿丢掉。现在按字符串处理，并且能恢复。 */
+    var _mySeat = String(d.me.seat);
+    if (_mySeat !== '-1' && _mySeat !== '') {
+      if (!MY_SEAT || String(MY_SEAT.idx) !== _mySeat) {
+        try { townSeatApply({ id: _mySeat }); } catch (eMS) { }
       }
     } else if (MY_SEAT) {
       try { townSeatClear(null); } catch (eMT) { }
+    }
+  }
+  if (d.me && d.me.sleep != null) {
+    var _mySleep = String(d.me.sleep || '');
+    if (_mySleep && _mySleep !== '0') {
+      if (String(MY_SLEEP || '') !== _mySleep) {
+        try {
+          MY_SLEEP = _mySleep;
+          if (typeof d.me.syaw === 'number') { P.sleepYaw = +d.me.syaw; }
+          if (typeof UI !== 'undefined' && UI.sleepState) { UI.sleepState(true); }
+        } catch (eSl2) { }
+      }
+    } else if (MY_SLEEP) {
+      MY_SLEEP = '';
+      try { if (typeof UI !== 'undefined' && UI.sleepState) { UI.sleepState(false); } } catch (eSl3) { }
     }
   }
   if (d.me) {

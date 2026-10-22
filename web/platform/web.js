@@ -1155,16 +1155,17 @@ function bindInput() {
   document.addEventListener('touchstart', firstTouch, { passive: true });
   document.addEventListener('mousedown', firstTouch);
   function atkDown(e) { if (e) { e.preventDefault(); } if (UI_EDIT) { return; }
-  /* ★ 2026-10-22：附近有多个可交互对象 → 先弹窗选，不直接执行 */
-  if (typeof NEAR_CANDS !== 'undefined' && NEAR_CANDS.length > 1) { nearPickOpen(); return; }
+  /* ★ 2026-10-22：坐着 / 躺着时，按钮就是【起身 / 起床】—— 不能先弹交互菜单 */
   if (typeof MY_SLEEP !== 'undefined' && MY_SLEEP) { tryWake(); return; }
+  if (typeof MY_SEAT !== 'undefined' && MY_SEAT) {
+    if (typeof orderShopNear === 'function' && orderShopNear()) { orderOpen(); return; }
+    tryStand(); return;
+  }
+  /* 附近有多个可交互对象 → 先弹窗选，不直接执行 */
+  if (typeof NEAR_CANDS !== 'undefined' && NEAR_CANDS.length > 1) { nearPickOpen(); return; }
   if (typeof SLEEP_NEAR !== 'undefined' && SLEEP_NEAR) { trySleep(); return; }
   if (typeof FRIDGE_NEAR !== 'undefined' && FRIDGE_NEAR) { fridgeOpen(FRIDGE_NEAR.id); return; }
   if (typeof SHOP_NEAR !== 'undefined' && SHOP_NEAR) { shopOpen(); return; }
-  if (typeof MY_SEAT !== 'undefined' && MY_SEAT) {
-    if (orderShopNear()) { orderOpen(); return; }
-    tryStand(); return;
-  }
   if (typeof SEAT_NEAR !== 'undefined' && SEAT_NEAR) { trySit(); return; }
   if (typeof TP_NEAR !== 'undefined' && TP_NEAR) { tpOpen(); return; }
   if (typeof HOUSE_NEAR !== 'undefined' && HOUSE_NEAR) { houseOpen(); return; }
@@ -2254,23 +2255,22 @@ function mkOpts(rowId, items, key, cur) {
    ★ 所有 xxxPrompt 共用一份计时器；换成别的内容时重新计时 */
 var _PROMPT_TIMERS = {};
 var PROMPT_MS = 3000;
-function showPrompt(id, text) {
+function showPrompt(id, text, sticky) {
   var el = document.getElementById(id);
   if (!el) { return; }
+  if (_PROMPT_TIMERS[id]) { clearTimeout(_PROMPT_TIMERS[id]); _PROMPT_TIMERS[id] = null; }
   if (!text) {
     el.style.display = 'none';
-    if (_PROMPT_TIMERS[id]) { clearTimeout(_PROMPT_TIMERS[id]); _PROMPT_TIMERS[id] = null; }
     return;
   }
   el.textContent = text;
   el.style.display = 'block';
-  if (_PROMPT_TIMERS[id]) { clearTimeout(_PROMPT_TIMERS[id]); }
+  /* ★ 2026-10-22：交互提示是"状态"，要一直显示（以前 3 秒后自己消失，玩家得走开再靠近）
+     只有一次性的提示才用 3 秒自动消失。 */
+  if (sticky) { return; }
   _PROMPT_TIMERS[id] = setTimeout(function () {
     _PROMPT_TIMERS[id] = null;
-    try {
-      /* 如果这 3 秒里玩家还在原地、提示被重新显示过，就不要误关（以最后一次为准） */
-      el.style.display = 'none';
-    } catch (e) { }
+    try { el.style.display = 'none'; } catch (e) { }
   }, PROMPT_MS);
 }
 window.showPrompt = showPrompt;
@@ -2359,7 +2359,7 @@ UI.interactNear = function (list) {
     var c = NEAR_CANDS[0];
     /* 单项：只留它自己的那个提示（其它统一关掉），行为保持原样 */
     ids.forEach(function (id) { if (id !== c.prompt) { showPrompt(id, ''); } });
-    if (c.prompt) { showPrompt(c.prompt, c.text); }
+    if (c.prompt) { showPrompt(c.prompt, c.text, true); }
     if (atk) {
       atk.classList.remove('seat', 'shop', 'sleep', 'house', 'teleport', 'interact');
       if (c.cls) { atk.classList.add(c.cls); }
@@ -2372,7 +2372,7 @@ UI.interactNear = function (list) {
   /* 多个：统一一条提示，按钮显示"交互 N"，点击弹选择 */
   ids.forEach(function (id) { showPrompt(id, ''); });
   var names = NEAR_CANDS.map(function (x) { return x.title || NEAR_KIND_LABEL[x.kind] || '交互'; });
-  showPrompt('sitPrompt', '附近可交互：' + names.join(' · ') + '（点按钮选择）');
+  showPrompt('sitPrompt', '附近可交互：' + names.join(' · ') + '（点按钮选择）', true);
   if (atk) {
     atk.classList.remove('seat', 'shop', 'sleep', 'house', 'teleport');
     atk.classList.add('interact');
@@ -5852,6 +5852,34 @@ UI.setSafeMode = function (on) {
   try { document.body.classList.toggle('safe-mode', !!on); } catch (e) { }
 };
 
+/* ★ 2026-10-22：记住"我正坐在哪 / 睡在哪"，刷新页面后自动恢复 */
+/* 重连后恢复上次的坐/睡（服务端已经没这个状态了 → 重新发一次请求） */
+function tryRestorePose() {
+  try {
+    if (typeof WSC !== 'undefined' && WSC && WSC.ready === false) { return; }
+    if (typeof MY_SEAT !== 'undefined' && MY_SEAT) { return; }
+    if (typeof MY_SLEEP !== 'undefined' && MY_SLEEP) { return; }
+    var seat = (UI.getPose ? UI.getPose('seat') : '') || '';
+    var sleep = (UI.getPose ? UI.getPose('sleep') : '') || '';
+    if (sleep) {
+      try { wsSend('house_sleep', { id: sleep }); return; } catch (e1) { }
+    }
+    if (seat) {
+      try { wsSend('sit', { id: seat }); } catch (e2) { }
+    }
+  } catch (e) { }
+}
+
+UI.savePose = function (kind, val) {
+  try {
+    if (val) { localStorage.setItem('pose_' + kind, String(val)); }
+    else { localStorage.removeItem('pose_' + kind); }
+  } catch (e) { }
+};
+UI.getPose = function (kind) {
+  try { return localStorage.getItem('pose_' + kind) || ''; } catch (e) { return ''; }
+};
+
 UI.townCanvas = function (w, h) {
   var c = document.createElement('canvas');
   c.width = w || 256; c.height = h || 128;
@@ -6736,6 +6764,7 @@ function sleepApply(d) {
   if (!d) { return; }
   if (d.on) {
     MY_SLEEP = d.id || '';
+    try { if (UI.savePose) { UI.savePose('sleep', MY_SLEEP); } } catch (ePose) { }
     if (typeof d.x === 'number') { P.x = +d.x; P.z = +d.z; }
     /* ★ 2026-10-22：床的朝向（服务端给的），躺姿用它，不要用玩家自己的朝向 */
     if (typeof d.yaw === 'number') { P.sleepYaw = +d.yaw; P.yaw = +d.yaw; }
@@ -6745,6 +6774,7 @@ function sleepApply(d) {
     try { if (UI.sleepState) { UI.sleepState(true); } } catch (e3) { }
   } else {
     MY_SLEEP = '';
+    try { if (UI.savePose) { UI.savePose('sleep', ''); } } catch (ePose2) { }
     if (typeof d.x === 'number') { P.x = +d.x; P.z = +d.z; }
     try { if (UI.sleepState) { UI.sleepState(false); } } catch (e4) { }
   }
@@ -10742,6 +10772,13 @@ function wsOnMessage(raw) {
     try {
       setTimeout(function () { try { wsSend('town_objects', {}); } catch (eTo) { } }, 900);
     } catch (eTp) { }
+    /* ★ 2026-10-22：刷新页面后，把上次的坐姿/睡姿恢复回来 */
+    try {
+      /* 重试几次：刚连上时服务端可能还没把 me 状态算好 */
+      [700, 1500, 2600].forEach(function (ms) {
+        setTimeout(function () { tryRestorePose(); }, ms);
+      });
+    } catch (eTp2) { }
     return; }
   if (t === 'world') {
     window._lastWorldT = Date.now();
