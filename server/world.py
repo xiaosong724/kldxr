@@ -6918,40 +6918,120 @@ class World(object):
             if a['life'] <= 0:
                 self.arrows.pop(str(a['id']), None)
 
-    def _aoe_players(self, p, x, z, radius, dmg, push=None):
-        _total = 0   # ★ 2026-10-22：调用方会累加返回值
-        """范围伤害/控制也要作用到玩家身上（★ round406）
+    def _aoe_players(self, p, x, z, radius, dmg, push=None, cone=None, src=None,
+                     skip=None, is_skill=False):
+        """范围伤害/控制也要作用到玩家身上（★ round406 / round407）
 
         ★ push = 击退距离（米）✗ None = 只伤害不推 ✓
         ★ 玩家位置是客户端权威 ✗ 所以【推】只能发事件让客户端自己执行 ✓
+        ★ cone = (朝向, cos 下限) ✗ None = 圆形（旋击 ✓）
+                 给了就只打正前方锥形里的人（横扫那条直线 ✓ round407）
+                 ★ 为什么加参数而不是在横扫分支里另写一遍：
+                   玩家受伤/击退/判死/发 hurts 这些"最后一公里"必须只有一份 ✓
+                   （上一轮的教训：同一个形状写两遍，改一处漏一处 ✓）
+        ★ p 允许是 None（"落地砸地"这种没有具体施法者的伤害 ✓ round407）
+        ★ skip = 不打的那个 cid（★ round408：这次挥砍的【主目标】已经吃过 dv 了 ✓
+                 打怪那边就是 `o is m` 那句 ✓ 玩家这边靠这个 cid 排除 ✓
+                 不排除的话：长棍打中的那个人会吃"直击 + 横扫"两份 ✓）
+        ★ 打不打得动某个人，一律走 _pvp_ok（开关/队友/安全区/等级差 ✓）
         """
         r2 = radius * radius
+        _tot = 0
+        _sx = _sz = 0.0
+        _cmin = -1.0
+        if cone:
+            _cy, _cmin = cone
+            _sx, _sz = math.sin(_cy), math.cos(_cy)
+        # ★★ round574 修的真 bug（用户："技能攻击不到其他玩家"）★★
+        #   病根：调用方传的是 src='skill'（一个字符串）✗
+        #         而这里把它当【攻击者对象】喂给 _pvp_ok ✓
+        #         → _pvp_ok 里 a_.role 直接 AttributeError ✓
+        #         → 被 _skill_damage 外层的 except 吞掉 → 玩家一滴血都不掉 ✓
+        #   修：src 必须是"有 role 的玩家对象"才用 ✗ 否则回退到施法者 p ✓
+        _src = src if (src is not None and hasattr(src, 'role')) else p
+        _by = getattr(p, 'name', None) or '落地'
         for q in self.players.values():
-            if q is p or int(q.hp or 0) <= 0:
+            if p is not None and q is p:
                 continue
-            if (q.x - x) ** 2 + (q.z - z) ** 2 > r2:
+            if skip is not None and q.cid == skip:
+                continue
+            if int(q.hp or 0) <= 0:
+                continue
+            _dx = q.x - x
+            _dz = q.z - z
+            _ln2 = _dx * _dx + _dz * _dz
+            if _ln2 > r2:
+                continue
+            if cone:
+                _ln = math.sqrt(_ln2)
+                if _ln < 0.01:
+                    continue              # ★ 正好站在脚下不算"正前方"✓
+                if (_dx * _sx + _dz * _sz) / _ln < _cmin:
+                    continue
+            # ★ PvP 门禁：和 _pvp_hit 同一套规则（不然关了 PvP 也能被斧头溅射打死 ✓）
+            if _src is not None:
+                if not self._pvp_ok(_src, q)[0]:
+                    continue
+            elif not self._pvp_on(q):
                 continue
             d = max(1, int(dmg))
+            # ★ round580（C6 技能韧性）：只减【技能】伤害 ✓
+            if is_skill:
+                d = max(1, int(round(d * (1.0 - self._sk_val(q, 'skillten')))))
+            d = self._on_player_hurt(
+                q, d, _src if hasattr(_src, 'cid') else None, is_skill)
+            _was_q = int(q.hp or 0) > 0
             q.hp = max(0, int(q.hp) - d)
+            _tot += d
+            # ★ round586：技能/AOE 打玩家也吃全能吸血
+            self._lifesteal(p, d, q.x, q.z, show=True)
+            if _was_q and int(q.hp or 0) <= 0:
+                self._tank_reset(q)      # ★ AOE 击杀也要清空坦克层数
             self._add_pend(q.cid, 'hurts', {'dmg': d, 'x': round(x, 2),
-                                            'z': round(z, 2), 'by': p.name, 'pvp': 1})
-            if push:
-                # ★ 沿"攻击者 → 被打的人"方向推 ✓
-                dx = q.x - p.x
-                dz = q.z - p.z
-                ln = (dx * dx + dz * dz) ** 0.5
-                if ln < 0.01:
-                    dx, dz, ln = math.sin(p.yaw), math.cos(p.yaw), 1.0
-                try:
-                    self._send_cid(q.cid, P.pack('fx', kind='kb',
-                                                 dx=round(dx / ln * push, 2),
-                                                 dz=round(dz / ln * push, 2)))
-                except Exception:
-                    pass
+                                            'z': round(z, 2), 'by': _by, 'pvp': 1,
+                                            'sk': 1 if is_skill else 0})
+            if push and p is not None:
+                self._kb_player(p, q, push)
             if int(q.hp) <= 0:
                 q.hp = 0
-                self._send_cid(q.cid, P.pack('dead', by=p.name))
-        return _total
+                self._send_cid(q.cid, P.pack('dead', by=_by))
+                # ★ round574：AOE/技能击杀也要算 PvP 击杀（之前只发 dead ✓ 不结算）
+                if _src is not None:
+                    try:
+                        self._pvp_killed(_src, q)
+                    except Exception as e:
+                        print('[pvp] aoe 击杀结算失败：%r' % (e,))
+
+        # ★ round575：AOE / 技能也能打到【分身】（它现在有血 ✓）
+        for _c in list(self.clones.values()):
+            if int(_c.get('hp') or 0) <= 0:
+                continue
+            _co = self.players.get(_c['owner'])
+            if _co is None:
+                continue
+            if abs(_c['x']) <= mqmod.SAFE_HALF and abs(_c['z']) <= mqmod.SAFE_HALF:
+                continue
+            if _src is not None:
+                if not self._pvp_ok(_src, _co)[0]:
+                    continue
+            elif not self._pvp_on(_co):
+                continue
+            _dx = _c['x'] - x
+            _dz = _c['z'] - z
+            _ln2 = _dx * _dx + _dz * _dz
+            if _ln2 > r2:
+                continue
+            if cone:
+                _ln = math.sqrt(_ln2)
+                if _ln < 0.01:
+                    continue
+                if (_dx * _sx + _dz * _sz) / _ln < _cmin:
+                    continue
+            _cdmg = max(1, int(dmg))
+            _tot += _cdmg
+            self._clone_damage(_c, _cdmg,
+                               _src if hasattr(_src, 'cid') else None, False)
+        return _tot
 
     def _report_hit(self, p, mid, dmg, crit, x, z, extra=None):
         """打中反馈：给我 mhits + 广播给周围的人（★ round402）
@@ -10310,7 +10390,13 @@ class World(object):
         # ★ 第 67 轮：掉到东西时有 25% 概率是【防具】✓
         #   （不然防具永远拿不到 ✗ 只能靠管理页发 ✗）
         if it and random.random() < 0.25:
-            _ta = max(0, min(11, int(it.get('tier') or 0)))
+            # ★★★ round463（用户："防具不会掉 3 阶以上的"）★★★
+            #   病根：这里拿的是【材料】的品阶 ✗
+            #     而材料表 drops.MATERIALS 里最高只有 2 阶（疫苗 / 铜线卷）✗
+            #     → 防具品阶永远 ≤ 2 ✗ 用户说「3 阶以上不掉」一字不差 ✓
+            #   修：和武器一样用 weapons.roll_tier（幂律曲线，按怪等级）✓
+            import weapons as _weap
+            _ta = max(0, min(11, int(_weap.roll_tier(m.lv, klv))))
             # ★★★ 第 104 轮修的真 bug ★★★
             #   原来这里是包了一层：{'name':…, 'kind':'armor', 'slot':'armor',
             #                        'armor': make_armor(...)}
@@ -10319,10 +10405,46 @@ class World(object):
             #       （名字对、图标是防具、但没有 base → 属性算不出来 ✓
             #         20 件这样的假防具已经在库里了 ✓ 用户报的"材料图标像防具"就是它 ✓）
             #   修：直接存【防具本体】✓ 它的字段本来就是齐的（name/tier/base/slot…）✓
-            it = armormod.make_armor(_ta, max(1, klv // 4 + 1))
+            # ★★ round472：装备等级 = 击杀者等级 ✗ 不再 ÷4 ✓（用户："和人物等级差不多"）
+            it = armormod.make_armor(_ta, max(1, int(klv)))
         self._drop_one(p, m, it)
         eq = drops.roll_equip(m.lv, klv)          # ★ 装备类（独立 roll）
         self._drop_one(p, m, eq)
+        # ★ round600：精英/Boss 额外掉落（最后一刀归属不变）
+        try:
+            _rk = int(getattr(m, 'rank', 0) or 0)
+            for _xi in range(2 if _rk >= 2 else (1 if _rk == 1 else 0)):
+                self._drop_one(p, m, drops.roll_equip(m.lv + _xi, klv))
+        except Exception:
+            pass
+        # ★★★ round485：皮肤掉落（用户定 1%）★★★
+        #   ★ 掉落"即解锁" ✗ 不发背包物品（少一套背包/图标逻辑 ✓）
+        #   ★ 抽到已解锁的 → 折 10000 金币（用户之前定的补偿 ✓）
+        try:
+            if random.random() < skinsmod.DROP_RATE:
+                _k = skinsmod.drop_key(random)
+                # ★ round487（用户："打到背包然后使用，并且可以出售"）
+                #   → 掉的是【皮肤卡】物品 ✗ 不再当场解锁 ✓
+                _it = {'name': '皮肤·' + skinsmod.NAME.get(_k, _k), 'tier': 0,
+                       'kind': 'skin', 'key': _k}
+                self._drop_one(p, m, _it)
+        except Exception as _se:
+            print('[skin] drop failed: %r' % (_se,))
+        # ★ round596：技能书掉落 1%（用户定）
+        #   ★ 主动/被动释放书 1 品；被动加成书随机品阶（1~5，越高越难）
+        try:
+            if random.random() < 0.01:
+                import skills as _skm
+                _k2 = random.choice(_skm.KEYS)
+                _tr = 1
+                if _skm.tier_max(_k2) > 1:
+                    _tr = random.choices([1, 2, 3, 4, 5], weights=[45, 27, 15, 9, 4])[0]
+                _it2 = {'name': '技能书·' + _skm.NAME.get(_k2, _k2) +
+                        ('' if _skm.tier_max(_k2) <= 1 else '（%d 品）' % _tr),
+                        'tier': _tr, 'kind': 'skillbook', 'key': _k2}
+                self._drop_one(p, m, _it2)
+        except Exception as _ske:
+            print('[skill] drop failed: %r' % (_ske,))
 
     def _drop_one(self, p, m, it):
         """把一件掉落物放到地上（it 为 None 就什么都不做 ✓）"""
