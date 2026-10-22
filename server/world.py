@@ -3023,7 +3023,7 @@ class World(object):
 
     def _handle_intent(self, p, t, d):
         _TP = ('house_info', 'house_buy', 'house_leave', 'house_sleep', 'house_wake',
-               'run',
+               'run', 'skinask',
                'warehouse_open', 'warehouse_move', 'warehouse_move_many',
                'shop_open', 'shop_buy', 'usefood', 'fridge_open', 'order_open',
                'order_buy', 'cup_take', 'work_start', 'work_stop', 'jobstep', 'jobdone',
@@ -6876,6 +6876,47 @@ class World(object):
 
     def _intent_house_wake(self, p, d=None):
         self._house_wake(p)
+
+    def _intent_skinask(self, p, d):
+        """皮肤页数据（★ 2026-10-22：这个 intent 协议里有、服务端一直没实现 →
+        皮肤页永远是空的）。返回 40 个皮肤的拥有/使用状态。"""
+        try:
+            import skins as skinsmod
+        except Exception as e:
+            print('[skin] import failed: %r' % (e,))
+            self._send_cid(p.cid, P.pack('skinpage', items=[], start=20000,
+                                         step=5000, gold=0))
+            return
+        rid = int(getattr(p, 'role_id', 0) or 0)
+        owned = set()
+        bids = {}
+        try:
+            with dbmod.db(self.cfg) as c:
+                for r in c.execute('SELECT key FROM skin_unlocks WHERE role_id=?', (rid,)):
+                    owned.add(str(r[0]))
+                for r in c.execute(
+                        'SELECT key,total FROM skin_bids WHERE role_id=?', (rid,)):
+                    bids[str(r[0])] = int(r[1] or 0)
+        except Exception as e:
+            print('[skin] read unlocks failed: %r' % (e,))
+        cur = str((p.role or {}).get('skin') or '')
+        items = []
+        for k in skinsmod.KEYS:
+            items.append({
+                'k': k,
+                'n': skinsmod.NAME.get(k, k),
+                'g': skinsmod.GENDER.get(k, ''),
+                'own': 1 if k in owned else 0,
+                # ★ 简化：拥有就能用（不搞"前三/被独占"那套竞价限制）
+                'can': 1 if k in owned else 0,
+                'use': 1 if k == cur else 0,
+                'mode': '',
+                'solo': 0,
+                'bid': int(bids.get(k, 0)),
+            })
+        self._send_cid(p.cid, P.pack(
+            'skinpage', items=items, start=20000, step=5000,
+            gold=int(getattr(p, 'gold', 0) or 0)))
 
     def _intent_shop_open(self, p, d):
         self._shop_open(p, d)
