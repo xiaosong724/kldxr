@@ -452,7 +452,17 @@
     var grp = ensureGroup();
     if (!grp) { return; }
     if (P.ghost) { grp.remove(P.ghost); P.ghost = null; }
-    var spec = TOWN_MODELS[item.model_id || item.id];
+    /* ★ 2026-10-22（用户："长椅、自行车放置时预览用的不是对应模型"）：
+       prop_* 不在 TOWN_MODELS 也不在 TOWN_FURNITURE_SPECS 里，
+       以前这里拿不到 spec → 落到"占位建筑"（一座 1×1 的小房子，18 个零件）。
+       现在先查 PROP_SPECS。 */
+    var spec = null;
+    try {
+      if (typeof PROP_SPECS !== 'undefined' && PROP_SPECS[item.id]) {
+        spec = PROP_SPECS[item.id];
+      }
+    } catch (eSp) { }
+    if (!spec) { spec = TOWN_MODELS[item.model_id || item.id]; }
     if (!spec && typeof tmFurnitureModelFor === 'function') {
       spec = tmFurnitureModelFor(item.id);
     }
