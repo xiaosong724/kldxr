@@ -34,6 +34,16 @@
     return typeof W().scene !== 'undefined' ? W().scene : null;
   }
 
+  function catOf(cid) {
+    var list = W().MY_TOWN_CATALOG || [];
+    for (var i = 0; i < list.length; i++) { if (list[i].id === cid) { return list[i]; } }
+    return null;
+  }
+  function isBuildingCat(cid) {
+    var c = catOf(cid);
+    return !!(c && c.category === 'building');
+  }
+
   function catalogItems() {
     var cat = W().MY_TOWN_CATALOG || [];
     return cat.filter(function (c) {
@@ -124,7 +134,7 @@
         var r = +d.rot || 0;
         var ca = Math.abs(Math.cos(r)), sa = Math.abs(Math.sin(r));
         var ex = hw * ca + hd * sa, ez = hw * sa + hd * ca;
-        out.push({ x0: +d.x - ex, x1: +d.x + ex,
+        out.push({ id: d.id, x0: +d.x - ex, x1: +d.x + ex,
                    z0: +d.z - ez, z1: +d.z + ez, y: 0.28 });
       }
       townSetObjectFloors(out);
@@ -157,11 +167,77 @@
     mesh.position.set(+o.x + _TOFF.x, 0, +o.z + _TOFF.z);
     mesh.rotation.y = +o.rot || 0;
     mesh.userData.objId = o.id;          /* 2026-10-22：编辑模式拾取用 */
+    if (isBuildingCat(o.catalog)) {
+      /* ★ 2026-10-22：进屋要单独淡化这栋建筑 → 材质必须每栋一份，不能共用 */
+      mesh.userData.isBuilding = true;
+      mesh.traverse(function (m) {
+        if (m.isMesh && m.material) {
+          m.material = m.material.clone();
+          /* 记住原始透明度（玻璃本来就是半透明的，恢复时不能一律设 1） */
+          m.material.userData.baseOpacity =
+            (typeof m.material.opacity === 'number') ? m.material.opacity : 1;
+          m.material.userData.baseTransparent = !!m.material.transparent;
+          m.material.userData.baseDepthWrite = !!m.material.depthWrite;
+        }
+      });
+    }
     grp.add(mesh);
     P.objs[o.id] = { mesh: mesh, data: o };
     syncSolids();
     syncFloors();
   }
+
+  /* ★ 2026-10-22：玩家进屋 → 这栋建筑的墙和屋顶变半透明（看清屋内）；
+     走出去自动恢复。每 150ms 检查一次，开销很小。 */
+  var INTERIOR = { id: null };
+  function interiorTick() {
+    try {
+      var gp = W().P || null;          /* place.js 自己的 P 是同名的私有对象 ✗ 必须走 window.P */
+      var px = gp ? +gp.x : 0, pz = gp ? +gp.z : 0;
+      var fl = (W().TOWN_FLOORS || []);
+      var inside = null;
+      for (var i = 0; i < fl.length; i++) {
+        var f = fl[i];
+        if (px >= f.x0 && px <= f.x1 && pz >= f.z0 && pz <= f.z1) { inside = f.id; break; }
+      }
+      if (inside === INTERIOR.id) { return; }
+      INTERIOR.id = inside;
+      for (var k in P.objs) {
+        var e = P.objs[k];
+        if (!e || !e.mesh || !e.mesh.userData) { continue; }
+        /* 目录可能比对象晚到 → 第一次遇到时补上「建筑」标记和独立材质 */
+        if (!e.mesh.userData.isBuilding) {
+          if (!isBuildingCat(e.data && e.data.catalog)) { continue; }
+          e.mesh.userData.isBuilding = true;
+          e.mesh.traverse(function (mm) {
+            if (mm.isMesh && mm.material) {
+              mm.material = mm.material.clone();
+              mm.material.userData.baseOpacity =
+                (typeof mm.material.opacity === 'number') ? mm.material.opacity : 1;
+              mm.material.userData.baseTransparent = !!mm.material.transparent;
+              mm.material.userData.baseDepthWrite = !!mm.material.depthWrite;
+            }
+          });
+        }
+        var fade = (inside != null && String(e.mesh.userData.objId) === String(inside));
+        e.mesh.traverse(function (m) {
+          if (!m.isMesh || !m.material) { return; }
+          var u = m.material.userData || {};
+          if (fade) {
+            m.material.transparent = true;
+            m.material.opacity = Math.min(0.35, (u.baseOpacity == null ? 1 : u.baseOpacity));
+            m.material.depthWrite = false;
+          } else {
+            m.material.transparent = !!u.baseTransparent;
+            m.material.opacity = (u.baseOpacity == null) ? 1 : u.baseOpacity;
+            m.material.depthWrite = (u.baseDepthWrite == null) ? true : u.baseDepthWrite;
+          }
+          m.material.needsUpdate = true;
+        });
+      }
+    } catch (e2) { }
+  }
+  window.__townInteriorTick = interiorTick;
 
   function clearAll() {
     var grp = ensureGroup();
@@ -217,8 +293,8 @@
     /* ★ 立即放在玩家面前（不用等鼠标动就能看到预览） */
     var gy = 0;
     try { gy = (typeof P !== 'undefined' && P.y) ? 0 : 0; } catch (e) { }
-    updateGhost((typeof P.x === 'number' ? P.x : 0),
-                (typeof P.z === 'number' ? P.z + 2.2 : 0));
+    var _pp = W().P || null;
+    updateGhost(_pp ? +_pp.x : 0, _pp ? +_pp.z + 2.2 : 0);
   }
 
   function stopPlace() {
@@ -605,6 +681,18 @@
     },
     /* 目录后到（towns 包）时重算一遍碰撞和地板 */
     refreshAux: function () { syncSolids(); syncFloors(); },
+    /* 自测用：某栋建筑当前的透明度 / 是否半透明 */
+    buildingFade: function (id) {
+      var e = P.objs[id];
+      if (!e || !e.mesh) { return null; }
+      var out = null;
+      e.mesh.traverse(function (m) {
+        if (out == null && m.isMesh && m.material) {
+          out = { opacity: m.material.opacity, transparent: !!m.material.transparent };
+        }
+      });
+      return out;
+    },
     startEdit: editEnter,
     selectById: function (id) { editSelect(id); return EDIT.id; },
     objPos: function (id) {
@@ -676,6 +764,7 @@
 
   function boot() {
     bindInput();
+    if (typeof setInterval === 'function') { setInterval(interiorTick, 150); }
     /* ★ 2026-10-22：不再单独放一个「放置」按钮 ✓
        放置 / 编辑 / 权限都并进「小镇」面板的导航里了 */
   }

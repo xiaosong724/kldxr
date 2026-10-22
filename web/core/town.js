@@ -69,7 +69,9 @@ var TOWN_STATS = { meshes: 0, instanced: 0, seats: 0, solids: 0 };
   if (!TOWN_DATA) { return; }
   /* ★ 2026-10-22：住宅/道具/椅子已经从主城移除（用户要求：不能移动的全删），
      它们的静态碰撞也一起丢掉，否则会留下看不见的墙。 */
-  var _drop = { house: 1, prop: 1, seat: 1 };
+  /* ★ 2026-10-22：旧建筑的墙（building 115 个）也不再渲染了 →
+     它们的碰撞必须一起丢，否则满地图"看不见的墙" */
+  var _drop = { house: 1, prop: 1, seat: 1, building: 1 };
   for (var i = 0; i < TOWN_DATA.solids.length; i++) {
     var s = TOWN_DATA.solids[i];
     if (_drop[s[4]]) { continue; }

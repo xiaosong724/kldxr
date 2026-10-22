@@ -122,7 +122,8 @@ async def main_async(token):
             assert st['dataSolids'] == 374, 'town_data not regenerated: %r' % (st['dataSolids'],)
             static_n = st['solids'] - st['objSolids']
             print('  static solids:', static_n)
-            assert static_n < 200, 'static solids not filtered: %r' % (static_n,)
+            # 剩下的应该是：8 城墙 + 喷泉 + 仓库柜台 + 4 花坛 + 2 信息亭 = 16，全部有可见模型
+            assert static_n <= 16, 'static solids still too many: %r' % (static_n,)
             assert st['objSolids'] > 100, 'placed-object solids missing: %r' % (st['objSolids'],)
 
             # 住宅中心点不应该被任何 solid 覆盖（没有隐形墙）
