@@ -391,11 +391,14 @@ def near_warehouse(x, z):
     return dx * dx + dz * dz <= WAREHOUSE_R * WAREHOUSE_R
 
 
-def _box(x0, z0, x1, z1):
-    return ((x0 + x1) / 2.0, (z0 + z1) / 2.0, abs(x1 - x0) / 2.0, abs(z1 - z0) / 2.0)
+def _box(x0, z0, x1, z1, kind='misc'):
+    # ★ 2026-10-22：第 5 位是来源（wall/building/house/prop/seat/misc），
+    #   客户端按它决定哪些静态碰撞要跟着"静态渲染开关"一起关掉
+    return ((x0 + x1) / 2.0, (z0 + z1) / 2.0, abs(x1 - x0) / 2.0,
+            abs(z1 - z0) / 2.0, kind)
 
 
-def _wall_boxes(b):
+def _wall_boxes(b, kind='building'):
     x0, x1, z0, z1 = b['x0'], b['x1'], b['z0'], b['z1']
     side, at = b['door'], b['door_at']
     gap = 1.15
@@ -404,23 +407,23 @@ def _wall_boxes(b):
     for z in (z0, z1):
         if side in ('north', 'south') and ((z == z0 and side == 'north') or (z == z1 and side == 'south')):
             if at - gap > x0:
-                out.append(_box(x0, z - t, at - gap, z + t))
+                out.append(_box(x0, z - t, at - gap, z + t, kind))
             if at + gap < x1:
-                out.append(_box(at + gap, z - t, x1, z + t))
+                out.append(_box(at + gap, z - t, x1, z + t, kind))
         else:
-            out.append(_box(x0, z - t, x1, z + t))
+            out.append(_box(x0, z - t, x1, z + t, kind))
     for x in (x0, x1):
         if side in ('east', 'west') and ((x == x0 and side == 'west') or (x == x1 and side == 'east')):
             if at - gap > z0:
-                out.append(_box(x - t, z0, x + t, at - gap))
+                out.append(_box(x - t, z0, x + t, at - gap, kind))
             if at + gap < z1:
-                out.append(_box(x - t, at + gap, x + t, z1))
+                out.append(_box(x - t, at + gap, x + t, z1, kind))
         else:
-            out.append(_box(x - t, z0, x + t, z1))
+            out.append(_box(x - t, z0, x + t, z1, kind))
     return out
 
 
-def _prop_box(p):
+def _prop_box(p, kind='prop'):
     import math
     k = p['k']
     w, d = PROP_FOOT.get(k, (0.6, 0.6))
@@ -431,7 +434,7 @@ def _prop_box(p):
     ca, sa = abs(math.cos(ry)), abs(math.sin(ry))
     hw = (ca * w + sa * d) / 2.0
     hd = (sa * w + ca * d) / 2.0
-    return (float(p['x']), float(p['z']), hw, hd)
+    return (float(p['x']), float(p['z']), hw, hd, kind)
 
 
 SEAT_FOOT = {'chair': (0.52, 0.52), 'stool': (0.44, 0.44),
@@ -561,14 +564,16 @@ def solid_boxes():
     G2 = GATE_HALF
     # 外围墙（四门留 7 米）
     for z in (-E, E):
-        out.append(_box(-E, z - t / 2, -G2, z + t / 2))
-        out.append(_box(G2, z - t / 2, E, z + t / 2))
+        out.append(_box(-E, z - t / 2, -G2, z + t / 2, 'wall'))
+        out.append(_box(G2, z - t / 2, E, z + t / 2, 'wall'))
     for x in (-E, E):
-        out.append(_box(x - t / 2, -E, x + t / 2, -G2))
-        out.append(_box(x - t / 2, G2, x + t / 2, E))
+        out.append(_box(x - t / 2, -E, x + t / 2, -G2, 'wall'))
+        out.append(_box(x - t / 2, G2, x + t / 2, E, 'wall'))
     # 建筑墙体（含门洞）
-    for b in BUILDINGS + HOUSES:
-        out.extend(_wall_boxes(b))
+    for b in BUILDINGS:
+        out.extend(_wall_boxes(b, 'building'))
+    for h in HOUSES:
+        out.extend(_wall_boxes(h, 'house'))
     # 道具
     for p in PROPS:
         if p['k'] in NO_SOLID:
@@ -578,9 +583,9 @@ def solid_boxes():
     for s in seat_list():
         w, d = SEAT_FOOT.get(s['k'], (0.52, 0.52))
         hw, hd = w / 2.0, d / 2.0
-        out.append((float(s['x']), float(s['z']), hw, hd))
+        out.append((float(s['x']), float(s['z']), hw, hd, 'seat'))
     # 喷泉 + 仓库柜台
-    out.append((0.0, 0.0, 1.95, 1.95))
+    out.append((0.0, 0.0, 1.95, 1.95, 'misc'))
     _counter = _box(WAREHOUSE_COUNTER[0] - 0.95, WAREHOUSE_COUNTER[1] - 0.38,
                     WAREHOUSE_COUNTER[0] + 0.95, WAREHOUSE_COUNTER[1] + 0.38)
     out.append(_counter)

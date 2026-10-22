@@ -25,6 +25,11 @@ var TOWN_STATIC_ON = (function () {
   try { return ((location && location.search) || '').indexOf('static=1') >= 0; }
   catch (e) { return false; }
 })();
+/* ★ 2026-10-22：住宅/道具已从主城移除；?keepstatic=1 可回滚 */
+var TOWN_KEEP_STATIC = (function () {
+  try { return ((location && location.search) || '').indexOf('keepstatic=1') >= 0; }
+  catch (e) { return false; }
+})();
 var UI = {
   /* ---- 画布与窗口 ---- */
   mainCanvas: function () { return document.getElementById('cv'); },

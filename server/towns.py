@@ -345,6 +345,27 @@ DEAD_CATALOG_IDS = (
 )
 
 
+def shrink_boxes(cj, k=0.85):
+    """家具碰撞统一缩小（2026-10-22：用户反馈"房子里容易卡住"）。
+
+    ★ 只缩 x/z，不缩 y；k=0.85 表示每边各内缩 7.5%。
+    """
+    try:
+        boxes = json.loads(cj) if isinstance(cj, str) else (cj or [])
+    except Exception:
+        return cj
+    out = []
+    for b in boxes:
+        if not (isinstance(b, (list, tuple)) and len(b) == 6):
+            continue
+        cx = (b[0] + b[3]) / 2.0
+        cz = (b[2] + b[5]) / 2.0
+        hw = (b[3] - b[0]) / 2.0 * k
+        hd = (b[5] - b[2]) / 2.0 * k
+        out.append([cx - hw, b[1], cz - hd, cx + hw, b[4], cz + hd])
+    return json.dumps(out, ensure_ascii=False)
+
+
 def wall_boxes(w, d, h, door_w=1.7, t=0.26):
     """建筑碰撞：四面墙 + 南墙留门洞（所有新模型的门都朝 +Z）。
 
@@ -376,6 +397,8 @@ def seed_catalog(cfg):
         # real furniture pieces (v4.1)
         for (cid, name, cat, w, d, h, price, fn, fj, cj,
              mid, pmode, movable) in FURNITURE_SEED:
+            # ★ 家具/装饰碰撞统一缩到 85%（室内更好走）
+            cj = shrink_boxes(cj, 0.85)
             c.execute('INSERT OR IGNORE INTO town_catalog'
                       '(id,name,category,size_w,size_d,height,price,function_type,'
                       'function_json,collision_json,enabled,sort,updated_at,'
@@ -395,6 +418,12 @@ def seed_catalog(cfg):
                       (cid, name, cat, w, d, h, int(price), fn, fj, cj,
                        int(price // 1000000), now, mid, 'v1',
                        json.dumps(layout, ensure_ascii=False), 'grid', 0))
+        # ★ 家具碰撞缩放（老库也要生效）
+        for (cid, name, cat, w, d, h, price, fn, fj, cj,
+             mid, pmode, movable) in FURNITURE_SEED:
+            shr = shrink_boxes(cj, 0.85)
+            c.execute('UPDATE town_catalog SET collision_json=? WHERE id=? AND collision_json<>?',
+                      (shr, cid, shr))
         # ★ C3：清掉旧的通用目录 / legacy_*（没有物件引用它们）
         c.execute("DELETE FROM town_catalog WHERE id LIKE 'legacy\\_%' ESCAPE '\\'")
         qmarks = ','.join('?' * len(DEAD_CATALOG_IDS))

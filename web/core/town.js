@@ -53,8 +53,12 @@ var TOWN_TELEPORTS = TOWN_DATA ? (TOWN_DATA.teleports || []) : [];
 var TOWN_STATS = { meshes: 0, instanced: 0, seats: 0, solids: 0 };
 (function () {
   if (!TOWN_DATA) { return; }
+  /* ★ 2026-10-22：住宅/道具/椅子已经从主城移除（用户要求：不能移动的全删），
+     它们的静态碰撞也一起丢掉，否则会留下看不见的墙。 */
+  var _drop = { house: 1, prop: 1, seat: 1 };
   for (var i = 0; i < TOWN_DATA.solids.length; i++) {
     var s = TOWN_DATA.solids[i];
+    if (_drop[s[4]]) { continue; }
     TOWN_SOLIDS.push({ x: s[0], z: s[1], hw: s[2], hd: s[3] });
   }
 })();
@@ -3326,11 +3330,16 @@ function buildTown() {
       townBuilding(g, TOWN_BUILDINGS[i]);
     }
   }
-  for (var hi = 0; hi < TOWN_HOUSES.length; hi++) {
-    townBuilding(g, TOWN_HOUSES[hi]);
-  }
-  for (var p = 0; p < (TOWN_DATA ? TOWN_DATA.props.length : 0); p++) {
-    townProp(g, TOWN_DATA.props[p]);
+  /* ★ 2026-10-22：主城里"不能移动"的住宅和道具已全部移除；
+     回滚：URL 加 ?keepstatic=1 */
+  var _keepStatic = (typeof TOWN_KEEP_STATIC !== 'undefined') && TOWN_KEEP_STATIC;
+  if (_keepStatic) {
+    for (var hi = 0; hi < TOWN_HOUSES.length; hi++) {
+      townBuilding(g, TOWN_HOUSES[hi]);
+    }
+    for (var p = 0; p < (TOWN_DATA ? TOWN_DATA.props.length : 0); p++) {
+      townProp(g, TOWN_DATA.props[p]);
+    }
   }
   if (_staticOn) {
     TOWN_SEATS.forEach(function (s) { townSeat(g, s); });
