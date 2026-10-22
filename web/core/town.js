@@ -2262,20 +2262,39 @@ function townBlockGround(g) {
   for (var kind in buckets) {
     var list = buckets[kind];
     if (!list.length) { continue; }
-    var geo = townGroundGeo(kind);
-    var im = new THREE.InstancedMesh(geo, townGroundMat(), list.length);
+    /* ★ C4（2026-10-22）：地面原来用 InstancedMesh 摆【整块 0.62m 立方体】，
+       一块 12 个三角 → 242×234m 约 14.7 万块 ≈ 176 万三角，是全场最大的三角形来源。
+       但地砖是平铺的：侧面永远被邻居/地形挡住，只有顶面看得见。
+       → 改成"只保留顶面"的合并几何：每块 2 个三角，三角数直接降到 1/6，
+         颜色/明暗和原来完全一致（逐块随机明暗照旧），draw call 还是每类 1 次。 */
+    var V = [], C = [], NN = [], I = [];
+    var CELL = _TOWN_TILE_CELL;
+    var y = -0.309 + 0.31;                 /* 原来立方体的顶面高度 */
+    var bc = new THREE.Color((_TOWN_GROUND_COLORS[kind] || _TOWN_GROUND_COLORS.grass).top);
     for (var n = 0; n < list.length; n++) {
-      pos.set(list[n].x, -0.309, list[n].z);
-      mtx.compose(pos, q, scl);
-      im.setMatrixAt(n, mtx);
+      var x = list[n].x, z = list[n].z;
+      var b = V.length / 3;
+      V.push(x - CELL / 2, y, z - CELL / 2,
+             x + CELL / 2, y, z - CELL / 2,
+             x + CELL / 2, y, z + CELL / 2,
+             x - CELL / 2, y, z + CELL / 2);
+      for (var kk = 0; kk < 4; kk++) { NN.push(0, 1, 0); }
       var shade = 0.93 + ((n * 37) % 11) * 0.012;
-      ic.setRGB(shade, shade, shade);
-      im.setColorAt(n, ic);
+      for (var kc = 0; kc < 4; kc++) {
+        C.push(bc.r * shade, bc.g * shade, bc.b * shade);
+      }
+      I.push(b, b + 3, b + 2, b, b + 2, b + 1);
     }
-    im.instanceMatrix.needsUpdate = true;
-    if (im.instanceColor) { im.instanceColor.needsUpdate = true; }
-    im.frustumCulled = false;
-    g.add(im);
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(V, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(NN, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+    geo.setIndex(I);
+    var mesh = new THREE.Mesh(geo, townGroundMat());
+    mesh.frustumCulled = false;
+    /* ★ 别让 townBatchStatic 把这块合走：合批只认材质颜色 ✗ 会把逐格明暗/材质色全洗成白 */
+    mesh.userData.noBatch = true;
+    g.add(mesh);
   }
 
   /* 车道线：直接替换成白色方块，不是覆盖层 */
