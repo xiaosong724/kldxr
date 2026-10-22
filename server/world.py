@@ -93,7 +93,7 @@ TELEPORT_CAST = 6.0            # 传送回安全区的读条秒数              
 FLY_H = 2.6
 FLY_LAND_R = 3.2
 MKT_EXPIRED_KEEP = 14
-TICKER_MAX_CHARS = 22
+TICKER_MAX_CHARS = 48
 PARTY_SHARE_DIST = 9999999.0   # round 241: user wants NO distance limit for party exp
 PARTY_INVITE_DIST = 9999999.0   # round259: user wants NO party distance limit at all (was 20)
 PARTY_INVITE_TTL = 60.0       # ★ 第 82 轮用户改：10 秒 → 1 分钟 ✓
@@ -11353,12 +11353,16 @@ class World(object):
                 c.push_text(text)
 
     def _ticker(self, text, kind='sys', tag=''):
-        """第 247 轮（用户要求）：滚动通知（弹幕）
+        """第 247 轮：滚动通知（弹幕）
 
-        · notice = 只发给一个人 ✗ 屏幕中间弹一下（"你已经在安全区了"这类）
-        · ticker = 广播给所有人 ✗ 屏幕上方【向左滚动】（谁升级了 / 谁杀了谁）
-        文案限长 22 字：滚动时长 = (文字宽 + 屏宽) ÷ 速度 ✗ 太长会滚十几秒 ✗ 后面全堵住
+        · notice = 只发给一个人 ✗ 屏幕中间弹一下
+        · ticker = 广播给所有人 ✗ 屏幕上方【向左滚动】
         同类 1 秒内合并：打团战 3 秒杀 5 个 ✗ 不然弹幕滚一分钟
+
+        ★★★ round410（用户："滚动文字信息不完整，只能看到前面的部分"）★★★
+          病根：原来【卡死在 22 字】→ 超了就砍掉加"…"
+          ★ 现在上限 TICKER_MAX_CHARS（48）✓
+        ★ 2026-10-22：QQ 转发用【没截断】的原文（48 字上限只约束画面）
         """
         try:
             import time as _t
@@ -11372,15 +11376,14 @@ class World(object):
                 if n:
                     text = text + '（等 %d 条）' % n
                 self._ticker_last[tag] = now
-            # ★ 2026-10-22：弹幕也进 QQ 转发队列（要发哪些 kind 由 config 的 kinds 决定；
-            #   注意用【没截断】的原文，弹幕那条 22 字限制是画面用的）
+            # ★ QQ 先发全文（画面才受长度限制）
             try:
-                if getattr(self, 'qq', None):
+                if self.qq is not None:
                     self.qq.post(text, kind)
-            except Exception as _qqe2:
+            except Exception:
                 pass
-            if len(text) > 22:
-                text = text[:21] + '…'
+            if len(text) > TICKER_MAX_CHARS:
+                text = text[:TICKER_MAX_CHARS - 1] + '…'
             self._broadcast(P.pack('ticker', text=text, kind=kind))
         except Exception as e:
             print('[ticker] 发不出去：%r' % (e,))
