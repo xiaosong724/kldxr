@@ -668,8 +668,11 @@
       ? (townObjName(o.catalog) || ('#' + EDIT.id))
       : ((o && (o.catalog || o.model)) || ('#' + EDIT.id));
     if (EDIT.moving) {
-      EDIT.bar.innerHTML = '<b style="color:#7ee08a">③ 点地面确定新位置</b>' +
-        '<span style="color:#9aa3a8">左键/点一下地面 · Esc 取消</span>' +
+      /* ★ 2026-10-22（用户："取消移动旁边再加一个确认键"）：
+         用方向键挪到满意位置后，不用再点地面，直接点「确认移动」。 */
+      EDIT.bar.innerHTML = '<b style="color:#7ee08a">③ 方向键调整位置</b>' +
+        '<span style="color:#9aa3a8">也可以直接点地面 · Esc 取消</span>' +
+        '<button data-e="okmove" style="background:#2f6b3f;border-color:#7ee08a">确认移动</button>' +
         '<button data-e="cancelmove" style="background:#6a2f2f;border-color:#ff9a8a">取消移动</button>';
       return;
     }
@@ -683,6 +686,21 @@
   function editAct(a) {
     if (a === 'done') { editExit(); return; }
     if (a === 'unsel') { editSelect(null); return; }
+    if (a === 'okmove') {
+      /* 用预览模型当前的位置提交移动 */
+      var gp = padTargetPos();
+      var ed = P.objs[EDIT.id];
+      if (gp && ed && ed.data) {
+        editMoveGhostStop(false);
+        send('move_object', { id: EDIT.id, x: +gp.x.toFixed(2), z: +gp.z.toFixed(2),
+                              rot: +ed.data.rot || 0 });
+      }
+      EDIT.moving = false;
+      editBarRender();
+      editHintText();
+      try { padRender(); } catch (eOk) { }
+      return;
+    }
     if (a === 'cancelmove') {
       EDIT.moving = false;
       editMoveGhostStop(true);
