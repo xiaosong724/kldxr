@@ -390,7 +390,7 @@
       PLACEBAR.el = document.createElement('div');
       PLACEBAR.el.id = 'placeBar';
       PLACEBAR.el.style.cssText =
-        'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:56;' +
+        'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:2147482000;' +
         'background:#111417ee;border:1px solid #ffffff22;border-radius:12px;padding:8px 12px;' +
         'color:#e9e1cf;font:12px system-ui;display:flex;gap:8px;align-items:center;' +
         'box-shadow:0 12px 40px #000a;max-width:94vw;flex-wrap:wrap';
@@ -662,17 +662,16 @@
       'background:#6a2f2f;color:#ffd9d2;font:700 14px system-ui;cursor:pointer">删除</button>' +
       '</div></div>';
     box.style.display = 'flex';
+    /* ★ 2026-10-22：回退到实测可用的版本（c963934）——
+       之前我在绑定方式上反复折腾（捕获阶段拦 pointerdown 会掐掉 click），越改越坏。 */
     if (!box._bound) {
       box._bound = true;
       box.addEventListener('click', function (e) {
         e.stopPropagation();
         var b = e.target.closest ? e.target.closest('button[data-e]') : null;
         if (b) { editAct(b.getAttribute('data-e')); return; }
-        /* ★ 2026-10-22（用户："点删除没反应，而且也不能关闭"）：
-           点按钮以外的空白处 = 取消，任何情况下都关得掉。 */
         editConfirmClose();
       });
-      /* 捕获阶段也拦住，别让这一下冒到场景（会被当成"取消选中"或"点地面"） */
       box.addEventListener('pointerdown', function (e) {
         e.stopPropagation();
       }, { capture: true });
@@ -719,8 +718,12 @@
     if (!EDIT.bar) {
       EDIT.bar = document.createElement('div');
       EDIT.bar.id = 'editBar';
+      /* ★ 2026-10-22（用户："出现黄框但点删除对话框不弹"）：
+         实测 #annBox（公告遮罩，z-index:120）压在编辑条（55）上面，
+         点「删除」其实点到了公告框 → 穿透到场景 → 取消选中。
+         编辑条必须压在所有 HUD 之上。 */
       EDIT.bar.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);' +
-        'z-index:55;background:#111417ee;border:1px solid #ffffff22;border-radius:12px;' +
+        'z-index:2147482000;background:#111417ee;border:1px solid #ffffff22;border-radius:12px;' +
         'padding:8px 12px;color:#e9e1cf;font:12px system-ui;display:flex;gap:8px;align-items:center;' +
         'box-shadow:0 12px 40px #000a;max-width:94vw;flex-wrap:wrap';
       document.body.appendChild(EDIT.bar);
@@ -783,6 +786,21 @@
       try { padRender(); } catch (ePad2) { }
       return;
     }
+    /* ★★★ 2026-10-22（用户："删了一个，再删一个就不行"）★★★
+       `delok` / `delno` 原来排在 `if (EDIT.id == null) return;` 后面 ——
+       删除完第一个之后 EDIT.id 已经被 editSelect(null) 清空，
+       第二次点「删除」就卡在这个 return，对话框关不掉、也删不掉。
+       这两个动作只跟对话框有关，必须在 id 检查之前处理。 */
+    if (a === 'delok') {
+      var _delId = EDIT.id;
+      editConfirmClose();
+      if (_delId != null) {
+        send('remove_object', { id: _delId });
+        editSelect(null);
+      }
+      return;
+    }
+    if (a === 'delno') { editConfirmClose(); return; }
     if (EDIT.id == null) { return; }
     if (a === 'move') {
       /* ★ 2026-10-22：移动时给一个半透明预览 ✗ 不然看不见会挪到哪 ✓ */
@@ -801,8 +819,6 @@
       return;
     }
     if (a === 'del') { editConfirmOpen(); return; }
-    if (a === 'delok') { editConfirmClose(); send('remove_object', { id: EDIT.id }); editSelect(null); return; }
-    if (a === 'delno') { editConfirmClose(); return; }
   }
   /* 移动预览：克隆一份半透明模型，原物件先隐藏 */
   function editMoveGhostStart() {
@@ -879,7 +895,7 @@
       PAD.el = document.createElement('div');
       PAD.el.id = 'movePad';
       PAD.el.style.cssText =
-        'position:fixed;right:16px;bottom:150px;z-index:56;display:grid;' +
+        'position:fixed;right:16px;bottom:150px;z-index:2147482000;display:grid;' +
         'grid-template-columns:repeat(3,52px);grid-template-rows:repeat(3,52px);gap:6px;' +
         'touch-action:none;user-select:none';
       var keys = [
@@ -940,7 +956,7 @@
       EDIT.hint = document.createElement('div');
       EDIT.hint.id = 'editHint';
       EDIT.hint.style.cssText = 'position:fixed;left:50%;top:56px;transform:translateX(-50%);' +
-        'z-index:55;background:#111417ee;border:1px solid #ffd83d55;border-radius:10px;' +
+        'z-index:2147482000;background:#111417ee;border:1px solid #ffd83d55;border-radius:10px;' +
         'padding:6px 14px;color:#ffe9b0;font:12px system-ui';
       document.body.appendChild(EDIT.hint);
     }
@@ -1159,6 +1175,34 @@
     startPlace: function (item) { startPlace(item); },
     stopPlace: function () { stopPlace(); },
     debugEdit: function () { return { on: EDIT.on, id: EDIT.id, moving: EDIT.moving }; },
+    /* ★ 2026-10-22：自检 —— 在控制台跑 PlaceMode.selfTest() 就能看出卡在哪一环 */
+    selfTest: function () {
+      var out = { build: '?', canPick: '?', objs: 0, buildings: 0, small: 0 };
+      try {
+        out.objs = Object.keys(P.objs).length;
+        var all = window.MY_OBJECTS || [];
+        var sm = [], bd = [];
+        for (var i = 0; i < all.length; i++) {
+          var e = P.objs[all[i].id];
+          if (!e || !e.mesh) { continue; }
+          if (e.mesh.userData && e.mesh.userData.isBuilding) { bd.push(all[i]); } else { sm.push(all[i]); }
+        }
+        out.buildings = bd.length;
+        out.small = sm.length;
+        /* 取一个小物件，算它屏幕位置，再拾取一次 */
+        var t = sm[0];
+        if (t) {
+          var d = PlaceMode.debugScreen(t.id);
+          out.testTarget = { id: t.id, cat: t.catalog };
+          out.screen = d;
+          out.canPick = (d && String(d.picked) === String(t.id)) ? 'YES' : 'NO(' + (d ? d.picked : 'null') + ')';
+        } else {
+          out.canPick = 'NO small objects in scene';
+        }
+        out.build = 'ok';
+      } catch (e) { out.build = 'EX:' + e; }
+      return out;
+    },
     /* 2026-10-22 调试：物件在屏幕上的位置 + 该位置能拾取到什么 */
     debugScreen: function (objId) {
       var e = P.objs[objId]; var c = editCam();
