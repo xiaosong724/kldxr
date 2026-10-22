@@ -133,11 +133,18 @@
   function makeGhost(spec) {
     var g = buildTownModel(spec, {});
     g.traverse(function (o) {
-      if (o.material) {
-        o.material = o.material.clone();
-        o.material.transparent = true;
-        o.material.opacity = 0.55;
-      }
+      if (!o.isMesh || !o.material) { return; }
+      o.material = o.material.clone();
+      o.material.transparent = true;
+      o.material.opacity = 0.45;
+      o.material.depthWrite = false;
+      /* ★ 2026-10-22：半透明在暗色场景里不明显 → 每个零件再加一圈亮边 */
+      try {
+        var eg = new THREE.EdgesGeometry(o.geometry, 35);
+        var line = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({
+          color: 0x9fe8ff, transparent: true, opacity: 0.9, depthWrite: false }));
+        o.add(line);
+      } catch (e) { }
     });
     return g;
   }
@@ -161,6 +168,11 @@
     }
     P.ghost = makeGhost(spec);
     grp.add(P.ghost);
+    /* ★ 立即放在玩家面前（不用等鼠标动就能看到预览） */
+    var gy = 0;
+    try { gy = (typeof P !== 'undefined' && P.y) ? 0 : 0; } catch (e) { }
+    updateGhost((typeof P.x === 'number' ? P.x : 0),
+                (typeof P.z === 'number' ? P.z + 2.2 : 0));
   }
 
   function stopPlace() {
@@ -284,13 +296,15 @@
       if (panel && panel.contains(e.target)) { return; }
       var p = groundPoint(e.clientX, e.clientY);
       if (p) {
+        updateGhost(p.x, p.z);          /* 先让预览跳到落点，再确认 */
         if (confirmPlace(p.x, p.z)) { e.stopPropagation(); }
       }
     }, true);
   }
 
   /* ---------- 2026-10-22：编辑模式（选中 → 移动 / 旋转 / 删除） ---------- */
-  var EDIT = { on: false, id: null, moving: false, box: null, bar: null, hint: null };
+  var EDIT = { on: false, id: null, moving: false, box: null, bar: null, hint: null,
+               ghost: null, srcMesh: null };
 
   function editCam() {
     try { return (typeof W().cam !== 'undefined') ? W().cam : null; } catch (e) { return null; }
@@ -371,7 +385,13 @@
     if (a === 'done') { editExit(); return; }
     if (a === 'unsel') { editSelect(null); return; }
     if (EDIT.id == null) { return; }
-    if (a === 'move') { EDIT.moving = true; editBarRender(); return; }
+    if (a === 'move') {
+      /* ★ 2026-10-22：移动时给一个半透明预览 ✗ 不然看不见会挪到哪 ✓ */
+      editMoveGhostStart();
+      EDIT.moving = true;
+      editBarRender();
+      return;
+    }
     if (a === 'rot') {
       var e = P.objs[EDIT.id];
       if (!e || !e.data) { return; }
@@ -385,6 +405,43 @@
       editSelect(null);
     }
   }
+  /* 移动预览：克隆一份半透明模型，原物件先隐藏 */
+  function editMoveGhostStart() {
+    editMoveGhostStop(true);
+    var e = EDIT.id != null ? P.objs[EDIT.id] : null;
+    if (!e || !e.mesh) { return; }
+    var grp = ensureGroup();
+    if (!grp) { return; }
+    var g;
+    try { g = e.mesh.clone(true); } catch (e1) { g = null; }
+    if (!g) { return; }
+    g.traverse(function (o) {
+      if (!o.isMesh || !o.material) { return; }
+      o.material = o.material.clone();
+      o.material.transparent = true;
+      o.material.opacity = 0.45;
+      o.material.depthWrite = false;
+    });
+    g.position.copy(e.mesh.position);
+    g.rotation.copy(e.mesh.rotation);
+    g.userData.ghostOf = EDIT.id;
+    grp.add(g);
+    EDIT.ghost = g;
+    EDIT.srcMesh = e.mesh;
+    e.mesh.visible = false;
+  }
+  function editMoveGhostStop(keepOriginal) {
+    if (EDIT.ghost) {
+      if (EDIT.ghost.parent) { EDIT.ghost.parent.remove(EDIT.ghost); }
+      EDIT.ghost = null;
+    }
+    if (EDIT.srcMesh) { EDIT.srcMesh.visible = true; EDIT.srcMesh = null; }
+  }
+  function editMoveGhostAt(x, z) {
+    if (!EDIT.ghost) { return; }
+    EDIT.ghost.position.set(x, 0, z);
+  }
+
   function editEnter() {
     if (P.placing) { stopPlace(); }
     EDIT.on = true;
@@ -403,6 +460,7 @@
   }
   function editExit() {
     EDIT.on = false; EDIT.moving = false; EDIT.id = null;
+    editMoveGhostStop(true);
     editClear();
     if (EDIT.bar) { EDIT.bar.style.display = 'none'; }
     if (EDIT.hint) { EDIT.hint.style.display = 'none'; }
@@ -410,9 +468,14 @@
   addEventListener('keydown', function (e) {
     if (!EDIT.on) { return; }
     if (e.key === 'Escape') {
-      if (EDIT.moving) { EDIT.moving = false; editBarRender(); }
+      if (EDIT.moving) { EDIT.moving = false; editMoveGhostStop(true); editBarRender(); }
       else { editExit(); }
     }
+  });
+  addEventListener('pointermove', function (e) {
+    if (!EDIT.on || !EDIT.moving) { return; }
+    var p = groundPoint(e.clientX, e.clientY);
+    if (p) { editMoveGhostAt(p.x, p.z); }
   });
   addEventListener('pointerdown', function (e) {
     if (!EDIT.on) { return; }
@@ -421,6 +484,8 @@
       var p = groundPoint(e.clientX, e.clientY);
       var ed = P.objs[EDIT.id];
       if (p && ed && ed.data) {
+        editMoveGhostAt(p.x, p.z);
+        editMoveGhostStop(false);            /* 先恢复原物件，等 moved 回来再刷新位置 */
         send('move_object', { id: EDIT.id, x: +p.x.toFixed(2), z: +p.z.toFixed(2),
                               rot: +ed.data.rot || 0 });
         EDIT.moving = false;
@@ -461,13 +526,32 @@
       if (EDIT.on && EDIT.id != null && String(EDIT.id) === String(o.id)) { editSelect(EDIT.id); }
     },
     startEdit: editEnter,
+    selectById: function (id) { editSelect(id); return EDIT.id; },
+    objVisible: function (id) {
+      var e = P.objs[id];
+      return e && e.mesh ? !!e.mesh.visible : null;
+    },
     stopEdit: editExit,
     /* 小镇面板里用：给它目录 id，直接开始放置 */
+    /* 2026-10-22：给自测看预览状态（放置 ghost / 移动 ghost） */
+    previewState: function () {
+      function op(g) {
+        var v = null;
+        if (g) { g.traverse(function (o) { if (v == null && o.isMesh && o.material) { v = o.material.opacity; } }); }
+        return v;
+      }
+      var src = EDIT.srcMesh ? EDIT.srcMesh.visible : null;
+      return { placing: !!P.placing, ghost: !!P.ghost, ghostOpacity: op(P.ghost),
+               moving: !!EDIT.moving, moveGhost: !!EDIT.ghost,
+               moveGhostOpacity: op(EDIT.ghost), srcVisible: src };
+    },
     startPlaceById: function (id) {
       var item = null;
       catalogItems().forEach(function (c) { if (String(c.id) === String(id)) { item = c; } });
-      if (item) { startPlace(item); }
-      return !!item;
+      if (item) { startPlace(item); return true; }
+      /* 目录还没到（没打开过面板）→ 请求一次，调用方稍后重试 */
+      try { send('town_catalog', {}); } catch (e) { }
+      return false;
     },
     catalog: function () { return catalogItems(); },
     editState: function () { return { on: EDIT.on, id: EDIT.id, moving: EDIT.moving }; },

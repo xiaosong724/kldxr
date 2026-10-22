@@ -98,6 +98,14 @@ async def main_async(token):
         async with websockets.connect(target['webSocketDebuggerUrl'], max_size=64 * 1024 * 1024) as ws:
             c = CDP(ws)
             await c.send('Runtime.enable')
+            # 等页面真的落在本站 origin 上，再写 localStorage（否则会 SecurityError）
+            for _ in range(80):
+                await asyncio.sleep(0.25)
+                try:
+                    if await c.ev('return location.origin;') == ORIGIN:
+                        break
+                except Exception:
+                    pass
             await c.ev('localStorage.setItem("token", %s); location.reload(); return 1;'
                        % json.dumps(token))
             for _ in range(80):
