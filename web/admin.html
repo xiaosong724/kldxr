@@ -45,6 +45,7 @@
 <div class="wrap">
   <h1>后台管理 · 末日丧尸 × 组队修仙</h1>
   <div class="sub">这里是**不该出现在玩家那边**的能力：刷怪 / 发武器 / 踢人 / 喊话 / 看内部状态 ✓</div>
+  <div style="margin:10px 0 0"><a href="/admin/announce" style="display:inline-block;font-size:13px;color:#ffe9a0;text-decoration:none;border:1px solid #ffd83d66;background:#3a300f;border-radius:9px;padding:7px 14px">📢 公告管理 →</a></div>
 
   <!-- 登录 -->
   <div class="card" id="loginCard">
@@ -63,15 +64,50 @@
        align-items:center;justify-content:center">
     <div class="card" style="width:min(560px,94vw);max-height:90vh;overflow:auto;margin:0">
       <h2 style="display:flex;justify-content:space-between">
-        <span>给 <b id="giveWho" style="color:#ffd83d"></b> 发装备</span>
+        <span>给 <b id="giveWho" style="color:#ffd83d"></b> 发装备 / 皮肤</span>
         <span style="cursor:pointer" id="giveX">✕</span>
       </h2>
       <div class="tip" style="margin-bottom:6px">武器类型（8 种）</div>
       <div id="giveType" style="display:flex;flex-wrap:wrap;gap:6px"></div>
-      <div class="tip" style="margin:12px 0 6px">品阶（1 ~ 12，越后面越强）</div>
-      <div id="giveTier" style="display:flex;flex-wrap:wrap;gap:6px"></div>
-      <div class="tip" style="margin:12px 0 6px">词条条数</div>
-      <div id="giveAff" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+      <div id="giveGearWrap">
+       <div class="tip" style="margin:12px 0 6px">品阶（1 ~ 12，越后面越强）</div>
+       <div id="giveTier" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+       <div class="tip" style="margin:12px 0 6px">词条条数</div>
+       <div id="giveAff" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+      </div>
+      <!-- ★ round492：发皮肤（只给测试用 ✓ 40 个都能点 ✓）-->
+      <div id="giveSkinWrap" style="display:none">
+        <div class="tip" style="margin:12px 0 6px">选一个皮肤（点中就发光）· 也可以一键全给</div>
+        <div style="margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button id="giveSkinAll" style="background:#6a4a1f;border-color:#ffd83d">全部 40 个</button>
+          <label class="tip" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <!-- ★ round527（用户："管理页面给的皮肤改成给皮肤卡，不要直接给皮肤"）-->
+            <span>每个发</span>
+            <input type="number" id="giveSkinCount" value="1" min="1" max="20"
+                   style="width:52px"> <span>张皮肤卡</span>
+          </label>
+        </div>
+        <div id="giveSkin" style="display:flex;flex-wrap:wrap;gap:6px;max-height:260px;overflow:auto"></div>
+      </div>
+      <div id="giveSkillWrap" style="display:none">
+        <div class="tip" style="margin:12px 0 6px">选一本技能书（点中就发光）· 被动加成书可选品阶</div>
+        <div style="margin-bottom:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <label class="tip" style="display:flex;align-items:center;gap:6px">
+            <span>品阶</span>
+            <select id="giveSkillTier" style="padding:4px 6px;border-radius:6px;
+                    border:1px solid #ffffff22;background:#0e141c;color:#dfe8f2">
+              <option value="1">1 品</option><option value="2">2 品</option>
+              <option value="3">3 品</option><option value="4">4 品</option>
+              <option value="5">5 品</option>
+            </select>
+          </label>
+          <label class="tip" style="display:flex;align-items:center;gap:6px">
+            <span>数量</span>
+            <input type="number" id="giveSkillCount" value="1" min="1" max="20" style="width:52px">
+          </label>
+        </div>
+        <div id="giveSkill" style="display:flex;flex-wrap:wrap;gap:6px;max-height:260px;overflow:auto"></div>
+      </div>
       <div style="margin-top:14px;display:flex;align-items:center;gap:10px">
         <button id="giveGo" style="background:#2f6b3f;border-color:#7ee08a">赠 送</button>
         <span class="tip" id="givePrev"></span>
@@ -133,8 +169,31 @@
         <button id="btnAtkAllOff">全服关闭</button>
         <span class="tip">★ 关掉后僵尸照样刷、照样围着你，但咬不动你（方便看风景/截图）✓</span>
       </div>
+      <div style="margin:6px 0">
+        <b>QQ 群转发</b>
+        <span id="qqState" class="sw">状态…</span>
+        <button id="btnQqOn">开启</button>
+        <button id="btnQqOff">关闭</button>
+        <span class="tip">★ 把【滚动通知 + 玩家上线】转发到 QQ 群 346049634（走云端的 qq-forwarder）✓
+          关掉后一条都不发 ✗ 但桥还连着 ✓ 再点开启立刻恢复 ✓ 改完不用重启 ✓</span>
+        <div id="qqNow" class="tip" style="margin-top:2px"></div>
+      </div>
       <div id="mobNow" class="tip" style="margin-top:4px"></div>
       <div id="swNow" class="tip" style="margin-top:2px"></div>
+    </div>
+
+    <div class="card">
+      <h2>精英 / Boss 直接召唤 <span class="tip">（选类型、选模型、选玩家，立刻召唤在目标附近）</span></h2>
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px">
+        <label class="tip">召唤对象
+          <select id="spawnPick" style="min-width:150px"></select>
+        </label>
+        <label class="tip">目标玩家
+          <select id="spawnPlayer"></select>
+        </label>
+        <button id="btnSpawnSpecial">召唤</button>
+      </div>
+      <div class="tip" id="spawnSpecialNow" style="margin-top:6px"></div>
     </div>
 
     <!-- ★★ 第 153 轮（用户："把魔气的配置设置也加到管理页面"）★★
@@ -178,6 +237,22 @@
     </div>
 
     <div class="card">
+      <h2 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <span>小镇 <span class="tip" id="townInfo"></span></span>
+        <button id="btnTownRefresh">刷新小镇</button>
+        <span class="tip" id="townMsg"></span>
+      </h2>
+      <table>
+        <thead><tr><th>ID</th><th>名字</th><th>主人</th><th>尺寸</th><th>坐标</th>
+          <th>状态</th><th>到期</th><th>物件</th><th>操作</th></tr></thead>
+        <tbody id="townRows"></tbody>
+      </table>
+      <h2 style="margin-top:16px">目录价格
+        <span class="tip">（放置时扣的钱；改完立刻生效）</span></h2>
+      <div id="catalogRows" style="max-height:320px;overflow:auto"></div>
+    </div>
+
+    <div class="card">
       <button id="btnOut">退出管理登录</button>
       <button id="btnRefresh">立即刷新</button>
     </div>
@@ -199,10 +274,16 @@ var TYPES = [['dagger', '匕首'], ['sword', '单手剑'], ['saber', '刀'], ['s
              /* ★ 第 93 轮：加上【防具】✓（用户问"防具到底做了没"✗
                 根因就是这个菜单里没有 ✗ 所以只能靠打怪 25% 概率掉 ✓ 很难碰上 ✓
                 服务器早就支持 kind='armor' 了 ✓ 只是菜单没给选项 ✗）*/
-             ['armor', '防具']];
+             ['armor', '防具'],
+             /* ★ round492（用户："管理页面增加皮肤的发放管理，可以选择对应的皮肤"）*/
+             ['skin', '皮肤'],
+             /* ★ round553：技能书（方便测试技能）*/
+             ['skillbook', '技能书']];
 var TIER_NAME = ['锈蚀', '破旧', '精铁', '镔铁', '玄铁', '灵纹',
                  '秘银', '灵器', '宝器', '灵宝', '仙器', '神品'];
-var givePick = { name: '', kind: 'sword', tier: 5, affix: 'auto' };
+var givePick = { name: '', kind: 'sword', tier: 5, affix: 'auto', skin: '', equip: 0, skill: '' };
+var SKIN_LIST = null;
+var SKILL_LIST = null;          // ★ 皮肤目录（第一次打开时拉一次 ✓）
 try { TOKEN = localStorage.getItem('adminToken') || ''; } catch (e) { }
 
 function $(id) { return document.getElementById(id); }
@@ -238,6 +319,7 @@ function doLogin() {
       showPanel(true);
       mobCapBind();
       refresh();
+      loadTowns();
     });
 }
 
@@ -252,6 +334,65 @@ function doLogout() {
 
 /* ★ 第 133 轮：刷怪上限的界面逻辑 */
 var mobCaps = null;   // 服务器报回来的当前值 ✓
+var CUR_PLAYERS = [];
+var SPECIAL_SKINS = {
+  1: [['rift', '裂口者'], ['guard', '铁卫'], ['ember', '火鬼'],
+      ['toad', '毒沼蟾'], ['beetle', '刃甲虫'], ['wolf', '影狼']],
+  2: [['butcher', '屠夫'], ['mage', '深渊法师'], ['mech', '钢铁巨兽'],
+      ['dragon', '骨龙'], ['serpent', '熔岩巨蟒'], ['eye', '虚空之眼']]
+};
+function spawnSpecialRender() {
+  var pick = document.getElementById('spawnPick');
+  var pl = document.getElementById('spawnPlayer');
+  if (!pick || !pl) { return; }
+  var oldPick = pick.value;
+  var oldPl = pl.value;
+  var html = '';
+  [1, 2].forEach(function (rk) {
+    html += '<optgroup label="' + (rk === 2 ? 'Boss' : '精英') + '">';
+    (SPECIAL_SKINS[rk] || []).forEach(function (a) {
+      html += '<option value="' + rk + ':' + a[0] + '">' +
+        (rk === 2 ? '[BOSS] ' : '[精英] ') + a[1] + '</option>';
+    });
+    html += '</optgroup>';
+  });
+  pick.innerHTML = html;
+  if (oldPick && pick.querySelector('option[value="' + oldPick.replace(/"/g, '\\"') + '"]')) {
+    pick.value = oldPick;
+  }
+  pl.innerHTML = CUR_PLAYERS.filter(function (p) { return p.online; })
+    .map(function (p) { return '<option value="' + p.name.replace(/"/g, '&quot;') + '">' + p.name + '</option>'; })
+    .join('');
+  if (oldPl && pl.querySelector('option[value="' + oldPl.replace(/"/g, '\\"') + '"]')) {
+    pl.value = oldPl;
+  }
+  var now = document.getElementById('spawnSpecialNow');
+  if (now) {
+    var has = CUR_PLAYERS.some(function (p) { return p.online; });
+    now.textContent = has ? '' : '（当前没有在线玩家，先登录一个角色）';
+  }
+}
+function spawnSpecialBind() {
+  spawnSpecialRender();
+  var pick = document.getElementById('spawnPick');
+  var btn = document.getElementById('btnSpawnSpecial');
+  if (!pick || !btn || btn._b) { return; }
+  btn._b = true;
+  pick.onchange = spawnSpecialRender;
+  btn.onclick = function () {
+    var pv = String((document.getElementById('spawnPick') || {}).value || '1:rift');
+    var parts = pv.split(':');
+    var rank = +(parts[0] || 1), skin = parts[1] || 'rift';
+    var name = (document.getElementById('spawnPlayer') || {}).value || '';
+    if (!name) { msg('没有在线玩家可刷'); return; }
+    act('spawn', { name: name, n: 1, rank: rank, skin: skin });
+    var now = document.getElementById('spawnSpecialNow');
+    if (now) {
+      var label = (SPECIAL_SKINS[rank] || []).filter(function (a) { return a[0] === skin; })[0];
+      now.textContent = '已请求：' + (label ? label[1] : skin) + ' → ' + name;
+    }
+  };
+}
 function mobCapBind() {
   var g = function (id) { return document.getElementById(id); };
   /* ★★★ 第 137 轮修的真回归（自检抓到的 ✗）★★★
@@ -300,6 +441,9 @@ function swBind() {
   g('btnPvpAllOff').onclick = function () { act('pvp', { on: 0 }); };
   g('btnAtkAllOn').onclick = function () { act('mobatk', { on: 1 }); };
   g('btnAtkAllOff').onclick = function () { act('mobatk', { on: 0 }); };
+  /* ★ round418：QQ 群转发的开关（开关也会存进 admin_tune ✗ 重启自动恢复 ✓）*/
+  if (g('btnQqOn')) { g('btnQqOn').onclick = function () { act('qq', { on: 1 }); }; }
+  if (g('btnQqOff')) { g('btnQqOff').onclick = function () { act('qq', { on: 0 }); }; }
   var mc = (typeof mobCaps === 'object' && mobCaps) ? mobCaps : null;
   var set = function (id, on, extra) {
     var el = g(id);
@@ -312,6 +456,16 @@ function swBind() {
         '（' + Object.keys(mc.pvpOnes || {}).length + ' 人有单独设置）');
     set('atkState', !!mc.atkAll,
         '（' + Object.keys(mc.atkOnes || {}).length + ' 人有单独设置）');
+    set('qqState', !!mc.qqOn, '');
+    var _qqEl = g('qqNow');
+    if (_qqEl) {
+      var _qs = mc.qqStats || {};
+      _qqEl.textContent = _qs.on
+        ? ('已发 ' + (_qs.sent || 0) + ' 条 · 失败 ' + (_qs.fails || 0) +
+           ' · 丢弃 ' + (_qs.drops || 0) + ' · 队列 ' + (_qs.queued || 0) +
+           (_qs.lastErr ? (' · 最后错误 ' + _qs.lastErr) : ''))
+        : ('已关闭（已发 ' + (_qs.sent || 0) + ' 条）');
+    }
   }
 }
 
@@ -489,6 +643,8 @@ function refresh() {
     if (typeof ovBind === 'function') { ovBind(); }
     if (typeof mqCfgRender === 'function') { mqCfgRender(); }
     if (typeof mqRowBind === 'function') { mqRowBind(); }
+    CUR_PLAYERS = r.players || [];
+    if (typeof spawnSpecialBind === 'function') { spawnSpecialBind(); }
     $('testInfo').textContent = r.testHidden
       ? ('（已隐藏 ' + r.testHidden + ' 个测试账号）') : '';
     $('pgInfo').textContent = '第 ' + PAGE + ' / ' + PAGES + ' 页 · 共 ' +
@@ -532,6 +688,9 @@ function refresh() {
           '<button data-capset="' + nm + '">设</button>' +
           '<button data-capclr="' + nm + '">清</button></span>' +
         '<button data-a="spawn" data-n="' + nm + '">刷 5 只</button>' +
+        '<button data-a="spawn" data-n="' + nm + '" data-rank="1">刷精英</button>' +
+        '<button data-a="spawn" data-n="' + nm + '" data-rank="2">刷 Boss</button>' +
+        '<button data-a="special" data-n="' + nm + '">召唤选中</button>' +
         '<button data-a="give" data-n="' + nm + '">给装备</button>' +
         '<button data-a="heal" data-n="' + nm + '">治疗</button>' +
         (p.online ? '<button class="warn" data-a="kill" data-n="' + nm + '">打倒</button>' +
@@ -542,11 +701,87 @@ function refresh() {
   });
 }
 
+/* ---------- C1：小镇管理 ---------- */
+function townMsg(t, ok) {
+  var el = $('townMsg');
+  if (el) { el.textContent = t || ''; el.style.color = ok ? '#7ee08a' : '#ffb4a0'; }
+}
+function townStatusText(st) {
+  if (st === 'active') { return '<span class="on">正常</span>'; }
+  if (st === 'frozen') { return '<span class="warn">冻结</span>'; }
+  if (st === 'restoring') { return '<span class="warn">恢复中</span>'; }
+  return st || '-';
+}
+function loadTowns() {
+  if (!TOKEN) { return; }
+  api('/api/admin/towns').then(function (r) {
+    if (!r.ok) {
+      if ((r.error || '').indexOf('登录') >= 0) { showPanel(false); msg(r.error); }
+      return;
+    }
+    var rows = r.towns || [];
+    $('townInfo').textContent = '共 ' + rows.length + ' 座';
+    $('townRows').innerHTML = rows.map(function (t) {
+      var ops;
+      if (+t.is_system) {
+        ops = '<span class="tip">系统主城</span>';
+      } else if (t.status === 'active') {
+        ops = '<button data-town="' + t.id + '" data-tact="settle">立刻结算</button>' +
+              '<button class="warn" data-town="' + t.id + '" data-tact="freeze">冻结</button>' +
+              '<button class="warn" data-town="' + t.id + '" data-tact="dissolve">解散</button>';
+      } else {
+        ops = '<button data-town="' + t.id + '" data-tact="restore">恢复</button>';
+      }
+      return '<tr><td>' + t.id + '</td><td>' + (t.name || '') + '</td><td>' +
+        (t.owner_name || (t.owner_id ? '#' + t.owner_id : '系统')) + '</td><td>' +
+        t.tier + ' 格</td><td>(' + (+t.x).toFixed(1) + ', ' + (+t.z).toFixed(1) + ')</td><td>' +
+        townStatusText(t.status) + '</td><td>' +
+        (t.expires ? new Date(t.expires).toLocaleString() : '-') + '</td><td>' +
+        (t.objects || 0) + '</td><td>' + ops + '</td></tr>';
+    }).join('') || '<tr><td colspan="9" class="tip">没有小镇</td></tr>';
+    var cat = r.catalog || [];
+    $('catalogRows').innerHTML = cat.map(function (c) {
+      return '<div style="display:flex;align-items:center;gap:8px;padding:2px 0">' +
+        '<span style="flex:1">' + (c.name || c.id) +
+        ' <span class="tip">' + c.id + ' · ' + c.category + '</span></span>' +
+        '<input type="number" min="0" step="1000" value="' + (c.price || 0) +
+        '" data-cat="' + c.id + '" style="width:110px">' +
+        '<button data-price="' + c.id + '">保存</button></div>';
+    }).join('');
+  });
+}
+function townAct(id, actName) {
+  if (actName === 'dissolve' && !confirm('解散小镇 #' + id + '？数据保留 7 天。')) { return; }
+  api('/api/admin/town', { method: 'POST', body: JSON.stringify({ act: actName, id: id }) })
+    .then(function (r) {
+      townMsg(r.ok ? ('#小镇 ' + id + '：' + actName + ' 已执行') : (r.error || '失败'), r.ok);
+      loadTowns();
+    });
+}
+
 /* 事件绑定 */
 $('btnLogin').onclick = doLogin;
 $('pw').onkeydown = function (e) { if (e.key === 'Enter') { doLogin(); } };
 $('btnOut').onclick = doLogout;
-$('btnRefresh').onclick = refresh;
+$('btnRefresh').onclick = function () { refresh(); loadTowns(); };
+$('btnTownRefresh').onclick = loadTowns;
+$('townRows').onclick = function (e) {
+  var b = e.target && e.target.closest ? e.target.closest('button[data-tact]') : null;
+  if (!b) { return; }
+  townAct(+b.getAttribute('data-town'), b.getAttribute('data-tact'));
+};
+$('catalogRows').onclick = function (e) {
+  var b = e.target && e.target.closest ? e.target.closest('button[data-price]') : null;
+  if (!b) { return; }
+  var cid = b.getAttribute('data-price');
+  var inp = document.querySelector('#catalogRows input[data-cat="' + cid + '"]');
+  if (!inp) { return; }
+  api('/api/admin/town', { method: 'POST',
+    body: JSON.stringify({ act: 'price', catalog: cid, price: +inp.value }) })
+    .then(function (r) {
+      townMsg(r.ok ? ('价格已存：' + cid + ' → ' + r.price) : (r.error || '失败'), r.ok);
+    });
+};
 $('btnSay').onclick = function () {
   var t = $('say').value.trim();
   if (!t) { return; }
@@ -558,7 +793,16 @@ $('rows').onclick = function (e) {
   if (!b || b.tagName !== 'BUTTON') { return; }
   var a = b.getAttribute('data-a'), n = b.getAttribute('data-n');
   if (a === 'give') { openGive(n); }
-  else if (a === 'spawn') { act('spawn', { name: n, n: 5 }); }
+  else if (a === 'spawn') {
+    var rk = +(b.getAttribute('data-rank') || 0);
+    act('spawn', { name: n, n: rk ? 1 : 5, rank: rk,
+      skin: rk === 2 ? 'dragon' : (rk === 1 ? 'rift' : '') });
+  }
+  else if (a === 'special') {
+    var spv = String((document.getElementById('spawnPick') || {}).value || '1:rift');
+    var spp = spv.split(':');
+    act('spawn', { name: n, n: 1, rank: +(spp[0] || 1), skin: spp[1] || 'rift' });
+  }
   else if (a === 'heal') { act('heal', { name: n }); }
   else if (a === 'kill') { if (confirm('把 ' + n + ' 打倒？')) { act('kill', { name: n }); } }
   else if (a === 'kick') { if (confirm('把 ' + n + ' 踢下线？')) { act('kick', { name: n }); } }
@@ -604,12 +848,73 @@ function mkPick(box, list, cur, onPick) {
 function giveRender() {
   mkPick($('giveType'), TYPES, givePick.kind,
          function (v) { givePick.kind = v; giveRender(); });
+  var _isSkin = (givePick.kind === 'skin');
+  var _isBook = (givePick.kind === 'skillbook');
+  $('giveGearWrap').style.display = (_isSkin || _isBook) ? 'none' : 'block';
+  $('giveSkinWrap').style.display = _isSkin ? 'block' : 'none';
+  $('giveSkillWrap').style.display = _isBook ? 'block' : 'none';
+  if (_isBook) {
+    if (!SKILL_LIST) {
+      $('giveSkill').textContent = '加载中…';
+      api('/api/skills').then(function (r) {
+        SKILL_LIST = (r && r.defs) || [];
+        giveRender();
+      });
+    } else {
+      var box2 = $('giveSkill');
+      box2.innerHTML = '';
+      SKILL_LIST.forEach(function (it) {
+        var b = document.createElement('button');
+        var kindName = it.kind === 'A' ? '主动' : (it.kind === 'B' ? '被动释放' : '被动加成');
+        b.textContent = '[' + kindName + '] ' + it.n + (it.tmax > 1 ? '・' + it.tmax + '品' : '');
+        if (givePick.skill === it.k) { b.style.background = '#3a6ea8'; b.style.borderColor = '#8ee0ff'; }
+        b.onclick = function () { givePick.skill = it.k; giveRender(); };
+        box2.appendChild(b);
+      });
+    }
+  }
+  if (_isSkin) {
+    if (!SKIN_LIST) {
+      $('giveSkin').textContent = '加载中…';
+      api('/api/admin/skins').then(function (r) {
+        SKIN_LIST = (r && r.skins) || [];
+        giveRender();
+      });
+    } else {
+      var box = $('giveSkin');
+      box.innerHTML = '';
+      SKIN_LIST.forEach(function (it) {
+        var b = document.createElement('button');
+        b.textContent = (it.g === 'm' ? '♂ ' : '♀ ') + it.n;
+        if (givePick.skin === it.k) { b.style.background = '#3a6ea8'; b.style.borderColor = '#8ee0ff'; }
+        b.onclick = function () { givePick.skin = it.k; giveRender(); };
+        box.appendChild(b);
+      });
+    }
+  }
   mkPick($('giveTier'), TIER_NAME.map(function (nm, i) { return [i, (i + 1) + ' ' + nm]; }),
          givePick.tier, function (v) { givePick.tier = v; giveRender(); });
   mkPick($('giveAff'), [['auto', '按概率'], [1, '1 条'], [2, '2 条'], [3, '3 条'],
                         [4, '4 条'], [5, '5 条']], givePick.affix,
          function (v) { givePick.affix = v; giveRender(); });
   var tn = TYPES.filter(function (x) { return x[0] === givePick.kind; })[0][1];
+  if (_isBook) {
+    var _nm = '（还没选）';
+    for (var _j = 0; _j < (SKILL_LIST || []).length; _j++) {
+      if (SKILL_LIST[_j].k === givePick.skill) { _nm = SKILL_LIST[_j].n; break; }
+    }
+    $('givePrev').textContent = '将发放技能书：' + _nm + '（背包里点「学习」才学会）';
+    return;
+  }
+  if (givePick.kind === 'skin') {
+    var nmS = '（还没选）';
+    for (var _i = 0; _i < (SKIN_LIST || []).length; _i++) {
+      if (SKIN_LIST[_i].k === givePick.skin) { nmS = SKIN_LIST[_i].n; break; }
+    }
+    $('givePrev').textContent = '将发放皮肤：' + nmS +
+      ' · 发【皮肤卡】（背包里点使用才解锁）';
+    return;
+  }
   $('givePrev').textContent = '将发出：' + TIER_NAME[givePick.tier] + tn + '（' +
     (givePick.tier + 1) + ' 阶 · 建议等级 ' + (givePick.tier * 3 + 1) + ' · ' +
     (givePick.affix === 'auto' ? '词条按概率' : givePick.affix + ' 条词条') + '）';
@@ -624,10 +929,41 @@ function closeGive() { giveBox.style.display = 'none'; }
 $('giveX').onclick = closeGive;
 giveBox.onclick = function (e) { if (e.target === giveBox) { closeGive(); } };
 $('giveGo').onclick = function () {
-  var body = { name: givePick.name, kind: givePick.kind, tier: givePick.tier };
-  if (givePick.affix !== 'auto') { body.affixCount = givePick.affix; }
+  var body;
+  if (givePick.kind === 'skillbook') {
+    if (!givePick.skill) { alert('先选一本技能书'); return; }
+    var tierSel = +($('giveSkillTier') || {}).value || 1;
+    var cntSel = Math.max(1, Math.min(20, +($('giveSkillCount') || {}).value || 1));
+    api('/api/admin/act', { method: 'POST', body: JSON.stringify({
+      act: 'give', name: givePick.name, kind: 'skillbook',
+      skillKey: givePick.skill, count: cntSel, tier: tierSel }) })
+      .then(function (r) {
+        if (r && r.ok) { closeGive(); }
+        else { alert((r && r.error) || '发放失败'); }
+      });
+    return;
+  }
+  if (givePick.kind === 'skin') {
+    if (!givePick.skin) { msg('先选一个皮肤'); return; }
+    body = { name: givePick.name, kind: 'skin', skinKey: givePick.skin,
+             count: Math.max(1, Math.min(20, +(document.getElementById('giveSkinCount') || {}).value || 1)),
+             equip: givePick.equip ? 1 : 0 };
+  } else {
+    body = { name: givePick.name, kind: givePick.kind, tier: givePick.tier };
+    if (givePick.affix !== 'auto') { body.affixCount = givePick.affix; }
+  }
   act('give', body);
   closeGive();
+};
+/* ★ round492：一键 40 个 */
+$('giveSkinAll').onclick = function () {
+  if (!confirm('给 ' + givePick.name + ' 发放【全部 40 个皮肤】？')) { return; }
+  act('give', { name: givePick.name, kind: 'skin', skinKey: '*' });
+  closeGive();
+};
+$('giveSkinEquip').onchange = function () {
+  givePick.equip = this.checked ? 1 : 0;
+  giveRender();
 };
 /* ★ 删除（只能删离线的 ✓ 在线的不给删 ✗）*/
 function delPlayer(n) {
@@ -637,7 +973,7 @@ function delPlayer(n) {
 
 
 /* 开局：有 token 就直接进面板（过期的话第一次刷新会踢回登录 ✓） */
-if (TOKEN) { showPanel(true); refresh(); }
+if (TOKEN) { showPanel(true); refresh(); loadTowns(); }
 /* ★ 第 138 轮：① 用户在操作列表时不刷 ✗ ② 间隔 1.5 → 3 秒（少打扰 ✓）*/
 setInterval(function () {
   if (!TOKEN || document.hidden) { return; }

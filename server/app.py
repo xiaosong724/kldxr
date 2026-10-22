@@ -289,6 +289,9 @@ class Api(BaseHTTPRequestHandler):
             return self.api_admin_players()
         if path == '/api/admin/who':
             return self.api_admin_who()
+        # ★ C1：小镇管理（列表 / 冻结 / 恢复 / 结算 / 目录价格）
+        if path == '/api/admin/towns':
+            return self.api_admin_towns()
         # round303: 卖东西前的【报价】（只读 ✗ 不动任何东西 ✓）
         #   ★ 为什么要有这个接口：确认框里要写"这次能卖多少钱" ✗
         #     而价格公式只在服务器的 value.py 里 ✗
@@ -382,6 +385,8 @@ class Api(BaseHTTPRequestHandler):
             return self.api_admin_logout()
         if path == '/api/admin/act':
             return self.api_admin_act(body)
+        if path == '/api/admin/town':
+            return self.api_admin_town(body)
         if path == '/api/admin/announce':
             return self.api_admin_ann_save(body)
         return self._send(404, {'ok': False, 'error': 'not found', 'path': path})
@@ -540,6 +545,95 @@ class Api(BaseHTTPRequestHandler):
         import time as _t
         _t.sleep(0.35)                   # 等 tick 线程处理（排障用 ✗ 不在乎这点延迟 ✓）
         return self._send(200, {'ok': True, 'who': getattr(self.world, 'who_dump', None)})
+
+    # ---------- C1：小镇管理 ----------
+
+    def api_admin_towns(self):
+        """所有小镇 + 目录价格（只读，管理页轮询用）"""
+        if not self._admin_ok():
+            return self._send(401, {'ok': False, 'error': '没登录或登录过期了'})
+        import towns as townreg
+        out = []
+        try:
+            with dbmod.db(self.cfg) as c:
+                rows = c.execute(
+                    'SELECT t.*, r.name AS owner_name FROM towns t'
+                    ' LEFT JOIN roles r ON r.id = t.owner_id'
+                    ' ORDER BY t.is_system DESC, t.id').fetchall()
+                for row in rows:
+                    d = {k: row[k] for k in row.keys()}
+                    d['fee'] = 0 if int(d.get('is_system') or 0) else townreg.fee_for(int(d['tier']))
+                    d['objects'] = c.execute(
+                        "SELECT COUNT(*) FROM town_objects WHERE town_id=? AND state='active'",
+                        (int(d['id']),)).fetchone()[0]
+                    out.append(d)
+            catalog = townreg.list_catalog(self.cfg, enabled_only=True)
+        except Exception as e:
+            return self._send(500, {'ok': False, 'error': '读取失败：%s' % e})
+        return self._send(200, {'ok': True, 'towns': out, 'catalog': catalog})
+
+    def api_admin_town(self, body):
+        """小镇操作：freeze / restore / dissolve / settle / price"""
+        if not self._admin_ok():
+            return self._send(401, {'ok': False, 'error': '没登录或登录过期了'})
+        import towns as townreg
+        act = str(body.get('act') or '')
+        if act == 'price':
+            cid = str(body.get('catalog') or '')
+            try:
+                price = max(0, int(body.get('price')))
+            except Exception:
+                return self._send(400, {'ok': False, 'error': '价格不对'})
+            try:
+                with dbmod.db(self.cfg) as c:
+                    cur = c.execute('UPDATE town_catalog SET price=?, updated_at=? WHERE id=?',
+                                    (price, dbmod.now_ms(), cid))
+                    c.commit()
+                    if cur.rowcount <= 0:
+                        return self._send(404, {'ok': False, 'error': '目录里没有这个物件'})
+            except Exception as e:
+                return self._send(500, {'ok': False, 'error': str(e)})
+            if self.world is not None:
+                try:
+                    self.world.town_catalog = townreg.list_catalog(self.cfg)
+                except Exception:
+                    pass
+            return self._send(200, {'ok': True, 'id': cid, 'price': price})
+
+        try:
+            tid = int(body.get('id'))
+        except Exception:
+            return self._send(400, {'ok': False, 'error': '缺少小镇 id'})
+        t = townreg.get_town(self.cfg, tid)
+        if not t:
+            return self._send(404, {'ok': False, 'error': '没有这个小镇'})
+        if int(t.get('is_system') or 0) and act in ('freeze', 'dissolve', 'restore'):
+            return self._send(400, {'ok': False, 'error': '系统主城不能冻结/解散/恢复'})
+        err = ''
+        if act == 'freeze':
+            townreg.freeze_town(self.cfg, tid, 'admin')
+        elif act == 'dissolve':
+            townreg.dissolve_town(self.cfg, tid)
+        elif act == 'restore':
+            x = float(t['original_x'] or t['x'])
+            z = float(t['original_z'] or t['z'])
+            ok, err, _r = townreg.restore_town(self.cfg, tid, x, z,
+                                               townreg.next_due_ms())
+            if not ok:
+                return self._send(400, {'ok': False, 'error': err})
+        elif act == 'settle':
+            if self.world is None:
+                return self._send(503, {'ok': False, 'error': '世界没起来'})
+            self.world.post_admin('towndue', {'id': tid})
+            return self._send(200, {'ok': True, 'msg': '已安排结算（5 秒内）'})
+        else:
+            return self._send(400, {'ok': False, 'error': '不认识的小镇操作'})
+        # 让 tick 线程换成库里的最新状态（冻结/恢复都要立刻生效）
+        if self.world is not None:
+            fresh = townreg.get_town(self.cfg, tid)
+            if fresh:
+                self.world.post_admin('townset', {'row': {k: fresh[k] for k in fresh.keys()}})
+        return self._send(200, {'ok': True, 'id': tid, 'act': act})
 
     def api_admin_players(self):
         """玩家列表（第 64 轮：在线优先 + 分页 + 测试账号过滤）

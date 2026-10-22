@@ -4199,6 +4199,23 @@ class World(object):
             return
         # ★ B1：把小镇到期时间调到"刚刚"，让下一个 5 秒的结算立刻扣费/冻结
         #   （管理页/自测都用它；不直接改金币 ✓）
+        # ★ C1：管理页把库里最新的一条小镇记录推给 tick 线程（冻结/恢复立刻生效）
+        if act == 'townset':
+            row = (d or {}).get('row') or {}
+            try:
+                tid = int(row.get('id'))
+            except Exception:
+                return
+            self.towns[tid] = row
+            try:
+                self._rebuild_dyn_shops()
+            except Exception as e:
+                print('[town] rebuild after townset failed: %r' % (e,))
+            q = self._player_by_role(row.get('owner_id'))
+            if q is not None:
+                self._town_send_list(q)
+            return
+
         if act == 'towndue':
             try:
                 tid = int(d.get('id'))
