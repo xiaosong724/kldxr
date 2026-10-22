@@ -1419,7 +1419,7 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
   width:min(520px,94vw);color:#dfe8f2;font:12px 'Microsoft YaHei',sans-serif;pointer-events:auto">
   <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
     <span style="color:#8fa3b8;white-space:nowrap">画面大小</span>
-    <input id="camZoom" type="range" min="60" max="300" value="100" style="flex:1;min-width:0">
+    <input id="camZoom" type="range" min="30" max="500" value="100" style="flex:1;min-width:0">
     <span id="camZoomVal" style="color:#ffd83d;min-width:38px;text-align:right">100%</span>
   </div>
   <div style="display:flex;gap:5px;flex-wrap:wrap">
@@ -1877,9 +1877,9 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
    <div id="rowDet"></div>
    <!-- ★ round422（用户："只放大游戏画面，UI 和按钮不变"）
         ★ 100% = 现在的大小（最小档 ✓）既只放大也不会缩小 ✓ -->
-   <div class="setLabel">画面大小 <small style="opacity:.6">（只缩放游戏画面 ✗ 按钮和界面不变 ✓ 60% ~ 300%）</small></div>
+   <div class="setLabel">画面大小 <small style="opacity:.6">（只缩放游戏画面 ✗ 按钮和界面不变 ✓ 30% ~ 500%，第一/第三人称都生效）</small></div>
    <div id="rowZoom" style="display:flex;align-items:center;gap:10px;padding:6px 0">
-     <input id="zoomRange" type="range" min="60" max="300" step="5" value="100"
+     <input id="zoomRange" type="range" min="30" max="500" step="5" value="100"
             style="flex:1 1 auto;height:16px;accent-color:#ffd83d">
      <span id="zoomVal" style="width:48px;text-align:right;font-size:13px;color:#ffd83d;
            font-variant-numeric:tabular-nums">100%</span>

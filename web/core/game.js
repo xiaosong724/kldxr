@@ -99,13 +99,19 @@ function setWorldZoom() {
   /* ★★ round531（用户："游戏相机画面改成大小滑动，最小 60%，最大 300%"）
      → 范围放宽到 60~300 ✗ 设置页用滑条调 ✓ */
   if (typeof v !== 'number' || !isFinite(v)) { return SET_DEF.zoom; }
-  return Math.max(60, Math.min(300, Math.round(v)));
+  // ★ 2026-10-22（用户要求）：范围 60~300 → 【30~500】
+  return Math.max(30, Math.min(500, Math.round(v)));
 }
 function applyWorldZoom() {
   if (!cam) { return; }
   /* ★ 80% 也要能用 ✗ 所以 【不能】再把 k 夹到 >= 1 ✓
      （k<1 → fov 变宽 → 看得更远 / 人更小 ✓）*/
-  var k = (CAM_VIEW === 'first' || CAM_VIEW === 'third') ? 1 : setWorldZoom() / 100;
+  /* ★★★ 2026-10-22（用户："第一视角也可以调整画面大小"）★★★
+     以前这里写的是 `(first || third) ? 1 : zoom/100` —— 第一/第三人称直接吃掉缩放，
+     所以第一视角拖滑块完全没反应。
+     现在：第一人称【也用】滑块（改 FOV，人不变形、只看远近）；
+           第三人称仍然 1（它的远近是靠相机距离 CAM_DIST 实现的，不能再乘一次）。 */
+  var k = (CAM_VIEW === 'third') ? 1 : (setWorldZoom() / 100);
   cam.fov = 2 * Math.atan(Math.tan(CAM_FOV_BASE * Math.PI / 360) / k) * 180 / Math.PI;
   cam.updateProjectionMatrix();
 }

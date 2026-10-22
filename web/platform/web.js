@@ -4766,7 +4766,7 @@ function openSet(wantTab) {
     if (!zr._b) {
       zr._b = true;
       zr.addEventListener('input', function () {
-        var v = Math.max(60, Math.min(300, parseInt(zr.value, 10) || 100));
+        var v = Math.max(30, Math.min(500, parseInt(zr.value, 10) || 100));
         SETCFG.zoom = v;
         saveSet();
         if (zv) { zv.textContent = v + '%'; }
@@ -7435,12 +7435,13 @@ function camToolsSync() {
     if (!z._b) {
       z._b = true;
       z.addEventListener('input', function () {
-        if (CAM_VIEW !== 'free') {
-          try { toast('自由视角才能缩放画面'); } catch (eZZ) { }
+        /* ★ 2026-10-22（用户要求）：第一人称也能调画面大小（以前只允许自由视角） */
+        if (CAM_VIEW !== 'free' && CAM_VIEW !== 'first') {
+          try { toast('自由 / 第一视角才能缩放画面'); } catch (eZZ) { }
           z.value = String((typeof setWorldZoom === 'function') ? setWorldZoom() : 100);
           return;
         }
-        var nv = Math.max(60, Math.min(300, parseInt(z.value, 10) || 100));
+        var nv = Math.max(30, Math.min(500, parseInt(z.value, 10) || 100));
         try {
           SETCFG.zoom = nv;
           if (typeof saveSet === 'function') { saveSet(); }
