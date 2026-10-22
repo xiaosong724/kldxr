@@ -3184,7 +3184,23 @@ function townDistrictDetails(g) {
 }
 
 /* 西南新镇细节：公园 / 市集 / 停车 / 花坛 */
+/* ★★★ 2026-10-22（用户："还有很多没有在预设清单里的建筑相关的没有移除"）★★★
+   这是旧版「西南新镇」的硬编码装饰，整片都不在放置清单里、也点不掉：
+     · 公园（草坪/石板路/水池/树）+ 凉亭
+     · 6 张长椅（硬编码画的长椅，和 prop_bench 重影）
+     · 5 个市集摊位（x -154~-106, z 224）
+     · 4 辆车 + 公交站（x -82~-70 / -92, z 148）
+     · 8 个小区花坛（x -220/-204/-188/-172, z 164/182）← 用户在这撞见的就是它
+   主城已经是「放置对象」体系，这些静态残留只会造成"删不掉的物件"。
+   需要回滚：URL 加 ?newdistrict=1 */
 function townNewDistrictDetails(g) {
+  var _on = (function () {
+    try {
+      var q = (typeof UI !== 'undefined' && UI.search) ? (UI.search() || '') : '';
+      return q.indexOf('newdistrict=1') >= 0;
+    } catch (e) { return false; }
+  })();
+  if (!_on) { return; }
   var px = -210, pz = 120;
   townTiledPlane(g, 54, 34, 'grass', px, 0.024, pz);
   for (var p = 0; p < 4; p++) { townTiledPlane(g, 1.4, 30, 'pav', px - 18 + p * 12, 0.031, pz); }
