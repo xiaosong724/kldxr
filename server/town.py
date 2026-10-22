@@ -20,14 +20,15 @@ WALL_T = 0.38
 SEAT_R = 1.9              # 靠近椅子多近能坐下
 SEAT_USE_R = 1.4
 # ★ 2026-10-22（用户："椅子款式不一样，按坐垫调整坐的高度"）：各款座椅的坐垫顶面
+SEAT_PAD_UNIFORM = 0.48
 SEAT_PAD = {
-    'chair_wood': 0.565,
-    'hall_chair': 0.565,
-    'desk_chair': 0.565,
-    'sofa_modern_2': 0.60,
-    'bed_single': 0.53,
-    'bed_double': 0.53,
-    'bed_king': 0.53,
+    'chair_wood': SEAT_PAD_UNIFORM,
+    'hall_chair': SEAT_PAD_UNIFORM,
+    'desk_chair': SEAT_PAD_UNIFORM,
+    'sofa_modern_2': SEAT_PAD_UNIFORM,
+    'bed_single': SEAT_PAD_UNIFORM,
+    'bed_double': SEAT_PAD_UNIFORM,
+    'bed_king': SEAT_PAD_UNIFORM,
 }
 
 

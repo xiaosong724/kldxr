@@ -1032,20 +1032,26 @@ function buildChairAt(g, add, x, z, ry, prefix, color, y0) {
     tmBind(piece, m);
     return m;
   }
+  /* ★ 2026-10-22（用户："椅子样式可以不一样，但坐垫高度要一样"）：
+     坐垫顶面统一到 0.48（= 坐下时人被抬到的绝对高度）。
+     原来坐垫中心 0.535、厚 0.06 → 顶面 0.565，比目标高 0.085，整体下移这么多。 */
+  var SEAT_TOP = 0.48;              /* 所有座椅统一的坐垫顶面高度 */
+  var CUSH = 0.06;                  /* 坐垫厚度 */
+  var yShift = 0.085;               /* 原模型整体下移量（0.565 - 0.48） */
   var a = rp(0, 0), b;
-  put(0.50, 0.09, 0.48, c, a[0], yb + 0.48, a[1], prefix + '_seat');
-  put(0.44, 0.06, 0.40, 0xd8cbb0, a[0], yb + 0.535, a[1], prefix + '_cushion');
+  put(0.50, 0.09, 0.48, c, a[0], yb + 0.48 - yShift, a[1], prefix + '_seat');
+  put(0.44, CUSH, 0.40, 0xd8cbb0, a[0], yb + (SEAT_TOP - CUSH / 2), a[1], prefix + '_cushion');
   b = rp(0, -0.22);
-  put(0.50, 0.55, 0.07, c, b[0], yb + 0.80, b[1], prefix + '_back', ry);
+  put(0.50, 0.55, 0.07, c, b[0], yb + 0.80 - yShift, b[1], prefix + '_back', ry);
   var legs = [['fl', -0.20, 0.18], ['fr', 0.20, 0.18], ['bl', -0.20, -0.18], ['br', 0.20, -0.18]];
   for (var i = 0; i < legs.length; i++) {
     b = rp(legs[i][1], legs[i][2]);
-    put(0.055, 0.42, 0.055, 0x4a3423, b[0], yb + 0.24, b[1], prefix + '_leg_' + legs[i][0]);
+    put(0.055, 0.42, 0.055, 0x4a3423, b[0], yb + 0.24 - yShift, b[1], prefix + '_leg_' + legs[i][0]);
   }
   b = rp(-0.25, 0.0);
-  put(0.045, 0.06, 0.38, 0x4a3423, b[0], yb + 0.66, b[1], prefix + '_arm_left', ry);
+  put(0.045, 0.06, 0.38, 0x4a3423, b[0], yb + 0.66 - yShift, b[1], prefix + '_arm_left', ry);
   b = rp(0.25, 0.0);
-  put(0.045, 0.06, 0.38, 0x4a3423, b[0], yb + 0.66, b[1], prefix + '_arm_right', ry);
+  put(0.045, 0.06, 0.38, 0x4a3423, b[0], yb + 0.66 - yShift, b[1], prefix + '_arm_right', ry);
   tmEndPiece(g, piece);
 }
 
@@ -1199,12 +1205,15 @@ function buildBedAt(g, add, x, z, ry, y0) {
     tmBind(piece, m);
     return m;
   }
-  b(1.60, 0.22, 2.05, 0x6b4a32, 0, 0.22, 0, 'bed_frame');
-  b(1.48, 0.20, 1.92, 0xe8e0d0, 0, 0.43, 0, 'bed_mattress');
-  b(1.42, 0.08, 0.95, 0x7a9aa8, 0, 0.56, 0.42, 'bed_blanket');
-  b(0.55, 0.16, 0.34, 0xf2eee4, -0.34, 0.60, -0.72, 'bed_pillow_l');
-  b(0.55, 0.16, 0.34, 0xf2eee4, 0.34, 0.60, -0.72, 'bed_pillow_r');
-  b(1.60, 0.85, 0.10, 0x5a3e32, 0, 0.55, -1.02, 'bed_headboard');
+  /* ★ 2026-10-22（用户："床垫也统一到 0.48"）：
+     原来床垫顶面 0.43+0.10=0.53，整体下移 0.05 → 顶面 0.48。 */
+  var _bedShift = 0.05;
+  b(1.60, 0.22, 2.05, 0x6b4a32, 0, 0.22 - _bedShift, 0, 'bed_frame');
+  b(1.48, 0.20, 1.92, 0xe8e0d0, 0, 0.43 - _bedShift, 0, 'bed_mattress');
+  b(1.42, 0.08, 0.95, 0x7a9aa8, 0, 0.56 - _bedShift, 0.42, 'bed_blanket');
+  b(0.55, 0.16, 0.34, 0xf2eee4, -0.34, 0.60 - _bedShift, -0.72, 'bed_pillow_l');
+  b(0.55, 0.16, 0.34, 0xf2eee4, 0.34, 0.60 - _bedShift, -0.72, 'bed_pillow_r');
+  b(1.60, 0.85, 0.10, 0x5a3e32, 0, 0.55 - _bedShift, -1.02, 'bed_headboard');
   b(0.12, 0.35, 0.12, 0x4a3423, -0.70, 0.17, 0.92, 'bed_leg_fl');
   b(0.12, 0.35, 0.12, 0x4a3423, 0.70, 0.17, 0.92, 'bed_leg_fr');
   b(0.12, 0.35, 0.12, 0x4a3423, -0.70, 0.17, -0.92, 'bed_leg_bl');
@@ -1232,14 +1241,18 @@ function buildSofaAt(g, add, x, z, ry, y0) {
     tmBind(piece, m);
     return m;
   }
-  b(1.95, 0.35, 0.82, 0x5a6e7a, 0, 0.32, 0, 'sofa_base');
-  b(1.95, 0.62, 0.18, 0x4e606b, 0, 0.76, -0.32, 'sofa_back');
-  b(0.18, 0.52, 0.82, 0x4e606b, -0.88, 0.52, 0, 'sofa_arm_left');
-  b(0.18, 0.52, 0.82, 0x4e606b, 0.88, 0.52, 0, 'sofa_arm_right');
-  b(0.84, 0.12, 0.62, 0x7d94a0, -0.44, 0.54, 0.02, 'sofa_cushion_l');
-  b(0.84, 0.12, 0.62, 0x7d94a0, 0.44, 0.54, 0.02, 'sofa_cushion_r');
-  b(0.10, 0.18, 0.10, 0x3a2a20, -0.82, 0.09, 0.30, 'sofa_leg_l');
-  b(0.10, 0.18, 0.10, 0x3a2a20, 0.82, 0.09, 0.30, 'sofa_leg_r');
+  /* ★ 2026-10-22：沙发坐垫顶面也统一到 0.48（原来 0.54+0.06=0.60，高 0.12）。
+     其它部件整体下移 0.12，保持造型比例。 */
+  var _sy2 = 0.12;
+  b(1.95, 0.35, 0.82, 0x5a6e7a, 0, 0.32 - _sy2, 0, 'sofa_base');
+  b(1.95, 0.62, 0.18, 0x4e606b, 0, 0.76 - _sy2, -0.32, 'sofa_back');
+  b(0.18, 0.52, 0.82, 0x4e606b, -0.88, 0.52 - _sy2, 0, 'sofa_arm_left');
+  b(0.18, 0.52, 0.82, 0x4e606b, 0.88, 0.52 - _sy2, 0, 'sofa_arm_right');
+  /* 坐垫：顶面固定 0.48（厚 0.12 → 中心 0.42） */
+  b(0.84, 0.12, 0.62, 0x7d94a0, -0.44, 0.42, 0.02, 'sofa_cushion_l');
+  b(0.84, 0.12, 0.62, 0x7d94a0, 0.44, 0.42, 0.02, 'sofa_cushion_r');
+  b(0.10, 0.18, 0.10, 0x3a2a20, -0.82, 0.09 - _sy2, 0.30, 'sofa_leg_l');
+  b(0.10, 0.18, 0.10, 0x3a2a20, 0.82, 0.09 - _sy2, 0.30, 'sofa_leg_r');
   tmEndPiece(g, piece);
 }
 
@@ -1320,8 +1333,8 @@ function buildHouseInterior(g, add, W, D, H) {
   dg.rotation.y = -Math.PI / 2;
   g.add(dg);
   var Pdt = tmPiece(g, 'dining_table', '餐桌');
-  Pdt.add(add(tmBox(dg, 1.30, 0.10, 0.78, 0x6b4a32, 0, 0.72, 0), 'dining_table'));
-  Pdt.add(add(tmBox(dg, 0.10, 0.62, 0.10, 0x4a3423, 0, 0.42, 0), 'dining_table_leg'));
+  Pdt.add(add(tmBox(dg, 1.30, 0.10, 0.78, 0x6b4a32, 0, 0.635, 0), 'dining_table'));
+  Pdt.add(add(tmBox(dg, 0.10, 0.62, 0.10, 0x4a3423, 0, 0.335, 0), 'dining_table_leg'));
   tmPieceEnd(g, Pdt);
   buildChairAt(dg, add, -0.95, 0, Math.PI / 2, 'dining_chair_1', 0x8a5a3a);
   buildChairAt(dg, add, 0.95, 0, -Math.PI / 2, 'dining_chair_2', 0x8a5a3a);
@@ -1371,8 +1384,8 @@ function buildCafeOutdoor(g, add, W, D) {
   var z = D / 2 + 1.55;
   var x = W * 0.29;
   var t1 = tmPiece(g, 'outdoor_table', '户外桌');
-  t1.add(add(tmBox(g, 1.20, 0.10, 0.82, 0x6b4a32, x, 0.70, z), 'outdoor_table_1'));
-  t1.add(add(tmBox(g, 0.10, 0.58, 0.10, 0x4a3423, x, 0.41, z), 'outdoor_table_1_leg'));
+  t1.add(add(tmBox(g, 1.20, 0.10, 0.82, 0x6b4a32, x, 0.615, z), 'outdoor_table_1'));
+  t1.add(add(tmBox(g, 0.10, 0.58, 0.10, 0x4a3423, x, 0.325, z), 'outdoor_table_1_leg'));
   tmPieceEnd(g, t1);
   buildChairAt(g, add, x - 0.92, z, Math.PI / 2, 'outdoor_chair_1', 0x8a5a3a);
   buildChairAt(g, add, x + 0.92, z, -Math.PI / 2, 'outdoor_chair_2', 0x8a5a3a);
@@ -1380,8 +1393,8 @@ function buildCafeOutdoor(g, add, W, D) {
 
   var x2 = -W * 0.27;
   var t2 = tmPiece(g, 'outdoor_table', '户外桌');
-  t2.add(add(tmBox(g, 0.90, 0.10, 0.65, 0x6b4a32, x2, 0.68, z), 'outdoor_table_2'));
-  t2.add(add(tmBox(g, 0.10, 0.56, 0.10, 0x4a3423, x2, 0.39, z), 'outdoor_table_2_leg'));
+  t2.add(add(tmBox(g, 0.90, 0.10, 0.65, 0x6b4a32, x2, 0.595, z), 'outdoor_table_2'));
+  t2.add(add(tmBox(g, 0.10, 0.56, 0.10, 0x4a3423, x2, 0.305, z), 'outdoor_table_2_leg'));
   tmPieceEnd(g, t2);
   buildChairAt(g, add, x2 - 0.70, z, Math.PI / 2, 'outdoor_chair_3', 0x8a5a3a);
   buildChairAt(g, add, x2 + 0.70, z, -Math.PI / 2, 'outdoor_chair_4', 0x8a5a3a);
@@ -1458,8 +1471,8 @@ function buildTownInterior(g, spec, add, W, D, H) {
     /* ---- table: top + leg in one piece ---- */
     var tx = W * 0.20, tz = D * 0.18;
     var pt = tmPiece(g, 'dining_table', '餐桌');
-    pt.add(add(tmBox(g, 1.45, 0.10, 0.90, 0x6b4a32, tx, 0.72, tz), 'table_1'));
-    pt.add(add(tmBox(g, 0.10, 0.62, 0.10, 0x4a3423, tx, 0.42, tz), 'table_1_leg'));
+    pt.add(add(tmBox(g, 1.45, 0.10, 0.90, 0x6b4a32, tx, 0.635, tz), 'table_1'));
+    pt.add(add(tmBox(g, 0.10, 0.62, 0.10, 0x4a3423, tx, 0.335, tz), 'table_1_leg'));
     tmPieceEnd(g, pt);
 
     buildChairAt(g, add, tx - 1.05, tz, Math.PI / 2, 'chair_1', 0x8a5a3a);

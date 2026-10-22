@@ -118,14 +118,18 @@ var TOWN_SEAT_SLOTS = {
    人坐下时模型整体抬到这个高度，而不是统一 0.48。
    木椅/大厅座椅/书桌椅：坐垫中心 0.535、厚 0.06 → 顶面 0.565
    双人沙发：坐垫中心 0.54、厚 0.12 → 顶面 0.60 */
+/* ★ 2026-10-22（用户："椅子样式可以不一样，但坐垫高度要一样"）：
+   模型里所有座椅的坐垫顶面、桌面、床垫都改成了【0.48】，
+   所以这里不再按款式区分，统一取 0.48。 */
+var SEAT_PAD_UNIFORM = 0.48;
 var TOWN_SEAT_PAD = {
-  chair_wood: 0.565,
-  hall_chair: 0.565,
-  desk_chair: 0.565,
-  sofa_modern_2: 0.60,
-  bed_single: 0.53,
-  bed_double: 0.53,
-  bed_king: 0.53
+  chair_wood: SEAT_PAD_UNIFORM,
+  hall_chair: SEAT_PAD_UNIFORM,
+  desk_chair: SEAT_PAD_UNIFORM,
+  sofa_modern_2: SEAT_PAD_UNIFORM,
+  bed_single: SEAT_PAD_UNIFORM,
+  bed_double: SEAT_PAD_UNIFORM,
+  bed_king: SEAT_PAD_UNIFORM
 };
 function townPadOf(catalog, fallback) {
   var v = TOWN_SEAT_PAD[catalog];

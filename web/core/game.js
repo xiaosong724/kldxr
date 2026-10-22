@@ -7537,8 +7537,8 @@ function netUpdate(dt) {
         /* ★ 2026-10-22（用户：躺/坐的高度要和地板一样）：不再额外加高，
            直接站在"脚下地板高度"上（躺姿只沿朝向偏一点，保持躺在床上）。 */
         var _y3b = (typeof o.fy === 'number') ? o.fy : 0;
-        /* 床垫顶面 0.53 */
-        _gs0.position.set(_pX + Math.sin(_sy3) * _so3, _y3b + 0.53,
+        /* 床垫顶面 0.48（和坐垫统一） */
+        _gs0.position.set(_pX + Math.sin(_sy3) * _so3, _y3b + 0.48,
                           _pZ + Math.cos(_sy3) * _so3);
         _gs0.rotation.set(-1.45, _sy3, 0);
         o.hh.legL.rotation.x = 0; o.hh.legR.rotation.x = 0;
@@ -9406,8 +9406,8 @@ function frame(ts) {
     var _so = (typeof SLEEP_OFF !== 'undefined') ? SLEEP_OFF : 0.85;
     /* ★ 2026-10-22（用户：自己睡觉的高度变高了）：和"别人看你"保持一致 ——
        高度就是脚下地板高度（P.y 已经是 supportYAt 的结果），不再额外 +0.62。 */
-    /* 床垫顶面 0.53 */
-    H.g.position.set(P.x + Math.sin(_sy) * _so, P.y + 0.53, P.z + Math.cos(_sy) * _so);
+    /* 床垫顶面 0.48（和坐垫统一） */
+    H.g.position.set(P.x + Math.sin(_sy) * _so, P.y + 0.48, P.z + Math.cos(_sy) * _so);
     /* ★ 欧拉顺序必须是 YXZ：先绕 Y 转向，再绕本地 X 躺下。
        用默认 XYZ 的话，Y 转 90/180 度后"躺"的方向就跟着歪了 → 头穿出床外。 */
     H.g.rotation.order = 'YXZ';
