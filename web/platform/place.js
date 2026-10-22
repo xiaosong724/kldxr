@@ -331,18 +331,32 @@
       EDIT.box = null;
     }
   }
+  function editHintText() {
+    if (!EDIT.hint) { return; }
+    var txt;
+    if (EDIT.moving) {
+      txt = '第 3 步：点一下地面，物件就搬过去（半透明模型 = 新位置）· Esc 取消';
+    } else if (EDIT.id != null) {
+      txt = '第 2 步：点底部「移动」，然后点地面 · 也可以直接「旋转 90°」或「删除」';
+    } else {
+      txt = '第 1 步：点场景里的建筑 / 家具（会变黄框）· Esc 退出编辑';
+    }
+    EDIT.hint.textContent = txt;
+  }
+
   function editSelect(id) {
     editClear();
     EDIT.id = id;
     EDIT.moving = false;
-    if (id == null) { editBarRender(); return; }
+    if (id == null) { editBarRender(); editHintText(); return; }
     var e = P.objs[id];
-    if (!e || !e.mesh) { EDIT.id = null; editBarRender(); return; }
+    if (!e || !e.mesh) { EDIT.id = null; editBarRender(); editHintText(); return; }
     try {
       EDIT.box = new THREE.BoxHelper(e.mesh, 0xffd83d);
       (sceneOf() || W().scene).add(EDIT.box);
     } catch (e1) { EDIT.box = null; }
     editBarRender();
+    editHintText();
   }
   function sceneOf() { return (typeof W().scene !== 'undefined') ? W().scene : null; }
   function editBarRender() {
@@ -366,16 +380,22 @@
     }
     EDIT.bar.style.display = 'flex';
     if (EDIT.id == null) {
-      EDIT.bar.innerHTML = '<b style="color:#ffe9b0">编辑小镇</b>' +
-        '<span style="color:#9aa3a8">点场景里的物件选中 · Esc 退出</span>' +
+      EDIT.bar.innerHTML =
+        '<b style="color:#ffe9b0">① 点场景里的物件</b>' +
+        '<span style="color:#9aa3a8">选中后会变黄框 · Esc 退出</span>' +
         '<button data-e="done" style="background:#2f6b3f;border-color:#7ee08a">完成</button>';
       return;
     }
     var e = P.objs[EDIT.id], o = e && e.data;
     var nm = (o && (o.catalog || o.model)) || ('#' + EDIT.id);
-    EDIT.bar.innerHTML = '<b style="color:#ffe9b0">已选：' + nm + '</b>' +
-      (EDIT.moving ? '<span style="color:#7ee08a">点地面确定新位置</span>' : '') +
-      '<button data-e="move">移动</button>' +
+    if (EDIT.moving) {
+      EDIT.bar.innerHTML = '<b style="color:#7ee08a">③ 点地面确定新位置</b>' +
+        '<span style="color:#9aa3a8">左键/点一下地面 · Esc 取消</span>' +
+        '<button data-e="cancelmove" style="background:#6a2f2f;border-color:#ff9a8a">取消移动</button>';
+      return;
+    }
+    EDIT.bar.innerHTML = '<b style="color:#ffe9b0">② 已选：' + nm + '</b>' +
+      '<button data-e="move" style="background:#2f5f8a;border-color:#9fe8ff">移动（点这里）</button>' +
       '<button data-e="rot">旋转 90°</button>' +
       '<button data-e="del" style="background:#6a2f2f;border-color:#ff9a8a">删除</button>' +
       '<button data-e="unsel">取消选中</button>' +
@@ -384,12 +404,19 @@
   function editAct(a) {
     if (a === 'done') { editExit(); return; }
     if (a === 'unsel') { editSelect(null); return; }
+    if (a === 'cancelmove') {
+      EDIT.moving = false;
+      editMoveGhostStop(true);
+      editBarRender();
+      return;
+    }
     if (EDIT.id == null) { return; }
     if (a === 'move') {
       /* ★ 2026-10-22：移动时给一个半透明预览 ✗ 不然看不见会挪到哪 ✓ */
       editMoveGhostStart();
       EDIT.moving = true;
       editBarRender();
+      editHintText();
       return;
     }
     if (a === 'rot') {
@@ -455,7 +482,7 @@
       document.body.appendChild(EDIT.hint);
     }
     EDIT.hint.style.display = 'block';
-    EDIT.hint.textContent = '编辑小镇：点物件选中 → 底部工具条操作';
+    editHintText();
     editSelect(null);
   }
   function editExit() {
@@ -498,6 +525,11 @@
     if (id != null) {
       editSelect(id);
       try { e.stopPropagation(); } catch (e2) { }
+      return;
+    }
+    /* 点空地：如果选着东西，就当作「取消选中」（避免误触移动） */
+    if (EDIT.id != null && !EDIT.moving) {
+      editSelect(null);
     }
   }, true);
 

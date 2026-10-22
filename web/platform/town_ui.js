@@ -90,10 +90,15 @@
     return h;
   }
   function editHTML(t) {
-    return '<div class="townHint">编辑模式：点场景里的物件选中，然后用底部的工具条' +
-      '「移动 / 旋转 90° / 删除」。Esc 退出。</div>' +
-      '<div class="row"><button onclick="townEdit()">进入编辑模式</button></div>' +
-      '<div class="townHint">删除会连同该建筑自带的家具一起删除，不退款。</div>';
+    return '<div class="townHint"><b>怎么改已经放好的东西：</b></div>' +
+      '<div class="townHint">① 点下面的按钮进入编辑模式；<br>' +
+      '② 点场景里的建筑 / 家具 → 会套一个黄框；<br>' +
+      '③ 点底部工具条的「移动」→ 再点一下地面，就搬过去了<br>' +
+      '　（搬的时候有半透明模型预览；按 Esc 可以取消）</div>' +
+      '<div class="row"><button onclick="townEdit()" style="background:#2f5f8a;border-color:#9fe8ff">' +
+      '进入编辑模式</button></div>' +
+      '<div class="townHint">想换朝向：选中后点「旋转 90°」；不要了：点「删除」' +
+      '（连同建筑自带家具一起删，不退款）。</div>';
   }
   function permHTML(t) {
     if (!t) {

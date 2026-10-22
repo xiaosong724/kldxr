@@ -134,12 +134,26 @@ async def main_async(token):
             # ② 编辑移动预览
             obj_id = await c.ev("return (window.MY_OBJECTS||[]).filter(function(o){"
                                 "return !o.parent;})[0].id;")
-            await c.ev('PlaceMode.startEdit(); PlaceMode.selectById(%d); return 1;' % obj_id)
+            await c.ev('PlaceMode.startEdit(); return 1;')
             await asyncio.sleep(0.3)
+            h1 = await c.ev("return (document.getElementById('editHint')||{}).textContent||'';")
+            print('  hint step1:', h1)
+            assert '第 1 步' in h1, 'guidance step1 missing'
+            await c.ev('PlaceMode.selectById(%d); return 1;' % obj_id)
+            await asyncio.sleep(0.3)
+            h2 = await c.ev("return (document.getElementById('editHint')||{}).textContent||'';")
+            bar2 = await c.ev("return (document.getElementById('editBar')||{}).textContent||'';")
+            print('  hint step2:', h2)
+            assert '第 2 步' in h2 and '移动' in bar2, 'guidance step2 missing'
             await c.ev("var bs=[].slice.call(document.querySelectorAll('#editBar button'));"
                        "var b=bs.filter(function(x){return x.textContent.indexOf('移动')>=0;})[0];"
                        "if(b){b.click();} return 1;")
             await asyncio.sleep(0.4)
+            h3 = await c.ev("return (document.getElementById('editHint')||{}).textContent||'';")
+            print('  hint step3:', h3)
+            assert '第 3 步' in h3, 'guidance step3 missing'
+            cancelBtn = await c.ev("return !!document.querySelector('#editBar button[data-e=\"cancelmove\"]');")
+            assert cancelBtn, 'cancel move button missing'
             st2 = await c.ev('return PlaceMode.previewState();')
             print('  move preview:', st2)
             assert st2['moving'] and st2['moveGhost'], 'no move ghost'
