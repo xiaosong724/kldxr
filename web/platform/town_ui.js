@@ -84,7 +84,9 @@
       if (!arr || !arr.length) { return; }
       h += '<div class="townSub">' + (cn[k] || k) + '</div><div class="townGrid">';
       arr.forEach(function (c) {
-        h += '<button onclick="townPlace(\'' + c.id + '\')">' + (c.name || c.id) +
+        /* ★ 2026-10-22：目录现在带图标（服务端 icon 列） */
+        h += '<button onclick="townPlace(\'' + c.id + '\')">' +
+          '<b style="margin-right:4px">' + (c.icon || '📦') + '</b>' + (c.name || c.id) +
           '<s>' + (+c.price || 0).toLocaleString() + '</s></button>';
       });
       h += '</div>';

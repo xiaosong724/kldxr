@@ -1760,12 +1760,33 @@ class World(object):
             if (p.x - float(s.get('bx') or s['x'])) ** 2 + \
                (p.z - float(s.get('bz') or s['z'])) ** 2 <= r * r:
                 return s
-        for s in shopmod.shop_list():
-            if not s.get('served'):
-                continue
-            if (p.x - s['x']) ** 2 + (p.z - s['z']) ** 2 <= 4.6 * 4.6:
-                return s
+        # ★ 2026-10-22：静态商店表（老主城写死坐标的那几家）已经不再渲染，
+        #   这里再兜底就会让空地上也能点单 —— 直接去掉。
         return None
+
+    def _nearest_table_of_seat(self, sid):
+        """椅子没连到桌位时，按椅子坐标就近找一张桌子（3.2 米内）。
+
+        ★ 2026-10-22（用户："范围内的椅子坐下都可以点单才对"）
+        """
+        try:
+            st = self._seat_lookup(sid)
+        except Exception:
+            st = None
+        if not st:
+            return None
+        sx = float(st.get('x') or 0.0)
+        sz = float(st.get('z') or 0.0)
+        best = None
+        bd = 3.2 * 3.2
+        for tid, t in (self.shop_tables or {}).items():
+            dx = float(t.get('x') or 0.0) - sx
+            dz = float(t.get('z') or 0.0) - sz
+            d2 = dx * dx + dz * dz
+            if d2 <= bd:
+                bd = d2
+                best = t
+        return best
 
     def _order_ready(self, p):
         """点单前置：找到店 + 已坐下 + 椅子属于店里的桌子。返回 (shop, table, msg)"""
@@ -1775,6 +1796,11 @@ class World(object):
         if str(getattr(p, 'seat', -1)) in ('-1', '', 'None'):
             return None, None, 'SIT_FIRST'
         table = self._table_of_seat(getattr(p, 'seat', -1))
+        if not table:
+            # ★ 2026-10-22（用户："范围内的椅子坐下都可以点单才对"）：
+            #   椅子离桌心稍远（>SEAT_LINK_R）就没连上桌位 → 以前直接 NO_TABLE。
+            #   这里退一步：按「坐着的椅子坐标」就近找一张桌子。
+            table = self._nearest_table_of_seat(getattr(p, 'seat', -1))
         if not table:
             return s, None, 'NO_TABLE'
         # 桌子必须在这家店的范围里（别在别人家里坐下就能点隔壁店的单）
@@ -1859,7 +1885,7 @@ class World(object):
                 (wid, str(s['id']), oid, int(table['obj']), json.dumps(path),
                  'walking', now))
             wmsg = P.pack('waiter', id=wid, shop=str(s['id']), table=table['id'],
-                          path=path, secs=2.5)
+                          path=path, secs=2.5, name=str(s.get('name') or ''))
             for q in list(self.players.values()):
                 if (q.x - table['x']) ** 2 + (q.z - table['z']) ** 2 <= 14.0 * 14.0:
                     self._send_cid(q.cid, wmsg)
@@ -2160,8 +2186,23 @@ class World(object):
                     if not chairs:
                         continue
                     key = 'tbl%d' % int(o['id'])
+                    # ★ 2026-10-22（用户："点单后桌子上要有对应的商品模型"）：
+                    #   桌面高度按目录 height 算（以前客户端写死 0.78 → 杯子浮在桌面上方），
+                    #   室内的还要加上那栋建筑的室内地板高度。
+                    _cr = cats.get(str(o.get('catalog_id') or '')) or {}
+                    _top = float(_cr.get('height') or 0.75) - 0.06
+                    try:
+                        _pid = int(o.get('parent_id') or 0)
+                        if _pid:
+                            for _oo in rows:
+                                if int(_oo['id']) == _pid:
+                                    _top += townreg.floor_y_of(_oo.get('model_id'))
+                                    break
+                    except Exception:
+                        pass
                     tables[key] = {
                         'id': key, 'obj': int(o['id']), 'town': int(tid),
+                        'top': round(_top, 2),
                         'x': float(o['x']), 'z': float(o['z']),
                         'rot': float(o.get('rot') or 0.0),
                         'parent': int(o.get('parent_id') or 0),
@@ -2169,11 +2210,7 @@ class World(object):
                     }
                     for ch in chairs:
                         seat_table[ch['id']] = key
-            # 老主城露台：桌子是旧渲染器画的，没有 town_objects 记录
-            for st in tblmod.static_tables():
-                tables[st['id']] = st
-                for ch in st['chairs']:
-                    seat_table[ch['id']] = st['id']
+            # ★ 2026-10-22：老主城露台桌（静态画出来的）已下线，不再注入桌位
         except Exception as _e:
             print('[shop] rebuild failed: %r' % (_e,))
         self.dyn_shops = out
@@ -2296,6 +2333,8 @@ class World(object):
             'id': tblmod.new_id('cup'), 'table': table['id'], 'order': str(order_id),
             'slot': int(slot), 'item_key': str(item.get('key') or ''),
             'item_name': str(item.get('name') or ''), 'model': str(item.get('model') or 'cup'),
+            # ★ 2026-10-22：图标只在内存里带着（库里没这一列，重启后回落到默认）
+            'icon': str(item.get('icon') or ''),
             'state': str(state), 'created_at': int(now),
         }
         self.cups.setdefault(table['id'], []).append(cup)

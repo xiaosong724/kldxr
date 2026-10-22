@@ -17,7 +17,7 @@ SEAT_CATALOG = frozenset(('chair_wood', 'hall_chair', 'desk_chair',
 # 一张桌子最多几杯（也受实际椅子数限制）
 MAX_CUPS = 4
 # 椅子离桌心多远算这张桌子的
-SEAT_LINK_R = 1.9
+SEAT_LINK_R = 2.6
 
 
 def new_id(prefix):
@@ -93,6 +93,7 @@ def table_public(table, cups):
         px, pz = pos.get(slot, (table['x'], table['z']))
         out_cups.append({'slot': slot,
                          'name': c.get('item_name') or '',
+                         'icon': c.get('icon') or '',
                          'model': c.get('model') or 'cup',
                          'state': c.get('state') or 'served',
                          'x': px, 'z': pz})
@@ -100,6 +101,7 @@ def table_public(table, cups):
         'id': str(table.get('id') or ('tbl%d' % int(table['obj']))),
         'x': round(float(table['x']), 2),
         'z': round(float(table['z']), 2),
+        'top': round(float(table.get('top') or 0.78), 2),
         'max': int(table.get('max') or 0),
         'cups': out_cups,
     }

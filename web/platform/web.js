@@ -6358,26 +6358,82 @@ function ensureCupGroup() {
   return CUP_GROUP;
 }
 function cupMesh(model) {
+  /* ★ 2026-10-22（用户："点单后桌子上要有对应的商品模型"）：
+     以前只有 cup/bottle/plate/bowl/cake/crystal 六种，其余（卷轴/木箱/石头/
+     砖/票…）全画成杯子。现在按商品 model 逐个给形状。 */
   var g = new THREE.Group();
-  var col = 0xf0e6d6, r = 0.07, h = 0.11, handle = true;
-  if (model === 'bottle') { col = 0x8fb8c8; r = 0.05; h = 0.26; handle = false; }
-  else if (model === 'plate') { col = 0xe8e0d0; r = 0.17; h = 0.03; handle = false; }
-  else if (model === 'bowl') { col = 0xcf6a4a; r = 0.14, h = 0.09; handle = false; }
-  else if (model === 'cake') { col = 0xf2d9a0; r = 0.10; h = 0.12; handle = false; }
-  else if (model === 'crystal') { col = 0x9ad0e8; r = 0.06; h = 0.16; handle = false; }
-  var body = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.85, h, 10),
-    new THREE.MeshLambertMaterial({ color: col }));
-  body.position.y = h / 2;
-  g.add(body);
-  if (handle) {
-    var hd = new THREE.Mesh(new THREE.TorusGeometry(0.035, 0.012, 6, 10),
-      new THREE.MeshLambertMaterial({ color: col }));
-    hd.position.set(r + 0.03, h * 0.55, 0);
-    hd.rotation.y = Math.PI / 2;
-    g.add(hd);
+  function M(c) { return new THREE.MeshLambertMaterial({ color: c }); }
+  function cyl(rt, rb, h, c, y, seg) {
+    var m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg || 12), M(c));
+    m.position.y = y || 0; g.add(m); return m;
+  }
+  function box(w, h, d, c, x, y, z) {
+    var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), M(c));
+    m.position.set(x || 0, y || 0, z || 0); g.add(m); return m;
+  }
+  switch (model) {
+    case 'bottle':
+      cyl(0.05, 0.06, 0.24, 0x8fb8c8, 0.12);
+      cyl(0.022, 0.028, 0.08, 0x6a8a96, 0.28);
+      break;
+    case 'plate':
+      cyl(0.17, 0.16, 0.02, 0xe8e0d0, 0.01, 18);
+      cyl(0.13, 0.13, 0.02, 0xf4ecd8, 0.03, 16);
+      box(0.11, 0.05, 0.11, 0xc88a4a, 0, 0.06, 0);
+      break;
+    case 'bowl':
+      cyl(0.14, 0.10, 0.09, 0xcf6a4a, 0.045, 14);
+      cyl(0.12, 0.12, 0.02, 0xe8d0b0, 0.10, 14);
+      box(0.07, 0.03, 0.07, 0xd8a45a, 0, 0.11, 0);
+      break;
+    case 'cake':
+      box(0.16, 0.09, 0.16, 0xf2d9a0, 0, 0.045, 0);
+      box(0.17, 0.02, 0.17, 0xe8a8b8, 0, 0.10, 0);
+      cyl(0.015, 0.015, 0.05, 0xff6a6a, 0, 0.13, 6);
+      break;
+    case 'bread':
+      box(0.20, 0.10, 0.13, 0xd8a45a, 0, 0.05, 0);
+      box(0.21, 0.03, 0.14, 0xe8c07a, 0, 0.11, 0);
+      break;
+    case 'crystal': {
+      var cm = new THREE.Mesh(new THREE.OctahedronGeometry(0.08, 0), M(0x9ad0e8));
+      cm.position.y = 0.09; g.add(cm);
+      break;
+    }
+    case 'scroll': {
+      var sc = cyl(0.045, 0.045, 0.22, 0xe8dcc8, 0.05, 8);
+      sc.rotation.z = Math.PI / 2;
+      cyl(0.05, 0.05, 0.02, 0xb08a5a, 0.05).rotation.z = Math.PI / 2;
+      break;
+    }
+    case 'crate':
+      box(0.22, 0.15, 0.20, 0xa87a4a, 0, 0.075, 0);
+      box(0.23, 0.025, 0.21, 0x8a6038, 0, 0.155, 0);
+      box(0.24, 0.02, 0.03, 0x8a6038, 0, 0.06, 0);
+      break;
+    case 'stone':
+      cyl(0.09, 0.11, 0.08, 0x9a9a94, 0.04, 8);
+      break;
+    case 'brick':
+      box(0.18, 0.10, 0.12, 0x9a6a4a, 0, 0.05, 0);
+      box(0.185, 0.012, 0.125, 0x7a5238, 0, 0.10, 0);
+      break;
+    case 'ticket':
+      box(0.16, 0.012, 0.10, 0xf0e8d0, 0, 0.006, 0);
+      box(0.03, 0.014, 0.10, 0xd8c8a8, 0.06, 0.007, 0);
+      break;
+    default:
+      cyl(0.07, 0.06, 0.11, 0xf0e6d6, 0.055, 12);
+      var hd = new THREE.Mesh(new THREE.TorusGeometry(0.032, 0.011, 6, 10), M(0xf0e6d6));
+      hd.position.set(0.095, 0.062, 0);
+      hd.rotation.y = Math.PI / 2;
+      g.add(hd);
+      cyl(0.06, 0.06, 0.01, 0xb4784a, 0.10, 12);
+      break;
   }
   return g;
 }
+
 function renderCups() {
   var grp = ensureCupGroup();
   if (!grp) { return; }
@@ -6398,7 +6454,8 @@ function renderCups() {
         m.scale.set(0.6, 0.6, 0.6);
         m.traverse(function (o) { if (o.material) { o.material.transparent = true; o.material.opacity = 0.45; } });
       }
-      m.position.set(+c.x || +t.x, 0.78, +c.z || +t.z);
+      /* ★ 2026-10-22：以前写死 0.78 → 杯子浮在桌面上方；现在用服务端按目录 height 算的 t.top */
+      m.position.set(+c.x || +t.x, (+t.top > 0 ? +t.top : 0.78), +c.z || +t.z);
       grp.add(m);
     }
   }
@@ -6411,6 +6468,19 @@ function cupsApply(d) {
 }
 function cupTake(slot, drink) {
   try {
+    if (drink) {
+      /* ★ 2026-10-22（用户："我们使用的喝的吃的是否有动画，手上有没有拿"）：
+         在桌上"喝掉"以前只发包、没有任何动作。这里复用背包吃药的同一套动画
+         （右手拿起杯子 → 抬手 → 放下）。 */
+      var _t = TABLE_CUPS[MY_TABLE];
+      var _c = null;
+      if (_t && _t.cups) {
+        for (var _i = 0; _i < _t.cups.length; _i++) {
+          if (+_t.cups[_i].slot === +slot) { _c = _t.cups[_i]; break; }
+        }
+      }
+      if (typeof eatStart === 'function') { eatStart((_c && _c.model) || 'cup'); }
+    }
     wsSend('cup_take', { table: MY_TABLE, slot: slot, drink: drink ? 1 : 0 });
     ORDER_MSG = drink ? '喝一口…' : '收走…';
     orderRender();
@@ -6418,12 +6488,20 @@ function cupTake(slot, drink) {
 }
 window.cupTake = cupTake;
 
-function waiterModel() {
-  /* ★ 2026-10-22（用户："NPC 用玩家的模型，参考 AI 分身"）
-     传菜员直接用 hero()，和本体同一个身材/皮肤，只是不拿武器、端个托盘 */
+function waiterModel(shopName) {
+  /* ★ 2026-10-22（用户："送过来要和现在在店里的人皮肤一样"）：
+     传菜员的皮肤 = 同一家店【店员】的皮肤。
+     店员名字是「店名 + 掌柜」，镇上的 clerk 就是用这个名字选皮肤的，
+     所以这里用同一个 townNpcSkinId() 就能保证两张脸一模一样。 */
   try {
     if (typeof hero === 'function') {
-      var r = hero('f02', {});
+      var _skin = 'f02';
+      try {
+        if (typeof townNpcSkinId === 'function') {
+          _skin = townNpcSkinId(String(shopName || '') + '掌柜');
+        }
+      } catch (eSk) { }
+      var r = hero(_skin, {});
       if (r && r.g) {
         if (r.sw) { r.sw.visible = false; }
         if (r.swL) { r.swL.visible = false; }
@@ -6431,11 +6509,22 @@ function waiterModel() {
         if (typeof G !== 'undefined' && G.HERO_SCALE) {
           gg.scale.set(G.HERO_SCALE, G.HERO_SCALE, G.HERO_SCALE);
         }
-        var tray = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.04, 0.30),
+        /* 托盘端在胸前（以前写 y=2.05 → 飘在头顶上方，看着根本不像在端东西） */
+        var tray = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.035, 0.32),
           new THREE.MeshLambertMaterial({ color: 0xc8c0b0 }));
-        tray.position.set(0, 2.05, 0.52);
+        tray.position.set(0, 1.02, 0.30);
         gg.add(tray);
+        var dish = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.10, 0.05, 12),
+          new THREE.MeshLambertMaterial({ color: 0xe8e0d0 }));
+        dish.position.set(0, 1.06, 0.30);
+        gg.add(dish);
+        /* 端着东西的姿势：两只手抬到身前，不再跟着走路甩 */
+        try {
+          if (r.armR) { r.armR.rotation.x = -1.15; r.armR.rotation.z = 0.12; }
+          if (r.armL) { r.armL.rotation.x = -0.95; r.armL.rotation.z = -0.12; }
+        } catch (eArm) { }
         gg.userData.hh = r;
+        gg.userData.carry = true;
         return gg;
       }
     }
@@ -6473,7 +6562,7 @@ function spawnWaiter(d) {
   if (!path || path.length < 2) { return; }
   var S = cupScene();
   if (!S) { return; }
-  var m = waiterModel();
+  var m = waiterModel(d && d.name);
   m.position.set(+path[0][0], 0, +path[0][1]);
   S.add(m);
   WAITERS.push({ mesh: m, hh: m.userData.hh || null, path: path,
@@ -6498,8 +6587,10 @@ function waiterTick() {
       var sw = Math.sin((now - w.t0) * 0.008) * 0.7;
       w.hh.legL.rotation.x = sw;
       w.hh.legR.rotation.x = -sw;
-      w.hh.armL.rotation.x = -sw * 0.6;
-      w.hh.armR.rotation.x = sw * 0.35;
+      /* ★ 端着东西：手臂保持端盘姿势，只有轻微上下颠（不再左右大甩） */
+      var bob = Math.sin((now - w.t0) * 0.008) * 0.06;
+      w.hh.armL.rotation.x = -0.95 + bob;
+      w.hh.armR.rotation.x = -1.15 + bob;
     }
   }
   if (!WAITERS.length && WAITER_TIMER) {
@@ -6589,7 +6680,7 @@ function cupRowsHtml() {
         '<div class="shopDesc">传菜员正在送…</div></div></div>';
       continue;
     }
-    h += '<div class="shopRow"><div class="shopIco">☕</div><div class="shopMain">' +
+    h += '<div class="shopRow"><div class="shopIco">' + (c.icon || '☕') + '</div><div class="shopMain">' +
       '<div class="shopName">' + (c.name || '') + '（桌上）</div>' +
       '<div class="shopDesc">喝掉会生效，收走只释放杯位</div></div>' +
       '<div><button class="shopBuy" onclick="cupTake(' + c.slot + ',1)">喝掉</button>' +

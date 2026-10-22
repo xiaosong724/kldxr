@@ -3590,14 +3590,21 @@ function townLabelTick(px, pz) {
    直接复用玩家的 hero() 构建器：和本体/分身同一套身材、同一套皮肤。
    名字决定用哪套皮肤（同一个 NPC 每次进游戏都一样 ✓）。
    不挂武器（店员/路人拿剑很奇怪 ✗）。*/
+/* ★ 2026-10-22（用户："送过来要和现在在店里的人皮肤一样"）：
+   名字 → 皮肤 id 的映射抽出来，店员和传菜员共用同一套，
+   这样同一家店的传菜员和柜台后的店员长得一模一样。 */
+function townNpcSkinId(name) {
+  var order = (typeof SKIN_ORDER !== 'undefined' && SKIN_ORDER.length) ? SKIN_ORDER : ['f01'];
+  var nm = String(name || '');
+  var hsh = 0;
+  for (var i = 0; i < nm.length; i++) { hsh = (hsh * 31 + nm.charCodeAt(i)) | 0; }
+  return order[Math.abs(hsh) % order.length];
+}
+
 function townNpcHero(n) {
   try {
     if (typeof hero !== 'function') { return null; }
-    var order = (typeof SKIN_ORDER !== 'undefined' && SKIN_ORDER.length) ? SKIN_ORDER : ['f01'];
-    var nm = String(n.name || n.id || '');
-    var hsh = 0;
-    for (var i = 0; i < nm.length; i++) { hsh = (hsh * 31 + nm.charCodeAt(i)) | 0; }
-    var r = hero(order[Math.abs(hsh) % order.length], {});
+    var r = hero(townNpcSkinId(n.name || n.id || ''), {});
     if (!r || !r.g) { return null; }
     if (r.sw) { r.sw.visible = false; }
     if (r.swL) { r.swL.visible = false; }

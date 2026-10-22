@@ -409,6 +409,38 @@ def wall_boxes(w, d, h, door_w=1.7, t=0.26):
     ]
 
 
+# ★ 2026-10-22（用户："我们小镇的所有商品是不是图标还没有做"）：
+#   目录一直没有图标字段 —— 放置列表只有「名字 + 价格」。
+#   这里按名字关键词给 emoji，类别兜底；启动时 UPDATE 进 icon 列。
+ICON_RULES = (
+    ('别墅', '🏡'), ('小院', '🏡'), ('平房', '🏠'), ('公寓', '🏢'), ('旅店', '🏨'),
+    ('大厅', '🏛️'), ('仓库', '📦'), ('警亭', '🚔'), ('药铺', '💊'), ('铁匠', '⚒️'),
+    ('澡堂', '♨️'), ('邮局', '📮'), ('书店', '📚'), ('花店', '💐'), ('茶馆', '🍵'),
+    ('咖啡', '☕'), ('面包', '🥐'), ('面馆', '🍜'), ('居酒屋', '🍶'), ('甜品', '🍰'),
+    ('超市', '🛒'), ('杂货', '🏪'), ('传送', '🔮'),
+    ('床', '🛏️'), ('沙发', '🛋️'), ('椅', '🪑'), ('凳', '🪑'), ('桌', '🍽️'),
+    ('衣柜', '🗄️'), ('床头柜', '🗄️'), ('书架', '📚'), ('货架', '🗄️'), ('货柜', '🗄️'),
+    ('灯', '💡'), ('盆栽', '🪴'), ('花盆', '🪴'), ('花坛', '🌷'), ('花架', '🌺'),
+    ('画', '🖼️'), ('镜', '🪞'), ('地毯', '🟫'), ('时钟', '🕰️'),
+    ('冰箱', '🧊'), ('水槽', '🚰'), ('灶', '🔥'), ('烤箱', '🔥'), ('厨房', '🍳'),
+    ('浴缸', '🛁'), ('马桶', '🚽'), ('淋浴', '🚿'), ('洗手台', '🚰'), ('梳妆', '🪞'),
+    ('电视', '📺'), ('收银', '💰'), ('菜单', '📋'), ('招牌', '📢'),
+    ('围栏', '🚧'), ('闸机', '🚧'), ('信箱', '📬'), ('伞', '⛱️'), ('自行车', '🚲'),
+    ('手推车', '🛒'), ('购物车', '🛒'), ('篮子', '🧺'), ('铁砧', '⚒️'), ('煤', '⚫'),
+    ('灯笼', '🏮'), ('雕塑', '🗿'), ('绿篱', '🌿'), ('晾衣', '🧺'), ('垃圾桶', '🗑️'),
+    ('遮阳', '⛱️'), ('电线杆', '🗼'), ('路灯', '💡'), ('吊灯', '💡'),
+)
+ICON_BY_CAT = {'building': '🏠', 'furniture': '🪑', 'decor': '🪴', 'function': '🔮'}
+
+
+def icon_for(name, cat):
+    nm = str(name or '')
+    for kw, ico in ICON_RULES:
+        if kw in nm:
+            return ico
+    return ICON_BY_CAT.get(str(cat or ''), '📦')
+
+
 def seed_catalog(cfg):
     now = now_ms()
     with dbmod.db(cfg) as c:
@@ -450,6 +482,18 @@ def seed_catalog(cfg):
             shr = '[]' if cat == 'furniture' else shrink_boxes(cj, 0.85)
             c.execute('UPDATE town_catalog SET collision_json=? WHERE id=? AND collision_json<>?',
                       (shr, cid, shr))
+        # ★ 2026-10-22：给目录补图标（按名字关键词，类别兜底）
+        try:
+            cols = [r[1] for r in c.execute('PRAGMA table_info(town_catalog)').fetchall()]
+            if 'icon' not in cols:
+                c.execute("ALTER TABLE town_catalog ADD COLUMN icon TEXT DEFAULT ''")
+            rows2 = c.execute('SELECT id,name,category FROM town_catalog').fetchall()
+            for _r in rows2:
+                _ico = icon_for(_r[1], _r[2])
+                c.execute('UPDATE town_catalog SET icon=? WHERE id=? AND (icon IS NULL OR icon<>?)',
+                          (_ico, _r[0], _ico))
+        except Exception as _ie:
+            print('[town] catalog icons failed: %r' % (_ie,))
         # ★ C3：清掉旧的通用目录 / legacy_*（没有物件引用它们）
         c.execute("DELETE FROM town_catalog WHERE id LIKE 'legacy\\_%' ESCAPE '\\'")
         qmarks = ','.join('?' * len(DEAD_CATALOG_IDS))
