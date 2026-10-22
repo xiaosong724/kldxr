@@ -600,14 +600,28 @@
     rc.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1,
                                        -(cy / innerHeight) * 2 + 1), c);
     var hits = rc.intersectObjects(grp.children, true);
+    /* ★★★ 2026-10-22（用户："建筑能删，别的都不行"）★★★
+       病根：射线第一个命中的总是【建筑的外壳】，里面/旁边的小物件被挡在后面
+       → 点家具其实选中了那栋建筑，所以"点删除没反应"（删的是建筑或什么都没删）。
+       现在把命中列表全过一遍：优先返回【不是建筑】的物件（最近的优先），
+       一个都没有才返回建筑。 */
+    var firstBuilding = null;
+    var seen = {};
     for (var i = 0; i < hits.length; i++) {
       var o = hits[i].object;
+      var hitId = null;
       while (o && o !== grp) {
-        if (o.userData && o.userData.objId != null) { return o.userData.objId; }
+        if (o.userData && o.userData.objId != null) { hitId = o.userData.objId; break; }
         o = o.parent;
       }
+      if (hitId == null || seen[hitId]) { continue; }
+      seen[hitId] = 1;
+      var ee = P.objs[hitId];
+      var isBld = !!(ee && ee.mesh && ee.mesh.userData && ee.mesh.userData.isBuilding);
+      if (!isBld) { return hitId; }        /* 小物件优先 */
+      if (firstBuilding == null) { firstBuilding = hitId; }
     }
-    return null;
+    return firstBuilding;
   }
   function editClear() {
     if (EDIT.box) {
