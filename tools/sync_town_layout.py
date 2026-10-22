@@ -27,7 +27,7 @@ import sqlite3
 import sys
 import time
 
-TABLES = ('towns', 'town_objects', 'town_perms', 'houses')
+TABLES = ('towns', 'town_catalog', 'town_objects', 'town_perms', 'houses')
 
 
 def _connect(path):
@@ -160,6 +160,13 @@ def do_import(db_path, in_path, dry_run=False, backup=True):
                 ph = ','.join('?' * len(cols))
                 c.execute('INSERT OR REPLACE INTO %s(%s) VALUES(%s)'
                           % (t, ','.join(cols), ph), vals)
+        # 目录：INSERT OR IGNORE —— 只补缺的（本地有 4 个道具目录不在代码播种表里）
+        for row in data['tables'].get('town_catalog') or []:
+            cols = [x for x in _cols(c, 'town_catalog')]
+            vals = [row.get(x) for x in cols]
+            ph = ','.join('?' * len(cols))
+            c.execute('INSERT OR IGNORE INTO town_catalog(%s) VALUES(%s)'
+                      % (','.join(cols), ph), vals)
         # 住宅：INSERT OR IGNORE（不覆盖云端已有房主）
         for row in data['tables'].get('houses') or []:
             cols = [x for x in _cols(c, 'houses')]
