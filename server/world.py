@@ -943,6 +943,24 @@ class World(object):
             self._qi_regen_tick()
             self._sleep_tick()
             self._table_tick()
+            # B1：每 5 秒看一次到期（扣费/冻结本身一天才发生一次，很便宜）
+            self._fee_acc = float(getattr(self, '_fee_acc', 0.0)) + TICK_DT
+            if self._fee_acc >= 5.0:
+                self._fee_acc = 0.0
+                self._town_fee_tick()
+            # B4：每小时清一次"冻结满 7 天"的小镇
+            self._purge_acc = float(getattr(self, '_purge_acc', 0.0)) + TICK_DT
+            if self._purge_acc >= 3600.0:
+                self._purge_acc = 0.0
+                try:
+                    gone = townreg.purge_expired(self.cfg)
+                    for gid in gone:
+                        self.towns.pop(int(gid), None)
+                    if gone:
+                        self._rebuild_dyn_shops()
+                        print('[town] purged %r' % (gone,))
+                except Exception as _pe:
+                    print('[town] purge failed: %r' % (_pe,))
         except Exception as _tk:
             print('[tick] town systems failed: %r' % (_tk,))
         self._mob_tick(TICK_DT)
@@ -1431,11 +1449,37 @@ class World(object):
             s = shopmod.shop_by_id(sid)
         if not s:
             return None
-        if not town.in_town(p.x, p.z):
+        if not self._in_any_town(p.x, p.z):
             return None
         if (p.x - s['x']) ** 2 + (p.z - s['z']) ** 2 > 3.2 * 3.2:
             return None
         return s
+
+    def _in_any_town(self, x, z):
+        """是不是站在某座 active 小镇里（多小镇，不能再用固定的 ±250）"""
+        for r in self.towns.values():
+            if str(r.get('status')) != 'active':
+                continue
+            try:
+                x0, z0, x1, z1 = townreg.bounds_of(r)
+            except Exception:
+                continue
+            if x0 <= x <= x1 and z0 <= z <= z1:
+                return True
+        return False
+
+    def _in_safe_zone(self, x, z):
+        """任何 active 小镇的边界 + 2 格都不刷怪（多小镇安全区）"""
+        for r in self.towns.values():
+            if str(r.get('status')) != 'active':
+                continue
+            try:
+                x0, z0, x1, z1 = townreg.safe_bounds_of(r)
+            except Exception:
+                continue
+            if x0 <= x <= x1 and z0 <= z <= z1:
+                return True
+        return False
 
     def _shop_open(self, p, d):
         sid = str((d or {}).get('id') or '')
@@ -1463,6 +1507,7 @@ class World(object):
             return
         p.gold = int(getattr(p, 'gold', 0) or 0) - price
         p.goldDirty = True
+        self._town_revenue(sid, price, 'shop', sid)
         use = {}
         for k in ('hp_pct', 'qi_pct', 'exp'):
             if item.get(k):
@@ -1696,6 +1741,7 @@ class World(object):
 
         p.gold = int(getattr(p, 'gold', 0) or 0) - price
         p.goldDirty = True
+        self._town_revenue(str(s['id']), price, 'order', str(s['id']))
         now = dbmod.now_ms()
         oid = tblmod.new_id('ord')
         due = now + 2500
@@ -1745,6 +1791,7 @@ class World(object):
         price = int(item.get('price') or 0)
         p.gold = int(getattr(p, 'gold', 0) or 0) - price
         p.goldDirty = True
+        self._town_revenue(str(s['id']), price, 'order', str(s['id']))
         use = {}
         for k in ('hp_pct', 'qi_pct'):
             if item.get(k):
@@ -1781,7 +1828,7 @@ class World(object):
             return None
         for tid in list(self.towns.keys()):
             try:
-                rows = objreg2.nearby(self.cfg, tid, 0.0, 0.0, 400.0)
+                rows = self._town_scan(objreg2.nearby, tid)
             except Exception:
                 continue
             for o in rows:
@@ -1870,7 +1917,7 @@ class World(object):
             return None
         for tid in list(self.towns.keys()):
             try:
-                rows = objreg3.nearby(self.cfg, tid, 0.0, 0.0, 400.0)
+                rows = self._town_scan(objreg3.nearby, tid)
             except Exception:
                 continue
             for o in rows:
@@ -1903,6 +1950,14 @@ class World(object):
         ca, sa = math.cos(float(rot or 0.0)), math.sin(float(rot or 0.0))
         return (lx * ca + lz * sa, -lx * sa + lz * ca)
 
+    def _town_scan(self, fn, tid):
+        """在多小镇世界里按【这座小镇的中心】扫物件，而不是原点 ±400。"""
+        r = self.towns.get(int(tid)) or {}
+        cx = float(r.get('x') or 0.0)
+        cz = float(r.get('z') or 0.0)
+        rad = float(r.get('size_m') or 60.0) / 2.0 + 25.0
+        return fn(self.cfg, int(tid), cx, cz, rad)
+
     def _rebuild_dyn_shops(self):
         """按已放置的建筑生成商店数据（交互点 = 门口，不是中心）；顺带算桌位。"""
         out = {}
@@ -1917,7 +1972,7 @@ class World(object):
             for tid, trow in self.towns.items():
                 if str(trow.get('status')) != 'active':
                     continue
-                rows = objreg2.nearby(self.cfg, tid, 0.0, 0.0, 400.0)
+                rows = self._town_scan(objreg2.nearby, tid)
                 for o in rows:
                     if int(o.get('parent_id') or 0) != 0:
                         continue
@@ -1940,6 +1995,8 @@ class World(object):
                         'x': float(o['x']) + ox, 'z': float(o['z']) + oz,
                         'pass_at': [float(o['x']) + ox, float(o['z']) + oz],
                         'items': items, 'object_id': int(o['id']),
+                        # 分账用：这家店属于哪个小镇、主人是谁
+                        'town': int(tid), 'owner': int(trow.get('owner_id') or 0),
                         # 点单判定用建筑中心和"半对角线 + 1.5m"，坐店里都能点到
                         'bx': float(o['x']), 'bz': float(o['z']),
                         'br': math.hypot(w, dd) / 2.0 + 1.5,
@@ -2245,6 +2302,117 @@ class World(object):
             kw['town'] = self._town_public(town)
         self._send_cid(p.cid, P.pack('townresult', **kw))
 
+    # ---------- B1：每日维护费 / 余额不足冻结 ----------
+
+    def _player_by_role(self, rid):
+        rid = int(rid or 0)
+        if rid <= 0:
+            return None
+        for q in self.players.values():
+            if int(getattr(q, 'role_id', 0) or 0) == rid:
+                return q
+        return None
+
+    def _town_fee_tick(self):
+        """每天本地 00:00 扣维护费；余额不足立刻冻结（保留 7 天）。
+
+        ★ 在线玩家用内存金币（金币以内存为准）✓
+          离线玩家走 towns.charge_offline 的原子 UPDATE ✓
+        """
+        now = dbmod.now_ms()
+        for tid, r in list(self.towns.items()):
+            if int(r.get('is_system') or 0):
+                continue
+            if str(r.get('status')) != 'active':
+                continue
+            exp = int(r.get('expires_at') or 0)
+            if exp > now:
+                continue
+            owner = int(r.get('owner_id') or 0)
+            fee = townreg.fee_for(int(r.get('tier') or 30))
+            q = self._player_by_role(owner)
+            paid = False
+            if int(r.get('auto_pay') or 0) == 0:
+                paid = False          # 手动模式：到期不自动扣
+            elif q is not None:
+                if int(getattr(q, 'gold', 0) or 0) >= fee:
+                    q.gold = int(q.gold) - fee
+                    q.goldDirty = True
+                    paid = True
+            else:
+                try:
+                    paid = townreg.charge_offline(self.cfg, owner, fee)
+                except Exception as e:
+                    print('[town] offline fee failed: %r' % (e,))
+            if paid:
+                nexp = townreg.next_due_ms(now / 1000.0)
+                r['expires_at'] = nexp
+                r['last_fee_at'] = now
+                r['updated_at'] = now
+                self.post_save('UPDATE towns SET expires_at=?, last_fee_at=?, updated_at=?'
+                               ' WHERE id=?', (nexp, now, now, tid))
+                self.post_save('INSERT INTO town_payments(town_id,kind,amount,due_at,paid_at,'
+                               'status,meta) VALUES(?,?,?,?,?,?,?)',
+                               (tid, 'daily', fee, exp, now, 'paid', '{}'))
+                if q is not None:
+                    self._send_cid(q.cid, P.pack('notice',
+                                                 text='小镇维护费 -%d，已续到明天 00:00' % fee))
+                    self._town_send_list(q)
+            else:
+                r['status'] = 'frozen'
+                r['original_x'] = float(r['x'])
+                r['original_z'] = float(r['z'])
+                r['deleted_at'] = now + townreg.RETENTION_DAYS * townreg.DAY_MS
+                r['updated_at'] = now
+                self.post_save('UPDATE towns SET status=?, original_x=?, original_z=?,'
+                               ' deleted_at=?, updated_at=? WHERE id=?',
+                               ('frozen', r['original_x'], r['original_z'],
+                                r['deleted_at'], now, tid))
+                self.post_save('INSERT INTO town_payments(town_id,kind,amount,due_at,paid_at,'
+                               'status,meta) VALUES(?,?,?,?,?,?,?)',
+                               (tid, 'daily', fee, exp, 0, 'failed', '{}'))
+                print('[town] frozen #%d: fee %d not paid' % (tid, fee))
+                try:
+                    self._rebuild_dyn_shops()
+                except Exception as e:
+                    print('[town] rebuild after freeze failed: %r' % (e,))
+                for qq in list(self.players.values()):
+                    if int(getattr(qq, 'role_id', 0) or 0) == owner:
+                        self._send_cid(qq.cid, P.pack(
+                            'notice', text='余额不足，小镇已冻结（保留 7 天，可恢复）'))
+                        self._town_send_list(qq)
+
+    def _town_revenue(self, shop_id, gross, kind='shop', ref=''):
+        """B2：交易立刻分账 —— 80% 主人，20% 税【直接扣掉不入账】。
+
+        ★ 系统主城（owner=0）：全进系统（等于扣掉），账本仍记一笔。
+        """
+        gross = max(0, int(gross or 0))
+        if gross <= 0:
+            return 0, 0
+        s = self.dyn_shops.get(str(shop_id))
+        if s:
+            tid = int(s.get('town') or 1)
+            owner = int(s.get('owner') or 0)
+        else:
+            tid, owner = 1, 0
+        owner_gain = int(gross * 0.8) if owner else 0
+        tax = gross - owner_gain
+        now = dbmod.now_ms()
+        self.post_save('INSERT INTO town_ledger(town_id,owner_id,kind,gross,owner_gain,tax,'
+                       'ref,ts) VALUES(?,?,?,?,?,?,?,?)',
+                       (tid, owner, str(kind), gross, owner_gain, tax, str(ref), now))
+        if owner and owner_gain:
+            q = self._player_by_role(owner)
+            if q is not None:
+                self._gain_gold(q, owner_gain, 'town_income')
+            else:
+                # 主人在线不了：进待入账，登录时补发
+                self.post_save('INSERT INTO pending_gold(role,amount,why,ts,done)'
+                               ' VALUES(?,?,?,?,0)',
+                               (owner, owner_gain, 'town_income', now))
+        return owner_gain, tax
+
     def _intent_town_list(self, p, d=None):
         self._town_send_list(p)
 
@@ -2471,12 +2639,14 @@ class World(object):
             self._town_result(p, False, 'not enough gold: %d' % fee)
             return
         now = townreg.now_ms()
+        # ★ B1：首日费用只买到"当天 00:00"（和 towns.create_town 同一规则）
+        nexp = townreg.next_due_ms(now / 1000.0)
         self.town_seq += 1
         tid = self.town_seq
         row = {'id': tid, 'owner_id': int(p.role_id), 'name': name,
                'tier': tier, 'size_m': townreg.size_m(tier), 'x': x, 'z': z,
                'status': 'active', 'is_system': 0, 'auto_pay': 1,
-               'created_at': now, 'expires_at': now + townreg.DAY_MS,
+               'created_at': now, 'expires_at': nexp,
                'last_fee_at': now, 'original_x': x, 'original_z': z,
                'deleted_at': 0, 'updated_at': now}
         self.towns[tid] = row
@@ -2488,7 +2658,10 @@ class World(object):
             'auto_pay,created_at,expires_at,last_fee_at,original_x,original_z,'
             'deleted_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (tid, int(p.role_id), name, tier, townreg.size_m(tier), x, z,
-             'active', 0, 1, now, now + townreg.DAY_MS, now, x, z, 0, now))
+             'active', 0, 1, now, nexp, now, x, z, 0, now))
+        self.post_save('INSERT INTO town_payments(town_id,kind,amount,due_at,paid_at,status,meta)'
+                       ' VALUES(?,?,?,?,?,?,?)',
+                       (tid, 'create', fee, nexp, now, 'paid', '{}'))
         self.post_save('INSERT OR REPLACE INTO town_perms(town_id,player_id,mask,granted_by,granted_at)'
                        ' VALUES(?,?,?,?,?)',
                        (tid, int(p.role_id), townreg.P_ALL, int(p.role_id), now))
@@ -2580,18 +2753,26 @@ class World(object):
             self._town_result(p, False, 'not enough gold: %d' % fee)
             return
         now = townreg.now_ms()
+        nexp = townreg.next_due_ms(now / 1000.0)
         p.gold = int(getattr(p, 'gold', 0) or 0) - fee
         p.goldDirty = True
         r['x'], r['z'] = nx, nz
         r['status'] = 'active'
         r['deleted_at'] = 0
-        r['expires_at'] = now + townreg.DAY_MS
+        r['expires_at'] = nexp
         r['last_fee_at'] = now
         r['updated_at'] = now
         self.post_save('UPDATE towns SET x=?,z=?,status=?,deleted_at=0,expires_at=?,'
                        'last_fee_at=?,updated_at=? WHERE id=?',
-                       (nx, nz, 'active', now + townreg.DAY_MS, now, now, tid))
+                       (nx, nz, 'active', nexp, now, now, tid))
+        self.post_save('INSERT INTO town_payments(town_id,kind,amount,due_at,paid_at,status,meta)'
+                       ' VALUES(?,?,?,?,?,?,?)',
+                       (tid, 'restore', fee, nexp, now, 'paid', '{}'))
         self._town_result(p, True, 'restored fee %d' % fee, r)
+        try:
+            self._rebuild_dyn_shops()
+        except Exception as e:
+            print('[town] rebuild after restore failed: %r' % (e,))
         self._town_send_list(p)
 
     def _intent_town_dissolve(self, p, d):
@@ -2616,6 +2797,10 @@ class World(object):
                        'updated_at=? WHERE id=?',
                        ('frozen', r['original_x'], r['original_z'], r['deleted_at'], now, tid))
         self._town_result(p, True, 'dissolved, keep 7 days', r)
+        try:
+            self._rebuild_dyn_shops()
+        except Exception as e:
+            print('[town] rebuild after dissolve failed: %r' % (e,))
         self._town_send_list(p)
 
     def _handle_intent(self, p, t, d):
@@ -3546,7 +3731,7 @@ class World(object):
             else:
                 m.awayT = 0.0
             # 镇内不刷新怪物：走进安全区的怪物直接回收
-            if abs(m.x) <= TOWN_R and abs(m.z) <= TOWN_R:
+            if self._in_safe_zone(m.x, m.z):
                 self.mobs.pop(m.mid, None)
                 continue
             if m.awayT >= mobs.AWAY_GRACE:
@@ -3855,7 +4040,7 @@ class World(object):
         dist = mobs.SPAWN_MIN + random.random() * (mobs.SPAWN_MAX - mobs.SPAWN_MIN)
         x = p.x + math.sin(ang) * dist
         z = p.z + math.cos(ang) * dist
-        if abs(x) <= SPAWN_SAFE and abs(z) <= SPAWN_SAFE:
+        if self._in_safe_zone(x, z):
             return                       # 安全区里不刷（方形 500x500）
         # 组队时：以刷新点 SPAWN_TEAM_R 内【随机一个】队员的等级为准（§3.1）✓
         near = [q for q in ps if (q.x - x) ** 2 + (q.z - z) ** 2 <= mobs.SPAWN_TEAM_R ** 2]
@@ -4011,6 +4196,23 @@ class World(object):
                 # ★ 第 254 轮（用户要求）：管理公告改成走【弹幕】（全服滚动 ✓）
                 #   原来是 notice（屏幕中间弹一下 ✗ 容易被错过 ✓）
                 self._broadcast(P.pack('ticker', text='[管理] ' + txt, kind='sys'))
+            return
+        # ★ B1：把小镇到期时间调到"刚刚"，让下一个 5 秒的结算立刻扣费/冻结
+        #   （管理页/自测都用它；不直接改金币 ✓）
+        if act == 'towndue':
+            try:
+                tid = int(d.get('id'))
+            except Exception:
+                return
+            r = self.towns.get(tid)
+            if not r:
+                return
+            r['expires_at'] = dbmod.now_ms() - 1
+            self.post_save('UPDATE towns SET expires_at=? WHERE id=?',
+                           (r['expires_at'], tid))
+            q = self._player_by_role(r.get('owner_id'))
+            if q is not None:
+                self._send_cid(q.cid, P.pack('notice', text='[管理] 小镇已到结算时间'))
             return
         # ★★ 第 133 轮：调整刷怪上限（用户要求）★★
         #   ★ 这一支【不需要 name】✗（全局设置人人可用 ✓）

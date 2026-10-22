@@ -452,6 +452,8 @@ def create_town(cfg, owner_id, name, tier, x, z, now=None):
     if clash:
         return False, '距离其它小镇不足 50 格', None
     now = now_ms() if now is None else int(now)
+    # 首日费用按"当天 00:00 到期"算（用户确认：建镇/恢复都这样）
+    expires = next_due_ms(now / 1000.0)
     try:
         with dbmod.db(cfg) as c:
             cur = c.execute(
@@ -460,7 +462,7 @@ def create_town(cfg, owner_id, name, tier, x, z, now=None):
                 'deleted_at,updated_at)'
                 ' VALUES(?,?,?,?,?,?,?,0,1,?,?,?,?,?,0,?)',
                 (int(owner_id), nm, tier, size, float(x), float(z), 'active',
-                 now, now + DAY_MS, now, float(x), float(z), now))
+                 now, expires, now, float(x), float(z), now))
             rid = int(cur.lastrowid)
             c.execute('INSERT OR REPLACE INTO town_perms(town_id,player_id,mask,granted_by,granted_at)'
                       ' VALUES(?,?,?,?,?)',
@@ -513,6 +515,21 @@ def restore_town(cfg, town_id, x, z, paid_until=None):
 def dissolve_town(cfg, town_id):
     """Owner voluntarily dissolves: same 7-day frozen retention."""
     return freeze_town(cfg, town_id, 'dissolved')
+
+
+def charge_offline(cfg, owner_id, amount):
+    """离线扣费：只在余额够的时候扣（原子），返回是否成功。
+
+    ★ 在线玩家不走这里：金币以内存为准 ✓ 走 World 的 p.gold ✓
+    """
+    amount = max(0, int(amount))
+    if amount <= 0:
+        return True
+    with dbmod.db(cfg) as c:
+        cur = c.execute('UPDATE roles SET gold=gold-? WHERE id=? AND gold>=?',
+                        (amount, int(owner_id), amount))
+        c.commit()
+        return cur.rowcount > 0
 
 
 def purge_expired(cfg):

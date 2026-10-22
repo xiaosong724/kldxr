@@ -19,10 +19,12 @@
 """
 
 import argparse
+import gzip
 import json
 import os
 import sys
 import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -36,6 +38,7 @@ try:
 except Exception:
     pass
 
+import rankboard          # noqa: E402  ★ round424：排行榜定义 + 算榜
 import auth as authmod    # noqa: E402  （都必须在本目录下）
 import db as dbmod        # noqa: E402
 import protocol as P      # noqa: E402
@@ -102,6 +105,34 @@ def load_cfg(path=DEFAULT_CFG):
 
 # ============================================================ HTTP 服务
 
+def rank_refresh_once(cfg, world):
+    """算一次 5 个榜 → 发布到 world（只读快照 ✗ tick 只读 ✓）
+
+    ★ 只能在非 tick 线程调（要读库 ✗）：刷新线程 + /api/rank 兜底 ✓
+    """
+    rows = rankboard.refresh(cfg, cfg.get('test_name_keys') or [])
+    m = rankboard.build_map(rows)
+    if world is not None:
+        world.rank_rows = rows          # ★ 一次性赋值（不原地改 ✓）
+        world.rank_map = m
+        world.rank_at = int(time.time())
+
+
+def start_rank_thread(cfg, world):
+    """每 60 秒算一次榜单（头顶称号要用 ✗ 不能等玩家打开面板才算 ✓）"""
+    def loop():
+        while True:
+            try:
+                rank_refresh_once(cfg, world)
+            except Exception as e:
+                print('[rank] 榜单刷新失败：%r' % (e,))
+            time.sleep(60)
+    th = threading.Thread(target=loop, name='rank', daemon=True)
+    th.start()
+    print('[rank] 排行榜刷新线程已启动（每 60 秒 · 5 个榜）')
+    return th
+
+
 class Api(BaseHTTPRequestHandler):
     cfg = None
     world = None          # 由 main() 挂上来，/api/health 里报 tick 健康度
@@ -122,13 +153,58 @@ class Api(BaseHTTPRequestHandler):
 
     def _send(self, code, obj, ctype='application/json; charset=utf-8'):
         body = obj if isinstance(obj, bytes) else json.dumps(obj, ensure_ascii=False).encode('utf-8')
+        # ★★★ round507（用户："背包东西多了，一键整理和使用延迟特别高"）
+        #   体检结论：1420 件的背包 JSON = 647KB ✗ gzip 后只有 26KB（4%）✓
+        #   而这里以前【从来不压】✗ 只有静态文件走了 gzip ✓
+        #   → 1 Mbps 上传要 5.3 秒；压完 0.21 秒 ✓ 一个字都没改协议 ✓
+        #   ★ 只压 >800 字节的（小响应压了反而多花 CPU ✓）
+        _gz = False
+        if len(body) > 800:
+            try:
+                _ae = (self.headers.get('Accept-Encoding') or '')
+                if 'gzip' in _ae.lower():
+                    import gzip as _gzip
+                    _z = _gzip.compress(body, 6)
+                    if len(_z) < len(body) - 64:      # 压不小就别压 ✓
+                        body = _z
+                        _gz = True
+            except Exception:
+                _gz = False
         self.send_response(code)
         self.send_header('Content-Type', ctype)
+        if _gz:
+            self.send_header('Content-Encoding', 'gzip')
+            self.send_header('Vary', 'Accept-Encoding')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-Token')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except Exception:
+            pass
+
+    def _send_static(self, code, body, ctype, etag=None, immutable=False, gz=False):
+        """静态文件专用的发送（和 _send 的区别：带 ETag / 可长缓存 ✗ 不发 no-store ✓）"""
+        if gz:
+            self.send_response(code)
+            self.send_header('Content-Type', ctype)
+            self.send_header('Content-Encoding', 'gzip')
+            self.send_header('Vary', 'Accept-Encoding')
+        else:
+            self.send_response(code)
+            self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(len(body)))
+        if etag:
+            self.send_header('ETag', etag)
+        if immutable:
+            self.send_header('Cache-Control', 'public, max-age=31536000, immutable')
+        else:
+            # ★ no-cache = 可以存，但每次要回来问一下（带 ETag → 304 十几字节 ✓）
+            self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -181,11 +257,32 @@ class Api(BaseHTTPRequestHandler):
             return self.api_lobby()
         if path == '/api/bag':                 # ★ 第 47 轮：背包 + 已装备的武器
             return self.api_bag()
+        # ★★ round424：排行榜（只读 ✗ 登录不登录都能看 ✓）
+        if path == '/api/rank':
+            return self.api_rank()
         # ★★ 第 48 轮：后台管理 ★★
         #   /admin 页面本身可以公开（空壳，没登录啥也拿不到 ✓）
         #   真正有数据、有能力的都是 /api/admin/*，每一个都验管理 token ✓
         if path in ('/admin', '/admin/'):
             return self.static('/admin.html')
+        # ★ round496：公告
+        # ★★ round540：技能特效参数（公开读 ✗ 写要管理 token）
+        if path == '/api/vfx':
+            return self.api_vfx_get()
+        # ★ round542：技能定义（调参台要拿"技能本身的半径/射程"画范围 ✓ 公开读）
+        if path == '/api/skills':
+            import skills as _skm
+            return self._send(200, {'ok': True, 'defs': _skm.to_client()})
+        if path == '/api/announce/latest':
+            return self.api_ann_latest()
+        if path == '/api/admin/announce':
+            return self.api_admin_ann_list()
+        if path in ('/ann', '/ann.html'):
+            return self.static('/ann.html')          # 干净预览页（截图用 ✓）
+        if path in ('/admin/announce', '/admin/announce/'):
+            return self.static('/admin-ann.html')    # 公告管理（独立导航页 ✓）
+        if path == '/api/admin/skins':
+            return self.api_admin_skins()
         if path == '/api/admin/status':
             return self.api_admin_status()
         if path == '/api/admin/players':
@@ -223,11 +320,50 @@ class Api(BaseHTTPRequestHandler):
             int(self.cfg.get('ws_port', 8900)), self._web_build())
         return self._send(200, js.encode('utf-8'), 'application/javascript; charset=utf-8')
 
+    def do_PUT(self):
+        """★ round496：只给公告用（改内容 / 改状态）"""
+        path = self.path.split('?')[0]
+        if not path.startswith('/api/admin/announce/'):
+            return self._send(404, {'ok': False, 'error': 'not found', 'path': path})
+        body = self._body()
+        self._bodyCache = body          # ★ round540：后面要用的时候别再读一遍（会卡住 ✓）
+        if body is None:
+            return self._send(400, {'ok': False, 'error': '请求体不是合法 JSON'})
+        try:
+            aid = int(path.rsplit('/', 1)[-1])
+        except Exception:
+            return self._send(400, {'ok': False, 'error': 'id 不对'})
+        if not self._admin_ok():
+            return self._send(401, {'ok': False, 'error': '管理密码不对或过期'})
+        import announce as annmod
+        ok, err = annmod.update(self.cfg, aid, body, status=body.get('status'))
+        if not ok:
+            return self._send(400, {'ok': False, 'error': err})
+        return self._send(200, {'ok': True, 'id': aid, 'ann': annmod.get(self.cfg, aid)})
+
+    def do_DELETE(self):
+        """★ round496：只允许删草稿"""
+        path = self.path.split('?')[0]
+        if not path.startswith('/api/admin/announce/'):
+            return self._send(404, {'ok': False, 'error': 'not found', 'path': path})
+        try:
+            aid = int(path.rsplit('/', 1)[-1])
+        except Exception:
+            return self._send(400, {'ok': False, 'error': 'id 不对'})
+        if not self._admin_ok():
+            return self._send(401, {'ok': False, 'error': '管理密码不对或过期'})
+        import announce as annmod
+        ok, err = annmod.drop(self.cfg, aid)
+        if not ok:
+            return self._send(400, {'ok': False, 'error': err})
+        return self._send(200, {'ok': True, 'id': aid})
+
     def do_POST(self):
         path = self.path.split('?')[0]
         if not path.startswith('/api/'):
             return self._send(404, {'ok': False, 'error': 'not found', 'path': path})
         body = self._body()
+        self._bodyCache = body          # ★ round540：后面要用的时候别再读一遍（会卡住 ✓）
         if body is None:
             return self._send(400, {'ok': False, 'error': '请求体不是合法 JSON'})
         if path == '/api/register':
@@ -238,12 +374,16 @@ class Api(BaseHTTPRequestHandler):
             return self.api_sell(body)
         if path == '/api/logout':
             return self.api_logout()
+        if path == '/api/vfx':
+            return self.api_vfx_save()
         if path == '/api/admin/login':
             return self.api_admin_login(body)
         if path == '/api/admin/logout':
             return self.api_admin_logout()
         if path == '/api/admin/act':
             return self.api_admin_act(body)
+        if path == '/api/admin/announce':
+            return self.api_admin_ann_save(body)
         return self._send(404, {'ok': False, 'error': 'not found', 'path': path})
 
     # ---------- 账号接口（P0-3） ----------
@@ -489,6 +629,14 @@ class Api(BaseHTTPRequestHandler):
             _mc['pvpOnes'] = dict(getattr(_w, 'pvp_of', {}) or {})
             _mc['atkAll'] = bool(getattr(_w, 'mob_atk_all', True))
             _mc['atkOnes'] = dict(getattr(_w, 'mob_atk_of', {}) or {})
+            # ★ round418：QQ 群转发的开关 + 计数（管理页要显示 ✓）
+            try:
+                _qb = getattr(_w, 'qq', None)
+                _mc['qqOn'] = bool(_qb.on) if _qb is not None else False
+                _mc['qqStats'] = _qb.stats() if _qb is not None else {'on': False}
+            except Exception:
+                _mc['qqOn'] = False
+                _mc['qqStats'] = {'on': False}
             # ★ 第 153 轮：把魔气配置一起报回去（管理页要显示当前值 ✓）
             import mq as _mqm
             _mc['mq'] = dict(_mqm.TUNE)
@@ -517,7 +665,14 @@ class Api(BaseHTTPRequestHandler):
                         'mobcap', 'pvp', 'mobatk', 'who',
                         # ★ 第 153 轮：魔气配置 + 单人魔气
                         'mqcfg', 'mqset',
-                       'delplayer', 'delTest'):
+                       'delplayer', 'delTest',
+                       # ★ round418：QQ 群转发的开关
+                       #   ★ 又踩了同一个坑（加管理动作要改【两处】：
+                       #     这个白名单 + world._handle_admin ✗）
+                       #   → 下次再加，只改一处就会报 400 "不认识的动作" ✓
+                       # ★ B1：小镇立刻结算（扣维护费/冻结），自测和管理页用
+                       'towndue',
+                       'qq', 'trigB'):
             return self._send(400, {'ok': False, 'error': '不认识的动作'})
         if self.world is None:
             return self._send(503, {'ok': False, 'error': '世界没起来'})
@@ -641,6 +796,72 @@ class Api(BaseHTTPRequestHandler):
                                 'online': len(st['players']),
                                 'shown': len(out), 'total': _tot})
 
+    def api_vfx_get(self):
+        """所有技能特效参数（{key: {参数}}）—— 公开 ✓ 客户端启动时拉一次"""
+        import json as _j
+        out = {}
+        try:
+            with dbmod.db(self.cfg) as c:
+                for r in c.execute('SELECT key, data FROM vfx_params'):
+                    try:
+                        out[r['key']] = _j.loads(r['data'])
+                    except Exception:
+                        pass
+        except Exception as e:
+            return self._send(500, {'ok': False, 'error': str(e)})
+        return self._send(200, {'ok': True, 'params': out})
+
+    def api_vfx_save(self):
+        """写一个技能的特效参数（要管理 token ✓）"""
+        import json as _j
+        if not self._admin_ok():
+            return self._send(401, {'ok': False, 'error': '要管理密码'})
+        d = getattr(self, '_bodyCache', None)
+        if d is None:
+            d = self._body() or {}
+        key = str(d.get('key') or '')[:40]
+        data = d.get('data') or {}
+        if not key or not isinstance(data, dict):
+            return self._send(400, {'ok': False, 'error': '参数不对'})
+        try:
+            with dbmod.db(self.cfg) as c:
+                c.execute('INSERT OR REPLACE INTO vfx_params(key, data, at) VALUES(?,?,?)',
+                          (key, _j.dumps(data, ensure_ascii=False), dbmod.now_ms()))
+                c.commit()
+        except Exception as e:
+            return self._send(500, {'ok': False, 'error': str(e)})
+        return self._send(200, {'ok': True, 'key': key, 'data': data})
+
+    def api_ann_latest(self):
+        """最新的已发布公告（公开 ✓ 预览页和客户端都能读）"""
+        import announce as annmod
+        a = annmod.latest(self.cfg)
+        return self._send(200, {'ok': True, 'ann': a})
+
+    def api_admin_ann_list(self):
+        if not self._admin_ok():
+            return self._send(401, {'ok': False, 'error': '管理密码不对或过期'})
+        import announce as annmod
+        return self._send(200, {'ok': True, 'list': annmod.list_all(self.cfg)})
+
+    def api_admin_ann_save(self, body):
+        """新建（POST）→ {ok, id}；publish=1 直接发布"""
+        if not self._admin_ok():
+            return self._send(401, {'ok': False, 'error': '管理密码不对或过期'})
+        import announce as annmod
+        try:
+            aid = annmod.create(self.cfg, body, publish=bool(body.get('publish')))
+        except Exception as e:
+            return self._send(500, {'ok': False, 'error': '保存失败：%r' % (e,)})
+        return self._send(200, {'ok': True, 'id': aid, 'ann': annmod.get(self.cfg, aid)})
+
+    def api_admin_skins(self):
+        """皮肤目录（给管理页做"发皮肤"的按钮用 ✓ 只读 ✓）"""
+        import skins as skinsmod
+        out = [{'k': k, 'n': skinsmod.NAME.get(k, k),
+                'g': skinsmod.GENDER.get(k, '')} for k in skinsmod.KEYS]
+        return self._send(200, {'ok': True, 'skins': out})
+
     def _admin_give(self, d):
         """给某个角色发一件武器（写库 ✓ 在线的话再顺手告诉他一声 ✓）"""
         import auth as authmod2
@@ -670,6 +891,98 @@ class Api(BaseHTTPRequestHandler):
         #   ★ 为什么要这个：材料只在打怪掉落里出现 ✗
         #     要造"一堆碎玻璃"来验按数量上架 ✗ 靠打怪太不确定 ✓
         #   ★ kind='material' 时 name 可以指定（不给就随机一个能掉的 ✓）
+        # ★★★ round492（用户："管理页面增加皮肤的发放管理，可以选择对应的皮肤，方便测试"）★★★
+        #   kind='skin' + skinKey=<key>|'*'（* = 全部 40 个）
+        #   equip=1 → 顺手给他换上（测试时少点两下 ✓）
+        # ★★★ round527（用户："管理页面给的皮肤改成给皮肤卡，不要直接给皮肤"）
+        #   → 现在只发【皮肤卡】✗ 进背包自己点「使用」解锁 ✓（和打怪掉落同一条路 ✓）
+        #   kind='skin' + skinKey=<key>|'*'（* = 全部 40 个）+ count（每个发几张，默认 1）
+        #   ★ 不再直接写 skin_unlocks ✗ 也不再直接换装 ✓（那两条只有玩家自己点才会发生 ✓）
+        if (d.get('kind') or '') == 'skin':
+            import json as _json
+            import skins as skinsmod
+            key = str(d.get('skinKey') or d.get('key') or '')
+            keys = list(skinsmod.KEYS) if key == '*' else [key]
+            keys = [k2 for k2 in keys if skinsmod.valid(k2)]
+            if not keys:
+                return self._send(400, {'ok': False, 'error': '没有这个皮肤：%s' % key})
+            try:
+                cnt = max(1, min(20, int(d.get('count') or 1)))
+            except Exception:
+                cnt = 1
+            n_card = 0
+            try:
+                with dbmod.db(self.cfg) as c:
+                    for k2 in keys:
+                        it = {'name': '皮肤·' + skinsmod.NAME.get(k2, k2), 'tier': 0,
+                              'kind': 'skin', 'key': k2}
+                        js = _json.dumps(it, ensure_ascii=False)
+                        for _i in range(cnt):
+                            c.execute('INSERT INTO items(role_id, in_storage, slot_index,'
+                                      ' stack, item_json, created_at) VALUES(?,0,-1,1,?,?)',
+                                      (rid, js, dbmod.now_ms()))
+                            n_card += 1
+                    c.commit()
+            except Exception as e:
+                return self._send(500, {'ok': False, 'error': '发皮肤卡失败：%s' % e})
+            if self.world:
+                self.world.post_admin('notify', {
+                    'name': name,
+                    'text': ('管理员发了 %d 张皮肤卡（%s）→ 背包里点「使用」解锁'
+                             % (n_card, '全部 40 种' if key == '*' else
+                                skinsmod.NAME.get(keys[0], keys[0])))})
+                # 让他背包立刻刷新（不然要等下次打开面板）
+                try:
+                    self.world.post_admin('bagrefresh', {'name': name})
+                except Exception:
+                    pass
+            return self._send(200, {'ok': True, 'act': 'give', 'kind': 'skin',
+                                    'cards': n_card,
+                                    'skins': keys,
+                                    'item': ('%d 张皮肤卡' % n_card),
+                                    'role': name})
+        # ★★★ round538：管理页发【技能书】（方便测试技能）
+        #   kind='skillbook' + skillKey=<key> + count（默认 1）+ tier（被动加成书用）
+        if (d.get('kind') or '') == 'skillbook':
+            import json as _json2
+            import skills as skm
+            key = str(d.get('skillKey') or d.get('key') or '')
+            if not skm.valid(key):
+                return self._send(400, {'ok': False, 'error': '没有这个技能：%s' % key})
+            try:
+                cnt = max(1, min(20, int(d.get('count') or 1)))
+            except Exception:
+                cnt = 1
+            try:
+                tr = max(1, min(skm.tier_max(key), int(d.get('tier') or 1)))
+            except Exception:
+                tr = 1
+            nm_book = '技能书·' + skm.NAME.get(key, key) + ('' if skm.tier_max(key) <= 1
+                                                            else '（%d 品）' % tr)
+            n_add = 0
+            try:
+                with dbmod.db(self.cfg) as c:
+                    it = {'name': nm_book, 'tier': tr, 'kind': 'skillbook', 'key': key}
+                    js = _json2.dumps(it, ensure_ascii=False)
+                    for _i in range(cnt):
+                        c.execute('INSERT INTO items(role_id, in_storage, slot_index,'
+                                  ' stack, item_json, created_at) VALUES(?,0,-1,1,?,?)',
+                                  (rid, js, dbmod.now_ms()))
+                        n_add += 1
+                    c.commit()
+            except Exception as e:
+                return self._send(500, {'ok': False, 'error': '发技能书失败：%s' % e})
+            if self.world:
+                self.world.post_admin('notify', {
+                    'name': name,
+                    'text': '管理员发了 %d 本技能书（%s）→ 背包里点「使用」学习'
+                            % (n_add, skm.NAME.get(key, key))})
+                try:
+                    self.world.post_admin('bagrefresh', {'name': name})
+                except Exception:
+                    pass
+            return self._send(200, {'ok': True, 'act': 'give', 'kind': 'skillbook',
+                                    'cards': n_add, 'item': nm_book, 'role': name})
         if (d.get('kind') or '') == 'material':
             import drops as dropsmod
             _pool = [m for m in dropsmod.MATERIALS if m[1] <= max(0, int(d.get('matTier') or 0))]
@@ -704,11 +1017,11 @@ class Api(BaseHTTPRequestHandler):
             _is_armor = False
         elif _is_armor:
             import armor as armormod2
-            w = armormod2.make_armor(tier, max(1, lvl // 4 + 1))
+            w = armormod2.make_armor(tier, max(1, int(lvl)))   # ★ round472：装备等级 = 等级 ✓
         else:
         # ★ 第 64 轮：支持指定词条条数（管理页的详细菜单 ✓）
         #   不传就按品阶概率抽（和正常掉落一样 ✓）
-            w = weapons.make_weapon(look, tier, weapons.roll_coeff(look), max(1, lvl // 4 + 1))
+            w = weapons.make_weapon(look, tier, weapons.roll_coeff(look), max(1, int(lvl)))   # ★ round472 ✓
         try:
             affn = d.get('affixCount')
             if affn is not None:
@@ -831,8 +1144,12 @@ class Api(BaseHTTPRequestHandler):
                 self.world.inbox.put(('gain', None, (rid, int(total), 'sell')))
         except Exception as e:
             return self._send(500, {'ok': False, 'error': '\u5165\u8d26\u5931\u8d25\uff1a%r' % (e,)})
+        # ★★ round412（用户："批量出售上锁的物品会报 400"）★★
+        #   ★ 混着卖的时候：卖出去的那些照旧成功 ✓
+        #     但要把【为什么剩下的没卖】带回去 ✗ 不然玩家只看到"有 N 件没卖出"✓
         return self._send(200, {'ok': True, 'sold': sold, 'total': int(total),
-                                'failed': int(failed)})
+                                'failed': int(failed),
+                                'error': (first_err or '') if failed else ''})
 
 
     def api_trades(self):
@@ -900,10 +1217,12 @@ class Api(BaseHTTPRequestHandler):
                 slot = (it or {}).get('slot')
                 look = (it or {}).get('look')
                 kind = (it or {}).get('kind')
+                key = (it or {}).get('key')
                 dur = (it or {}).get('dur')
                 durMax = (it or {}).get('durMax')
             except Exception:
                 tier, slot, look, kind, dur, durMax = 0, None, None, None, 0, 0
+                key = None
             me_sell = (int(seller or 0) == rid)
             q = max(1, int(qty or 1))
             out.append({
@@ -918,7 +1237,8 @@ class Api(BaseHTTPRequestHandler):
                 'ts': int(ts or 0),
                 # 图标要用的（★ 和背包/货架同一个 iconOfItem 输入 ✓）
                 'icon': {'slot': slot, 'look': (name if not slot else look),
-                         'kind': kind, 'rarity': None, 'broken': 0},
+                         'kind': kind, 'rarity': None, 'broken': 0,
+                         'key': key},
                 'dur': int(dur or 0), 'durMax': int(durMax or 0),
             })
         pages = max(1, (total + per - 1) // per)
@@ -994,6 +1314,104 @@ class Api(BaseHTTPRequestHandler):
                                     'armor': authmod.armor_of(self.cfg, rid)[0],
                                     'armorItemId': authmod.armor_of(self.cfg, rid)[1]})
 
+    def api_rank(self):
+        """排行榜（★ round424）
+
+        ★ 只读：不改世界不改库 ✗ HTTP 线程直接读快照 ✓
+        ★ 用户定：只排前 100 名 · 每页 10 个 · 任何时候都能看到自己名次 ✓
+        """
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        board = str((qs.get('board') or ['level'])[0] or 'level')
+        if board not in rankboard.KEYS:
+            return self._send(400, {'ok': False, 'error': '不认识的排行榜'})
+        try:
+            page = max(1, min(20, int((qs.get('page') or ['1'])[0])))
+        except Exception:
+            page = 1
+        try:
+            size = max(1, min(20, int((qs.get('size') or ['10'])[0])))
+        except Exception:
+            size = 10
+
+        # 自己的角色（没登录就只看榜 ✗ 不报错 ✓）
+        rid = None
+        try:
+            ok, rr = authmod.check_token(self.cfg, self._token())
+            if ok and isinstance(rr, dict):
+                # ★ rr['role'] 是 sqlite3.Row ✗ 它没有 .get() ✗✗
+                #   （这个错被 try 吞掉的话表现就是「我的名次永远不显示」✗ 测试抓到了 ✓）
+                _role = rr.get('role')
+                _rid0 = 0
+                try:
+                    _rid0 = int(_role['id'] or 0)
+                except Exception:
+                    try:
+                        _rid0 = int(dict(_role).get('id') or 0)
+                    except Exception:
+                        _rid0 = 0
+                rid = _rid0 or None
+        except Exception:
+            rid = None
+
+        # ★ ?force=1 只给管理员（测试 / 排查用 ✗ 普通玩家刷不动缓存 ✓）
+        force = str((qs.get('force') or ['0'])[0]) == '1'
+        if force and not self._admin_ok():
+            return self._send(403, {'ok': False, 'error': '只有管理员能强刷'})
+        now = int(time.time())
+        rows_all = None
+        cache_age = 0
+        w = self.world
+        if w is not None:
+            try:
+                if (not force) and w.rank_rows and \
+                        (now - int(getattr(w, 'rank_at', 0) or 0)) < 120:
+                    rows_all = w.rank_rows
+                    cache_age = now - int(w.rank_at or 0)
+            except Exception:
+                rows_all = None
+        if not rows_all:
+            try:
+                rank_refresh_once(self.cfg, w)
+                rows_all = (w.rank_rows if w is not None else
+                            rankboard.refresh(self.cfg, self.cfg.get('test_name_keys') or []))
+                cache_age = 0
+            except Exception as e:
+                return self._send(500, {'ok': False, 'error': '算榜失败：%r' % (e,)})
+
+        rows = rows_all.get(board) or []
+        total = len(rows)
+        top = rows[:rankboard.TOP_N]
+        pages = max(1, (min(total, rankboard.TOP_N) + size - 1) // size)
+
+        # 全量里找自己的名次（★ 即使 137 名也要告诉他 ✓）
+        me = None
+        if rid:
+            for i, x in enumerate(rows):
+                if x['rid'] == rid:
+                    me = {'r': i + 1, 'v': x['v'], 'in100': (i + 1) <= rankboard.TOP_N}
+                    break
+
+        online = set()
+        try:
+            if w is not None:
+                online = set(int(getattr(q, 'role_id', 0) or 0)
+                             for q in list(w.players.values()))
+        except Exception:
+            online = set()
+
+        start = (page - 1) * size
+        out = []
+        for i, x in enumerate(top[start:start + size]):
+            r = start + i + 1
+            out.append({'r': r, 'name': x['name'], 'lv': x['lv'], 'v': x['v'],
+                        'sub': x['sub'], 'on': 1 if x['rid'] in online else 0,
+                        'medal': r if r <= 3 else 0})
+        return self._send(200, {
+            'ok': True, 'board': board, 'rows': out, 'me': me,
+            'total': total, 'topN': rankboard.TOP_N, 'pages': pages,
+            'cacheAge': cache_age, 'ts': now,
+        })
+
     # ---------- 其他接口 ----------
 
     def api_health(self):
@@ -1013,6 +1431,13 @@ class Api(BaseHTTPRequestHandler):
                 'world': {'online': w.get('online', 0), 'tick': w.get('tick', 0),
                           'mobs': w.get('mobs', 0), 'tickMs': w.get('tickMs', 0)},
             }
+            # ★ round417：QQ 群转发的状态（群里没消息时先看这里 ✓）
+            #   sent/fails/drops/queued ✗ 一眼就知道是"没发" 还是"没发出去" ✓
+            try:
+                _qq = getattr(self.world, 'qq', None) if self.world else None
+                out['qq'] = _qq.stats() if _qq is not None else {'on': False}
+            except Exception:
+                out['qq'] = {'on': False}
             return self._send(200, out)
         except Exception as e:
             return self._send(500, {'ok': False, 'error': str(e)})
@@ -1048,6 +1473,19 @@ class Api(BaseHTTPRequestHandler):
         """把 html 里的脚本/样式引用加上 ?v=构建号 ✓（幂等 ✓ 已经有 v 的不重复加 ✓）"""
         v = self._web_build()
         out = html
+        # ★ round457：顺便把构建号写进页面 ✗ 方便一眼看出"是不是新版本" ✓
+        try:
+            _tag = '<meta name="build" content="%s">' % v
+            if 'name="build"' not in out:
+                NL = chr(10)
+                if '<meta charset' in out:
+                    _i = out.index('<meta charset')
+                    _j = out.index('>', _i) + 1
+                    out = out[:_j] + NL + _tag + out[_j:]
+                elif '<head>' in out:
+                    out = out.replace('<head>', '<head>' + NL + _tag, 1)
+        except Exception:
+            pass
         for rel in ('/ws-config.js', '/lib/three.min.js', '/platform/web.js',
                     '/core/game.js'):
             if rel in out and (rel + '?v=') not in out:
@@ -1076,8 +1514,29 @@ class Api(BaseHTTPRequestHandler):
         try:
             with open(full, 'rb') as f:
                 data = f.read()
+            stt = os.stat(full)
         except Exception as e:
             return self._send(500, {'error': str(e)})
+        # ★★ round443：ETag（mtime + 大小）✗ 没变就只回 304 ✓
+        etag = '"%x-%x"' % (int(stt.st_mtime), stt.st_size)
+        # ★★★ round457（用户："为什么我看没有变化，是不是缓存的问题"）★★★
+        #   HTML 的 ETag 必须带上【构建号】✗✗
+        #   不然：只改了 game.js → 构建号变了、但 index.html 没变 → 304 →
+        #   浏览器用缓存里的【旧 HTML】→ 里面写的是【旧 ?v=】→
+        #   而旧地址是 immutable（一年）→ 永远跑旧代码 ✗✗✗
+        if 'text/html' in str(ctype or ''):
+            try:
+                etag = '"%x-%x-%s"' % (int(stt.st_mtime), stt.st_size, self._web_build())
+            except Exception:
+                pass
+        inm = self.headers.get('If-None-Match') or ''
+        if inm and etag in inm:
+            self.send_response(304)
+            self.send_header('ETag', etag)
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            return
         # ★ 第 95 轮查证：_send() 里【本来就发了 Cache-Control: no-store】✓
         #   （见 _send 的第 119 行）
         #   所以"管理页没有防具选项"不是服务器发旧页 ✗
@@ -1093,7 +1552,37 @@ class Api(BaseHTTPRequestHandler):
                     data = _new.encode('utf-8')
             except Exception:
                 pass
-        return self._send(200, data, ctype)
+        # ★★ round443：文本资源 gzip ✗✗ （1.3MB JS → 约 300KB）
+        _gzip_ok = False
+        _ct = str(ctype or '')
+        _compressible = ('javascript' in _ct or 'text/' in _ct or 'json' in _ct
+                         or 'svg' in _ct or 'css' in _ct)
+        if _compressible and len(data) > 1024:
+            if 'gzip' in (self.headers.get('Accept-Encoding') or ''):
+                try:
+                    _gz = gzip.compress(data, 6)
+                    if len(_gz) < len(data) * 0.95:
+                        data = _gz
+                        _gzip_ok = True
+                except Exception:
+                    _gzip_ok = False
+        # ★★ round444（用户："缓存的话有更新时这样不会跑到旧程序吧"）★★
+        #   只有【v 等于当前构建号】才允许长缓存 ✗
+        #   理由：构建号 = index/game.js/web.js/three 里最新的 mtime ✓
+        #         任何一个改了 → 号变了 → html 里引用的地址也变了 → 不会跑旧代码 ✓
+        #   另外两类永远不能长缓存：
+        #     · ws-config.js（服务器现算的配置 ✗ 改配置不会变构建号）
+        #     · 带上了一个不对的 v（手写/旧书签 → 回去问服务器 ✓）
+        _immutable = False
+        try:
+            _q = (self.path or '')
+            if 'v=' in _q:
+                _v = _q.split('v=', 1)[1].split('&', 1)[0]
+                _immutable = (_v == self._web_build()) and ('ws-config' not in _q)
+        except Exception:
+            _immutable = False
+        return self._send_static(200, data, ctype, etag=etag,
+                                 immutable=_immutable, gz=_gzip_ok)
 
 
 # ============================================================ WebSocket（P0-4）
@@ -1126,6 +1615,50 @@ def start_ws(cfg, ready, world_box=None):
         world = World(cfg)
         # 第 224 轮：把上次管理员改的开关读回来（要在 tick 起来之前 ✓）
         _load_admin_tune(world, cfg)
+        # ★★ round417：QQ 群转发（滚动通知 + 玩家上线）★★
+        #   ★ 在这里建实例并启后台线程 ✗ 然后挂到 world 上 ✓
+        #   ★ 没开 / 没配 url → start() 返回 False → world.qq 保持 None ✓
+        #     （集成测试 / 本地开发不会往真群里发消息 ✓）
+        try:
+            import qqbridge as _qqmod
+            _qcfg = dict(cfg.get('qq') or {})
+            # ★★ round421（用户："本地服转发到 1103784008，云服务器测试服转发到 346049634"）★★
+            #   ★ deploy 脚本故意不传 config.json（两边各存各的 ✓）
+            #     → 但万一以后改成传了 ✗ 两边就会互相覆盖 ✓
+            #   ★ 现在多一层保险：环境变量能盖掉配置文件里的值 ✗
+            #     云服务器只要在 service 里加一行就行 ✗ 不用动配置文件 ✓
+            #     XIUXIAN_QQ_GROUP / XIUXIAN_QQ_URL / XIUXIAN_QQ_TOKEN / XIUXIAN_QQ_ENABLED
+            for _ek, _ck in (('XIUXIAN_QQ_GROUP', 'group'),
+                             ('XIUXIAN_QQ_URL', 'url'),
+                             ('XIUXIAN_QQ_TOKEN', 'token')):
+                _ev = os.environ.get(_ek)
+                if _ev:
+                    _qcfg[_ck] = _ev.strip()
+                    print('[qq] %s 覆盖了配置里的 %s → %s'
+                          % (_ek, _ck, _qcfg[_ck]))
+            _ev2 = os.environ.get('XIUXIAN_QQ_ENABLED')
+            if _ev2 is not None and _ev2 != '':
+                _qcfg['enabled'] = _ev2.strip() not in ('0', 'false', 'no', 'off')
+            # ★ round418：管理页设过的优先级高于 config.json ✗
+            if getattr(world, 'qq_on', None) is not None:
+                _qcfg['enabled'] = bool(world.qq_on)
+            _qq = _qqmod.QqBridge(_qcfg,
+                                  skip_names=cfg.get('test_name_keys') or [])
+            if _qq.start():
+                world.qq = _qq
+        except Exception as _qe:
+            print('[qq] 启动失败（不影响游戏）：%r' % (_qe,))
+        # ★★ round424：排行榜刷新线程（头顶称号靠它 ✗ 启动就得算一次 ✓）
+        try:
+            start_rank_thread(cfg, world)
+        except Exception as _re0:
+            print('[rank] 线程启动失败（不影响游戏）：%r' % (_re0,))
+        # ★★ round502：Q 群「修仙战报」（每 15 分钟一张图 ✗ 没数据不发 ✓）
+        try:
+            import battlereport_run as _rpt
+            _rpt.start(cfg, world)
+        except Exception as _re1:
+            print('[rpt] 线程启动失败（不影响游戏）：%r' % (_re1,))
         net = Net(cfg, world)
         if world_box is not None:
             world_box.append(world)
@@ -1237,6 +1770,18 @@ def _load_admin_tune(world, cfg):
             print('[admin] 没有存过的管理员设置（用默认值）')
             return False
         d = _json.loads(_row[0])
+        # ★ round419：每人上限 + 补怪间隔也要读回来
+        #   （以前只存了 mob_cap ✗ 所以这两个每次重启都变回 8 / 2 ✓）
+        if d.get('mob_per'):
+            try:
+                world.mob_per_player = max(1, min(30, int(d['mob_per'])))
+            except Exception:
+                pass
+        if d.get('spawn_interval') is not None:
+            try:
+                world.spawn_interval = max(0.2, min(30.0, float(d['spawn_interval'])))
+            except Exception:
+                pass
         if d.get('mob_cap'):
             world.mob_cap = int(d['mob_cap'])
         for k, v in (d.get('mob_cap_of') or {}).items():
@@ -1247,11 +1792,18 @@ def _load_admin_tune(world, cfg):
             world.pvp_of[int(k)] = bool(v)
         if 'mob_atk_all' in d:
             world.mob_atk_all = bool(d['mob_atk_all'])
+        # ★ round418：QQ 群转发的开关（管理页改过就优先 ✗ 没改过就跟 config ✓）
+        if 'qq_on' in d:
+            world.qq_on = (None if d.get('qq_on') is None else bool(d.get('qq_on')))
         for k, v in (d.get('mob_atk_of') or {}).items():
             world.mob_atk_of[int(k)] = bool(v)
-        print('[admin] 已恢复上次的管理员设置：刷怪上限 %s 只 · 全局PVP %s · 妖兽伤害 %s'
-              % (world.mob_cap, '开' if world.pvp_all else '关',
-                 '开' if world.mob_atk_all else '关'))
+        print('[admin] 已恢复上次的管理员设置：每人 %s 只 · 全服 %s 只 · '
+              '每 %.1f 秒补一只 · 全局PVP %s · 妖兽伤害 %s · QQ 转发 %s'
+              % (world.mob_per_player, world.mob_cap, world.spawn_interval,
+                 '开' if world.pvp_all else '关',
+                 '开' if world.mob_atk_all else '关',
+                 ('跟 config' if getattr(world, 'qq_on', None) is None
+                  else ('开' if world.qq_on else '关'))))
         return True
     except Exception as e:
         print('[admin] 读取管理员设置失败（用默认值）：%r' % (e,))
@@ -1276,6 +1828,16 @@ def main():
     tables = dbmod.table_names(cfg)
     # ★ round304b：启动时清掉"卡在交易锁里"的物品（方案 v3 第 5 节 ✓ 幂等 ✓）
     unlocked = dbmod.startup_unlock_items(cfg)
+    # v4: multi-town foundation
+    try:
+        import towns as townsmod
+        _sys_town = townsmod.ensure_system_town(cfg)
+        townsmod.seed_catalog(cfg)
+        print('  小镇系统  : 主城 #%s（%s）· 目录 %d 项'
+              % (_sys_town.get('id'), _sys_town.get('name'),
+                 len(townsmod.list_catalog(cfg))))
+    except Exception as _te:
+        print('  小镇系统  : 初始化失败 %r' % (_te,))
 
     print('=' * 58)
     print('  末日丧尸 × 组队修仙 · 独立版后端  v%s' % cfg.get('version', '?'))
