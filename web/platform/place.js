@@ -631,6 +631,12 @@
   }
   /* ★ 2026-10-22：删除用我们自己的确认框（不用浏览器 confirm） */
   function editConfirmOpen() {
+    /* ★★★ 2026-10-22（用户："弹窗关了但没删掉"）★★★
+       点「删除」那一刻把目标 id 记下来 —— 之后不管 EDIT.id 因为什么被清空
+       （点穿透、取消选中、刷新…），确认删除时都用这个记下的 id。
+       之前用的是「当前 EDIT.id」，它一变 null 就静默不发了：
+       弹窗照常关闭、什么都不删、也不报错。 */
+    EDIT.confirmId = EDIT.id;
     var e = P.objs[EDIT.id], o = e && e.data;
     var nm = (o && o.catalog && typeof townObjName === 'function')
       ? (townObjName(o.catalog) || '这个物件') : '这个物件';
@@ -730,8 +736,14 @@
       EDIT.bar.addEventListener('click', function (e) {
         var b = e.target.closest ? e.target.closest('button[data-e]') : null;
         if (!b) { return; }
+        /* ★ 2026-10-22：别让工具条上的点击漏到场景里（会被当成"点空地"→ 取消选中） */
+        e.stopPropagation();
         editAct(b.getAttribute('data-e'));
       });
+      /* 指针按下阶段也拦住，否则场景的 pointerdown 可能先清掉选中 */
+      EDIT.bar.addEventListener('pointerdown', function (e) {
+        e.stopPropagation();
+      }, { capture: true });
     }
     EDIT.bar.style.display = 'flex';
     if (EDIT.id == null) {
@@ -792,15 +804,19 @@
        第二次点「删除」就卡在这个 return，对话框关不掉、也删不掉。
        这两个动作只跟对话框有关，必须在 id 检查之前处理。 */
     if (a === 'delok') {
-      var _delId = EDIT.id;
+      var _delId = (EDIT.confirmId != null) ? EDIT.confirmId : EDIT.id;
+      EDIT.confirmId = null;
       editConfirmClose();
       if (_delId != null) {
         send('remove_object', { id: _delId });
         editSelect(null);
+      } else {
+        /* 不再静默失败：让用户知道发生了什么 */
+        try { toast('没选中要删除的东西，请重新点一下再删'); } catch (eEmpty) { }
       }
       return;
     }
-    if (a === 'delno') { editConfirmClose(); return; }
+    if (a === 'delno') { EDIT.confirmId = null; editConfirmClose(); return; }
     if (EDIT.id == null) { return; }
     if (a === 'move') {
       /* ★ 2026-10-22：移动时给一个半透明预览 ✗ 不然看不见会挪到哪 ✓ */
