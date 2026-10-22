@@ -2296,6 +2296,19 @@ class World(object):
                                      catalog=self.town_catalog,
                                      owned=[int(r['id']) for r in rows]))
 
+    def _town_cleared(self, r):
+        """冻结/解散后，把这块区域里已经渲染的放置物从附近客户端撤掉"""
+        try:
+            x = float(r['x'])
+            z = float(r['z'])
+            rad = float(r.get('size_m') or 60.0) / 2.0 + 3.0
+            msg = P.pack('towncleared', town=int(r['id']), x=x, z=z, r=rad)
+            for q in list(self.players.values()):
+                if (q.x - x) ** 2 + (q.z - z) ** 2 <= (rad + 40.0) ** 2:
+                    self._send_cid(q.cid, msg)
+        except Exception as e:
+            print('[town] cleared broadcast failed: %r' % (e,))
+
     def _town_result(self, p, ok, msg='', town=None):
         kw = {'ok': 1 if ok else 0, 'msg': str(msg or '')}
         if town is not None:
@@ -2376,6 +2389,7 @@ class World(object):
                     self._rebuild_dyn_shops()
                 except Exception as e:
                     print('[town] rebuild after freeze failed: %r' % (e,))
+                self._town_cleared(r)
                 for qq in list(self.players.values()):
                     if int(getattr(qq, 'role_id', 0) or 0) == owner:
                         self._send_cid(qq.cid, P.pack(
@@ -2797,6 +2811,7 @@ class World(object):
                        'updated_at=? WHERE id=?',
                        ('frozen', r['original_x'], r['original_z'], r['deleted_at'], now, tid))
         self._town_result(p, True, 'dissolved, keep 7 days', r)
+        self._town_cleared(r)
         try:
             self._rebuild_dyn_shops()
         except Exception as e:
@@ -4206,7 +4221,10 @@ class World(object):
                 tid = int(row.get('id'))
             except Exception:
                 return
+            old = self.towns.get(tid) or {}
             self.towns[tid] = row
+            if str(row.get('status')) == 'frozen' and str(old.get('status')) == 'active':
+                self._town_cleared(row)
             try:
                 self._rebuild_dyn_shops()
             except Exception as e:

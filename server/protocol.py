@@ -516,6 +516,10 @@ C2S = {
         'req': ['table'], 'opt': [],
         'doc': '一张桌子的当前杯位（上菜后广播给附近的人）',
     },
+    'towncleared': {
+        'req': ['x', 'z'], 'opt': ['r', 'town'],
+        'doc': '小镇被冻结/解散：把以 (x,z) 为圆心、半径 r 内的放置物从客户端撤掉',
+    },
     'waiter': {
         'req': ['id', 'path'], 'opt': ['shop', 'table', 'secs'],
         'doc': '传菜员出餐：path=[[x,z],...] 世界坐标，secs=走完全程的秒数',

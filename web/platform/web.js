@@ -6271,6 +6271,26 @@ function waiterTick() {
     WAITER_TIMER = null;
   }
 }
+function townClearedApply(d) {
+  var x = +d.x || 0, z = +d.z || 0, r = +d.r || 60;
+  try {
+    var list = (typeof TOWN_OBJECTS_CACHE !== 'undefined' && TOWN_OBJECTS_CACHE) || [];
+    var keep = [];
+    for (var i = 0; i < list.length; i++) {
+      var o = list[i], dx = (+o.x) - x, dz = (+o.z) - z;
+      if (dx * dx + dz * dz > r * r) { keep.push(o); }
+    }
+    TOWN_OBJECTS_CACHE = keep;
+    try { window.MY_OBJECTS = keep; } catch (e1) { }
+  } catch (e2) { }
+  try {
+    if (window.PlaceMode && typeof PlaceMode.clearArea === 'function') {
+      PlaceMode.clearArea(x, z, r);
+    }
+  } catch (e3) { }
+  if (typeof toast === 'function') { toast('附近的小镇已冻结，建筑已移除'); }
+}
+
 function cupRowsHtml() {
   var t = TABLE_CUPS[MY_TABLE];
   if (!t || !t.cups || !t.cups.length) { return ''; }
@@ -10499,6 +10519,7 @@ function wsOnMessage(raw) {
   if (t === 'order') { try { orderApply(d); } catch (eOr) { } return; }
   if (t === 'tablecups') { try { cupsApply(d); } catch (eCup) { } return; }
   if (t === 'waiter') { try { spawnWaiter(d); } catch (eWt) { } return; }
+  if (t === 'towncleared') { try { townClearedApply(d); } catch (eTc) { } return; }
   if (t === 'work') { try { workApply(d); } catch (eWk) { } return; }
   if (t === 'jobstep') { try { jobRemote(d); } catch (eJs) { } return; }
   if (t === 'fridge') { try { fridgeApply(d); } catch (eFr) { } return; }

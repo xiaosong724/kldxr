@@ -280,6 +280,18 @@
       if (e && e.mesh && e.mesh.parent) { e.mesh.parent.remove(e.mesh); }
       delete P.objs[id];
     },
+    /* 小镇被冻结/解散：把这块区域里的物件全部撤掉（服务端 towncleared） */
+    clearArea: function (x, z, r) {
+      var r2 = (r || 60) * (r || 60);
+      for (var k in P.objs) {
+        var e = P.objs[k], d = e && e.data;
+        if (!d) { continue; }
+        var dx = (+d.x) - x, dz = (+d.z) - z;
+        if (dx * dx + dz * dz > r2) { continue; }
+        if (e.mesh && e.mesh.parent) { e.mesh.parent.remove(e.mesh); }
+        delete P.objs[k];
+      }
+    },
     isPlacing: function () { return P.placing; }
   };
 
