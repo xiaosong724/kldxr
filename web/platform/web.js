@@ -11327,6 +11327,9 @@ function wsOnMessage(raw) {
           try { window.onRemoved(k); } catch (eK) { }
         });
       }
+      /* ★ 2026-10-22：再向服务端要一次最新列表，彻底对齐（防止本地残留）。
+         服务端只回 active 的物件，这样删掉的绝不会再出现。 */
+      try { setTimeout(function () { wsSend('town_objects', {}); }, 240); } catch (eRef) { }
     } catch (eR) { }
     return;
   }

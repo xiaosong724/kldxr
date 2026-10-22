@@ -1150,11 +1150,41 @@
     catalog: function () { return catalogItems(); },
     editState: function () { return { on: EDIT.on, id: EDIT.id, moving: EDIT.moving }; },
     onRemoved: function (id) {
+      /* ★★★ 2026-10-22（用户："弹窗关了但东西没删掉"）★★★
+         数据库里确实删掉了，但画面上可能残留 —— 原因可能是：
+         ① mesh 被合批/重挂到别处，parent.remove 移不掉；
+         ② 有缓存引用没清。
+         所以这里做得彻底一点：先按引用移除，再全场景扫一遍兜底。 */
       var e = P.objs[id];
-      if (e && e.mesh && e.mesh.parent) { e.mesh.parent.remove(e.mesh); }
+      if (e && e.mesh) {
+        try {
+          if (e.mesh.parent) { e.mesh.parent.remove(e.mesh); }
+          e.mesh.visible = false;
+          if (e.mesh.traverse) {
+            e.mesh.traverse(function (m) {
+              m.visible = false;
+              m.userData = m.userData || {};
+              m.userData.objId = null;
+            });
+          }
+        } catch (eRm) { }
+      }
       delete P.objs[id];
-      syncSolids();
-      syncFloors();
+      /* 全场景兜底：凡是 userData.objId 等于它的，一律摘掉 */
+      try {
+        var S = scene(), kill = [];
+        if (S) {
+          S.traverse(function (n) {
+            if (n.userData && n.userData.objId != null &&
+                String(n.userData.objId) === String(id)) { kill.push(n); }
+          });
+        }
+        for (var q = 0; q < kill.length; q++) {
+          if (kill[q].parent) { kill[q].parent.remove(kill[q]); }
+        }
+      } catch (eSweep) { }
+      try { syncSolids(); } catch (eS1) { }
+      try { syncFloors(); } catch (eS2) { }
       if (EDIT.on && String(EDIT.id) === String(id)) { editSelect(null); }
     },
     /* 小镇被冻结/解散：把这块区域里的物件全部撤掉（服务端 towncleared） */
