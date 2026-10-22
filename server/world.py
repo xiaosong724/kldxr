@@ -253,11 +253,22 @@ class Player(object):
         self.skCloneN = 0
         self.skCustom = {}
         self.skCustomBySkin = {}
-        self.skTankBase = 0
-        self.skTankHp = 0
-        self.skSize = 1.0
-        self.skTankN = 0
-        self.tankAt = 0.0
+        # ★ 2026-10-22：坦克引擎层数/体型从存档恢复（离线 1 小时内保留）
+        try:
+            _thp = int((role or {}).get('sk_tank_hp') or 0)
+            _tbase = int((role or {}).get('sk_tank_base') or 0)
+            _tsz = float((role or {}).get('sk_tank_size') or 1.0)
+            _tn = int((role or {}).get('sk_tank_n') or 0)
+            _tat = float((role or {}).get('sk_tank_at') or 0.0)
+        except Exception:
+            _thp = _tbase = _tn = 0
+            _tsz = 1.0
+            _tat = 0.0
+        self.skTankHp = _thp
+        self.skTankBase = max(0, _tbase)
+        self.skSize = max(1.0, min(10.0, _tsz))
+        self.skTankN = max(0, _tn)
+        self.tankAt = _tat
         self.tankReset = 0.0
         self.skShield = 0
         self.skShieldT = 0.0
@@ -1210,6 +1221,8 @@ class World(object):
                 _tt_me, _tm_me = self._title_of(p)
                 _me0['tt'] = _tt_me
                 _me0['tm'] = _tm_me
+                # ★ 2026-10-22：坦克引擎体型（客户端按 me.sz 缩放自己的模型）
+                _me0['sz'] = round(float(getattr(p, 'skSize', 1.0) or 1.0), 4)
                 # ★★★ round349 修的真 bug（用户："没有听到逃跑音效"）★★★
                 #   根因：这里【只认 hurts / mhits】✗ 别的事件被静默丢掉 ✓
                 #         我加的 'flee' 走 _add_pend 上来 ✗ 到这里就被扔了 ✓
@@ -8120,7 +8133,11 @@ class World(object):
         #   ★ 故意加在【百分比之后】✗ 免得被防具的 hp% 二次放大 ✓
         #     （方案 §5 第 3 条特意写了这一句 ✓）
         v += float((p.talRaw or {}).get('hp') or 0.0)
-        return max(1, int(round(v)))
+        v = max(1, int(round(v)))
+        # ★ 2026-10-22（云端 round576 修的同一个坑）：
+        #   坦克引擎把成长后的上限存在 skTankHp 里 ✗ 不读它 → 面板上限永远不变 ✓
+        _tk = int(getattr(p, 'skTankHp', 0) or 0)
+        return max(v, _tk)
 
     # ================= round293: gold =================
     GOLD_CAP = 1000000000

@@ -942,6 +942,19 @@ class Net(object):
                     _k = str(_r['kind'] or '')
                     if _k in _sl and _r['key']:
                         _sl[_k].append(_r['key'])
+                # ★ 2026-10-22：坦克引擎层数/体型也在同一个连接里读（出去就是关库 ✗）
+                try:
+                    _rr = _c0.execute(
+                        'SELECT sk_tank_hp, sk_tank_base, sk_tank_size, sk_tank_n, sk_tank_at '
+                        'FROM roles WHERE id=?', (_rid0,)).fetchone()
+                    if _rr:
+                        role['sk_tank_hp'] = int(_rr['sk_tank_hp'] or 0)
+                        role['sk_tank_base'] = int(_rr['sk_tank_base'] or 0)
+                        role['sk_tank_size'] = float(_rr['sk_tank_size'] or 1.0)
+                        role['sk_tank_n'] = int(_rr['sk_tank_n'] or 0)
+                        role['sk_tank_at'] = int(_rr['sk_tank_at'] or 0)
+                except Exception as _tke:
+                    print('[skill] 坦克层数读取失败: %r' % (_tke,))
             role['skLe'] = _le
             role['skLd'] = _sl['A']
             role['skLoad'] = _sl
