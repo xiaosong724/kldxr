@@ -16,6 +16,13 @@
 
   function W() { return window; }
 
+  /* ★ C3 对照实验：?tox=-130&toz=130 只平移渲染，不改数据 */
+  var _TOFF = (function () {
+    var q = (W().location && W().location.search) || '';
+    var mx = /[?&]tox=(-?[\d.]+)/.exec(q), mz = /[?&]toz=(-?[\d.]+)/.exec(q);
+    return { x: mx ? +mx[1] : 0, z: mz ? +mz[1] : 0 };
+  })();
+
   function send(t, d) {
     try {
       if (typeof W().wsSend === 'function') { W().wsSend(t, d || {}); return true; }
@@ -85,7 +92,7 @@
     var old = P.objs[o.id];
     if (old && old.mesh) { grp.remove(old.mesh); }
     var mesh = buildMesh(o);
-    mesh.position.set(+o.x, 0, +o.z);
+    mesh.position.set(+o.x + _TOFF.x, 0, +o.z + _TOFF.z);
     mesh.rotation.y = +o.rot || 0;
     grp.add(mesh);
     P.objs[o.id] = { mesh: mesh, data: o };

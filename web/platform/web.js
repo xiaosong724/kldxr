@@ -20,6 +20,11 @@
 
 /* 已放置对象缓存（core/town.js 读取，避免 core 碰 window） */
 var TOWN_OBJECTS_CACHE = [];
+/* ★ C3 对照实验开关（平台层解析 URL，core 只读这个全局） */
+var TOWN_OBJ_PREVIEW = (function () {
+  try { return ((location && location.search) || '').indexOf('townobj=1') >= 0; }
+  catch (e) { return false; }
+})();
 var UI = {
   /* ---- 画布与窗口 ---- */
   mainCanvas: function () { return document.getElementById('cv'); },
@@ -10583,7 +10588,13 @@ function wsOnMessage(raw) {
   if (t === 'stood') { try { townSeatClear(d); } catch (eT) { } MY_TABLE = ''; return; }
   if (t === 'warehouse') { whApply(d); return; }
   if (t === 'welcome') {
-    try { setTimeout(function () { skAsk(); }, 600); } catch (e9) { } wsWelcome(d); return; }
+    try { setTimeout(function () { skAsk(); }, 600); } catch (e9) { } wsWelcome(d);
+    try {
+      if (((location && location.search) || '').indexOf('townobj=1') >= 0) {
+        setTimeout(function () { try { wsSend('town_objects', {}); } catch (eTo) { } }, 900);
+      }
+    } catch (eTp) { }
+    return; }
   if (t === 'world') {
     window._lastWorldT = Date.now();
     wsApplyWorld(d);

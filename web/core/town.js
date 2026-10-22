@@ -3255,6 +3255,9 @@ function townNpc(g, n) {
 }
 
 /* ============================ 组装 ============================ */
+/* ★ C3 对照实验用：?townobj=1&tox=-130&toz=130
+   只影响客户端渲染，不动数据库；开关由 platform/web.js 解析后放到全局 TOWN_OBJ_PREVIEW。
+   （core 层不许直接碰 window/location ✓） */
 function buildTown() {
   if (TOWN_GROUP) { return TOWN_GROUP; }
   var g = new THREE.Group();
@@ -3271,16 +3274,19 @@ function buildTown() {
   townGroundFlush(TOWN_CORE_GROUP);
   TOWN_SOLID_OX = 0; TOWN_SOLID_OZ = 0;
   townOuterWalls(g);
-  for (var i = 0; i < TOWN_BUILDINGS.length; i++) {
-    townBuilding(g, TOWN_BUILDINGS[i]);
+  var _preview = (typeof TOWN_OBJ_PREVIEW !== 'undefined') && TOWN_OBJ_PREVIEW;
+  if (!_preview) {
+    for (var i = 0; i < TOWN_BUILDINGS.length; i++) {
+      townBuilding(g, TOWN_BUILDINGS[i]);
+    }
+    for (var hi = 0; hi < TOWN_HOUSES.length; hi++) {
+      townBuilding(g, TOWN_HOUSES[hi]);
+    }
+    for (var p = 0; p < (TOWN_DATA ? TOWN_DATA.props.length : 0); p++) {
+      townProp(g, TOWN_DATA.props[p]);
+    }
+    TOWN_SEATS.forEach(function (s) { townSeat(g, s); });
   }
-  for (var hi = 0; hi < TOWN_HOUSES.length; hi++) {
-    townBuilding(g, TOWN_HOUSES[hi]);
-  }
-  for (var p = 0; p < (TOWN_DATA ? TOWN_DATA.props.length : 0); p++) {
-    townProp(g, TOWN_DATA.props[p]);
-  }
-  TOWN_SEATS.forEach(function (s) { townSeat(g, s); });
   townPolesAndLights(g);
   townMarketLife(TOWN_CORE_GROUP);
   townTeleportPads(g);
