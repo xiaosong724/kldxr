@@ -241,6 +241,18 @@ class Net(object):
                     pass
                 conn.push_text(P.pack('skillok', defs=skm.to_client(), learn=learn,
                                       load=load, err=msg))
+                # ★ 2026-10-22：学/装/卸/用书之后都要告诉 tick 线程更新内存
+                #   （少了这一步：当场装配的技能放不出来，必须重登）
+                try:
+                    _bfx = {}
+                    for _ck in (load.get('C') or []):
+                        if not _ck:
+                            continue
+                        _bfx[_ck] = int((learn.get(_ck) or {}).get('tier') or 1)
+                    self.world.post_intent(conn.cid, 'skillsync',
+                                           {'load': load, 'buff': _bfx})
+                except Exception:
+                    pass
 
             if t == 'skillask':
                 _send_state()

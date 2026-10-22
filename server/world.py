@@ -6415,6 +6415,28 @@ class World(object):
                     p.role['titleBoard'] = _b
             except Exception:
                 pass
+        elif t == 'skillsync':
+            # ★ 2026-10-22（云端 round578）：net 层改完装配 → 推给 tick 线程更新内存
+            #   缺这个分支：当场学/装的技能【放不出来】，要重登才生效
+            _sl2 = (d or {}).get('load') or {}
+            try:
+                p.skLoad = {'A': list(_sl2.get('A') or []),
+                            'B': list(_sl2.get('B') or []),
+                            'C': list(_sl2.get('C') or [])}
+                for _k2 in ('A', 'B', 'C'):
+                    while len(p.skLoad[_k2]) < 5:
+                        p.skLoad[_k2].append(None)
+                _bf2 = (d or {}).get('buff')
+                if isinstance(_bf2, dict):
+                    p.skBuff = {}
+                    for _bk2, _bv2 in _bf2.items():
+                        try:
+                            p.skBuff[str(_bk2)] = max(1, min(5, int(_bv2 or 1)))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            self._invalidate_stats(p)
         elif t == 'chat':
             txt = str(d.get('text') or '')[:200]
             if txt:
@@ -8440,15 +8462,18 @@ class World(object):
         _ar = p.armor
         if isinstance(_ar, dict) and _ar.get('broken'):
             _ar = None
-        st = armormod.stats_of(_ar)
+        # ★ round472：防具也吃发挥度（等级不够 → 血量加成打折 ✓）
+        _lv_p = (p.role or {}).get('level') or 1
+        st = armormod.stats_of(_ar, weapons.mastery_of(_ar, _lv_p), level=_lv_p)
         v = (base + st['hp']) * (1.0 + st['hp_pct'] / 100.0)
         # ★★ 第 117 轮（方案第 4 步）：天赋血量加进来 ★★
         #   ★ 故意加在【百分比之后】✗ 免得被防具的 hp% 二次放大 ✓
         #     （方案 §5 第 3 条特意写了这一句 ✓）
         v += float((p.talRaw or {}).get('hp') or 0.0)
         v = max(1, int(round(v)))
-        # ★ 2026-10-22（云端 round576 修的同一个坑）：
-        #   坦克引擎把成长后的上限存在 skTankHp 里 ✗ 不读它 → 面板上限永远不变 ✓
+        # ★★ round576（用户："坦克引擎的生命上限没有改变"）★★
+        #   坦克引擎把成长后的上限存在 skTankHp 里 ✗ 之前这里根本没读 ✓
+        #   → me.hpm 每帧都按这个函数算 → 不改这里，HUD 上限永远不变 ✓
         _tk = int(getattr(p, 'skTankHp', 0) or 0)
         return max(v, _tk)
 
@@ -10258,23 +10283,26 @@ class World(object):
         #   ★ 意思是：固有 + 武器 + 词条 + 天赋 先加完 ✓ 最后乘魔气 ✗
         #     → 魔气不会被别的加成二次放大 ✓（和方案 §4.1 一致 ✓）
         #   ★ 打怪也算 ✓（用户确认 ✓）—— 因为打怪也走这个函数 ✓
+        # ★ round472：平伤也用【有效等级】（min(装备等级, 你的等级)）✗
+        #   不然 1 级拿 1000 级剑：平伤 2194 → 就算打 2% 也是 44 ✗
+        _eff_lv = weapons.eff_level(w, lv)
         _atk0 = weapons.player_atk_with(inherent, w.get('look'), coeff,
-                                       w.get('tier') or 0, int(w.get('itemLv') or 1),
+                                       w.get('tier') or 0, _eff_lv,
                                        weapons.mastery_of(w, lv),
                                        # ★ 第 117 轮：flat 里加上【天赋攻击】✓
                                        #   武器/词条/天赋三者是相加关系 ✓ 走同一个 flat ✓
-                                       flat=(weapons.flat_full(w) +
+                                       flat=(weapons.flat_full(w, lv) +
                                              float((p.talRaw or {}).get('atk') or 0.0)),
                                        aff_w=w)                      # ★ 第 60 轮：词条 ✓
-        # ★ 2026-10-22：血怒（主动技能）15 秒内攻击 +40%
-        try:
-            _buf = getattr(p, 'skBuff', {}) or {}
-            if float(_buf.get('atk') or 0) > time.time():
-                _atk0 *= 1.4
-        except Exception:
-            pass
         # ★ 注意是 p.mq ✗ 不是 self.mq ✓（self 是 World ✓ 玩家是 p ✓ 我第一版写成 self ✗ 已修 ✓）
-        return _atk0 * (1.0 + mqmod.dmg_bonus_pct(p.mq) / 100.0)
+        # ★ round580：主动/被动攻击 buff（血怒 +40%、暴走 +20%）
+        _bmul = 1.0
+        _ta = getattr(p, 'skTA', {}) or {}
+        if float(_ta.get('bloodrage', 0) or 0) > 0:
+            _bmul *= 1.40
+        if float(_ta.get('berserk', 0) or 0) > 0:
+            _bmul *= 1.20
+        return _atk0 * (1.0 + mqmod.dmg_bonus_pct(p.mq) / 100.0) * _bmul
 
     def _intent_atk(self, p, d):
         """玩家挥了一刀 —— ★★ 服务器算伤害（客户端只报"我挥了"，不报打中谁）★★
