@@ -744,6 +744,11 @@ class World(object):
                                  % (_np.name, _lv, _on), 'join')
             except Exception as _qqe:
                 print('[qq] join post failed: %r' % (_qqe,))
+            # ★ 2026-10-22：把我自己的刷怪上限推给客户端（组队页滑块的初值）
+            try:
+                self._send_cid(_np.cid, P.pack('mobcap', n=int(self._cap_of(_np)), max=100))
+            except Exception:
+                pass
             self._town_zones_send(_np)
             try:
                 _tr = self._obj_town_ok(_np)
@@ -1189,6 +1194,29 @@ class World(object):
                        (p.role_id, stat, cur))
         self._tal_send(p)
 
+    def _intent_mobcap(self, p, d):
+        """玩家自己调「周围刷多少只」（1~100）
+
+        ★ 2026-10-22 用户要求：组队页下面加一个滑块。
+        存在 mob_cap_of[role_id]（和后台的「单人覆盖」是同一个位置），
+        n<=0 表示恢复默认（用全服每人的上限）。
+        """
+        try:
+            n = int((d or {}).get('n') or 0)
+        except Exception:
+            n = 0
+        rid = getattr(p, 'role_id', None)
+        if rid is None:
+            return
+        if n <= 0:
+            self.mob_cap_of.pop(rid, None)
+        else:
+            self.mob_cap_of[rid] = max(1, min(100, n))
+        cur = int(self._cap_of(p))
+        self._send_cid(p.cid, P.pack('mobcap', n=cur, max=100))
+        self._send_cid(p.cid, P.pack(
+            'notice', text='自己刷怪上限：%d 只' % cur))
+
     def _intent_statask(self, p, d):
         """客户端打开属性页时要一份最新的属性表"""
         try:
@@ -1242,7 +1270,7 @@ class World(object):
             add('生存', '灵气上限', qimax, '点', 0, qimax - tal_qi, '人物', 0, tal_qi)
         except Exception:
             pass
-        add('生存', '减伤', float(eff.get('dr') or 0) + gear_dr, '%', 50,
+        add('生存', '减伤', float(eff.get('dr') or 0) + gear_dr, '%', 70,
             0, '', gear_dr, float(eff.get('dr') or 0))
 
         # ---------- 输出 ----------
@@ -3329,7 +3357,7 @@ class World(object):
         _TP = ('house_info', 'house_buy', 'house_leave', 'house_sleep', 'house_wake',
                # ★ 2026-10-22：换皮肤 / 保存自定义以前【不在白名单】→ 包直接被丢掉，
                #   表现就是"点了换肤没反应""别人看不到我的自定义"。
-               'run', 'skinask', 'setskin', 'customset', 'statask',
+               'run', 'skinask', 'setskin', 'customset', 'statask', 'mobcap',
                'warehouse_open', 'warehouse_move', 'warehouse_move_many',
                'shop_open', 'shop_buy', 'usefood', 'fridge_open', 'order_open',
                'order_buy', 'cup_take', 'work_start', 'work_stop', 'jobstep', 'jobdone',

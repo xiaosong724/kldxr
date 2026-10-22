@@ -17,21 +17,27 @@
 DEFS = [
     ('hp',       '血量',   'pool', 8.0,   None, None,       True),
     ('atk',      '攻击力', 'pool', 1.0,   None, None,       True),
-    ('dr',       '减伤',   'vs',   0.5,   50.0, 'pen',      True),
-    ('speed',    '移速',   'buff', 1.0,   60.0, None,       True),
-    ('qi',       '灵气',   'pool', 2.0,   None, None,       False),
-    ('mana',     '法力',   'pool', 4.0,   None, None,       False),
-    ('crit',     '暴击',   'vs',   0.5,   30.0, 'anticrit', False),
-    ('anticrit', '免爆',   'vs',   0.5,   None, None,       False),
-    ('dodge',    '闪避',   'vs',   0.5,   30.0, 'hit',      False),
-    ('hit',      '命中',   'vs',   0.5,   None, None,       False),
-    ('critdmg',  '爆伤',   'buff', 1.0,   100.0, None,      False),
-    ('pen',      '穿透',   'vs',   0.5,   None, None,       False),
+    # ★ 2026-10-22（用户要求）减伤上限 50% → 70%
+    ('dr',       '减伤',   'vs',   0.5,   70.0, 'pen',      True),
+    # ★ round474（用户："把移速的上限砍一半"）→ 60% → 30% ✓
+    ('speed',    '移速',   'buff', 1.0,   30.0, None,       True),
+    ('qi',       '灵气',   'pool', 2.0,   None, None,       True),
+    ('crit',     '暴击',   'vs',   0.5,   30.0, 'anticrit', True),
+    ('anticrit', '免爆',   'vs',   0.5,   None, None,       True),
+    ('dodge',    '闪避',   'vs',   0.5,   30.0, 'hit',      True),
+    ('hit',      '命中',   'vs',   0.5,   None, None,       True),
+    ('critdmg',  '爆伤',   'buff', 1.0,   100.0, None,      True),
+    # ★★★ round473（用户："增加抗爆属性，用来降低受到暴击的伤害，
+    #   相当于闪避和命中这样的克制属性"）★★★
+    #   对抗关系：他的【爆伤】− 我的【抗爆】 = 实际暴击伤害 ✓
+    #   （和 命中↔闪避、免爆↔暴击率 完全同构 ✓）
+    ('anticritdmg', '抗爆', 'vs', 0.5, None, 'critdmg', True),
+    ('pen',      '穿透',   'vs',   0.5,   None, None,       True),
 ]
 
 KEYS = [d[0] for d in DEFS]
 BY_KEY = {d[0]: d for d in DEFS}
-LIVE = [d[0] for d in DEFS if d[6]]          # v1 立刻生效的 6 个 ✓
+LIVE = [d[0] for d in DEFS if d[6]]          # ★ round411：11 个全部接进战斗了 ✓
 
 
 def points_per_level():
@@ -72,21 +78,29 @@ def raw_of(spent):
 
 
 def effective(raw):
-    """原始值 → 有效值（对抗相减 + 封顶 ✓ 方案 §4 第②③步）
+    """原始值 → 有效值（★ 只做【封顶】✗ 不做对抗相减 ✓）
 
-    ★ 顺序不能反 ✗ 先相减再封顶 ✓
-      （先封顶的话"我 40% 对方命中 10%"会算成 30%−10%=20% ✗ 应该是 30% ✓）
+    ★★★ round411（用户："属性界面要能看当前所有属性"）★★★
+      病根：这里原来把【对抗方】的原始值从【自己】身上减掉了 ✗
+        例：我自己点了 10 点减伤 + 10 点穿透
+            → 减伤 = 5% − 穿透 5% = 0% ✓（自己把自己抵光 ✓✓）
+        而"对抗"本来是【我和对面】之间的事 ✗ 不是自己跟自己 ✓
+        表现：面板上投了 10 点减伤却显示 0.0%（一看就会说"没用"✓）
+      ★ 修法：本函数只算"我的原始值 + 封顶" ✓
+        对抗相减挪到【战斗时】✗ 那时两边都在手上 ✓
+        · 我的暴击 − 他的免爆
+        · 我的命中 − 他的闪避
+        · 他的减伤 − 我的穿透
+      ★ 打怪（PvE）没有对手天赋 ✗ 所以直接用封顶后的值 ✓（和以前一样 ✓）
     """
     e = dict(raw or {})
+    # 对抗类：只封顶 ✓（相减交给战斗）
     for k, d in BY_KEY.items():
         if d[2] != 'vs' or k not in e:
             continue
-        foe = d[5]
-        if foe and foe in (raw or {}):
-            e[k] = round(max(0.0, e[k] - float(raw[foe])), 2)
         if d[4] is not None:
             e[k] = min(e[k], float(d[4]))
-    # 增益类只封顶 ✓ 不相减
+    # 增益类：只封顶 ✓
     for k, d in BY_KEY.items():
         if d[2] == 'buff' and k in e and d[4] is not None:
             e[k] = min(e[k], float(d[4]))

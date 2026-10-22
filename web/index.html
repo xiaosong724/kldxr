@@ -1828,6 +1828,15 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
    <div id="ptPlayers"></div>
    <div style="opacity:.75;font-size:12px;margin:10px 0 4px">招募中的队伍</div>
    <div id="ptParties"></div>
+
+   <!-- ★ 2026-10-22（用户要求）：组队页下面加「自己刷怪上限」，1~100 滑动调整 -->
+   <div class="setLabel" style="margin-top:16px">自己刷怪上限
+     <small style="opacity:.6">（只影响刷在你附近的怪 · 1~100 只）</small></div>
+   <div class="ptRow" style="align-items:center;gap:10px">
+     <input id="ptMobCap" type="range" min="1" max="100" step="1" value="8"
+            style="flex:1;accent-color:#8ee0ff">
+     <b id="ptMobCapVal" style="min-width:56px;text-align:right;color:#8ee0ff">8 只</b>
+   </div>
   </div>
 
   <div class="tabpane" data-pane="ui">

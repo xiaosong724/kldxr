@@ -263,6 +263,11 @@ C2S = {
         'req': [], 'opt': [],
         'doc': '请求属性总览（服务器算好的完整表）',
     },
+    # ★ 2026-10-22（用户要求）：组队页里的「自己刷怪上限」滑块 1~100
+    'mobcap': {
+        'req': [], 'opt': ['n'],
+        'doc': '设置自己周围最多刷几只怪（1~100；n<=0 恢复默认）',
+    },
     'party': {
         'req': ['op'], 'opt': ['cid', 'text'],
         'doc': '队伍操作（op=invite/accept/decline/leave/kick/promote/disband/chat）',
@@ -602,6 +607,10 @@ S2C = {
     'welcome': {
         'req': ['role'], 'opt': ['cfg', 'ver', 'ts'],
         'doc': '认证通过：角色数据 + 服务端配置',
+    },
+    'mobcap': {
+        'req': ['n'], 'opt': ['max'],
+        'doc': '自己的刷怪上限（组队页滑块）',
     },
     'error': {
         'req': ['msg'], 'opt': ['code'],

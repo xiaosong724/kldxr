@@ -2038,7 +2038,57 @@ function ptWeapon(look, tier) {
   } catch (e) { return ''; }
 }
 
+/* ★ 2026-10-22（用户要求）：组队页下面的「自己刷怪上限」滑块（1~100）
+   · 拖动 → 发包 mobcap{n}
+   · 服务器回 mobcap{n,max} → 回写滑块和数字（以服务器为准，防越界）
+   · 进世界时服务器也会推一条 → 初值就是真实的 */
+var PT_MOBCAP = 8;
+try {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { try { ptMobCapBind(); } catch (e0) { } });
+  } else {
+    setTimeout(function () { try { ptMobCapBind(); } catch (e1) { } }, 0);
+  }
+} catch (eMc0) { }
+function ptMobCapBind() {
+  /* ★ 2026-10-22：改成【全局事件委托】——
+     以前只在组队页 ptRender() 里绑，没打开过组队页就=没绑上，
+     拖滑块毫无反应。委托不关心元素什么时候出现。 */
+  if (!window._mobCapDelegated) {
+    window._mobCapDelegated = true;
+    document.addEventListener('input', function (e) {
+      var el = e.target;
+      if (!el || el.id !== 'ptMobCap') { return; }
+      ptMobCapPaint(Math.max(1, Math.min(100, parseInt(el.value, 10) || 1)));
+    }, true);
+    document.addEventListener('change', function (e) {
+      var el = e.target;
+      if (!el || el.id !== 'ptMobCap') { return; }
+      var v = Math.max(1, Math.min(100, parseInt(el.value, 10) || 1));
+      try { wsSend('mobcap', { n: v }); } catch (e2) { }
+    }, true);
+  }
+  ptMobCapPaint(PT_MOBCAP);
+}
+function ptMobCapPaint(v) {
+  var sl = document.getElementById('ptMobCap');
+  var tx = document.getElementById('ptMobCapVal');
+  var n = Math.max(1, Math.min(100, parseInt(v, 10) || 1));
+  if (sl && String(sl.value) !== String(n)) { sl.value = n; }
+  if (tx) { tx.textContent = n + ' 只'; }
+}
+function ptMobCapApply(d) {
+  if (!d) { return; }
+  PT_MOBCAP = Math.max(1, Math.min(100, parseInt(d.n, 10) || 1));
+  if (+d.max) {
+    var sl = document.getElementById('ptMobCap');
+    if (sl) { sl.max = +d.max; }
+  }
+  ptMobCapPaint(PT_MOBCAP);
+}
+
 function ptRender() {
+  try { ptMobCapBind(); } catch (eMcb) { }   // ★ 滑块：第一次渲染就绑上
   var mine = document.getElementById('ptMine');
   var pend = document.getElementById('ptPend');
   var pls = document.getElementById('ptPlayers');
@@ -11575,6 +11625,10 @@ function wsOnMessage(raw) {
     }
     skcSay('');
     try { toast('自定义已保存 ✓'); } catch (eT) { }
+    return;
+  }
+  if (t === 'mobcap') {          // ★ 2026-10-22：自己刷怪上限（1~100）
+    try { ptMobCapApply(d); } catch (eMc) { }
     return;
   }
   if (t === 'skin') {              // ★ round485：服务器说"你的皮肤换了"
