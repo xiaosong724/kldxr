@@ -13055,6 +13055,77 @@ function bindLogin() {
      所以手机上通过 http://192.168.x.x 打开时【注册会失败】，这很正常，直接跳过就行，
      不影响游戏本身 ✓ 想要 PWA 就用 https（或走 APK 壳）✓
    ============================================================ */
+/* ★★★ 2026-10-23（用户："推送时可以让用户自动刷新，而不是还要手动刷新"）★★★
+   ★ 机制：/boot.js 里的 window.BUILD = 前端文件的最新 mtime ✗
+     → 每 60 秒重新拉一次 /boot.js（带 cache-busting）✓
+     → BUILD 变了 = 服务器更新过前端 → 自动刷新页面 ✓
+   ★ 三个保护（不然会打断玩家 / 刷不停）：
+     ① 只在【页面可见 + 不在战斗中】才刷 ✗ 战斗中推迟到脱战 ✓
+     ② 刷新前给 6 秒缓冲 ✗ 顶部提示"游戏已更新，即将刷新"✓
+     ③ 同一个 BUILD 只刷一次（sessionStorage 记着）✗ 防止死循环 ✓
+*/
+var UPD = { myBuild: '', timer: null, armed: false, done: false };
+function updInit() {
+  try { UPD.myBuild = String((typeof BUILD_TAG !== 'undefined' && BUILD_TAG) || ''); } catch (e) { }
+  if (!UPD.myBuild || UPD.myBuild === '?') { return; }
+  /* 上次已经因为这个 build 刷过 → 不再重复（防死循环）*/
+  try {
+    if (sessionStorage.getItem('updatedFor') === UPD.myBuild) { UPD.done = true; }
+  } catch (e2) { }
+  updSchedule();
+}
+function updSchedule() {
+  if (UPD.timer) { clearTimeout(UPD.timer); }
+  UPD.timer = setTimeout(updCheck, 60000);
+}
+function updCheck() {
+  if (UPD.done) { return; }
+  var url = '/boot.js?_=' + Date.now();
+  fetch(url, { cache: 'no-store' })
+    .then(function (r) { return r.text(); })
+    .then(function (txt) {
+      var m = /window\.BUILD\s*=\s*"([^"]*)"/.exec(String(txt || ''));
+      var srv = m ? m[1] : '';
+      if (srv && srv !== UPD.myBuild && srv !== '0') {
+        UPD.armed = true;
+        try { sessionStorage.setItem('updatedFor', srv); } catch (e) { }
+        updAnnounce();
+      }
+    })
+    .catch(function () { })
+    .then(function () { updSchedule(); });
+}
+/* 宣布更新：等他脱离战斗再刷 */
+function updAnnounce() {
+  try { toast('游戏已更新 · 即将自动刷新'); } catch (e) { }
+  var waited = 0;
+  var iv = setInterval(function () {
+    waited += 1;
+    /* 战斗中（有怪在打你 / 自己在挥刀）就继续等 ✗ 最多等 5 分钟 ✓ */
+    var busy = false;
+    try {
+      /* 附近有活着的怪 → 算战斗中；最多等 5 分钟（waited 到 150 次 = 300 秒）*/
+      if (waited < 150) {
+        var rm = (typeof NET !== 'undefined' && NET.rmobs) ? NET.rmobs : null;
+        if (rm) {
+          for (var k in rm) {
+            var o = rm[k];
+            if (o && (o.hp === undefined || o.hp > 0)) { busy = true; break; }
+          }
+        }
+      }
+    } catch (e2) { busy = false; }
+    if (!busy) {
+      clearInterval(iv);
+      UPD.done = true;
+      setTimeout(function () {
+        try { location.replace(location.pathname + '?u=' + Date.now()); }
+        catch (e3) { location.reload(); }
+      }, 800);
+    }
+  }, 2000);
+}
+
 (function bootServiceWorker() {
   try {
     if (!navigator.serviceWorker) { return; }
@@ -13064,6 +13135,9 @@ function bindLogin() {
     navigator.serviceWorker.register('/sw.js').catch(function () { /* 装不上也照玩 ✓ */ });
   } catch (e) { /* 老浏览器没有 SW —— 无所谓 ✓ */ }
 })();
+/* ★ 2026-10-23：启动自动更新检查 */
+try { updInit(); } catch (eUpd) { }
+
 
 
 
