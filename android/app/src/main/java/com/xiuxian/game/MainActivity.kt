@@ -30,11 +30,11 @@ import android.widget.FrameLayout
  *   · 全屏那句必须放在 setContentView 之后 ✗ 放前面会 NPE 闪退（第 184 轮 ✓）
  *   · Manifest 用 fullSensor（横竖都能转 ✓）不能写死横屏（第 180 轮 ✓）
  *   · 明文 http / ws 必须放行（usesCleartextTraffic + MIXED_CONTENT ✓）第 175 轮 ✓
+ *   · WebGL 拿不到上下文 → 必须【重建 WebView】✗ reload 没用（第 202 轮 ✓）
+ *   · 横屏要真转屏 → 提供 AndroidShell.setOrientation 给网页调（第 202 轮 ✓）
  *
- * ★ 第 191 轮新增：服务器没开 / 重启时显示【维护中】页面 + 重新连接按钮
- *   以前这种情况 WebView 会甩出浏览器自己的"无法连接"✗ 很难看也不像游戏 ✓
- *   现在：主页面加载失败 → 换成一张自带的维护页（深色、和游戏一个风格 ✓）
- *        上面有【重新连接】按钮 + 每 15 秒自动重试一次 ✓
+ * ★ 第 191 轮：服务器没开 / 重启时显示【维护中】页面 + 重新连接按钮
+ * ★ 第 202 轮：WebView 崩溃 / GL 上下文失败 → 销毁重建（最多 3 次）
  */
 class MainActivity : Activity() {
 
@@ -44,63 +44,77 @@ class MainActivity : Activity() {
 
         /** 维护页上的自动重试间隔（秒）*/
         private const val RETRY_SEC = 15
+
+        /** WebView 最多重建几次（防死循环 ✓ 页面加载成功就清零 ✓）*/
+        private const val MAX_REBUILD = 3
     }
 
     private lateinit var web: WebView
     private var showingMaint = false
+    private var glRebuildCount = 0
+    private var root: FrameLayout? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        /* ★★★ 2026-10-23（用户："切换横竖屏时，打开游戏会不会闪一下"）★★★
-           ★ 必须在【最最前面】就把方向定下来 ✗ 越晚越容易看到翻转 ✓
-           ★ 顺序：super.onCreate → 立刻 requestedOrientation → 再建界面 ✓
-             这样窗口还没画出来方向就定了 ✗ 用户看不到任何旋转 ✓
-           ★ 没存过（第一次装）：什么都不做 ✗ 走 Manifest 的 fullSensor
-             → 按手机当前怎么拿就怎么开 ✓ 也不会转 ✓ */
+        /* ★★★ 方向必须在【最最前面】定下来 ✗ 越晚越容易看到翻转 ✓
+           → 用户在启动瞬间看不到任何旋转 ✓
+           → 没存过（第一次装）就按手机当前怎么拿就怎么开 ✓ */
         try {
             val saved = getSharedPreferences("xiuxian", MODE_PRIVATE).getInt("screenOrientation", 0)
             if (saved != 0) { requestedOrientation = saved }
         } catch (e: Throwable) { }
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        /* ★★★ 2026-10-23 性能：告诉系统"这是游戏，别省电降频" ★★★
-           · FLAG_HARDWARE_ACCELERATED —— 双保险（Manifest 里也有 ✓）
-           · 关掉窗口动画 / 转场动画（一次性设置）✓
-           · 让 View 的绘制走 GPU 管线 ✓ */
         try {
             window.addFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED)
         } catch (e: Throwable) { }
-        /* ★ 这里不能调 goFullscreen() ✗ 界面还没建出来 → 会 NPE 闪退 ✓
-           （第 184 轮真机踩过 ✓ 挪到 setContentView 之后 ✓）*/
 
-        val root = FrameLayout(this)
-        root.setBackgroundColor(Color.parseColor("#1a1208"))
+        /* ★ 全屏不能在这里调 ✗ 界面还没建 → NPE 闪退（第 184 轮真机踩过 ✓）*/
 
-        /* ★★★ 2026-10-23：V8 调优 —— 先说结论 ★★★
-           ★ 我查了：普通 APK 【改不了 WebView 的 V8 flags】✗
-             · --js-flags 只有 Chromium 自己能读（从命令行 / apex 配置）
-             · WebView 没提供任何公开或反射可用的入口 ✓
-             · 那些 SystemProperties("debug.webview.v8.flags") 的老写法
-               在 Android 8+ 已经失效 ✗（我试过不行 ✓）
-           → 所以【不在 APK 层做 V8】，而是用下面这些【确实有效】的替代：
-             ① 开 WebContentsDebuggingEnabled —— 只用于真机排查（不是性能）✓
-             ② WebView 的多进程渲染 + 优先级（已做 ✓）
-             ③ 把「省 GC」的工作交给 JS 侧：
-                - 减少每帧 new 对象（飘字池已经做了 ✓）
-                - 复用 Vector3/Matrix4（项目已有 REUSE_V3 ✓）
-             ④ 下面这个 setRendererPriorityPolicy + 高优先级线程池，
-                是 APK 层【真正能影响 JS 执行速度】的手段 ✓
+        val r = FrameLayout(this)
+        r.setBackgroundColor(Color.parseColor("#1a1208"))
+        root = r
 
-           ★ 如果以后真要做 V8 级优化，唯一可行的路是：
-             打包自己的 Chromium（巨大）✗ 或者改用 GeckoView / 原生渲染 ✓
-             不值得，收益也就 10% 上下 ✓
-        */
+        /* ★★★ 2026-10-23：高刷新率（用户："不要限制帧率"）★★★
+           只把窗口的上限顶到屏幕支持的最高档 ✗ 不写死 120 / 90 ✓ */
         try {
-            WebView.setWebContentsDebuggingEnabled(true)
+            @Suppress("DEPRECATION")
+            val dm = window.windowManager.defaultDisplay
+            @Suppress("DEPRECATION")
+            val best = dm.supportedModes?.maxByOrNull { it.refreshRate }
+            if (best != null) {
+                val lp = window.attributes
+                lp.preferredRefreshRate = best.refreshRate
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    lp.preferredDisplayModeId = best.modeId
+                }
+                window.attributes = lp
+            }
         } catch (e: Throwable) { }
 
+        initWebView()
+        r.addView(
+            web,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        setContentView(r)
+
+        /* 界面建好了，这时候才能安全地进全屏 ✓ */
+        goFullscreen()
+
+        web.loadUrl(GAME_URL)
+    }
+
+    /* ==================================================================
+       WebView 创建（首次 / 崩溃重建 都走这里 ✓ 配置完全一致 ✓）
+       ================================================================== */
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun initWebView() {
         web = WebView(this)
         web.settings.apply {
             javaScriptEnabled = true
@@ -116,71 +130,39 @@ class MainActivity : Activity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             }
-            /* ★ 2026-10-23：缓存策略 —— 静态资源走缓存 ✗ 别再每次重下 ✓
-               （只影响"加载速度"，不影响代码更新：项目用 ?v=构建号 破缓存 ✓）*/
             setSupportMultipleWindows(false)
             javaScriptCanOpenWindowsAutomatically = false
-            /* ★ 让 WebView 用 2D 画布时不走软件路径 ✓ */
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 offscreenPreRaster = true
-            }        }
+            }
+        }
         web.setBackgroundColor(Color.parseColor("#1a1208"))
         web.isScrollbarFadingEnabled = true
         web.overScrollMode = View.OVER_SCROLL_NEVER
         web.setPadding(0, 0, 0, 0)
 
-        /* ★★★ 2026-10-23：GPU / 渲染性能优化（画面不变、玩法不变）★★★
-           目标：把 WebView → 屏幕 这条合成链上多余的 CPU 开销砍掉。
-           都要点：
-             ① setLayerType(LAYER_TYPE_HARDWARE)
-                WebView 默认会走一层软件绘制 ✗ 显式指定硬件图层 ✓
-                省掉一次整屏 CPU 拷贝（高分辨率屏尤其明显）
-             ② setRendererPriorityPolicy(RENDERER_PRIORITY_IMPORTANT, false)
-                把渲染进程提到"重要"优先级 ✗ 系统不会给它降频 ✓
-                （false = 不在不可见时自动降级 —— 我们是全屏游戏，切后台自然会 pause）
-             ③ 关掉过度滚动 / 滚动条 / 长按选中 / 自动填充
-                这些每帧都可能触发额外的合成层重建 ✓
-             ④ WebSettings 关掉"离线缓存预取"之类的后台活
-           全部加 try-catch ✗ 任一机型不支持也不能闪退（真机踩过 NPE 的教训 ✓）
-        */
-        try {
-            web.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-        } catch (e: Throwable) { }
-
+        /* ★ GPU / 渲染优化：
+           ① 显式硬件图层（省一次整屏 CPU 拷贝 ✓）
+           ② 渲染进程提到"重要"优先级（系统不给它降频 ✓）
+           ③ 关掉长按选中 / 自动填充 / 安全浏览（省合成层和后台活 ✓）*/
+        try { web.setLayerType(View.LAYER_TYPE_HARDWARE, null) } catch (e: Throwable) { }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             try {
                 web.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
             } catch (e: Throwable) { }
         }
-
         try {
-            web.isLongClickable = false       // 长按不触发文字选择（省一次合成层）
+            web.isLongClickable = false
             web.isHapticFeedbackEnabled = false
             web.settings.setSupportZoom(false)
-            web.settings.setTextZoom(100)     // 不让系统字体大小影响布局（避免重排）
+            web.settings.setTextZoom(100)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                web.settings.safeBrowsingEnabled = false   // 游戏不需要，省后台检查
-            }
-            /* ★ 关掉"自动填充"那套表单服务 ✗ 游戏没有表单 ✓ */
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                web.settings.safeBrowsingEnabled = false
                 web.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
             }
         } catch (e: Throwable) { }
 
-        /* ★★★ 2026-10-23（用户："我手机无法横屏，从 APK 层面解决"）★★★
-           ★ 病根：游戏里【设置 → 画面 → 横屏】调的是
-             window.AndroidShell.setOrientation('landscape') ✗
-             而 APK 从来没提供这个接口 → 游戏只能退化成"只换 CSS 布局"✓
-             所以你点了横屏，画面布局变了，但手机【根本没转】✓✓
-           ★ 修：给 WebView 注入一个 AndroidShell 对象，提供 setOrientation：
-             · 'landscape' → SCREEN_ORIENTATION_SENSOR_LANDSCAPE（跟随重力左右转 ✓）
-             · 'portrait'  → SCREEN_ORIENTATION_SENSOR_PORTRAIT
-             · 'auto'      → SCREEN_ORIENTATION_FULL_SENSOR
-           ★ 为什么用 SENSOR_* 而不是固定 LANDSCAPE：
-             固定的话用户把手机倒过来，画面还是那个方向 ✗ 很别扭 ✓
-             SENSOR 会跟着重力自动翻 ✓ 这才是手机游戏该有的手感 ✓
-           ★ 调用必须在 UI 线程 ✗ 用 runOnUiThread ✓
-           ★ 加 @JavascriptInterface 才能在 JS 里访问（Android 4.2+ 强制要求 ✓）*/
+        /* ★ JS 可以调的原生能力（方向 + 硬重启）*/
         try {
             web.addJavascriptInterface(object : Any() {
                 @android.webkit.JavascriptInterface
@@ -191,9 +173,6 @@ class MainActivity : Activity() {
                         m.startsWith("port") -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
                         else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
                     }
-                    /* ★ 记忆住方向 ✗ 下次启动直接用这个方向开
-                       → 就【不会出现"先竖屏闪一下再转横屏"】✓
-                       （这是用户明确担心的观感问题 ✓）*/
                     try {
                         getSharedPreferences("xiuxian", MODE_PRIVATE).edit()
                             .putInt("screenOrientation", target).apply()
@@ -203,86 +182,104 @@ class MainActivity : Activity() {
                     }
                 }
 
-                /* 游戏想知道当前是不是真的横屏（用于 UI 判断 ✓）*/
                 @android.webkit.JavascriptInterface
                 fun isLandscape(): Boolean {
                     return try {
                         resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
                     } catch (e: Throwable) { false }
                 }
-            }, "AndroidShell")
-        } catch (e: Throwable) { }
 
-        /* ★ 启动时【一开始就直接用上次的方向】—— 已在 onCreate 最前面做了 ✓
-           这里不用再设一次（重复设置反而可能触发一次重新布局 ✓）
-           ★ 没存过（第一次装）就按屏幕当前方向走（Manifest 的 fullSensor）✓ */
-
-        /* ★★★ 2026-10-23：高刷新率优化 ★★★
-           真机实测：这块屏支持 120/90/60Hz，但游戏只跑到 ~55 FPS ✗
-           ★★★ 用户明确要求："不要限制帧率" ★★★
-           → 所以这里【只做一件事】：把窗口的刷新率上限顶到屏幕最高的那一档
-             不写死 120 / 90 ✗ 用 dm.supportedModes 里 refreshRate 最大的那个 ✓
-             换台 90Hz 的手机就自动要 90，144Hz 就要 144 ✓ 永远不锁死 ✓
-           → 调用 setFrameRate 反而可能锁帧 ✗ 所以【不用它】（编译也报不存在 ✓）
-           ★ 两者都是"提示" ✗ 系统不支持就自动忽略 ✓ 不会崩 ✓
-        */
-        try {
-            val dm = window.windowManager.defaultDisplay  // 老 API，但所有版本都能用
-            @Suppress("DEPRECATION")
-            val best = dm.supportedModes?.maxByOrNull { it.refreshRate }
-            if (best != null) {
-                val lp = window.attributes
-                lp.preferredRefreshRate = best.refreshRate
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    lp.preferredDisplayModeId = best.modeId
+                /** ★ WebGL 彻底拿不到上下文时调这个 → 真的重建 WebView ✓ */
+                @android.webkit.JavascriptInterface
+                fun hardRestart() {
+                    glRebuildCount += 1
+                    if (glRebuildCount > MAX_REBUILD) {
+                        runOnUiThread { showMaintenance() }
+                        return
+                    }
+                    rebuildWebView()
                 }
-                window.attributes = lp
-            }
+
+                @android.webkit.JavascriptInterface
+                fun rebuildCount(): Int = glRebuildCount
+            }, "AndroidShell")
         } catch (e: Throwable) { }
 
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView?, url: String?): Boolean = false
 
-            /**
-             * 加载失败 → 换成维护页
-             * ★ 只看【主页面】的失败（isForMainFrame）✗
-             *   子资源（图片/音效）加载失败不该整页变维护 ✓
-             */
+            /** 加载失败 → 维护页（只看主页面 ✓ 子资源失败不算 ✓）*/
             override fun onReceivedError(
                 view: WebView?, request: WebResourceRequest?, error: WebResourceError?
             ) {
                 if (request == null || request.isForMainFrame) { showMaintenance() }
             }
 
+            /* ★★★ 2026-10-23（用户："显卡上下文创建不出来，玩家反复反馈"）★★★
+               ★ 这是【渲染进程崩溃】的兜底 ✓ 真机常见 ✓
+               ★ 为什么 JS 的 location.reload 没用：
+                 渲染进程挂了以后，同一个 WebView 里【再也拿不到新的 GL 上下文】✗
+                 玩家看到的"自动恢复 2 次都失败"就是这个原因 ✓✓
+               ★ 唯一有效：销毁整个 WebView → 系统起新的渲染进程 → GL 重新分配 ✓ */
+            override fun onRenderProcessGone(
+                view: WebView?, detail: android.webkit.RenderProcessGoneDetail?
+            ): Boolean {
+                glRebuildCount += 1
+                if (glRebuildCount > MAX_REBUILD) {
+                    showMaintenance()
+                    return true
+                }
+                rebuildWebView()
+                return true     // ★ true = 我们自己处理了 ✗ 别让系统杀掉 Activity ✓
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
-                /* 真正的游戏页加载成功 → 清掉"正在维护"的标记 ✓ */
-                if (url != null && url.startsWith("http")) { showingMaint = false }
+                if (url != null && url.startsWith("http")) {
+                    showingMaint = false
+                    glRebuildCount = 0      // ★ 加载成功 → 计数器清零 ✓
+                }
             }
         }
         web.webChromeClient = WebChromeClient()
-
-        root.addView(
-            web,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        )
-        setContentView(root)
-
-        /* 界面建好了，这时候才能安全地进全屏 ✓ */
-        goFullscreen()
-
-        web.loadUrl(GAME_URL)
     }
 
-    /**
-     * 服务器连不上 → 显示自带的维护页
-     *
-     * ★ 为什么用 loadDataWithBaseURL 拼一段 HTML，而不是放 assets 文件：
-     *   需要把 GAME_URL 注入进页面（"重新连接"按钮要用 ✓）
-     *   直接拼最省事，也不用多一个资源文件 ✓
-     */
+    /* ==================================================================
+       重建 WebView（GL 失败 / 渲染进程崩溃 都走这里 ✓）
+       ================================================================== */
+    private fun rebuildWebView() {
+        runOnUiThread {
+            try {
+                val parent = root ?: (web.parent as? ViewGroup)
+                val idx = parent?.indexOfChild(web) ?: -1
+                try { parent?.removeView(web) } catch (e0: Throwable) { }
+                try {
+                    web.stopLoading()
+                    web.loadUrl("about:blank")
+                    web.clearHistory()
+                    web.removeAllViews()
+                    web.destroy()
+                } catch (e1: Throwable) { }
+                initWebView()
+                val w2 = web
+                if (parent != null && idx >= 0) {
+                    parent.addView(w2, idx, FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT))
+                } else {
+                    parent?.addView(w2, FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT))
+                }
+                w2.loadUrl(GAME_URL)
+            } catch (e: Throwable) {
+                showMaintenance()
+            }
+        }
+    }
+
+    /* ==================================================================
+       维护页（服务器连不上 / 重建失败）
+       ================================================================== */
     private fun showMaintenance() {
         if (showingMaint) { return }
         showingMaint = true
@@ -321,11 +318,16 @@ class MainActivity : Activity() {
  tick();
 </script></body></html>
 """
-        web.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+        try {
+            web.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+        } catch (e: Throwable) { }
     }
 
+    /* ==================================================================
+       全屏
+       ================================================================== */
     private fun goFullscreen() {
-        try { goFullscreenInner() } catch (e: Throwable) { /* 全屏失败也绝不能闪退 ✓ */ }
+        try { goFullscreenInner() } catch (e: Throwable) { /* 全屏失败也不能闪退 ✓ */ }
     }
 
     private fun goFullscreenInner() {
@@ -349,13 +351,13 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 从别处切回来时系统栏可能又冒出来 → 再藏一次（immersive 的标准做法 ✓）*/
+    /** 从别处切回来时系统栏可能又冒出来 → 再藏一次 ✓ */
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) { goFullscreen() }
     }
 
-    /** 返回键：能后退就后退；在维护页上按返回就直接退出 ✓ */
+    /** 返回键：能后退就后退；维护页上按返回直接退出 ✓ */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK && !showingMaint && web.canGoBack()) {
             web.goBack()
@@ -366,17 +368,17 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
-        web.onPause()
+        try { web.onPause() } catch (e: Throwable) { }
     }
 
     override fun onResume() {
         super.onResume()
-        web.onResume()
+        try { web.onResume() } catch (e: Throwable) { }
         goFullscreen()
     }
 
     override fun onDestroy() {
-        web.destroy()
+        try { web.destroy() } catch (e: Throwable) { }
         super.onDestroy()
     }
 }

@@ -10594,15 +10594,38 @@ if (typeof THREE === 'undefined') {
     if (/webgl|context/i.test(_msg)) {
       var _tries = 0;
       try { _tries = (UI && UI.glBootRetryGet) ? UI.glBootRetryGet() : 0; } catch (eR) { }
+      /* ★★★ 2026-10-23（用户："启动失败：显卡上下文创建不出来，玩家反复反馈"）★★★
+         ★ 关键认知：JS 里 location.reload【治不了这个病】✗
+           GL 上下文一旦没了，同一个 WebView（同一个渲染进程）里
+           再刷新一百次也拿不到新的 ✓ 这正是"自动恢复 2 次都失败"的原因 ✓✓
+         ★ 唯一有效：让【APK 销毁并重建整个 WebView】→ 新渲染进程 → GL 重新分配 ✓
+           APK 那边提供了 AndroidShell.hardRestart() ✓
+         ★ 所以优先级：
+           ① 有 AndroidShell.hardRestart → 用它（真的能好 ✓）
+           ② 没有（普通浏览器）→ 退回 hardReload（至少比不动强 ✓）*/
+      /* ★ 分层铁律：core 不许碰 window ✗ 走 UI.canNativeRestart / UI.nativeRestart ✓ */
+      var _canNative = false;
+      try { _canNative = !!(UI && UI.canNativeRestart && UI.canNativeRestart()); } catch (eNA) { _canNative = false; }
       if (_tries < 2) {
         try { if (UI && UI.glBootRetrySet) { UI.glBootRetrySet(_tries + 1); } } catch (eS) { }
-        E('显卡上下文没拿到，正在自动恢复（第 ' + (_tries + 1) + '/2 次）…');
-        setTimeout(function () {
-          try { if (UI && UI.hardReload) { UI.hardReload('WebGL 启动失败自动恢复'); } } catch (eH) { }
-        }, 900);
+        if (_canNative) {
+          E('显卡上下文没拿到，正在重建渲染进程（第 ' + (_tries + 1) + '/2 次）…');
+          setTimeout(function () {
+            try { if (UI && UI.nativeRestart) { UI.nativeRestart(); } } catch (eHR) { }
+          }, 700);
+        } else {
+          E('显卡上下文没拿到，正在自动恢复（第 ' + (_tries + 1) + '/2 次）…');
+          setTimeout(function () {
+            try { if (UI && UI.hardReload) { UI.hardReload('WebGL 启动失败自动恢复'); } } catch (eH) { }
+          }, 900);
+        }
       } else {
+        /* ★ APK 里还有最后一次机会：重建 WebView（计数由 APK 自己管 ✓ 最多 3 次）*/
+        if (_canNative) {
+          try { if (UI && UI.nativeRestart) { UI.nativeRestart(); } } catch (eHR2) { }
+        }
         E('启动失败：显卡上下文创建不出来（' + _msg + '）\n' +
-          '· 已经自动恢复过 2 次都没成功\n' +
+          '· 已尝试自动恢复\n' +
           '· 关掉别的游戏/3D 网页标签，再刷新\n' +
           '· 或者退出 APP 重进');
         try { if (UI && UI.glBootRetryClear) { UI.glBootRetryClear(); } } catch (eC) { }

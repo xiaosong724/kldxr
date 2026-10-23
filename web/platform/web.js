@@ -7861,6 +7861,26 @@ function camLandApply(on) {
   }
 }
 
+/* ★★★ 2026-10-23（用户："显卡上下文创建不出来，玩家反复反馈"）★★★
+   ABK 的 AndroidShell 提供了一个"真的能修好"的重启：
+     销毁整个 WebView → 新渲染进程 → GL 上下文重新分配 ✓
+   （JS 里 location.reload 治不了这个病 ✗ 同一个渲染进程里永远拿不到新上下文 ✓）
+   ★ core 不许碰 window ✗ 所以在这里包成 UI.* 给它用 ✓ */
+UI.canNativeRestart = function () {
+  try {
+    return !!(window.AndroidShell && typeof window.AndroidShell.hardRestart === 'function');
+  } catch (e) { return false; }
+};
+UI.nativeRestart = function () {
+  try {
+    if (window.AndroidShell && typeof window.AndroidShell.hardRestart === 'function') {
+      window.AndroidShell.hardRestart();
+      return true;
+    }
+  } catch (e) { }
+  return false;
+};
+
 function camRequestLandscape() {
   var isLand = (CAM_LAND_ON === true) ||
     ((CAM_LAND_ON !== false) && window.innerWidth > window.innerHeight + 40);
