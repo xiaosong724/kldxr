@@ -1044,6 +1044,10 @@ function _numFlyAt(txt, color, sx, sy, big, life, px, cls, crit) {
   /* ★ 2026-10-23：带上风格 class（金属渐变 / 红字 / 绿字 …）*/
   o.el.className = cls ? ('dmgNum ' + cls) : '';
   o.crit = !!crit;
+  /* ★ 2026-10-23：记下"是不是作用于自己的"✗ 上升动画里要区别对待 ✓
+     （自己的字必须钉死在头上 ✗ 不能横向漂移 ✓）*/
+  o.isSelf = !!(cls && (cls === 'dHeal' || cls === 'dHurt' || cls === 'dExp' ||
+                        cls === 'dSys' || cls === 'dFx'));
   o.el.style.transform = 'translate3d(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px,0)';
   o.el.style.opacity = '1';
   o.t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -1063,14 +1067,18 @@ function _numFlyAt(txt, color, sx, sy, big, life, px, cls, crit) {
           _dy = (k < .10 ? 6 * (k / .10) : 6);
         }
         /* ★ 2026-10-23：每条的上升高度随机 40~96px ✗ 不会全部停在同一个高度 ✓ */
-        if (o.rise === undefined) { o.rise = 40 + Math.random() * 56; }
+        /* ★ 2026-10-23：自己的字上升高度【固定 46px】✗ 随机高度会让同一条竖线上的字
+           看着高低不齐 ✓ 其它的保持随机（避免排成一条线 ✓） */
+        if (o.rise === undefined) { o.rise = o.isSelf ? 46 : (40 + Math.random() * 56); }
         var _rise = (o.el.className && o.el.className.indexOf('dmgNum') >= 0) ? o.rise : 46;
         var _y = o.y0 + _dy - _rise *
                  (o.el.className && o.el.className.indexOf('dmgNum') >= 0
                     ? (1 - Math.pow(1 - k, 1.9)) : k);
         /* ★ 2026-10-23：上升时往自己那个方向再偏一点 ✗ 不会排成一条直线 ✓ */
         /* ★ 2026-10-23：漂移幅度 40 → 110px ✗ 上升时彻底散开，不会又聚成一束 ✓ */
-        if (o.drift === undefined) { o.drift = (Math.random() * 170 - 85); }
+        /* ★ 2026-10-23：自己的字【完全不漂】✗ 死钉在头顶 ✓
+           其它的字照旧横向漂开 ✓ 多段伤害才散得开 ✓ */
+        if (o.drift === undefined) { o.drift = o.isSelf ? 0 : (Math.random() * 170 - 85); }
         var _xx = o.x0 + o.drift * k;
         o.el.style.transform = 'translate3d(' + _xx.toFixed(1) + 'px,' +
           _y.toFixed(1) + 'px,0)' + (_s !== 1 ? ' scale(' + _s.toFixed(3) + ')' : '');
@@ -1112,11 +1120,49 @@ function _numProject(x, y, z, txt, color, big, life, px, cls, crit) {
        ③ 时间错开 0~260ms（原来 90ms 太短 ✗ 几乎同时出现 = 视觉上就是重叠）
        ④ 再加一点随机抖动 ✗ 环形不至于太规律 ✓
   */
+  /* ★★★ 2026-10-23（用户："作用于我的飘字应该显示在我头上，例如吸血、经验、自己受伤；
+     其它的伤害可以继续保持分散"）★★★
+     ★ 分成两类：
+       ① 【自己身上发生的事】→ 死死钉在头顶 ✗ 不散、不抖、不错开 ✓
+          吸血 / 治疗 / 经验 / 受伤 / 吃食物 / 打工结算 / 突破 —— 玩家一看就懂"这是给我的"
+       ② 【打在别人（怪/人）身上】→ 保持现在的环形分散 ✓
+          普攻伤害 / 技能伤害 / 暴击 —— 多段伤害必须散开，否则糊成一坨 ✓
+
+     ★ 怎么判断"是不是自己"：
+       · DMG_CLS.heal（绿字 ◯ 治疗吸血）
+       · DMG_CLS.hurt（红字 ◯ 自己受伤）
+       · DMG_CLS.exp （蓝字 ◯ 经验/突破/金币/系统提示）
+       · DMG_CLS.sys （白字 ◯ 击败/复活这类系统字）
+       ↑ 这四类在项目里【只用于玩家自己】✗ 从来不会挂到怪头上 ✓
+       · dAtk/dAtkC/dSk/dSkC（伤害）→ 保持分散 ✓ 它们也可能是打怪的数字 ✓
+       · dFx（武器特效：横扫/旋击/连砍）→ 也是自己身上的 ✓ 归为"自己"
+
+     ★ 自己那类还有几个讲究：
+       · 不算环形槽位（否则别人的伤害会被自己的绿字挤歪 ✓）
+       · 不加随机延迟（延迟会让"我刚回血"和"我掉了血"错开 ✗ 玩家看着乱 ✓）
+       · 只留一点点横向抖动（±0.1 米）✗ 多个同时出现时不至于完全重叠 ✓
+       · 高度固定 +2.9 米（头顶上方 ✓ 和原来的 healNum 高度一致）✓ */
+  var _SELF_CLS = {
+    dHeal: 1, dHurt: 1, dExp: 1, dSys: 1, dFx: 1
+  };
+  var _isSelf = !!(cls && _SELF_CLS[cls]);
+  if (_isSelf) {
+    /* ★★★ 2026-10-23（用户："作用于我的飘字应该显示在我头上"）★★★
+       ★ 一开始我加了 ±0.12 米抖动 ✗ 实测投影到屏幕上有 10~20px 的偏移 ✓
+         看起来还是"飘在头顶旁边"而不是"钉在头顶" ✓
+       ★ 现在【完全不抖】✗ 严格用调用方给的坐标 ✓
+         · 高度由调用方决定（healNum 传 2.9 = 头顶 ✓ 受伤传 2.4 = 胸口 ✓）
+         · 多个同时出现时会有一点重叠 ✗ 但它们本来就该在同一条竖线上 ✓
+           （和"吸血/经验/受伤"这些字的语义一致 ✓ 玩家一看就知道是给自己的）✓ */
+    _numProjectNow(x, y, z, txt, color, big, life, px, cls, crit);
+    return;
+  }
+
   var _cx = x, _cy = y, _cz = z;
   /* 当前在飞的条数（池子本来就在维护 ✓ 直接数）*/
   var _alive = 0;
   for (var _i = 0; _i < _numPool.length; _i++) { if (_numPool[_i].busy) { _alive++; } }
-  /* ★ 2026-10-23 实测：半径 0.8~2.6 米投到屏幕上只有几十 px ✗ 12 段时重叠 17 组 ✓
+  /* ★ 实测：半径 0.8~2.6 米投到屏幕上只有几十 px ✗ 12 段时重叠 17 组 ✓
      → 半径放大到 1.6~5.2 米（屏幕上 90~300px）+ 时间错开 0~420ms ✓ */
   _NUM_SLOT = (_NUM_SLOT + 1) % 12;
   var _ang = (_NUM_SLOT / 12) * Math.PI * 2 + (Math.random() * 0.6 - 0.3);
@@ -1124,8 +1170,8 @@ function _numProject(x, y, z, txt, color, big, life, px, cls, crit) {
   var _rad = 1.6 + Math.min(3.6, Math.max(0, _alive - 1) * 0.36);
   var _sx = Math.cos(_ang) * _rad;
   var _sz = Math.sin(_ang) * _rad * 0.75;     /* 前后也错开（透视下变成上下位移）*/
-  var _sy = (Math.random() * 2.6 - 1.0);      /* 高度也拉开 ✗ 原来只有 0.95 米 */
-  var _delay = Math.floor(Math.random() * 420);   /* ★ 0~420ms，错得更开 */
+  var _sy = (Math.random() * 2.6 - 1.0);      /* 高度也拉开 */
+  var _delay = Math.floor(Math.random() * 420);   /* 0~420ms，错得更开 */
   var _go = function () {
     _numProjectNow(_cx + _sx, _cy + _sy, _cz + _sz, txt, color, big, life, px, cls, crit);
   };
@@ -12301,7 +12347,10 @@ function wsOnMessage(raw) {
     }
     /* ★ round586：全能吸血回血飘字（服务端已算好，0 不显示）*/
     if (d.kind === 'heal') {
-      if (+d.v > 0) { healNum('+' + Math.round(+d.v), +d.x, 2.9, +d.z); }
+      /* ★ 2026-10-23（用户："吸血要显示在我头上"）
+         ★ 用【本地玩家坐标】✗ 不用服务端那份（有网络延迟 → 字会慢半拍 ✓）
+         ★ 高度 2.9 = 头顶（和其它自己类飘字一致 ✓）*/
+      if (+d.v > 0) { healNum('+' + Math.round(+d.v), P.x, 2.9, P.z); }
       return;
     }
     /* ★ round590：服务端广播的疾风步残影 */
