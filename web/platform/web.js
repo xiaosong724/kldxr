@@ -945,6 +945,7 @@ var NUM_CAP = 16, _numPool = [], _numNext = 0, _numLive = 0;
 function _numSlot() {
   if (_numPool.length < NUM_CAP) {
     var el = document.createElement('div');
+    el.className = 'dmgNum';
     el.style.cssText = 'position:fixed;z-index:12;font-weight:800;pointer-events:none;' +
       'text-shadow:0 2px 5px #000;will-change:transform,opacity;display:none;' +
       'left:0;top:0;transform:translate3d(-9999px,0,0)';
@@ -962,13 +963,78 @@ function _numSlot() {
   var w = _numPool[_numNext]; _numNext = (_numNext + 1) % _numPool.length;
   return w;
 }
-function _numFlyAt(txt, color, sx, sy, big, life, px) {
+/* ★★★ 2026-10-23（用户："战斗飘字和网页上展示的完全不一样"）★★★
+   ★ 之前只在预览页做了样式 ✗ 真实游戏的 dmg()/dmgSkill() 还是纯色文字 ✓
+   → 这次把 9 类飘字的【金属渐变 + 双层投影 + 重砸动效】真正接进来 ✓
+   ★ 性能：样式定义一次注入 ✗ 每个飘字只切 class ✓ 不产生额外 DOM ✓ */
+(function sysDmgStyles() {
+  if (document.getElementById('dmgStyleCSS')) { return; }
+  var st = document.createElement('style');
+  st.id = 'dmgStyleCSS';
+  st.textContent = `
+  .dmgNum{font-weight:900;letter-spacing:.6px;font-style:italic;
+    background-clip:text;-webkit-background-clip:text;color:transparent;
+    -webkit-text-fill-color:transparent;transform-origin:50% 60%}
+  /* ① 普通攻击 白→金 */
+  .dmgNum.dAtk{background-image:linear-gradient(180deg,#fff 0%,#fff0c0 40%,#ffc65a 64%,#9a5b00 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.92)) drop-shadow(0 0 9px rgba(255,170,30,.62))}
+  /* ② 普攻暴击 白→亮金→橙 */
+  .dmgNum.dAtkC{background-image:linear-gradient(180deg,#fffdf0 0%,#ffe066 32%,#ff8f00 68%,#7d2400 100%);
+    filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 20px rgba(255,110,0,.95))}
+  /* ③ 技能伤害 白→青→蓝 */
+  .dmgNum.dSk{background-image:linear-gradient(180deg,#fff 0%,#d8f4ff 36%,#4fc3ff 66%,#0b3f6b 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.92)) drop-shadow(0 0 12px rgba(60,190,255,.75))}
+  /* ④ 技能暴击 白→品红→紫 */
+  .dmgNum.dSkC{background-image:linear-gradient(180deg,#fff 0%,#ffd0f6 30%,#ff37c8 64%,#5c0060 100%);
+    filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 24px rgba(255,60,200,.95))}
+  /* ⑤ 玩家受伤 白→红 */
+  .dmgNum.dHurt{background-image:linear-gradient(180deg,#fff2f2 0%,#ff8a80 34%,#e01a1a 66%,#5a0000 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 14px rgba(255,30,30,.8))}
+  /* ⑥ 治疗/吸血 白→薄荷绿 */
+  .dmgNum.dHeal{background-image:linear-gradient(180deg,#f4fff6 0%,#a8f5bd 36%,#2ecc71 66%,#0a4a24 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.9)) drop-shadow(0 0 12px rgba(60,220,120,.72))}
+  /* ⑦ 经验/突破 白→淡蓝 */
+  .dmgNum.dExp{background-image:linear-gradient(180deg,#fff 0%,#dbe9ff 36%,#7fb2ff 66%,#123a7a 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.9)) drop-shadow(0 0 12px rgba(110,160,255,.75))}
+  /* ⑧ 武器特效 白→青绿（不斜体，和数字区分）*/
+  .dmgNum.dFx{background-image:linear-gradient(180deg,#fff 0%,#d6fff2 36%,#3ddcb0 66%,#0a5644 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.88)) drop-shadow(0 0 9px rgba(60,220,180,.55));
+    font-style:normal}
+  /* ⑨ 击败/复活 纯白银灰 */
+  .dmgNum.dSys{background-image:linear-gradient(180deg,#fff 0%,#e9eef5 42%,#a9b6c6 70%,#2b3440 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.9)) drop-shadow(0 0 8px rgba(200,220,255,.45))}
+  `;
+  document.head.appendChild(st);
+})();
+
+/* 飘字"种类" → class（dmg 用 dAtk / dmgSkill 用 dSk / 受伤 dHurt …）*/
+var DMG_CLS = {
+  atk: 'dAtk', atkC: 'dAtkC', sk: 'dSk', skC: 'dSkC',
+  hurt: 'dHurt', heal: 'dHeal', exp: 'dExp', fx: 'dFx', sys: 'dSys'
+};
+/* 每种类型的运动参数：[字号, 寿命, 是否重砸弹跳] */
+var DMG_MOTION = {
+  dAtk:  [24, 1150, false],
+  dAtkC: [34, 1250, true],
+  dSk:   [32, 1200, false],
+  dSkC:  [42, 1350, true],
+  dHurt: [28, 1150, false],
+  dHeal: [26, 1150, false],
+  dExp:  [22, 1100, false],
+  dFx:   [22, 1100, false],
+  dSys:  [26, 1200, false]
+};
+
+function _numFlyAt(txt, color, sx, sy, big, life, px, cls, crit) {
   var o = _numSlot();
   o.busy = true; o.life = life; o.x0 = sx; o.y0 = sy;
   o.el.textContent = txt;
   o.el.style.display = 'block';
   o.el.style.color = color;
   o.el.style.fontSize = (px || (big ? 22 : 16)) + 'px';
+  /* ★ 2026-10-23：带上风格 class（金属渐变 / 红字 / 绿字 …）*/
+  o.el.className = cls ? ('dmgNum ' + cls) : '';
+  o.crit = !!crit;
   o.el.style.transform = 'translate3d(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px,0)';
   o.el.style.opacity = '1';
   o.t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -980,8 +1046,18 @@ function _numFlyAt(txt, color, sx, sy, big, life, px) {
       if (!o.busy || k >= 1) {
         o.busy = false; o.el.style.display = 'none';
       } else {
+        /* ★ 重砸动效：前 12% 从 2.15 倍砸到 1 倍（暴击再多弹一下）*/
+        var _s = 1, _dy = 0;
+        if (o.el.className && o.el.className.indexOf('dmgNum') >= 0) {
+          if (k < .12) { _s = 2.15 - 9.6 * k; }
+          else if (o.crit && k < .20) { _s = 1 + .22 * Math.sin((k - .12) / .08 * Math.PI); }
+          _dy = (k < .10 ? 6 * (k / .10) : 6);
+        }
+        var _y = o.y0 + _dy - (o.el.className && o.el.className.indexOf('dmgNum') >= 0 ? 62 : 46) *
+                 (o.el.className && o.el.className.indexOf('dmgNum') >= 0
+                    ? (1 - Math.pow(1 - k, 1.9)) : k);
         o.el.style.transform = 'translate3d(' + o.x0.toFixed(1) + 'px,' +
-          (o.y0 - 46 * k).toFixed(1) + 'px,0)';
+          _y.toFixed(1) + 'px,0)' + (_s !== 1 ? ' scale(' + _s.toFixed(3) + ')' : '');
         o.el.style.opacity = String(1 - k);
         requestAnimationFrame(loop);
       }
@@ -993,31 +1069,47 @@ function _numFlyAt(txt, color, sx, sy, big, life, px) {
       var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
       var k = (now - o.t0) / o.life;
       if (!o.busy || k >= 1) { o.busy = false; o.el.style.display = 'none'; o.wake = false; }
-      else { o.el.style.transform = 'translate3d(' + o.x0.toFixed(1) + 'px,' +
-             (o.y0 - 46 * k).toFixed(1) + 'px,0)'; o.el.style.opacity = String(1 - k);
-             requestAnimationFrame(lp); }
+      else {
+        var _s2 = 1, _dy2 = 0;
+        if (o.el.className && o.el.className.indexOf('dmgNum') >= 0) {
+          if (k < .12) { _s2 = 2.15 - 9.6 * k; }
+          else if (o.crit && k < .20) { _s2 = 1 + .22 * Math.sin((k - .12) / .08 * Math.PI); }
+          _dy2 = (k < .10 ? 6 * (k / .10) : 6);
+        }
+        var _y2 = o.y0 + _dy2 - (o.el.className && o.el.className.indexOf('dmgNum') >= 0 ? 62 : 46) *
+                  (o.el.className && o.el.className.indexOf('dmgNum') >= 0
+                     ? (1 - Math.pow(1 - k, 1.9)) : k);
+        o.el.style.transform = 'translate3d(' + o.x0.toFixed(1) + 'px,' +
+          _y2.toFixed(1) + 'px,0)' + (_s2 !== 1 ? ' scale(' + _s2.toFixed(3) + ')' : '');
+        o.el.style.opacity = String(1 - k);
+        requestAnimationFrame(lp); }
     })(); } });
   }
 }
 /* 老接口保留 ✓ 内部全部走池 */
-function _numProject(x, y, z, txt, color, big, life, px) {
+function _numProject(x, y, z, txt, color, big, life, px, cls, crit) {
   if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
   var v = REUSE_V3.v.set(x, y, z).project(cam);
   if (v.z < -1 || v.z > 2) { return; }
+  /* ★ 2026-10-23：按类型选字号/寿命/动效（见 DMG_MOTION）*/
+  var m = cls && DMG_MOTION[cls];
+  if (m) { px = px || m[0]; life = m[1]; crit = !!crit || m[2]; }
   _numFlyAt(txt, color, (v.x * 0.5 + 0.5) * innerWidth, (-v.y * 0.5 + 0.5) * innerHeight,
-            big, life, px);
+            big, life, px, cls, crit);
 }
 
 function dmg(txt, x, y, z, big) {
-  // ★ 第 77 轮：全部走复用池 ✓ 不再 new div ✗
-  _numProject(x, y, z, txt, big ? '#ffd83d' : '#fff6e8', big, 1150);
+  /* ★ 2026-10-23：普通攻击 → 白金渐变；暴击 → 更烫的金橙 + 重砸弹跳 */
+  _numProject(x, y, z, txt, '#fff6e8', big, big ? 1250 : 1150, 0,
+              big ? DMG_CLS.atkC : DMG_CLS.atk, !!big);
 }
 
 /* ★ round585：技能伤害数字（比普攻大 100%；技能暴击大 150%）
    普攻：16px 白 / 22px 金黄；技能：32px 淡红 / 40px 深红（已加粗 ✓）*/
 function dmgSkill(txt, x, y, z, crit) {
-  _numProject(x, y, z, txt, crit ? '#e01818' : '#ffb3b3',
-              true, crit ? 1600 : 1450, crit ? 40 : 32);
+  /* ★ 2026-10-23：技能 → 白青蓝渐变；技能暴击 → 白品红紫 + 重砸弹跳 */
+  _numProject(x, y, z, txt, '#ffffff', true, crit ? 1350 : 1200, 0,
+              crit ? DMG_CLS.skC : DMG_CLS.sk, !!crit);
 }
 
 /* ---------- healNum（治疗数字：绿色 + 号 ✓ 第 46 轮）----------
@@ -1025,13 +1117,20 @@ function dmgSkill(txt, x, y, z, crit) {
      和 dmg 一套做法（core 只说"在哪个像素、写什么字"，不碰 style ✓） */
 /* ★ 第 62 轮：指定颜色的飘字（dmg 的颜色写死了 ✗ 效果文字要区分颜色 ✓）*/
 function fxNum(txt, color, x, y, z) {
-  // ★ 第 77 轮：走池 ✓
-  _numProject(x, y, z, txt, color, false, 1100);
+  /* ★ 2026-10-23：按调用方给的颜色自动归类
+     红/橙(受伤) → dHurt；绿(吸血) → dHeal；蓝紫(经验/突破) → dExp；其余 → dFx */
+  var c = String(color || '').toLowerCase();
+  var cls = DMG_CLS.fx;
+  if (c === '#ff5a4a' || c === '#ff9a3c' || c === '#ff7a6a' || c === '#e01818') { cls = DMG_CLS.hurt; }
+  else if (c === '#6ee06e' || c === '#7ee08a') { cls = DMG_CLS.heal; }
+  else if (c === '#9fd0ff' || c === '#b8ff8a' || c === '#8ee0ff' || c === '#9fe8ff') { cls = DMG_CLS.exp; }
+  else if (c === '#ffd83d') { cls = DMG_CLS.fx; }
+  _numProject(x, y, z, txt, color, false, 1100, 0, cls);
 }
 
 function healNum(txt, x, y, z) {
-  // ★ 第 77 轮：走池 ✓
-  _numProject(x, y, z, txt, '#7ee08a', false, 1100);
+  /* ★ 2026-10-23：治疗/吸血 → 白薄荷绿渐变 */
+  _numProject(x, y, z, txt, '#7ee08a', false, 1150, 0, DMG_CLS.heal);
 }
 /* ---------- 方位标记（屏幕边缘的队友箭头）----------
    ★ 和名牌一样：core 只说"在哪个像素、朝哪个角度、写什么字"，不碰 style 属性名 ✓
