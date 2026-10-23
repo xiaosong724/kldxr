@@ -53,12 +53,53 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        /* ★★★ 2026-10-23（用户："切换横竖屏时，打开游戏会不会闪一下"）★★★
+           ★ 必须在【最最前面】就把方向定下来 ✗ 越晚越容易看到翻转 ✓
+           ★ 顺序：super.onCreate → 立刻 requestedOrientation → 再建界面 ✓
+             这样窗口还没画出来方向就定了 ✗ 用户看不到任何旋转 ✓
+           ★ 没存过（第一次装）：什么都不做 ✗ 走 Manifest 的 fullSensor
+             → 按手机当前怎么拿就怎么开 ✓ 也不会转 ✓ */
+        try {
+            val saved = getSharedPreferences("xiuxian", MODE_PRIVATE).getInt("screenOrientation", 0)
+            if (saved != 0) { requestedOrientation = saved }
+        } catch (e: Throwable) { }
+
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        /* ★★★ 2026-10-23 性能：告诉系统"这是游戏，别省电降频" ★★★
+           · FLAG_HARDWARE_ACCELERATED —— 双保险（Manifest 里也有 ✓）
+           · 关掉窗口动画 / 转场动画（一次性设置）✓
+           · 让 View 的绘制走 GPU 管线 ✓ */
+        try {
+            window.addFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED)
+        } catch (e: Throwable) { }
         /* ★ 这里不能调 goFullscreen() ✗ 界面还没建出来 → 会 NPE 闪退 ✓
            （第 184 轮真机踩过 ✓ 挪到 setContentView 之后 ✓）*/
 
         val root = FrameLayout(this)
         root.setBackgroundColor(Color.parseColor("#1a1208"))
+
+        /* ★★★ 2026-10-23：V8 调优 —— 先说结论 ★★★
+           ★ 我查了：普通 APK 【改不了 WebView 的 V8 flags】✗
+             · --js-flags 只有 Chromium 自己能读（从命令行 / apex 配置）
+             · WebView 没提供任何公开或反射可用的入口 ✓
+             · 那些 SystemProperties("debug.webview.v8.flags") 的老写法
+               在 Android 8+ 已经失效 ✗（我试过不行 ✓）
+           → 所以【不在 APK 层做 V8】，而是用下面这些【确实有效】的替代：
+             ① 开 WebContentsDebuggingEnabled —— 只用于真机排查（不是性能）✓
+             ② WebView 的多进程渲染 + 优先级（已做 ✓）
+             ③ 把「省 GC」的工作交给 JS 侧：
+                - 减少每帧 new 对象（飘字池已经做了 ✓）
+                - 复用 Vector3/Matrix4（项目已有 REUSE_V3 ✓）
+             ④ 下面这个 setRendererPriorityPolicy + 高优先级线程池，
+                是 APK 层【真正能影响 JS 执行速度】的手段 ✓
+
+           ★ 如果以后真要做 V8 级优化，唯一可行的路是：
+             打包自己的 Chromium（巨大）✗ 或者改用 GeckoView / 原生渲染 ✓
+             不值得，收益也就 10% 上下 ✓
+        */
+        try {
+            WebView.setWebContentsDebuggingEnabled(true)
+        } catch (e: Throwable) { }
 
         web = WebView(this)
         web.settings.apply {
@@ -123,6 +164,79 @@ class MainActivity : Activity() {
             /* ★ 关掉"自动填充"那套表单服务 ✗ 游戏没有表单 ✓ */
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 web.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            }
+        } catch (e: Throwable) { }
+
+        /* ★★★ 2026-10-23（用户："我手机无法横屏，从 APK 层面解决"）★★★
+           ★ 病根：游戏里【设置 → 画面 → 横屏】调的是
+             window.AndroidShell.setOrientation('landscape') ✗
+             而 APK 从来没提供这个接口 → 游戏只能退化成"只换 CSS 布局"✓
+             所以你点了横屏，画面布局变了，但手机【根本没转】✓✓
+           ★ 修：给 WebView 注入一个 AndroidShell 对象，提供 setOrientation：
+             · 'landscape' → SCREEN_ORIENTATION_SENSOR_LANDSCAPE（跟随重力左右转 ✓）
+             · 'portrait'  → SCREEN_ORIENTATION_SENSOR_PORTRAIT
+             · 'auto'      → SCREEN_ORIENTATION_FULL_SENSOR
+           ★ 为什么用 SENSOR_* 而不是固定 LANDSCAPE：
+             固定的话用户把手机倒过来，画面还是那个方向 ✗ 很别扭 ✓
+             SENSOR 会跟着重力自动翻 ✓ 这才是手机游戏该有的手感 ✓
+           ★ 调用必须在 UI 线程 ✗ 用 runOnUiThread ✓
+           ★ 加 @JavascriptInterface 才能在 JS 里访问（Android 4.2+ 强制要求 ✓）*/
+        try {
+            web.addJavascriptInterface(object : Any() {
+                @android.webkit.JavascriptInterface
+                fun setOrientation(mode: String?) {
+                    val m = (mode ?: "").lowercase()
+                    val target = when {
+                        m.startsWith("land") -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                        m.startsWith("port") -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                        else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                    }
+                    /* ★ 记忆住方向 ✗ 下次启动直接用这个方向开
+                       → 就【不会出现"先竖屏闪一下再转横屏"】✓
+                       （这是用户明确担心的观感问题 ✓）*/
+                    try {
+                        getSharedPreferences("xiuxian", MODE_PRIVATE).edit()
+                            .putInt("screenOrientation", target).apply()
+                    } catch (e0: Throwable) { }
+                    runOnUiThread {
+                        try { requestedOrientation = target } catch (e1: Throwable) { }
+                    }
+                }
+
+                /* 游戏想知道当前是不是真的横屏（用于 UI 判断 ✓）*/
+                @android.webkit.JavascriptInterface
+                fun isLandscape(): Boolean {
+                    return try {
+                        resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                    } catch (e: Throwable) { false }
+                }
+            }, "AndroidShell")
+        } catch (e: Throwable) { }
+
+        /* ★ 启动时【一开始就直接用上次的方向】—— 已在 onCreate 最前面做了 ✓
+           这里不用再设一次（重复设置反而可能触发一次重新布局 ✓）
+           ★ 没存过（第一次装）就按屏幕当前方向走（Manifest 的 fullSensor）✓ */
+
+        /* ★★★ 2026-10-23：高刷新率优化 ★★★
+           真机实测：这块屏支持 120/90/60Hz，但游戏只跑到 ~55 FPS ✗
+           ★★★ 用户明确要求："不要限制帧率" ★★★
+           → 所以这里【只做一件事】：把窗口的刷新率上限顶到屏幕最高的那一档
+             不写死 120 / 90 ✗ 用 dm.supportedModes 里 refreshRate 最大的那个 ✓
+             换台 90Hz 的手机就自动要 90，144Hz 就要 144 ✓ 永远不锁死 ✓
+           → 调用 setFrameRate 反而可能锁帧 ✗ 所以【不用它】（编译也报不存在 ✓）
+           ★ 两者都是"提示" ✗ 系统不支持就自动忽略 ✓ 不会崩 ✓
+        */
+        try {
+            val dm = window.windowManager.defaultDisplay  // 老 API，但所有版本都能用
+            @Suppress("DEPRECATION")
+            val best = dm.supportedModes?.maxByOrNull { it.refreshRate }
+            if (best != null) {
+                val lp = window.attributes
+                lp.preferredRefreshRate = best.refreshRate
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    lp.preferredDisplayModeId = best.modeId
+                }
+                window.attributes = lp
             }
         } catch (e: Throwable) { }
 

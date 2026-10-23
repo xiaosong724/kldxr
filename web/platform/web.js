@@ -7805,6 +7805,18 @@ function camLandApply(on) {
       if (nativeShell && nativeShell.setOrientation) {
         nativeShell.setOrientation(on ? 'landscape' : 'portrait');
         finish(true);
+        /* ★★★ 2026-10-23（用户："我手机无法横屏，从 APK 层面解决"）★★★
+           ★ 系统那边已经开始转了 ✗ 但转完是异步的 ✓
+           ★ finish(true) 已经切了 CSS 类 ✗ 但这时视口还是旧尺寸
+             → 按钮位置会按旧尺寸算 ✗ 旋转完成后就对不上了 ✓
+           → 这里等 400ms（旋转动画通常 300ms 内）再【按真实尺寸重算一次】✓
+           ★ 这次重算的是【布局坐标】✗ 不是方向 ✗ 所以画面不会跳 ✓ */
+        setTimeout(function () {
+          try { camLandApply(on); } catch (eRL) { }
+        }, 420);
+        setTimeout(function () {
+          try { camLandApply(on); } catch (eRL2) { }
+        }, 900);
         return;
       }
     } catch (eNative) { }
@@ -7854,6 +7866,53 @@ function camRequestLandscape() {
     ((CAM_LAND_ON !== false) && window.innerWidth > window.innerHeight + 40);
   camLandApply(!isLand);
 }
+
+/* ★★★ 2026-10-23（用户："我手机无法横屏，从 APK 层面解决"）★★★
+   ★ APK 的 AndroidShell.setOrientation 已经把【系统】转过去了 ✓
+     但系统旋转是【异步】的 ✗ 转完视口才变 ✓
+     → 这里监听视口变化，等系统转完再把 CSS 布局切过去 ✓
+     → 这样"界面横屏"和"系统横屏"才真正一致 ✓
+
+   ★ 为什么不用 screen.orientation.onchange：
+     部分 WebView 版本不触发 ✗ 而 resize 一定会触发 ✓
+   ★ 为什么要延迟 2 帧：旋转刚结束视口尺寸可能还在跳 ✓
+     等两帧拿到的是最终尺寸 ✓ 否则会算错按钮位置 ✓
+*/
+(function watchOrientationForShell() {
+  var _lastLand = null;
+  function applyBodyClass() {
+    try {
+      var land = window.innerWidth > window.innerHeight + 40;
+      if (land === _lastLand) { return; }
+      _lastLand = land;
+      /* ★ 2026-10-23：系统和 CSS 必须【一起】变 ✗ 只改一个就会错位 ✓
+         这里同时更新 CAM_LAND_ON（其它地方读它判断当前朝向 ✓）*/
+      try { CAM_LAND_ON = land; } catch (eC) { }
+      try { localStorage.setItem(CAM_LAND_STORE, land ? '1' : '0'); } catch (eS) { }
+      document.body.classList.toggle('landscape', land);
+      setTimeout(function () {
+        try { uiApplyAllSaved(); } catch (e1) { }
+        try { uiApplyAtkScale(); } catch (e2) { }
+        try { uiClampPositions(); } catch (e3) { }
+        try { camToolsSync(); } catch (e4) { }
+      }, 80);
+    } catch (e) { }
+  }
+  /* ★ 旋转后视口可能多次跳变 ✗ 延迟 2 帧 + 320ms 各算一次 ✓ 以最终尺寸为准 ✓ */
+  var _t2 = null;
+  function schedule() {
+    requestAnimationFrame(function () {
+      requestAnimationFrame(applyBodyClass);
+    });
+    if (_t2) { clearTimeout(_t2); }
+    _t2 = setTimeout(applyBodyClass, 320);
+  }
+  try {
+    window.addEventListener('resize', schedule);
+    window.addEventListener('orientationchange', schedule);
+    schedule();
+  } catch (e0) { }
+})();
 
 function camSetViewMode(v) {
   try { CAM_VIEW = v; } catch (e0) { }
