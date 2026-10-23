@@ -24,6 +24,7 @@ import queue
 import random
 import threading
 import time
+import types          # ★ 2026-10-22：_mob_zone_tick / _mob_tick 用了 types.SimpleNamespace
 
 import affixes
 import armor as armormod
@@ -38,15 +39,25 @@ import boss_skills               # ★ 2026-10-22：Boss 技能表
 import drops
 import market as mkmod  # ★ round304b：交易所规则中心（纯函数 ✗ 可离线测 ✓）
 import mobs
+# ★★★ 2026-10-23 修的真 bug（用户："一直没有发战报"）★★★
+#   病根：这里原来 import 的是 battlereport（那只是【渲染】模块 ✗
+#         统计累加 add_exp/add_gold/add_kill 全在 battlereport_run 里 ✓）
+#   → world 里每一处 rptmod.add_*() 都 AttributeError ✗ 被 try 吞掉 ✓
+#   → 统计桶永远是空的 → 每 15 分钟都"没人有数据 → 不发"✗ 一字不差 ✓
+#   ★ 渲染仍然依赖 PIL：没装 PIL 只影响 build_png，
+#     统计（add_*）不依赖 PIL ✓ 所以这里优先 run 模块，失败再退回渲染模块
 try:
-    import battlereport as rptmod    # ★ 2026-10-22：战报统计（依赖 PIL，没装就跳过）
-except Exception:                     # ★ 绝不因为一个可选模块让服务器起不来
-    class _RptStub(object):
-        def add_exp(self, *a, **kw):
-            pass
-        def __getattr__(self, name):
-            return lambda *a, **kw: None
-    rptmod = _RptStub()
+    import battlereport_run as rptmod     # 统计 + 调度（正确的那一个）
+except Exception as _rptE1:
+    try:
+        import battlereport as rptmod     # 兜底：至少别让服务器起不来
+        print('[rpt] 统计模块 battlereport_run 导入失败（%r）→ 战报不会发' % (_rptE1,))
+    except Exception:
+        class _RptStub(object):
+            def __getattr__(self, name):
+                return lambda *a, **kw: None
+        rptmod = _RptStub()
+        print('[rpt] 战报模块全部不可用 → 统计被跳过（游戏不受影响）')
 import mob_affixes            # ★ 2026-10-22：精英词条（出生包要用）
 import mob_ranks               # ★ 2026-10-22：精英/Boss 配置
 import mq as mqmod      # ★ 第 149 轮：魔气规则中心 ✓
@@ -190,6 +201,22 @@ def tier_no(t):
       → 只在【显示】时 +1 ✓ 数据层一律不动 ✓
     """
     return int(t or 0) + 1
+
+
+def cd_human(sec):
+    """秒 → 人话（冷却文案统一走这里，管理页改多少就显示多少）"""
+    try:
+        s = float(sec)
+    except Exception:
+        s = 0.0
+    if s <= 0:
+        return '不冷却'
+    if s < 60:
+        return '%d 秒' % int(round(s))
+    m = s / 60.0
+    if abs(m - round(m)) < 0.05:
+        return '%d 分钟' % int(round(m))
+    return '%.1f 分钟' % m
 
 
 def now_s():
@@ -790,6 +817,13 @@ class World(object):
                 self._step()
             except Exception as e:
                 print('  [tick] 出错：%r' % e)
+                # ★ 2026-10-22（事故）：以前这一帧【直接不发了】✗
+                #   客户端收不到 world → 心跳超时 → 【所有人一起掉线又重连】
+                #   → 出错也把最小快照发出去 ✓ 玩家至少不断线 ✓
+                try:
+                    self._emergency_snapshot()
+                except Exception:
+                    pass
             dt = (time.perf_counter() - t0) * 1000.0
             self.tick_ms = dt
             if dt > self.tick_max_ms:
@@ -4034,6 +4068,8 @@ class World(object):
                 if not d:
                     continue
                 rad = float(d.get('radius') or 0) * (1.0 + self._sk_val(p, 'skrange'))
+                # ★ 2026-10-22：云端这里也漏了 _dmul（技能持续倍率）✗ 冰封/时停一放就崩
+                _dmul = 1.0 + self._sk_val(p, 'skdur')
                 if key == 'icefield':
                     self._icefield(p, x, z, rad)
                     continue
@@ -11695,6 +11731,32 @@ class World(object):
 
     # ============================================================ 快照
 
+    def _emergency_snapshot(self):
+        """tick 出错时的兜底：只发最小快照，别让客户端心跳超时集体掉线。
+
+        ★ 2026-10-22 的事故就是缺这一层：
+          一条 NameError → _step 整帧抛异常 → 一帧都不发 world
+          → 30 秒后所有客户端心跳超时 → 一起掉线、马上重连（看着像"服务器抽风"）
+        """
+        if not self.players:
+            return
+        batch = []
+        for p in list(self.players.values()):
+            try:
+                d = {'ts': round(now_s(), 3), 'players': self._snapshot_for(p)}
+                ms = self._mobs_for(p)
+                if ms:
+                    d['mobs'] = ms
+                d['me'] = {'hp': int(p.hp or 0), 'hpm': int(self._hp_max(p))}
+                batch.append((p.cid, P.pack_str('world', d)))
+            except Exception:
+                continue
+        if batch:
+            try:
+                self._to_net(self._fanout, batch)
+            except Exception:
+                pass
+
     def _snapshot_for(self, p):
         """只发接收者视野内的玩家（方案 §13.2 兴趣管理的第一步）"""
         out = []
@@ -11750,7 +11812,6 @@ class World(object):
                 # ★ 2026-10-22：坐垫高度（不同椅子不一样）
                 'ppad': round(float(getattr(o, 'posePad', 0.48) or 0.48), 3),
 
-                'job': getattr(o, 'job', ''),
                 'sk': str((o.role or {}).get('skin') or ''),
                 'skc': (((o.role or {}).get('skcMap') or {}).get(
                     str((o.role or {}).get('skin') or '')) or None),

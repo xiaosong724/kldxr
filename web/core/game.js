@@ -1412,20 +1412,123 @@ function init() {
       }
     } catch (e6) { }
   }
+  /* ★★★ 2026-10-23（用户："启动失败：WebGL 上下文创建不出来，重试 3 次也没用"）★★★
+     原来只是"释放辅助上下文 + 同参数重试 3 次" ✗
+       · 同参数重试 = 条件没变，失败还是失败 ✓
+       · 浏览器回收 GPU 上下文需要时间，连着重试等于白试 ✓
+       · 没试过降级（关 AA / 低功耗 / 不要 alpha）✓
+     → 现在：逐级降级 + 每级之间真的等一下 + 强制丢弃旧画布 ✓
+       第 5 级最狠：直接拿裸 WebGL1 上下文喂给 Three（跳过它自己的探测）✓ */
+  function _sleep(ms) {
+    return new Promise(function (res) { setTimeout(res, ms); });
+  }
+  /* 真正把 canvas 上那个上下文丢掉（Three 的 dispose 不会解绑 canvas ✓） */
+  function _dropCanvasCtx(cv) {
+    try {
+      var gl = cv.getContext('webgl2') || cv.getContext('webgl') ||
+               cv.getContext('experimental-webgl');
+      if (gl && gl.getExtension) {
+        var lose = gl.getExtension('WEBGL_lose_context');
+        if (lose) { lose.loseContext(); }
+      }
+    } catch (e) { }
+  }
+  var _RENDER_LEVELS = [
+    { aa: (AA_MODE === 'msaa'), power: 'high-performance', alpha: false, failIf: true },
+    { aa: false, power: 'high-performance', alpha: false, failIf: true },
+    { aa: false, power: 'default', alpha: false, failIf: true },
+    { aa: false, power: 'low-power', alpha: true, failIf: true },
+    { aa: false, power: 'low-power', alpha: true, failIf: false, raw: true }
+  ];
+  function _tryMakeRenderer(lv, cv) {
+    var opt = { canvas: cv, antialias: !!lv.aa, alpha: !!lv.alpha };
+    if (lv.power) { opt.powerPreference = lv.power; }
+    if (lv.failIf) { opt.failIfMajorPerformanceCaveat = false; }
+    if (lv.raw) {
+      /* 最后一级：自己先拿一个上下文，再交给 Three（它就不会再探测/挑参数） */
+      var ctx = cv.getContext('webgl', { antialias: false, alpha: true,
+                                         powerPreference: 'low-power',
+                                         failIfMajorPerformanceCaveat: false }) ||
+                cv.getContext('experimental-webgl', { antialias: false, alpha: true });
+      if (!ctx) { throw new Error('getContext(webgl) 返回 null'); }
+      opt.context = ctx;
+    }
+    return new THREE.WebGLRenderer(opt);
+  }
+  /* ★ 换一个全新的 <canvas id="cv">（旧的丢了上下文的 canvas 不能复用 ✓）
+     为什么必须换：同一个 canvas 一旦 context lost，浏览器【不会再给它新上下文】✓
+     这也是"重试 3 次都没用、必须退出 APP 才好"的真正原因 ✓ */
+  function _rebuildCanvas() {
+    try {
+      var old = document.getElementById('cv');
+      if (!old || !old.parentNode) { return null; }
+      var cv = document.createElement('canvas');
+      cv.id = 'cv';
+      if (old.className) { cv.className = old.className; }
+      if (old.getAttribute('style')) { cv.setAttribute('style', old.getAttribute('style')); }
+      old.parentNode.replaceChild(cv, old);
+      return cv;
+    } catch (e) { return null; }
+  }
   function _makeMainRenderer() {
+    var cv = UI.mainCanvas();
+    if (!cv) { throw new Error('找不到主画布 #cv'); }
     var lastErr = null;
-    for (var _att = 0; _att < 3; _att++) {
+    for (var _att = 0; _att < _RENDER_LEVELS.length; _att++) {
+      var lv = _RENDER_LEVELS[_att];
       try {
-        return new THREE.WebGLRenderer({
-          canvas: UI.mainCanvas(), antialias: (AA_MODE === 'msaa')
-        });
+        var r = _tryMakeRenderer(lv, cv);
+        if (_att > 0) {
+          console.warn('[render] 已降级到第 ' + (_att + 1) + ' 级（AA=' + lv.aa +
+                       ' power=' + lv.power + '）');
+          try { UI.toastLowQuality && UI.toastLowQuality(); } catch (eT) { }
+        }
+        if (typeof SETCFG !== 'undefined' && SETCFG) { SETCFG._glLevel = _att; }
+        return r;
       } catch (eMr) {
         lastErr = eMr;
-        console.warn('[render] WebGL 上下文创建失败（第 ' + (_att + 1) + ' 次）', eMr);
+        console.warn('[render] WebGL 创建失败（第 ' + (_att + 1) + '/' +
+                     _RENDER_LEVELS.length + ' 级）', eMr);
         _freeAuxGl();
+        _dropCanvasCtx(cv);
+        /* ★ 换新画布（同步版没有等待，那就用"换新 canvas"代替等待 ✓）*/
+        var nv = _rebuildCanvas();
+        if (nv) { cv = nv; }
       }
     }
     throw lastErr || new Error('Error creating WebGL context');
+  }
+  /* ★ 启动时用异步版：每级之间等 120ms，给浏览器回收上下文的时间 */
+  function _makeMainRendererAsync() {
+    var cv = UI.mainCanvas();
+    if (!cv) { return Promise.reject(new Error('找不到主画布 #cv')); }
+    var lastErr = null;
+    var i = 0;
+    function step() {
+      if (i >= _RENDER_LEVELS.length) {
+        return Promise.reject(lastErr || new Error('Error creating WebGL context'));
+      }
+      var lv = _RENDER_LEVELS[i];
+      var idx = i++;
+      return Promise.resolve().then(function () {
+        return _tryMakeRenderer(lv, cv);
+      }).then(function (r) {
+        if (idx > 0) {
+          console.warn('[render] 已降级到第 ' + (idx + 1) + ' 级（AA=' + lv.aa +
+                       ' power=' + lv.power + '）');
+          try { UI.toastLowQuality && UI.toastLowQuality(); } catch (eT) { }
+        }
+        return r;
+      }).catch(function (e) {
+        lastErr = e;
+        console.warn('[render] WebGL 创建失败（第 ' + (idx + 1) + '/' +
+                     _RENDER_LEVELS.length + ' 级）', e);
+        _freeAuxGl();
+        _dropCanvasCtx(cv);
+        return _sleep(120).then(step);
+      });
+    }
+    return step();
   }
   rd = _makeMainRenderer();
   rd.setPixelRatio(Math.min(DPR, devicePixelRatio || 1));
@@ -10480,11 +10583,31 @@ if (typeof THREE === 'undefined') {
     init();
   } catch (e) {
     var _msg = (e && e.message ? e.message : String(e));
-    /* WebGL 上下文创建失败 = 显卡上下文被别的页面占满了，不是代码崩了 */
+    /* ★★★ 2026-10-23（用户："WebGL 创建失败，重试 3 次也没用，还得手动退出 APP"）★★★
+       以前只弹一句"退出 APP 重进"就完了 ✗ 玩家只能干等/手动操作 ✓
+       现在：显卡上下文拿不到 = 旧上下文还没被浏览器回收 ✓
+         → 自动【硬刷新一次】（换一个全新的页面 = 上下文全清 ✓ 最有效 ✓）
+         · 20 秒防抖（sessionStorage 计数）✗ 不会刷成死循环 ✓
+         · 连续自动恢复 2 次还不行 → 才把提示交给玩家 ✓ */
     if (/webgl|context/i.test(_msg)) {
-      E('启动失败：显卡上下文创建不出来（' + _msg + '）\n' +
-        '· 关掉别的游戏/3D 网页标签，再刷新\n' +
-        '· 或者退出 APP 重进（已经自动重试过 3 次）');
+      var _tries = 0;
+      try { _tries = +(sessionStorage.getItem('glBootRetry') || 0); } catch (eR) { }
+      if (_tries < 2) {
+        try { sessionStorage.setItem('glBootRetry', String(_tries + 1)); } catch (eS) { }
+        E('显卡上下文没拿到，正在自动恢复（第 ' + (_tries + 1) + '/2 次）…');
+        setTimeout(function () {
+          try {
+            if (typeof netHardReload === 'function') { netHardReload('WebGL 启动失败自动恢复'); }
+            else { location.reload(); }
+          } catch (eH) { location.reload(); }
+        }, 900);
+      } else {
+        E('启动失败：显卡上下文创建不出来（' + _msg + '）\n' +
+          '· 已经自动恢复过 2 次都没成功\n' +
+          '· 关掉别的游戏/3D 网页标签，再刷新\n' +
+          '· 或者退出 APP 重进');
+        try { sessionStorage.removeItem('glBootRetry'); } catch (eC) { }
+      }
     } else {
       E('启动失败：' + _msg);
     }
