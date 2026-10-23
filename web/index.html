@@ -138,7 +138,7 @@ body.safe-mode #skBar, body.safe-mode #auto { display:none !important; }
     transition:transform .07s ease,box-shadow .15s ease;touch-action:none}
  #run:active{transform:scale(.92);border-color:#b7e0a2cc;
     box-shadow:0 0 0 2px #b7e0a255,inset 0 1px 0 #ffffff22}
- #run .jic{width:52%;height:52%;color:#dfe8d4;opacity:.95}
+ #run .jic{width:46%;height:46%;color:#dfe8d4;opacity:.95}   /* ★ 2026-10-25：和 #jmp 统一成 46%（原来 52% 比跳跃大一圈）*/
  #run.on{background:radial-gradient(circle at 36% 30%,#c8ffb4 0%,#7fd06a 42%,#3f8a34 80%);
     border-color:#b7f0a0;box-shadow:0 0 0 2px #9cf07a66,0 0 14px #7ee06a88}
  #run.on .jic{color:#12300c;opacity:1}
@@ -221,7 +221,10 @@ body.safe-mode #skBar, body.safe-mode #auto { display:none !important; }
  /* ★ round500（用户："视角按钮点击有透明的蓝色框，参考跳跃的点击效果改"）
     → 把 #cam 并进 round358 那条统一规则里 ✓ 四个键 + 视角键表现完全一致 */
  #atk:focus,#jmp:focus,#auto:focus,#cam:focus,#uiEdit:focus,#setBtn:focus{outline:none}
- #cam:active,#jmp:active,#auto:active{-webkit-tap-highlight-color:transparent}
+ /* ★ 2026-10-25（用户："点击会有蓝色的透明方块"）：漏了 #run ✗ 补上 ✓
+   顺便把所有可点按钮都统一处理 ✗ 免得以后又漏 ✓ */
+#cam:active,#jmp:active,#auto:active,#run:active,#atk:active,#setBtn:active,#uiEdit:active{-webkit-tap-highlight-color:transparent}
+#run,#jmp,#atk,#auto,#cam,#setBtn,#uiEdit{-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none}
  .uiDrag{outline:2px dashed #ffd83d99;outline-offset:4px;
    transform:none;animation:none;transition:none!important}
 /* ★★ 第 233 轮（用户要求）：损坏的装备要有明显样式 ★★
@@ -1943,6 +1946,18 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
      <span id="zoomVal" style="width:48px;text-align:right;font-size:13px;color:#ffd83d;
            font-variant-numeric:tabular-nums">100%</span>
    </div>
+    <!-- ★★★ 2026-10-25（用户："有的玩家的设备可能不好不适合开着色器，在菜单设置里加一个着色器的开关，并且再加上拉动条来决定着色器的效果"）★★★
+         ★ 用【一个滑块】同时做开关和强度 ✗ 比"开关+滑块"更直观 ✓
+           0        → 关闭（纯色特效，最省 GPU）
+           10 ~ 100 → 强度 0.5 ~ 2.5（越大越浓烈）
+         ★ 默认 40 = 强度 1.0（现在的效果）✓ -->
+    <div class="setLabel">特效着色器 <small style="opacity:.6">（0 = 关闭；设备卡就拉到最左，越大特效越浓）</small></div>
+    <div id="rowShader" style="display:flex;align-items:center;gap:10px;padding:6px 0">
+      <input id="shaderRange" type="range" min="0" max="100" step="5" value="40"
+             style="flex:1 1 auto;height:16px;accent-color:#8fd6ff">
+      <span id="shaderVal" style="width:56px;text-align:right;font-size:13px;color:#8fd6ff;
+            font-variant-numeric:tabular-nums">标准</span>
+    </div>
    <div class="setLabel">视角模式</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;padding:4px 0 8px">
       <button id="setCamFirst" class="bagB">第一人称</button>
@@ -2113,24 +2128,24 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
      那时 DOM 还没解析到它 → getElementById 全是 null →（有 null 保护）静默失败
      → 页面能跑，但登录浮层永远不出现，谁都进不去 ✗（第 26 轮发现）-->
 <script src="/ws-config.js"></script>
-<script src="/lib/three.min.js?v=20261024p"></script>
-<script src="/icons.js?v=20261024p"></script>
-<script src="/vfx.js?v=20261024p"></script>
-<script src="/lib/annrender.js?v=20261024p"></script>
-<script src="/platform/web.js?v=20261024p"></script>
-<script src="/core/town_data.js?v=20261024p"></script>
-<script src="/core/town.js?v=20261024p"></script>
-<script src="/core/game.js?v=20261024p"></script>
-<script src="/core/town_models.js?v=20261024p"></script>
-<script src="/core/town_villas.js?v=20261024p"></script>
-<script src="/core/town_hall.js?v=20261024p"></script>
-<script src="/core/town_shops2.js?v=20261024p"></script>
-<script src="/core/town_shops3.js?v=20261024p"></script>
-<script src="/core/town_shops4.js?v=20261024p"></script>
-<script src="/core/town_veg.js?v=20261024p"></script>
-<script src="/core/town_props.js?v=20261024p"></script>
-<script src="/platform/town_ui.js?v=20261024p"></script>
-<script src="/platform/place.js?v=20261024p"></script>
+<script src="/lib/three.min.js?v=20261025x"></script>
+<script src="/icons.js?v=20261025x"></script>
+<script src="/vfx.js?v=20261025x"></script>
+<script src="/lib/annrender.js?v=20261025x"></script>
+<script src="/platform/web.js?v=20261025x"></script>
+<script src="/core/town_data.js?v=20261025x"></script>
+<script src="/core/town.js?v=20261025x"></script>
+<script src="/core/game.js?v=20261025x"></script>
+<script src="/core/town_models.js?v=20261025x"></script>
+<script src="/core/town_villas.js?v=20261025x"></script>
+<script src="/core/town_hall.js?v=20261025x"></script>
+<script src="/core/town_shops2.js?v=20261025x"></script>
+<script src="/core/town_shops3.js?v=20261025x"></script>
+<script src="/core/town_shops4.js?v=20261025x"></script>
+<script src="/core/town_veg.js?v=20261025x"></script>
+<script src="/core/town_props.js?v=20261025x"></script>
+<script src="/platform/town_ui.js?v=20261025x"></script>
+<script src="/platform/place.js?v=20261025x"></script>
 
 
 

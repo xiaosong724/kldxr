@@ -131,6 +131,163 @@ function buildHallModel(spec, opts) {
   return g;
 }
 
+/* ★★★ 2026-10-25（用户："帮我把传送阵也加一下着色器"）★★★
+   ★ 原来的传送阵：能量盘/光柱/粒子全是【纯色 + 透明度】✗ 像一块青色塑料 ✓
+   ★ 现在给三样东西加着色器：
+     ① 能量盘（地面那个圆）：同心环 + 旋转符文 + 脉动 ✗ 有"阵法"感 ✓
+     ② 光柱：向上流动的能量丝 + 底部亮顶部淡 ✓
+     ③ 粒子：改成着色器驱动的【上升光点】，CPU 不再每帧算 ✓
+   ★ 成本：几何体一个都没多 ✗ 粒子甚至更省（CPU 不再逐帧改 220 个点）✓
+   ★ 时钟：统一用 performance.now() 换算 ✗ 不依赖外部模块 ✓
+     （这个文件被 buildTeleportModel 调用时不一定能拿到 VFX ✓ 自己算最稳 ✓）*/
+function _tpTime() { return (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000; }
+var _TP_NOISE = [
+  'float th21(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }',
+  'float tvn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);',
+  '  return mix(mix(th21(i), th21(i + vec2(1,0)), f.x), mix(th21(i + vec2(0,1)), th21(i + vec2(1,1)), f.x), f.y); }'
+].join('\n');
+
+function _tpDiscMat(colorHex) {
+  var uT = { value: 0 };
+  var m = new THREE.ShaderMaterial({
+    uniforms: { uTime: uT, uColor: { value: new THREE.Color(colorHex) }, uOpacity: { value: 1 } },
+    vertexShader: [
+      'varying vec2 vTp;',
+      'void main(){ vTp = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }'
+    ].join('\n'),
+    fragmentShader: [
+      'precision mediump float;',
+      'varying vec2 vTp;',
+      'uniform float uTime, uOpacity;',
+      'uniform vec3 uColor;',
+      _TP_NOISE,
+      'void main(){',
+      '  float r = length(vTp) / 1.22;',           /* 0=中心 1=边缘 */
+      '  if (r > 1.0) discard;',
+      '  float ang = atan(vTp.y, vTp.x);',
+      /* ① 同心环：三圈慢慢向外扩 ✗ 阵法感 ✓ */
+      '  float rings = 0.0;',
+      '  for (int i = 0; i < 3; i++) {',
+      '    float ph = fract(uTime * 0.45 + float(i) * 0.333);',
+      '    float rr = ph;',
+      '    rings += smoothstep(0.045, 0.0, abs(r - rr)) * (1.0 - ph);',
+      '  }',
+      /* ② 旋转符文：8 个角向的亮块，整体缓慢转 */
+      '  float sector = fract((ang / 6.2831853 + uTime * 0.05) * 8.0);',
+      '  float rune = smoothstep(0.42, 0.5, sector) * smoothstep(0.58, 0.5, sector);',
+      '  rune *= smoothstep(0.72, 0.95, r) * smoothstep(1.0, 0.95, r);',
+      /* ③ 中心能量核：脉动 */
+      '  float core = smoothstep(0.34, 0.0, r) * (0.55 + 0.45 * sin(uTime * 3.4));',
+      /* ④ 细密纹理 ✗ 填充空隙，不至于一片空白 ✓ */
+      '  float grain = tvn(vTp * 14.0 + vec2(uTime * 0.3, -uTime * 0.22)) * 0.5',
+      '              + tvn(vTp * 30.0) * 0.5;',
+      '  float base = smoothstep(1.0, 0.72, r) * (0.10 + grain * 0.22);',
+      /* 边缘辉光 */
+      '  float rim = smoothstep(0.86, 1.0, r) * smoothstep(1.0, 0.94, r);',
+      '  float a = (rings * 0.55 + rune * 0.85 + core * 0.9 + base + rim * 0.7) * uOpacity;',
+      '  vec3 col = mix(uColor, vec3(0.85, 0.98, 1.0), core * 0.7 + rune * 0.5);',
+      '  gl_FragColor = vec4(col * (1.0 + core * 1.2 + rune * 0.6), clamp(a, 0.0, 1.0));',
+      '}'
+    ].join('\n'),
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending
+  });
+  m.userData.tpTime = uT;
+  return m;
+}
+
+function _tpBeamMat(colorHex) {
+  var uT = { value: 0 };
+  var m = new THREE.ShaderMaterial({
+    uniforms: { uTime: uT, uColor: { value: new THREE.Color(colorHex) }, uOpacity: { value: 1 } },
+    vertexShader: [
+      'varying vec2 vTpUv;',
+      'varying vec3 vTpP;',
+      'void main(){ vTpUv = uv; vTpP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }'
+    ].join('\n'),
+    fragmentShader: [
+      'precision mediump float;',
+      'varying vec2 vTpUv;',
+      'varying vec3 vTpP;',
+      'uniform float uTime, uOpacity;',
+      'uniform vec3 uColor;',
+      _TP_NOISE,
+      'void main(){',
+      /* CylinderGeometry：y 从 -0.45 到 +0.45（高 0.9）→ 归一化 0~1 */
+      '  float y = clamp(vTpP.y / 0.9 + 0.5, 0.0, 1.0);',
+      '  float ang = atan(vTpP.z, vTpP.x);',
+      /* 向上流动的能量丝 */
+      '  float strand = tvn(vec2(ang * 9.0, y * 5.0 - uTime * 2.2)) * 0.6',
+      '               + tvn(vec2(ang * 23.0, y * 11.0 - uTime * 3.6)) * 0.4;',
+      '  float flow = smoothstep(0.35, 0.72, strand + y * 0.28);',
+      /* 底部亮、顶部淡 ✗ 像从阵里升起来 ✓ */
+      '  float vfade = (1.0 - pow(y, 0.75)) * smoothstep(1.0, 0.86, y);',
+      '  float a = (flow * 0.85 + 0.12) * vfade * uOpacity;',
+      '  vec3 col = mix(uColor, vec3(0.90, 0.99, 1.0), flow * 0.65);',
+      '  gl_FragColor = vec4(col * (1.0 + flow * 0.9), clamp(a, 0.0, 1.0));',
+      '}'
+    ].join('\n'),
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending
+  });
+  m.userData.tpTime = uT;
+  return m;
+}
+
+function _tpParticleMat(colorHex) {
+  var uT = { value: 0 };
+  var m = new THREE.ShaderMaterial({
+    uniforms: { uTime: uT, uColor: { value: new THREE.Color(colorHex) }, uOpacity: { value: 1 } },
+    vertexShader: [
+      'attribute float aSeed;',      /* 每个粒子的相位 ✗ 让它们不同步 ✓ */
+      'attribute float aSpeed;',
+      'varying float vAlpha;',
+      'varying float vSeed;',
+      'uniform float uTime;',
+      'void main(){',
+      '  vec3 p = position;',
+      /* ★ 粒子上升完全在 GPU 里算 ✗ CPU 一个点都不用碰 ✓
+         fract() 让它循环：升到顶就回到原点 ✓ 无缝衔接 ✓ */
+      '  float span = 2.9;',
+      '  float t = fract(aSeed + uTime * aSpeed * 0.22);',
+      '  p.y = 0.40 + t * span;',
+      /* 上升时略微向内收（被吸进光柱）*/
+      '  p.xz *= 1.0 - t * 0.35;',
+      '  vec4 mv = modelViewMatrix * vec4(p, 1.0);',
+      '  gl_Position = projectionMatrix * mv;',
+      /* 越靠上越亮、到顶前淡出 ✗ 不会突然消失 ✓ */
+      '  vAlpha = smoothstep(0.0, 0.15, t) * (1.0 - smoothstep(0.75, 1.0, t));',
+      '  gl_PointSize = (2.4 + (1.0 - t) * 2.2) * 300.0 / max(-mv.z, 0.1);',
+      '  vSeed = aSeed;',
+      '}'
+    ].join('\n'),
+    fragmentShader: [
+      'precision mediump float;',
+      'varying float vAlpha;',
+      'varying float vSeed;',
+      'uniform float uOpacity;',
+      'uniform vec3 uColor;',
+      'void main(){',
+      '  vec2 q = gl_PointCoord - 0.5;',
+      '  float d = length(q) * 2.0;',
+      '  if (d > 1.0) discard;',
+      '  float a = pow(1.0 - d, 1.8) * vAlpha * uOpacity;',
+      '  vec3 col = mix(uColor, vec3(1.0, 1.0, 1.0), (1.0 - d) * 0.65);',
+      '  gl_FragColor = vec4(col, a);',
+      '}'
+    ].join('\n'),
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+  });
+  m.userData.tpTime = uT;
+  return m;
+}
+
 function buildTeleportModel(spec, opts) {
   var g = new THREE.Group(); g.userData.parts = [];
   var add = makeAdd(g);
@@ -145,7 +302,11 @@ function buildTeleportModel(spec, opts) {
   cyl(1.75, 1.85, 0.14, 0x726b5e, 0, 0.07, 0, 'tp_base_lower', 36);
   cyl(1.55, 1.68, 0.12, 0x8a8272, 0, 0.18, 0, 'tp_base_mid', 36);
   cyl(1.35, 1.48, 0.12, 0xa39a87, 0, 0.29, 0, 'tp_base_upper', 36);
-  cyl(1.22, 1.22, 0.04, cyan, 0, 0.37, 0, 'tp_energy_disc', 36);
+  /* ★ 2026-10-25：能量盘换成着色器（同心环 + 旋转符文 + 中心脉动）*/
+  var discMat = _tpDiscMat(cyan);
+  var discMesh = new THREE.Mesh(new THREE.CircleGeometry(1.22, 40), discMat);
+  discMesh.rotation.x = -Math.PI / 2; discMesh.position.y = 0.375;
+  g.add(discMesh); add(discMesh, 'tp_energy_disc');
   var ring = new THREE.Mesh(new THREE.TorusGeometry(1.30, 0.075, 10, 48),
     new THREE.MeshLambertMaterial({ color: cyan, emissive: 0x2a6b80 }));
   ring.rotation.x = Math.PI / 2; ring.position.y = 0.40; g.add(ring); add(ring, 'tp_ring_outer');
@@ -177,35 +338,48 @@ function buildTeleportModel(spec, opts) {
     pos[pi * 3 + 1] = 0.4 + seed[pi * 3 + 1] * 2.8;
     pos[pi * 3 + 2] = seed[pi * 3 + 2];
   }
+  /* ★ 2026-10-25：粒子改成 GPU 驱动 ✗ CPU 不再逐帧算位置 ✓
+     （原来每帧要循环 220 次 + 上传位置 ✗ 现在着色器自己算 ✓）
+     aSeed：每个粒子的相位（错开上升）
+     aSpeed：上升速度 */
   var pgeo = new THREE.BufferGeometry();
   pgeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  var pmat = new THREE.PointsMaterial({
-    color: cyan, size: 0.09, transparent: true, opacity: 0.85,
-    depthWrite: false, blending: THREE.AdditiveBlending, sizeAttenuation: true
-  });
+  var pSeed = new Float32Array(COUNT);
+  var pSpeed = new Float32Array(COUNT);
+  for (var psi = 0; psi < COUNT; psi++) {
+    pSeed[psi] = Math.random();
+    pSpeed[psi] = 0.35 + Math.random() * 0.75;
+  }
+  pgeo.setAttribute('aSeed', new THREE.BufferAttribute(pSeed, 1));
+  pgeo.setAttribute('aSpeed', new THREE.BufferAttribute(pSpeed, 1));
+  var pmat = _tpParticleMat(cyan);
   var particles = new THREE.Points(pgeo, pmat);
-  particles.userData.tpSeed = seed;
-  particles.userData.tpSpeed = new Float32Array(COUNT);
-  for (var sp = 0; sp < COUNT; sp++) { particles.userData.tpSpeed[sp] = 0.35 + Math.random() * 0.75; }
   g.add(particles);
   add(particles, 'tp_particles');
-  var core = new THREE.Mesh(new THREE.CylinderGeometry(0.30, 0.42, 0.9, 20, 1, true),
-    new THREE.MeshBasicMaterial({ color: cyan, transparent: true, opacity: 0.20, side: THREE.DoubleSide, depthWrite: false }));
+  /* ★ 2026-10-25：光柱换成着色器（向上流动的能量丝）*/
+  var beamMat = _tpBeamMat(cyan);
+  var core = new THREE.Mesh(new THREE.CylinderGeometry(0.30, 0.42, 0.9, 24, 1, true), beamMat);
   core.position.y = 0.90; g.add(core); add(core, 'tp_core_glow');
   /* animated particles: rise, fade by re-seeding at the base */
+  /* ★★★ 2026-10-25 升级：动画只更新时钟 ✗ CPU 不再逐帧算粒子 ✓★★★
+     ★ 原来：每帧循环 220 个粒子改 y 坐标 + needsUpdate 上传 ✓
+       每个传送阵 220 次运算 ✗ 镇上好几座就是上千次 ✓
+     ★ 现在：着色器里用 fract(seed + time*speed) 自己算位置 ✓
+       CPU 只写 3 个 uniform（而且是同一个时间值）✗ 开销几乎为 0 ✓✓
+     ★ 视觉还更好了：
+       · 粒子是【圆形柔边光点】✗ 不是方块 ✓
+       · 越往上越亮、到顶前淡出 ✗ 不会突然消失 ✓
+       · 上升时向内收 ✗ 像被光柱吸上去 ✓ */
   g.userData.animate = function (t) {
-    var arr = pgeo.attributes.position.array;
-    var spd = particles.userData.tpSpeed;
-    for (var i = 0; i < COUNT; i++) {
-      arr[i * 3 + 1] += spd[i] * 0.016 * (t > 0 ? 1 : 0);
-      if (arr[i * 3 + 1] > 3.25) {
-        arr[i * 3 + 1] = 0.40;
-        arr[i * 3] = seed[i * 3] * (0.55 + Math.random() * 0.45);
-        arr[i * 3 + 2] = seed[i * 3 + 2] * (0.55 + Math.random() * 0.45);
-      }
-    }
-    pgeo.attributes.position.needsUpdate = true;
-    pmat.opacity = 0.65 + Math.sin(t * 2.2) * 0.15;
+    var now = _tpTime();
+    discMat.userData.tpTime.value = now;
+    beamMat.userData.tpTime.value = now;
+    pmat.userData.tpTime.value = now;
+    /* 整体明暗脉动 ✓ 保留原来的呼吸感 */
+    var pulse = 0.82 + Math.sin(now * 2.2) * 0.18;
+    pmat.uniforms.uOpacity.value = pulse;
+    beamMat.uniforms.uOpacity.value = 0.85 + Math.sin(now * 1.7) * 0.15;
+    discMat.uniforms.uOpacity.value = 0.90 + Math.sin(now * 2.6) * 0.10;
   };
   return g;
 }

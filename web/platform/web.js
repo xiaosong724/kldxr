@@ -1803,6 +1803,17 @@ function perfBar(st) {
 var DETAIL_RANGE = { low: 16, mid: 28, high: 40 };
 
 function applySet() {
+  /* ★ 2026-10-25：着色器开关 + 强度（启动时就要生效 ✗ 不能等打开设置页 ✓）*/
+  try {
+    var _shv = 40;
+    if (typeof SETCFG !== 'undefined' && SETCFG && typeof SETCFG.shaderStrength === 'number') {
+      _shv = Math.max(0, Math.min(100, SETCFG.shaderStrength));
+    }
+    if (typeof VFX !== 'undefined' && VFX.setShader) {
+      VFX.setShader(_shv > 0);
+      VFX.setStrength(_shv > 0 ? (0.5 + (_shv / 100) * 2.0) : 1.0);
+    }
+  } catch (eShA) { }
   applyShadow();          // ★ 第 79 轮：阴影质量 ✓
   try {
     var dpr = setDpr();
@@ -3821,7 +3832,14 @@ function skFxTick(dt) {
                                                      seed: d.seed }, null);
           } else {
             if (_myShieldFx) { VFX.kill(_myShieldFx); _myShieldFx = null; }
-            _myShieldFx = VFX.spawn('shield', { attach: H.g, dur: d.dur,
+            /* ★ 2026-10-25（用户："护盾有点小，玩家的头在外面"）
+               ★ 这里【显式传半径】✗ 不依赖默认值 ✓
+                 因为 spawn 里参数优先级是：服务器 > localStorage > 调用参数（最高）✓
+                 如果之前在调参台存过 r=1.05 ✗ 会盖掉代码里的新默认值 ✓✓
+                 直接在调用点写死 ✗ 一定生效 ✓
+               ★ 1.55：护盾挂在 H.g 上（角色缩放 0.42）
+                 实际半径 1.55 × 0.42 = 0.65 米 ✗ 完整罩住 0.76 米高的玩家 ✓ */
+            _myShieldFx = VFX.spawn('shield', { attach: H.g, dur: d.dur, r: 2.2,
                                                 seed: d.seed }, null);
           }
           continue;
@@ -5190,6 +5208,54 @@ function openSet(wantTab) {
       });
     }
   }
+  /* ★★★ 2026-10-25（用户："在菜单设置里加一个着色器的开关，
+     并且再加上拉动条来决定着色器的效果"）★★★
+     ★ 一个滑块两用：
+       0      → VFX.setShader(false)  ✗ 纯色特效，最省 GPU ✓
+       >0     → VFX.setShader(true) + 强度 = 0.5 + (v/100) * 2.0
+                → v=10 → 0.7，v=40 → 1.3，v=100 → 2.5 ✓
+     ★ 档位文案：
+       0     → 「关闭」
+       10~25 → 「省电」
+       30~60 → 「标准」
+       65~90 → 「浓烈」
+       95+   → 「极致」*/
+  var shRange = document.getElementById('shaderRange');
+  var shVal = document.getElementById('shaderVal');
+  function shaderLabel(v) {
+    if (v <= 0) { return '关闭'; }
+    if (v <= 25) { return '省电'; }
+    if (v <= 60) { return '标准'; }
+    if (v <= 90) { return '浓烈'; }
+    return '极致';
+  }
+  function shaderApply(v) {
+    var on = v > 0;
+    var k = on ? (0.5 + (v / 100) * 2.0) : 1.0;
+    try {
+      if (typeof VFX !== 'undefined' && VFX.setShader) {
+        VFX.setShader(on);
+        VFX.setStrength(k);
+      }
+    } catch (eSh) { }
+    if (shVal) { shVal.textContent = shaderLabel(v); }
+  }
+  if (shRange && !shRange._b) {
+    shRange._b = true;
+    var _sv0 = 40;
+    try {
+      var _cfgSh = (typeof SETCFG !== 'undefined' && SETCFG) ? SETCFG.shaderStrength : null;
+      if (typeof _cfgSh === 'number') { _sv0 = Math.max(0, Math.min(100, _cfgSh)); }
+    } catch (eSh0) { }
+    shRange.value = String(_sv0);
+    shaderApply(_sv0);
+    shRange.addEventListener('input', function () {
+      var v = Math.max(0, Math.min(100, parseInt(shRange.value, 10) || 0));
+      try { if (typeof SETCFG !== 'undefined' && SETCFG) { SETCFG.shaderStrength = v; } } catch (eSh1) { }
+      try { if (typeof saveSet === 'function') { saveSet(); } } catch (eSh2) { }
+      shaderApply(v);
+    });
+  }
   // ★ 音效开关 + 音量 ✓
   var srow = document.getElementById('rowSfx');
   if (srow) {
@@ -5997,7 +6063,11 @@ function uiSavePos(id, l, t) {
 }
 function uiApplyAllSaved() {
   if (_dragSt) { return; }
-  var ids = ['atk', 'jmp', 'auto', 'cam'];
+  /* ★ 2026-10-25（用户："跑步的按钮没用复用之前的按键吗，很多功能细节都不一致"）
+     ★ 病根：这里也漏了 'run' ✗ 跑步按钮的位置【不会被恢复】✓
+       拖过去之后重开游戏就回到默认位置 ✓✓
+     ★ 跑步按钮是 makeDraggable('run') 登记的 ✗ 但这个恢复列表没加 ✓ */
+  var ids = ['atk', 'jmp', 'run', 'auto', 'cam'];
   for (var i = 0; i < ids.length; i++) {
     var el = document.getElementById(ids[i]);
     if (!el) { continue; }
@@ -8249,7 +8319,11 @@ function uiApplyAtkScale() {
 
 function uiClampPositions() {
   try {
-    var ids = ['atk', 'jmp', 'auto', 'cam', 'uiEdit', 'setBtn', 'skBar'];
+    /* ★★★ 2026-10-25（用户："屏幕缩放时会跑到屏幕外"）★★★
+       ★ 病根：这里漏了 'run' ✗ 跑步按钮不参与屏幕边界限制 ✓
+         → 窗口缩小时它会跑到屏幕外 ✓✓
+       ★ 顺便检查是否还有别的按钮漏了 ✗ 把 id="run" 这类都列进来 ✓ */
+    var ids = ['atk', 'jmp', 'run', 'auto', 'cam', 'uiEdit', 'setBtn', 'skBar'];
     var W = window.innerWidth, H = window.innerHeight;
     for (var i = 0; i < ids.length; i++) {
       var el = document.getElementById(ids[i]);

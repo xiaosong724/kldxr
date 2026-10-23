@@ -12,7 +12,7 @@
      代码类（js/html）走的是【network-first】→ 联网时永远拿最新，平时不用管；
      只有离线场景才读缓存副本。真想让离线副本也刷新，把 CACHE_VERSION +1 即可 ✓ */
 CACHE_VERSION = 'xx2d-v154';
-const ASSETS = [
+ASSETS = [
   './',
   './index.html',
   './manifest.webmanifest',
@@ -41,19 +41,19 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  const req = e.request;
+  req = e.request;
   if (req.method !== 'GET') { return; }
-  const u = new URL(req.url);
+  u = new URL(req.url);
   if (u.origin !== location.origin) { return; }      // 跨域资源不掺和 ✓
   if (u.pathname.startsWith('/api/')) { return; }    // 接口永远走网络 ✓
   if (u.pathname === '/ws-config.js') { return; }    // 服务端按配置生成的，别缓存（改了端口免得还是旧的）✓
 
   // ★ 代码类走 network-first：否则改了前端手机上永远是旧的 ✗
-  const netFirst = req.mode === 'navigate' || /\.(js|html|webmanifest)$/.test(u.pathname);
+  netFirst = req.mode === 'navigate' || /\.(js|html|webmanifest)$/.test(u.pathname);
   if (netFirst) {
     e.respondWith(
       fetch(req).then(resp => {
-        const cp = resp.clone();
+        cp = resp.clone();
         caches.open(CACHE_VERSION).then(c => c.put(req, cp)).catch(() => { });
         return resp;
       }).catch(() => caches.match(req).then(r => r || caches.match('./index.html')))
@@ -65,7 +65,7 @@ self.addEventListener('fetch', e => {
   e.respondWith(
     caches.match(req).then(r => r || fetch(req).then(resp => {
       if (resp && resp.ok) {
-        const cp = resp.clone();
+        cp = resp.clone();
         caches.open(CACHE_VERSION).then(c => c.put(req, cp)).catch(() => { });
       }
       return resp;

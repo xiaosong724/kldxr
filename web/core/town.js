@@ -3838,10 +3838,43 @@ function townAnimUnregister(m) {
   try { m.userData._animOn = false; } catch (e) { }
 }
 function townAnimClear() { TOWN_ANIM_MODELS = []; }
-function townAnimTick(now) {
+/* ★★★ 2026-10-25（用户："传送阵的特效我跑了很远的距离还是可以看见"）★★★
+   ★ 病根：这里对所有登记的模型【无条件每帧 animate】✗ 没有距离判断 ✓
+     镇上十几座传送阵 ✗ 每帧都要算粒子/法阵的 uniform ✓
+     而且【远处也照样显示】✗ 白白浪费填充率 ✓✓
+   ★ 修：按距离分三档
+     · 超过 TOWN_ANIM_HIDE（默认 140 米）→ 整个模型【隐藏】✗ 不画 ✓
+     · 超过 TOWN_ANIM_SKIP（默认 60 米）→ 不跑动画 ✗ 但还画（静态样子）✓
+     · 近处 → 正常动画 ✓
+   ★ 为什么用 140 米：雾的起点是 90 ✗ 140 时已经基本看不见了 ✓
+     再远就完全隐藏 ✗ 省下像素填充和 draw call ✓
+   ★ 为什么中间档还要画：玩家往那边走的时候要能看见轮廓 ✓
+     只是粒子和光效不刷新 ✗ 走近了自动开始动 ✓✓ */
+var TOWN_ANIM_HIDE = 140, TOWN_ANIM_SKIP = 60;
+function townAnimTick(now, px, pz) {
   if (!TOWN_ANIM_MODELS.length) { return; }
+  var _hasPos = (typeof px === 'number' && typeof pz === 'number');
+  var _hide2 = TOWN_ANIM_HIDE * TOWN_ANIM_HIDE;
+  var _skip2 = TOWN_ANIM_SKIP * TOWN_ANIM_SKIP;
   for (var i = 0; i < TOWN_ANIM_MODELS.length; i++) {
-    try { TOWN_ANIM_MODELS[i].userData.animate(now); } catch (e) { }
+    var m = TOWN_ANIM_MODELS[i];
+    try {
+      if (_hasPos) {
+        var dx = m.position.x - px, dz = m.position.z - pz;
+        var d2 = dx * dx + dz * dz;
+        if (d2 > _hide2) {
+          /* 太远 → 整个隐藏 ✗ 连画都不画 ✓ */
+          if (m.visible) { m.visible = false; }
+          continue;
+        }
+        if (!m.visible) { m.visible = true; }
+        if (d2 > _skip2) {
+          /* 中距离 → 显示但不动画 ✗ 省 CPU ✓ */
+          continue;
+        }
+      }
+      m.userData.animate(now);
+    } catch (e) { }
   }
 }
 

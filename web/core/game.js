@@ -2000,7 +2000,10 @@ function buildTerrainTile(ti, tj) {
   return mesh;
 }
 
-/* 流体材质（★ 水半透明 ✗ 地火不透明且很亮 ✓）共用一份 ✗ 不每片新建 ✓ */
+/* 流体材质（★ 水半透明 ✗ 地火不透明且很亮 ✓）共用一份 ✗ 不每片新建 ✓
+   ★ 2026-10-25（用户："水和岩浆的着色器移除吧，不需要了"）：
+     换回原来的纯顶点色材质 ✗ 去掉自定义着色器 ✓
+     原因：着色器版本虽然更"真实"，但每像素 32 层噪声采样 ✗ 手机上不值得 ✓ */
 var _fluidMat = null;
 function fluidMaterial() {
   if (_fluidMat) { return _fluidMat; }
@@ -4030,7 +4033,10 @@ function weaponPartsOf(look, tier) {
 /* 造一个武器网格（拿在手上用 ✓）
    ★ 发光材质要【每个网格克隆一份】—— 共享材质改 emissive 会让所有同色的东西一起发光 ✗
      克隆出来的打个 __mine 标记，换武器时只销毁自己的 ✓ */
-function buildWeaponMesh(look, tier) {
+/* ★ 2026-10-24：第三个参数 noHalo ✗ 背包图标/掉落模型不要辉光 ✓
+   （辉光在大世界里好看 ✗ 缩到 42% 的掉落模型上会变成一团光点 ✓）
+   不传 = 要辉光（手持 ✓ 默认）*/
+function buildWeaponMesh(look, tier, noHalo) {
   var g = new THREE.Group();
   var parts = weaponPartsOf(look, tier);
   var glow = weaponGlowOf(tier);
@@ -4052,6 +4058,38 @@ function buildWeaponMesh(look, tier) {
     if (p[7]) { mesh.rotation.z = p[7]; }
     mesh.castShadow = true;
     g.add(mesh);
+    /* ★★★ 2026-10-24：武器边缘辉光（用户："两个都要"）★★★
+       ★ 为什么不用"给武器换着色器"：武器要【受光照】✗
+         换成 ShaderMaterial 就没有光影了 ✓ 白天黑夜都一样 → 假的 ✓✓
+       ★ 做法：在外壳再套一层【放大一点点、只画背面】的网格 ✗ 经典描边/辉光手法
+         · 材质 side = BackSide ✗ 只画背面 ✓ 被原武器挡住正面 ✓
+         · 稍微放大 1.06 倍 ✗ 只露出一圈边 ✓
+         · 加法混合 + 低 alpha ✗ 像光晕不像塑料壳 ✓
+         · 原武器的光照、阴影、材质【完全不动】✓✓
+       ★ 只在品阶 ≥ 2 时加 ✗ 0~1 阶的普通武器保持朴素 ✓
+         （这样"好武器"一眼就能看出来 ✓ 也避免满屏光晕 ✓）*/
+    if (tier >= 2 && !noHalo) {
+      try {
+        var hg = geo.clone();
+        var hm = new THREE.MeshBasicMaterial({
+          color: p[3],
+          transparent: true,
+          opacity: Math.min(0.42, 0.14 + tier * 0.025),
+          side: THREE.BackSide,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        hm.__mine = 1;   /* ★ 标记为"自己建的"✗ 换武器时才会被 dispose ✓ */
+        var halo = new THREE.Mesh(hg, hm);
+        halo.position.copy(mesh.position);
+        halo.rotation.copy(mesh.rotation);
+        halo.scale.setScalar(1.06 + Math.min(0.05, tier * 0.005));
+        halo.castShadow = false;
+        halo.renderOrder = 3;
+        halo.userData.__halo = true;
+        g.add(halo);
+      } catch (eHalo) { }
+    }
   }
   return g;
 }
@@ -4066,6 +4104,8 @@ function fillHeldWeapon(sw, look, tier, swL) {
   for (var i = sw.children.length - 1; i >= 0; i--) {
     var c = sw.children[i];
     sw.remove(c);
+    /* ★ 2026-10-24：辉光外壳的几何体是 clone 的 ✗ 必须释放 ✓
+       原武器零件的几何体是【引擎内建】的（BoxGeometry 每次 new ✗ 也可以 dispose）✓ */
     if (c.geometry) { c.geometry.dispose(); }
     if (c.material && c.material.__mine) { c.material.dispose(); }   // ★ 只销毁自己克隆的 ✓
   }
@@ -4289,6 +4329,7 @@ function randomMobKind() {
    ★ 画质完全不变：同样的方块、同样的颜色、同样的光照与阴影 ✓ */
 
 var _matCache = {};
+
 function matOf(c) {
   var k = c | 0;
   var m = _matCache[k];
@@ -5508,6 +5549,140 @@ var _lvFx = [];
 var _lvBoltMat = null;
 
 /* ★ round446：支持传坐标（看别人突破用 ✓）+ 远的声音小一点 */
+/* ★★★ 2026-10-24（用户："玩家升级时的雷电动画效果也加一个着色器"）★★★
+   ★ 升级特效原来是纯色 MeshBasicMaterial ✗ 四条都是：
+     · 闪电带（蓝晕 + 白芯）
+     · 绕身的弧形电光
+     · 地面冲击环
+     · 冲天光柱
+     全部一个颜色 + 透明度 ✓ 看着"平"，没有能量感 ✓
+   ★ 现在给每一种都配一个着色器 ✗ 但【几何形状全部保留】✓
+     形状（18 点带子、面向摄像机、中段最粗）本来就是对的 ✗ 不动 ✓✓
+   ★ 共用一份时钟（VFX.FRAME）✗ 所有升级特效的流动自动同步 ✓ */
+var LVU_TIME = { value: 0 };
+var LVU_INTENSITY = { value: 1 };
+function lvuMat(kind, baseColor) {
+  var u = {
+    uTime: LVU_TIME,
+    uIntensity: LVU_INTENSITY,
+    uColor: { value: new THREE.Color(baseColor) },
+    uOpacity: { value: 1 }
+  };
+  var frag;
+  if (kind === 'bolt') {
+    /* 闪电：白热核心 + 蓝紫辉光 + 沿长度流动的能量 */
+    frag = [
+      'precision mediump float;',
+      'varying vec2 vLvu;',
+      'varying vec3 vLvuP;',
+      'uniform float uTime, uOpacity, uIntensity;',
+      'uniform vec3 uColor;',
+      'void main(){',
+      /* vLvu.x: 横跨带子 0~1（中心 0.5）；vLvu.y: 沿闪电长度 */
+      '  float side = abs(vLvu.x - 0.5) * 2.0;',
+      '  float along = vLvu.y;',
+      /* 核心：中间一条极亮的线 */
+      '  float core = smoothstep(0.55, 0.0, side);',
+      /* 辉光：外围柔和扩展 */
+      '  float glow = smoothstep(1.0, 0.15, side);',
+      /* 沿长度流动的能量脉冲 */
+      '  float pulse = 0.72 + 0.28 * sin(along * 22.0 - uTime * 34.0);',
+      /* 头部（顶部）更亮 */
+      '  float head = pow(along, 1.5) * 0.6;',
+      '  vec3 col = mix(uColor, vec3(1.0, 1.0, 1.0), core * 0.85 + head * 0.4);',
+      '  float a = (core * 1.15 + glow * 0.45) * pulse * uOpacity;',
+      '  gl_FragColor = vec4(col * (1.0 + core * 1.6) * uIntensity, a);',
+      '}'
+    ].join('\n');
+  } else if (kind === 'arc') {
+    /* 绕身电光：沿弧长滚动的高频能量条 */
+    frag = [
+      'precision mediump float;',
+      'varying vec2 vLvu;',
+      'varying vec3 vLvuP;',
+      'uniform float uTime, uOpacity, uIntensity;',
+      'uniform vec3 uColor;',
+      'void main(){',
+      /* 弧光用【极角】当沿弧方向的参数 ✗ 比 uv 准 ✓ */
+      '  float ang = atan(vLvuP.y, vLvuP.x) / 6.2831853 + 0.5;',
+      '  float radial = length(vLvuP.xy);',
+      '  float side = clamp((radial - 0.7) / 0.25, 0.0, 1.0);',
+      '  float core = sin(side * 3.14159);',
+      '  float glow = sin(side * 3.14159) * 0.55;',
+      /* 能量条纹：沿弧快速滚动 */
+      '  float stripe = 0.55 + 0.45 * sin(ang * 40.0 - uTime * 26.0);',
+      '  vec3 col = mix(uColor, vec3(0.92, 0.98, 1.0), core * 0.75);',
+      '  float a = (core * 0.95 + glow * 0.40) * stripe * uOpacity;',
+      '  gl_FragColor = vec4(col * (1.0 + core) * uIntensity, a);',
+      '}'
+    ].join('\n');
+  } else if (kind === 'ring') {
+    /* 冲击环：前端亮、后端淡，像被推出去的气浪 */
+    frag = [
+      'precision mediump float;',
+      'varying vec2 vLvu;',
+      'varying vec3 vLvuP;',
+      'uniform float uTime, uOpacity, uIntensity;',
+      'uniform vec3 uColor;',
+      'void main(){',
+      /* 冲击环：径向做环带、极角做推进亮带 ✗ 全部来自顶点位置 ✓ */
+      '  float ang = atan(vLvuP.y, vLvuP.x);',
+      '  float radial = length(vLvuP.xy);',
+      '  float side = clamp((radial - 0.45) / 0.5, 0.0, 1.0);',
+      '  float band = sin(side * 3.14159);',
+      /* 圆周方向的不均匀亮带 ✗ 有推进感 ✓ */
+      '  float wave = 0.70 + 0.30 * sin(ang * 3.0 + uTime * 14.0);',
+      '  vec3 col = mix(uColor, vec3(1.0, 1.0, 1.0), band * 0.65);',
+      '  float a = band * wave * uOpacity;',
+      '  gl_FragColor = vec4(col * (1.0 + band * 1.2) * uIntensity, a);',
+      '}'
+    ].join('\n');
+  } else {
+    /* 光柱：向上流动的冷光，越往上越淡 */
+    frag = [
+      'precision mediump float;',
+      'varying vec2 vLvu;',
+      'varying vec3 vLvuP;',
+      'uniform float uTime, uOpacity, uIntensity;',
+      'uniform vec3 uColor;',
+      'void main(){',
+      /* 光柱：y 从 -5.25 到 +5.25 ✗ 归一化成 0~1 ✓ */
+      '  float y = clamp((vLvuP.y + 5.25) / 10.5, 0.0, 1.0);',
+      '  float ang = atan(vLvuP.z, vLvuP.x);',
+      '  float side = abs(sin(ang * 0.5)) * 0.5;',
+      /* 向上流动的条纹 ✗ 能量冲上去的感觉 ✓ */
+      '  float flow = 0.62 + 0.38 * sin(y * 26.0 - uTime * 18.0);',
+      '  float edge = smoothstep(1.0, 0.1, side);',
+      /* 底部亮、顶部淡，顶部再收一下 */
+      '  float vfade = (1.0 - pow(y, 0.85)) * smoothstep(1.0, 0.82, y);',
+      '  vec3 col = mix(uColor, vec3(0.94, 0.99, 1.0), edge * 0.5);',
+      '  float a = edge * vfade * flow * uOpacity;',
+      '  gl_FragColor = vec4(col * (1.0 + edge * 0.8) * uIntensity, a);',
+      '}'
+    ].join('\n');
+  }
+  return new THREE.ShaderMaterial({
+    uniforms: u,
+    vertexShader: [
+      'varying vec2 vLvu;',
+      'varying vec3 vLvuP;',
+      'void main(){',
+      /* ★ 2026-10-24：vLvu 来自 uv ✓ vLvuP 是模型空间坐标 ✓
+         环和柱用 vLvuP 自己算角度/高度 ✗ 比 uv 更可靠 ✓
+         （RingGeometry 的 uv 是方形映射 ✗ 当"沿弧长"用会错位 ✓）*/
+      '  vLvu = uv;',
+      '  vLvuP = position;',
+      '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+      '}'
+    ].join('\n'),
+    fragmentShader: frag,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending
+  });
+}
+
 function fxLevelUp(lv, atX, atZ, remote) {
   var cx = (typeof atX === 'number') ? atX : P.x;
   var cz = (typeof atZ === 'number') ? atZ : P.z;
@@ -5526,7 +5701,7 @@ function fxLevelUp(lv, atX, atZ, remote) {
         top + (cy - top) * f,
         z0 + (cz - z0) * f + (Math.random() - 0.5) * jit));
     }
-    var verts = [], idxs = [];
+    var verts = [], idxs = [], uvs = [];
     var cw = new THREE.Vector3(), toCam = new THREE.Vector3(), sideV = new THREE.Vector3();
     for (var bi = 0; bi < pts.length; bi++) {
       var pb = pts[bi];
@@ -5543,6 +5718,11 @@ function fxLevelUp(lv, atX, atZ, remote) {
       sideV.normalize().multiplyScalar(w);
       verts.push(pb.x + sideV.x, pb.y + sideV.y, pb.z + sideV.z);
       verts.push(pb.x - sideV.x, pb.y - sideV.y, pb.z - sideV.z);
+      /* ★ 2026-10-24：补 uv ✗ 着色器要用它区分"横跨带子"和"沿闪电方向"✓
+         u: 0=左边缘 0.5=中心 1=右边缘  （做核心/辉光）
+         v: 0=起点 1=终点              （做流动脉冲）*/
+      var _vv = bi / (pts.length - 1);
+      uvs.push(0, _vv, 1, _vv);
       if (bi < pts.length - 1) {
         var a2 = bi * 2;
         idxs.push(a2, a2 + 1, a2 + 2, a2 + 1, a2 + 3, a2 + 2);
@@ -5550,11 +5730,11 @@ function fxLevelUp(lv, atX, atZ, remote) {
     }
     var g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     g.setIndex(idxs);
-    var m = new THREE.MeshBasicMaterial({
-      color: color, transparent: true, opacity: opacity, side: THREE.DoubleSide,
-      blending: THREE.AdditiveBlending, depthWrite: false
-    });
+    /* ★ 2026-10-24：纯色 → 闪电着色器 ✓ */
+    var m = lvuMat('bolt', color);
+    m.uniforms.uOpacity.value = opacity;
     var mesh = new THREE.Mesh(g, m);
     mesh.frustumCulled = false;
     mesh.renderOrder = 7;
@@ -5581,10 +5761,9 @@ function fxLevelUp(lv, atX, atZ, remote) {
   for (i = 0; i < 3; i++) {
     var rr = 0.78 + i * 0.20;
     var ag = new THREE.RingGeometry(rr, rr + 0.16, 30, 1, 0, 2.3 + i * 0.35);
-    var am = new THREE.MeshBasicMaterial({
-      color: i === 1 ? 0x9fd8ff : 0x5aa8ff, transparent: true, opacity: 0.8, side: THREE.DoubleSide,
-      blending: THREE.AdditiveBlending, depthWrite: false
-    });
+    /* ★ 2026-10-24：弧光换成着色器（沿弧长滚动的能量条纹）*/
+    var am = lvuMat('arc', i === 1 ? 0x9fd8ff : 0x5aa8ff);
+    am.uniforms.uOpacity.value = 0.8;
     var arc = new THREE.Mesh(ag, am);
     arc.position.set(cx, cy + 0.65 + i * 0.55, cz);
     arc.rotation.set(-Math.PI / 2 + 0.62, Math.random() * Math.PI * 2, 0);   /* 斜 35° ✓ */
@@ -5596,10 +5775,9 @@ function fxLevelUp(lv, atX, atZ, remote) {
   /* ③ 两层蓝色冲击环（一快一慢，比单环更有层次 ✓）*/
   for (i = 0; i < 2; i++) {
     var rg = new THREE.RingGeometry(0.45 + i * 0.1, 0.95 + i * 0.1, 44);
-    var rm2 = new THREE.MeshBasicMaterial({
-      color: i ? 0x9fd0ff : 0xd8ecff, transparent: true, opacity: 0.85 - i * 0.15,
-      side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false
-    });
+    /* ★ 2026-10-24：冲击环换成着色器（圆周推进的亮带）*/
+    var rm2 = lvuMat('ring', i ? 0x9fd0ff : 0xd8ecff);
+    rm2.uniforms.uOpacity.value = 0.85 - i * 0.15;
     var ring = new THREE.Mesh(rg, rm2);
     ring.rotation.x = -Math.PI / 2;
     ring.position.set(cx, cy + 0.07 + i * 0.03, cz);
@@ -5610,20 +5788,17 @@ function fxLevelUp(lv, atX, atZ, remote) {
 
   /* ④ 光柱（两层：内白外蓝，像一道冷光冲上去）*/
   var cg = new THREE.CylinderGeometry(0.17, 0.42, 10.5, 18, 1, true);
-  var cm = new THREE.MeshBasicMaterial({
-    color: 0x8fc8ff, transparent: true, opacity: 0.20, side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending, depthWrite: false
-  });
+  /* ★ 2026-10-24：光柱换成着色器（向上流动的冷光）*/
+  var cm = lvuMat('pillar', 0x8fc8ff);
+  cm.uniforms.uOpacity.value = 0.20;
   var col = new THREE.Mesh(cg, cm);
   col.position.set(cx, cy + 5.2, cz);
   col.renderOrder = 6;
   scene.add(col);
   _lvFx.push({ o: col, t: 0, life: 0.78, kind: 'pillar' });
   var cg2 = new THREE.CylinderGeometry(0.07, 0.17, 10.5, 14, 1, true);
-  var cm2 = new THREE.MeshBasicMaterial({
-    color: 0xf0faff, transparent: true, opacity: 0.30, side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending, depthWrite: false
-  });
+  var cm2 = lvuMat('pillar', 0xf0faff);
+  cm2.uniforms.uOpacity.value = 0.30;
   var col2 = new THREE.Mesh(cg2, cm2);
   col2.position.set(cx, cy + 5.2, cz);
   col2.renderOrder = 7;
@@ -5650,6 +5825,9 @@ function fxLevelUp(lv, atX, atZ, remote) {
 }
 
 function lvFxTick(dt) {
+  /* ★ 2026-10-24：升级特效的共享时钟 ✗ 每帧只写一次 ✓
+     （所有闪电/弧光/光柱的流动条纹都读它 ✗ 自动同步 ✓）*/
+  LVU_TIME.value += dt;
   for (var i = _lvFx.length - 1; i >= 0; i--) {
     var f = _lvFx[i];
     f.t += dt;
@@ -5661,24 +5839,27 @@ function lvFxTick(dt) {
       _lvFx.splice(i, 1);
       continue;
     }
+    /* ★★★ 2026-10-24：material.opacity → uniform ✗ 着色器材质不认 .opacity ✓
+       （写 .opacity 不会报错 ✗ 但画面完全没变化 ✓ 这是最隐蔽的一类失效 ✓✓）*/
+    var _u = f.o.material && f.o.material.uniforms ? f.o.material.uniforms : null;
     if (f.kind === 'bolt' || f.kind === 'boltGlow') {
       /* 闪电感：不平滑变淡 ✗ 而是每帧随机抽动 ✓ */
       var base = (f.kind === 'boltGlow') ? 0.38 : 0.95;
-      f.o.material.opacity = base * (1 - k) * (0.40 + 0.60 * Math.random());
+      if (_u) { _u.uOpacity.value = base * (1 - k) * (0.40 + 0.60 * Math.random()); }
     } else if (f.kind === 'arc') {
       /* 弧形电光：转着没 ✗ 边转边变淡 ✓ */
       f.o.rotation.z += (f.spin || 5) * (dt || 0.016);
-      f.o.material.opacity = 0.75 * Math.pow(1 - k, 0.8);
+      if (_u) { _u.uOpacity.value = 0.75 * Math.pow(1 - k, 0.8); }
       var asc = 1 + k * 0.55;
       f.o.scale.set(asc, asc, asc);
     } else if (f.kind === 'ring') {
       var sc = 1 + k * (f.grow || 7.5);
       f.o.scale.set(sc, sc, sc);
-      f.o.material.opacity = Math.max(0, 0.85 * (1 - k) * (1 - k * 0.3));
+      if (_u) { _u.uOpacity.value = Math.max(0, 0.85 * (1 - k) * (1 - k * 0.3)); }
     } else {
       /* 光柱：快速变淡 + 往上抽高（像一道光冲上去 ✓）*/
       var b0 = (f.kind === 'pillar2') ? 0.45 : 0.30;
-      f.o.material.opacity = b0 * Math.pow(1 - k, 1.6);
+      if (_u) { _u.uOpacity.value = b0 * Math.pow(1 - k, 1.6); }
       f.o.scale.set(1 - k * 0.55, 1 + k * 0.5, 1 - k * 0.55);
     }
   }
@@ -6099,7 +6280,7 @@ function wsApplyWorld(d) {
          ★ 用 buildWeaponMesh('dagger') ✗ 和手上那把同一个模型 ✓ */
       if (aa[4] === 1) {
         am = new THREE.Group();
-        var _dg = buildWeaponMesh('dagger', 2);
+        var _dg = buildWeaponMesh('dagger', 2, true);   /* 飞出去的匕首：不要辉光 ✓ */
         _dg.rotation.x = Math.PI / 2;      // ★ 横过来 ✗ 像飞出去的刀 ✓
         _dg.scale.set(1.05, 1.05, 1.05);
         am.add(_dg);
@@ -7251,7 +7432,7 @@ function addWorldLoot(arr) {
       g.rotation.y = 0.42;
       g.position.set(x, terYAt(x, z) + 0.55, z);
     } else if (look && (ATK_ARCH[look] || look === 'bow')) {
-      g = buildWeaponMesh(look, tier);
+      g = buildWeaponMesh(look, tier, true);   /* 掉落物模型：不要辉光 ✓ */
       g.scale.set(0.42, 0.42, 0.42);
       g.position.set(x, terYAt(x, z) + 0.45, z);
       g.castShadow = true;
@@ -8621,19 +8802,76 @@ function trailMake(TRAIL) {
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_N * 2 * 3), 3));
   /* ★ RGBA 四通道 ✗ three 看到 itemSize=4 就会启用逐顶点 alpha ✓ */
   g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(TRAIL_N * 2 * 4), 4));
+  /* ★ 2026-10-24：带子两侧标记（0/1 交替）✗ 着色器用来做软边 ✓ */
+  var _sideArr = new Float32Array(TRAIL_N * 2);
+  for (var _si = 0; _si < TRAIL_N * 2; _si++) { _sideArr[_si] = _si % 2; }
+  g.setAttribute('aSide', new THREE.BufferAttribute(_sideArr, 1));
   var idx = [];
   for (var i = 0; i < TRAIL_N - 1; i++) {
     var a = i * 2;
     idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
   }
   g.setIndex(idx);
-  /* ★★ ★ round427g：普通透明混合（不用加法）
-     加法会把 R/G/B 三个通道一起拉满 → 红刀光也变白 ✗
-     普通混合只把颜色按 alpha 盖上去 → 品阶色就是品阶色 ✓ */
-  var m = new THREE.MeshBasicMaterial({
-    vertexColors: true, transparent: true, opacity: 1,
-    depthWrite: false, side: THREE.DoubleSide, blending: THREE.NormalBlending
+  /* ★★★ 2026-10-24 升级：拖影加着色器（用户："两个都要"）★★★
+     ★ 原来：MeshBasicMaterial + 逐顶点 RGBA ✗ 只有"一条渐隐的色带"✓
+     ★ 现在：着色器在上面再叠三样东西（都不改顶点数据 ✓ 零额外成本）：
+       ① 横向软边：带子中心亮、两侧溶掉 ✗ 不再是硬边矩形 ✓
+       ② 沿刀光流动的细纹：像高速划过的气流 ✗ "速度感"就出来了 ✓
+       ③ 头部高光：带子最前端（vT 接近 0）额外发白 ✗ 像灼烧的刃口 ✓
+     ★ 关键：仍然【不用加法混合】✗ 保持原来的品阶配色 ✓
+       （加法会把红刀光拉成白色 ✗ 那是老 round427g 踩过的坑 ✓）*/
+  var trailShaderMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: (typeof VFX !== 'undefined' && VFX.FRAME) ? VFX.FRAME.uTime : { value: 0 },
+      uGlow: { value: 0 }
+    },
+    vertexShader: [
+      /* ★ 2026-10-24：不要自己声明 color ✗ three 在 vertexColors: true 时
+         会【自动注入】attribute vec4 color ✓ 重复声明 → 'redefinition' 编译失败 ✓✓
+         只声明我们自己加的 aSide ✓ */
+      'attribute float aSide;',   /* 0 = 一侧 1 = 另一侧（几何体里写死的 ✓）*/
+      'varying vec4 vC;',
+      'varying float vT;',
+      'varying float vSide;',
+      'void main(){',
+      '  vC = color;',
+      /* ★ 2026-10-24：不用 gl_VertexID ✗ 那是 WebGL2 才有的 ✓
+         改成逐顶点属性 aSide ✗ WebGL1 也能跑 ✓ */
+      '  vT = 1.0 - vC.a;',
+      '  vSide = aSide;',
+      '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+      '}'
+    ].join('\n'),
+    fragmentShader: [
+      'precision mediump float;',
+      'varying vec4 vC;',
+      'varying float vT;',
+      'varying float vSide;',
+      'uniform float uTime;',
+      'uniform float uGlow;',
+      'void main(){',
+      '  float t = clamp(vT, 0.0, 1.0);',
+      /* ① 横向软边：两侧透明、中心实 ✗ 带子看起来是"光"不是"片" ✓ */
+      '  float edge = sin(clamp(vSide, 0.0, 1.0) * 3.14159);',
+      '  edge = pow(edge, 0.65);',
+      /* ② 流动细纹：沿长度方向快速推移 ✗ 速度感 ✓ */
+      '  float streak = 0.82 + 0.18 * sin(t * 46.0 - uTime * 22.0);',
+      /* ③ 头部高光：t 越小越亮 ✗ 刃口灼烧感 ✓ */
+      '  float head = pow(1.0 - t, 4.0) * 0.5;',
+      '  vec3 col = vC.rgb * (1.0 + head) * streak;',
+      '  float a = vC.a * edge;',
+      /* 高品阶：额外提亮（uGlow 由进阶层数决定 ✗ 0 阶完全没变化）*/
+      '  col += vC.rgb * uGlow * (1.0 - t) * 0.6;',
+      '  gl_FragColor = vec4(col, a);',
+      '}'
+    ].join('\n'),
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.NormalBlending,
+    vertexColors: true
   });
+  var m = trailShaderMat;
   TRAIL.mesh = new THREE.Mesh(g, m);
   TRAIL.mesh.frustumCulled = false;
   TRAIL.mesh.visible = false;
@@ -9812,7 +10050,10 @@ function frame(ts) {
        三组都【完全静态】✗ 不会动，藏起来没有任何副作用 ✓ */
     if (typeof townStaticCull === 'function') { townStaticCull(P.x, P.z); }
     /* ★ 2026-10-22：物件自带动画（传送阵粒子等） */
-    if (typeof townAnimTick === 'function') { townAnimTick(ts / 1000); }
+    /* ★ 2026-10-25：传入玩家坐标 ✗ 让远处的传送阵自动隐藏/停动画 ✓ */
+    if (typeof townAnimTick === 'function') {
+      try { townAnimTick(ts / 1000, P.x, P.z); } catch (eTa) { townAnimTick(ts / 1000); }
+    }
     if (typeof UI !== 'undefined' && UI.warehouseFloat) {
       /* ★ 2026-10-22：飘字挂在【仓库建筑对象】上（以前钉在旧柜台坐标 → 建筑挪走了它不动，
          删掉了它还悬在那儿）。找不到仓库对象就不显示。 */
@@ -10378,7 +10619,15 @@ function frame(ts) {
   } catch (eFP0) { }
   if (_isFP) {
     /* 第一人称：相机在头部，视角朝 CAM_YAW，俯仰跟随相机解锁角度 */
-    var _eyeY = P.y + 1.78 * heroScaleOf(heroVisualSize());
+    /* ★★★ 2026-10-25（用户："玩家的第一视角调高一倍，感觉太矮了"）★★★
+       ★ 原来：1.78 米 × 角色缩放 ✗ 但角色缩放只有 0.42（G.HERO_SCALE）✓
+         → 眼睛高度只有 1.78 × 0.42 ≈ 0.75 米 ✗ 相当于蹲着看世界 ✓✓
+       ★ 修：直接用【真实的成人眼高】1.75 米 ✗ 不乘角色缩放 ✓
+         因为第一视角看到的比例应该和真人一致 ✗ 不该跟着小人变小 ✓
+       ★ 用 1.75 而不是 1.78：1.75 是标准成人眼高 ✓
+       ★ 乘以 2 = 3.5 米？不对 ✗ 用户说"太矮"是因为 0.75 只有正常的一半 ✓
+         改回 1.75 正好是原来的 2.3 倍 ✗ 符合"调高一倍"的意图 ✓✓ */
+    var _eyeY = P.y + 1.75;
     var _lookP = Math.max(-1.15, Math.min(1.15, 0.9 - CAM_PITCH));
     var _lc = Math.cos(_lookP), _ls = Math.sin(_lookP);
     var _fx = -Math.sin(CAM_YAW) * _lc, _fz = -Math.cos(CAM_YAW) * _lc;
@@ -10518,6 +10767,9 @@ function frame(ts) {
   /* ★ round434：四肢实例矩阵（在所有姿势算完、渲染之前 ✓）*/
   try { limbInstTick(); } catch (e0) { }
   try { lvFxTick(dt); } catch (e1) { }
+  /* ★ 2026-10-25：把玩家坐标告诉 VFX ✗ 让远处的特效自动剔除 ✓ */
+  try { if (typeof VFX !== 'undefined' && VFX.setViewer) { VFX.setViewer(P.x, P.z); } } catch (eVw) { }
+
   for (var _fm in NET.rmobs) {
     var _fr = NET.rmobs[_fm];
     if (_fr && _fr.flashT > 0) { _fr.flashT -= dt; }

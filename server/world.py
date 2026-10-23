@@ -4725,6 +4725,20 @@ class World(object):
         except Exception:
             return False
 
+    def _has_skill(self, p, key):
+        """★ 2026-10-25：这个玩家【装配了】某个技能吗（A/B/C 任何一栏都算）
+        （原来只有 _has_b 判断 B 栏 ✗ 病毒扩散是 A 栏、坦克引擎是 B 栏 ✓
+          统一一个判断 ✗ 免得每种技能各写一套 ✓）"""
+        try:
+            ld = getattr(p, 'skLoad', None) or {}
+            for slot in ('A', 'B', 'C'):
+                for it in (ld.get(slot) or []):
+                    if it == key:
+                        return True
+            return False
+        except Exception:
+            return False
+
     def _clone_despawn(self, cid):
         c = self.clones.pop(cid, None)
         if not c:
@@ -6826,6 +6840,37 @@ class World(object):
                             pass
             except Exception:
                 pass
+            # ★★★ 2026-10-25（用户："病毒扩散和坦克引擎，如果把技能卸下后还在生效，没有恢复"）★★★
+            #   ★ 病根：这里只更新了【技能装配表】✗ 没有清理技能【已经产生的状态】✓
+            #     · 病毒扩散：p.plagueOn 还是 1 → tick 循环继续每秒扣灵气、继续留毒云 ✓✓
+            #     · 坦克引擎：p.skTankHp / skTankN 还在 → 生命上限加成继续生效 ✓✓
+            #   ★ 修：装配表里已经【没有这个技能】→ 把它的运行时状态清掉 ✓
+            #     保留的层数也一起清 ✗ 因为技能都没了，留着没有意义 ✓
+            try:
+                _has_pg = self._has_skill(p, 'plague')
+                if not _has_pg and bool(getattr(p, 'plagueOn', False)):
+                    p.plagueOn = False
+                    self._send_cid(p.cid, P.pack('notice', text='病毒扩散：已随技能卸下关闭'))
+                _has_tk = self._has_skill(p, 'tank')
+                if not _has_tk and (int(getattr(p, 'skTankN', 0) or 0) > 0
+                                    or int(getattr(p, 'skTankHp', 0) or 0) > 0):
+                    # 生命上限要跟着降回去 ✗ 不然血条会"虚高" ✓
+                    _old_max = int(getattr(p, 'skTankHp', 0) or 0)
+                    self._tank_reset(p, save=True)
+                    # 当前血量不能超过新的上限
+                    try:
+                        _nm = int(self._hp_max(p) or 0)
+                        if _nm > 0 and int(p.hp or 0) > _nm:
+                            p.hp = _nm
+                    except Exception:
+                        pass
+                    self._send_cid(p.cid, P.pack(
+                        'notice', text='坦克引擎：已随技能卸下清空层数'))
+            except Exception as _e1:
+                try:
+                    print('[skill] 卸下技能清理失败：%r' % (_e1,))
+                except Exception:
+                    pass
             self._invalidate_stats(p)
         elif t == 'chat':
             txt = str(d.get('text') or '')[:200]
