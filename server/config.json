@@ -1,52 +1,53 @@
 {
- "_说明": "末日丧尸 × 组队修仙 · 独立版后端配置。${HERE} = 本文件所在目录，可移植 ✓",
- "_路径说明": "★ 路径一律用【正斜杠】✗ 不要用反斜杠 ✓ Windows 和 Linux 都认正斜杠 ✓ 反斜杠到 Linux 上会把路径弄坏 ✓",
- "host": "0.0.0.0",
- "http_port": 8899,
- "ws_port": 8900,
- "db": "${HERE}/game.db",
- "web_root": "${HERE}/../web",
- "version": "0.1.0",
- "admin_password": "xiuxian-admin",
- "allow_player_debug": false,
- "_管理员说明": "管理页在 /admin；密码就是上面的 admin_password，★ 对外开服前一定要改掉 ✗；allow_player_debug=true 会把\"刷怪/发武器\"还给玩家（只该在本地调试时开 ✓）",
- "_端口说明": "云服务器上要放行【两个】端口：http_port（网页 + 接口）和 ws_port（游戏通道）✗ 只开一个会出现\"能进游戏但打怪没反应\"✓",
- "test_name_keys": [
-  "TestCase",
-  "浏览器",
-  "背包",
-  "武器甲",
-  "格子",
-  "验锁",
-  "死亡甲",
-  "动作甲",
-  "新人乙",
-  "假死",
-  "测试"
- ],
- "_测试账号说明": "名字里含上面这些关键词的，管理页默认不显示 ✓；用「清理测试账号」可以真的删掉（只删离线的 ✓ 会二次确认 ✓）",
- "qq": {
-  "_说明": "把滚动通知 / 玩家上线转发到 QQ 群（走 qq-forwarder 的 /api/bridge/send）★ 本地服=1103784008（小D助手·测试群）✗ 云服=346049634（主群）✓ deploy 脚本故意不传 config.json，所以两边各存各的 ✓",
-  "_怎么用": "enabled=false 就一句话都不发 ✓ 管理页也能开/关 ✓ 群里没消息时先看 /api/health 的 qq 段 ✓",
-  "enabled": true,
-  "url": "http://43.138.171.250:8099/api/bridge/send",
-  "token": "N7hyNbxaEVK2f2PxL_75gYlk",
-  "group": "1103784008",
-  "minIntervalMs": 1500,
-  "kinds": [
-   "join"
+  "_说明": "末日丧尸 × 组队修仙 · 独立版后端配置。${HERE} = 本文件所在目录，可移植 ✓",
+  "_路径说明": "★ 路径一律用【正斜杠】✗ 不要用反斜杠 ✓ Windows 和 Linux 都认正斜杠 ✓ 反斜杠到 Linux 上会把路径弄坏 ✓",
+  "host": "0.0.0.0",
+  "http_port": 8899,
+  "ws_port": 8900,
+  "db": "${HERE}/game.db",
+  "web_root": "${HERE}/../web",
+  "version": "0.1.0",
+  "admin_password": "xiuxian-admin",
+  "allow_player_debug": false,
+  "_管理员说明": "管理页在 /admin；密码就是上面的 admin_password，★ 对外开服前一定要改掉 ✗；allow_player_debug=true 会把\"刷怪/发武器\"还给玩家（只该在本地调试时开 ✓）",
+  "_端口说明": "云服务器上要放行【两个】端口：http_port（网页 + 接口）和 ws_port（游戏通道）✗ 只开一个会出现\"能进游戏但打怪没反应\"✓",
+  "test_name_keys": [
+    "TestCase",
+    "浏览器",
+    "背包",
+    "武器甲",
+    "格子",
+    "验锁",
+    "死亡甲",
+    "动作甲",
+    "新人乙",
+    "假死",
+    "测试"
   ],
-  "_cloud": "云服务器上把 group 改成 346049634（或者用环境变量 XIUXIAN_QQ_GROUP=346049634，优先级更高 ✓）",
-  "_说明2": "round503：文字版只留【上线消息】✗ 其它（击杀/魔气/装备/系统）全部不转 ✓ 战报改发图 ✓"
- },
- "battleReport": {
-  "_说明": "每 15 分钟往 QQ 群发一张「修仙战报」图片 ✗ 没数据就不发 ✓；enabled=false 就完全关闭",
-  "enabled": false,
-  "intervalSec": 900,
-  "group": "1103784008",
-  "onebotHost": "127.0.0.1",
-  "onebotPort": 4999,
-  "onebotToken": "N7hyNbxaEVK2f2PxL_75gYlk",
-  "_cloud": "云服把 group 改成 346049634，然后把 enabled 改成 true"
- }
+  "_测试账号说明": "名字里含上面这些关键词的，管理页默认不显示 ✓；用「清理测试账号」可以真的删掉（只删离线的 ✓ 会二次确认 ✓）",
+  "qq": {
+    "_说明": "把滚动通知 / 玩家上线转发到 QQ 群（走 qq-forwarder 的 /api/bridge/send）★ 本地服=1103784008（小D助手·测试群）✗ 云服=346049634（主群）✓ deploy 脚本故意不传 config.json，所以两边各存各的 ✓",
+    "_怎么用": "enabled=false 就一句话都不发 ✓ 管理页也能开/关 ✓ 群里没消息时先看 /api/health 的 qq 段 ✓",
+    "enabled": true,
+    "url": "http://43.138.171.250:8099/api/bridge/send",
+    "token": "N7hyNbxaEVK2f2PxL_75gYlk",
+    "group": "1103784008",
+    "minIntervalMs": 1500,
+    "kinds": [
+      "join"
+    ],
+    "_cloud": "云服务器上把 group 改成 346049634（或者用环境变量 XIUXIAN_QQ_GROUP=346049634，优先级更高 ✓）",
+    "_说明2": "round503：文字版只留【上线消息】✗ 其它（击杀/魔气/装备/系统）全部不转 ✓ 战报改发图 ✓",
+    "stat_token": "xstat_9f3kBq7Lm2Zp"
+  },
+  "battleReport": {
+    "_说明": "每 15 分钟往 QQ 群发一张「修仙战报」图片 ✗ 没数据就不发 ✓；enabled=false 就完全关闭",
+    "enabled": false,
+    "intervalSec": 900,
+    "group": "1103784008",
+    "onebotHost": "127.0.0.1",
+    "onebotPort": 4999,
+    "onebotToken": "N7hyNbxaEVK2f2PxL_75gYlk",
+    "_cloud": "云服把 group 改成 346049634，然后把 enabled 改成 true"
+  }
 }

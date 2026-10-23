@@ -1,0 +1,13 @@
+{
+  "_说明": "把这一段加到 qq-forwarder 的 config.json 里（不是游戏的 config.json）",
+  "statQuery": {
+    "enabled": true,
+    "url": "http://127.0.0.1:8899/api/qq/stat",
+    "token": "xstat_9f3kBq7Lm2Zp",
+    "cooldownSec": 8
+  },
+  "_云端说明": {
+    "url": "云端要填云服务器的地址",
+    "token": "和 /opt/xiuxian2d/server/config.json 里 qq.stat_token 一致"
+  }
+}

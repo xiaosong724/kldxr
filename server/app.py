@@ -278,6 +278,12 @@ class Api(BaseHTTPRequestHandler):
         #   GET /download/app.apk → 下载 APK 本体
         #   ★ 下载地址是【相对路径】✗ APK 自己拼上服务器地址 ✓
         #     这样本地服务器返回 local，云端返回 cloud，同一份 APK 都适用 ✓
+        # ★★★ 2026-10-25：QQ 群「x 名字」属性查询 ✗ 返回 PNG 图片 ✓
+        #   GET /api/qq/stat?name=角色名[&token=xxx]
+        #   ★ 返回 PNG（不是 JSON）✗ 直接给 qq-forwarder 拿去发群 ✓
+        #   ★ 查不到返回 404 + JSON ✗ 调用方据此回"查无此人" ✓
+        if path == '/api/qq/stat':
+            return self.api_qq_stat()
         if path == '/api/apk':
             return self.api_apk_info()
         if path == '/api/announce/latest':
@@ -1737,6 +1743,84 @@ class Api(BaseHTTPRequestHandler):
 
     def _apk_file(self):
         return os.path.join(self._apk_dir(), 'app.apk')
+
+    def api_qq_stat(self):
+        """QQ 群查询玩家属性 ✗ 返回 PNG
+
+        ★ 参数：name（角色名，必填）、token（可选，配置了才校验）
+        ★ 为什么返回 PNG 而不是 JSON：
+          qq-forwarder 的插件拿到图片直接发群 ✗ 少一次转换 ✓
+          （ggo-forwarder 的 /card 也是这个思路 ✓）
+        ★ 复用服务端的 _stat_sheet ✗ 不自己重算属性 ✓
+        """
+        try:
+            import qq_statcard
+            import qq_stat_shim
+        except Exception as e:
+            import traceback
+            try:
+                print('[qqstat] 模块导入失败：')
+                traceback.print_exc()
+            except Exception:
+                pass
+            return self._send(500, {'ok': False, 'error': 'qqstat 模块不可用: %s' % (e,)})
+
+        try:
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query or '')
+            name = (qs.get('name') or [''])[0].strip()
+            if not name:
+                return self._send(400, {'ok': False, 'error': '缺 name 参数'})
+            # 长度限制（防注入 ✗ 非法名字直接拒 ✓）
+            if len(name) > 24:
+                return self._send(400, {'ok': False, 'error': '名字太长'})
+
+            # ★ token 校验（和 config.json 里的 qq_stat_token 对得上才行）
+            _want = ''
+            try:
+                _want = str(((self.cfg or {}).get('qq') or {}).get('stat_token') or '')
+            except Exception:
+                _want = ''
+            if _want:
+                _got = (qs.get('token') or [''])[0]
+                if _got != _want:
+                    return self._send(403, {'ok': False, 'error': 'token 不对'})
+
+            _db = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'game.db')
+
+            # ① 先看这个角色在不在（顺便拿基础信息）
+            _data = qq_statcard.load_role_data(_db, name)
+            if not _data:
+                return self._send(404, {'ok': False, 'error': '查无此人', 'name': name})
+
+            # ② 算属性（复用服务端公式 ✗ 失败就用空属性继续画 ✓）
+            stats = None
+            try:
+                if self.world is not None:
+                    stats = qq_stat_shim.stat_sheet_for(self.world, _db, name)
+            except Exception as _se:
+                try:
+                    print('[qqstat] 属性计算失败（继续画基础信息）：%r' % (_se,))
+                except Exception:
+                    pass
+
+            # ③ 出图
+            png = qq_statcard.render_stat_card(_db, name, stats=stats)
+            if not png:
+                return self._send(500, {'ok': False, 'error': '生成图片失败'})
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/png')
+            self.send_header('Content-Length', str(len(png)))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(png)
+        except Exception as e:
+            try:
+                print('[qqstat] 查询失败：%r' % (e,))
+            except Exception:
+                pass
+            return self._send(500, {'ok': False, 'error': '服务器内部错误'})
 
     def api_apk_info(self):
         """APK 版本信息（公开 ✓ 不需要登录）
