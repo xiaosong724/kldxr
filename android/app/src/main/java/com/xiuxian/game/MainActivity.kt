@@ -39,8 +39,12 @@ import android.widget.FrameLayout
 class MainActivity : Activity() {
 
     companion object {
-        /** ★ 改这里：跑服务器那台电脑的地址（末尾要带 / ） */
-        const val GAME_URL = "http://192.168.31.180:8899/"
+        /** ★ 2026-10-24：地址由 【gradle flavor】决定 ✗ 不在这里写死 ✓
+               local flavor → http://192.168.31.180:8899/
+               cloud flavor → http://43.138.171.250:8899/
+            两种包的 applicationId 不同 ✗ 可以同时装在一台手机上 ✓
+            （以前写死在这里 ✗ 编云端版要手改代码 → 容易忘、容易搞混 ✓）*/
+        val GAME_URL: String = com.xiuxian.game.BuildConfig.SERVER_URL
 
         /** 维护页上的自动重试间隔（秒）*/
         private const val RETRY_SEC = 15

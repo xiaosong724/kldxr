@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">块来修仙测试版</string>
+    <!-- 实际名字由 flavor 的 resValue 覆盖：
+         local → 修仙·本地服
+         cloud → 修仙·云端服
+         这里只是兜底（编译期一定被覆盖 ✓） -->
+    <string name="app_name">修仙·本地服</string>
 </resources>

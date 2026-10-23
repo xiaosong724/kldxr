@@ -68,3 +68,8 @@ server/_skill_port.json
 # ★ 2026-10-22：这俩是工具运行产生的东西（浏览器 profile / 临时），绝不能进库
 .videotools/
 tmp/
+/修仙-本地服.apk
+/修仙-云端服.apk
+/块来修仙-测试版.apk
+/块来修仙-云端版.apk
+/web/apk/app.apk
