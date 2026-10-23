@@ -91,11 +91,12 @@ REVIVE_INVULN = 1.5
 PARTY_MAX = 5                     # round 244: user wants 5 (was 3)
 PARTY_SHARE = 0.10            # 队友分到的经验比例（该僵尸经验的 10% ✓）
 # ★★ 第 118 轮（用户："基础减伤不能低于实际受到伤害的 10%，改成 30%"）★★
-#   含义：不管减伤堆多高，最后至少要挨【原来伤害的 30%】✗
-#   → 也就是减伤最多只能减掉 70% ✓（原来是 90% ✗ 太狠了 ✓）
+#   ★ 2026-10-23（用户："减伤上限 80%"）→ 地板 30% → 20%
+#     地板必须 ≤ (1 − 减伤上限) ✗ 否则属性页写着 80%、实际只减到 70% ✓
+#   含义：不管减伤堆多高，最后至少要挨【原来伤害的 20%】
 #   为什么抽成常量：原来这个 0.10 在两处各写了一遍 ✗（防具一处 / 天赋一处 ✓）
 #     改一个漏一个的坑等着呢 ✗ —— 现在只有这一个地方定义 ✓
-DMG_FLOOR = 0.30
+DMG_FLOOR = 0.20
 # ★★ 第 186 轮修的 bug：这个常量上一轮【根本没插进去】✗
 #   而 safetp 分支里用了它 → NameError → 被意图派发的 try 吞掉 → 静默失效 ✓
 #   表现：点传送没反应、界面上也不出读条 ✓（因为客户端永远收不到 tpcast ✓）
@@ -1577,7 +1578,8 @@ class World(object):
             add('生存', '灵气上限', qimax, '点', 0, qimax - tal_qi, '人物', 0, tal_qi)
         except Exception:
             pass
-        add('生存', '减伤', float(eff.get('dr') or 0) + gear_dr, '%', 70,
+        # ★ 2026-10-23（用户）：减伤上限 70 → 80
+        add('生存', '减伤', min(80.0, float(eff.get('dr') or 0) + gear_dr), '%', 80,
             0, '', gear_dr, float(eff.get('dr') or 0))
 
         # ---------- 输出 ----------
@@ -1591,9 +1593,11 @@ class World(object):
                 max(0.0, atk_v - gear_atk - tal_atk), '人物', gear_atk, tal_atk)
         except Exception:
             pass
-        add('输出', '暴击率', float(eff.get('crit') or 0), '%', 30, 0, '',
+        # ★ 2026-10-23（用户）：暴击率上限 30 → 40
+        add('输出', '暴击率', min(40.0, float(eff.get('crit') or 0)), '%', 40, 0, '',
             0, float(eff.get('crit') or 0))
-        add('输出', '爆伤', 150.0 + float(eff.get('critdmg') or 0), '%', 250,
+        # ★ 2026-10-23（用户）：爆伤上限 250 → 500
+        add('输出', '爆伤', min(500.0, 150.0 + float(eff.get('critdmg') or 0)), '%', 500,
             150, '基础', 0, float(eff.get('critdmg') or 0))
         add('输出', '穿透', float(eff.get('pen') or 0), '%', 0, 0, '',
             0, float(eff.get('pen') or 0))
@@ -1618,9 +1622,13 @@ class World(object):
         add('手感', '攻击间隔', _iv, '秒', 0, 0, '', 0, 0)
 
         # ---------- 附加 ----------
-        for key, nm in (('dodge', '闪避'), ('hit', '命中'),
-                        ('anticrit', '免爆'), ('anticritdmg', '抗爆')):
-            add('附加', nm, float(eff.get(key) or 0), '%', 30, 0, '',
+        # ★ 2026-10-23（用户）：闪避上限 30 → 50；命中/免爆/抗爆是对抗那一半，本来就没上限（0）
+        #   这里原来是"四个共用一个 cap=30" ✗ 全都被显示成上限 30 ✓
+        for key, nm, _cap in (('dodge', '闪避', 50),
+                              ('hit', '命中', 0),
+                              ('anticrit', '免爆', 0),
+                              ('anticritdmg', '抗爆', 0)):
+            add('附加', nm, float(eff.get(key) or 0), '%', _cap, 0, '',
                 0, float(eff.get(key) or 0))
         return rows
 
@@ -6346,9 +6354,11 @@ class World(object):
             0, '点', '生存')
         # ★ round474（用户定：减伤%词条 + 天赋，总上限仍然 50%）
         _dr_all = tal('dr') + g('dr_pct')
-        add('dr', '减伤（百分比）', min(50.0, _dr_all), 0, g('dr_pct'), tal('dr'), 50, '%', '生存')
-        add('dodge', '闪避', _st['dodge'] + tal('dodge'), 0, float(_st['dodge']),
-            tal('dodge'), 30, '%', '生存')
+        # ★ 2026-10-23（用户："属性文案上限也要跟着调整"）50 → 80
+        add('dr', '减伤（百分比）', min(80.0, _dr_all), 0, g('dr_pct'), tal('dr'), 80, '%', '生存')
+        # ★ 2026-10-23（用户）：闪避上限 30 → 50
+        add('dodge', '闪避', min(50.0, _st['dodge'] + tal('dodge')), 0, float(_st['dodge']),
+            tal('dodge'), 50, '%', '生存')
         # ★ round474：免爆 / 抗爆 / 命中 / 穿透 都把装备词条算进去 ✓
         add('anticrit', '免爆', g('anticrit') + tal('anticrit'), 0, g('anticrit'), tal('anticrit'), 0, '%', '生存')
         # ★ round586：全能吸血 = 词条（vamp_all/lifesteal）+ C3 被动，合并显示一行
@@ -6363,12 +6373,13 @@ class World(object):
         add('atk', '攻击力', float(self._atk_of(q)), float(mobs.player_atk(lv)),
             float(self._atk_of(q) - mobs.player_atk(lv) - tal('atk')), tal('atk'), 0, '点', '输出')
         _crit_base = mobs.CRIT_CHANCE * 100.0
-        add('crit', '暴击率', _crit_base + g('crit_pt') + tal('crit'),
-            _crit_base, g('crit_pt'), tal('crit'), 30, '%', '输出')
-        # ★ round473：爆伤显示口径 = 【暴击伤害倍率】✗ 基础 150% · 上限 250% ✓
+        # ★ 2026-10-23（用户："文案上限也要跟着调整"）暴击率上限 30 → 40
+        add('crit', '暴击率', min(40.0, _crit_base + g('crit_pt') + tal('crit')),
+            _crit_base, g('crit_pt'), tal('crit'), 40, '%', '输出')
+        # ★ round473：爆伤显示口径 = 【暴击伤害倍率】✗ 基础 150% · 上限 500%（2026-10-23）
         _cd_b = float(mobs.CRIT_MUL) * 100.0
-        _cd_v = min(250.0, _cd_b + g('crit_dmg') + tal('critdmg'))
-        add('critdmg', '爆伤', _cd_v, _cd_b, g('crit_dmg'), tal('critdmg'), 250, '%', '输出')
+        _cd_v = min(500.0, _cd_b + g('crit_dmg') + tal('critdmg'))
+        add('critdmg', '爆伤', _cd_v, _cd_b, g('crit_dmg'), tal('critdmg'), 500, '%', '输出')
         # ★ round473：抗爆（降低受到的暴击伤害，无上限 ✓）
         add('anticritdmg', '抗爆', g('anticritdmg') + tal('anticritdmg'),
             0.0, g('anticritdmg'), tal('anticritdmg'), 0, '%', '生存')
@@ -6386,12 +6397,12 @@ class World(object):
         # ★★★ round470（用户："攻速的上限是多少根据武器定的上限，还是人物？
         #   并且在属性页面要显示玩家当前的攻速，要算上武器和词条加成"）★★★
         #   答案：【不是按武器、也不是按人物】✗ 是一个全局常量 ✓
-        #     weapons.S_MIN = 0.6 · weapons.S_MAX = 2.2 · BASE_INTERVAL = 0.62
-        #     间隔 = 0.62 / S → 最快 0.282 秒（×2.2）· 最慢 1.033 秒（×0.6）
+        #     weapons.S_MIN = 0.6 · weapons.S_MAX = 4.4 · BASE_INTERVAL = 0.62
+        #     间隔 = 0.62 / S → 最快 0.141 秒（×4.4）· 最慢 1.033 秒（×0.6）
         #     每把武器只影响【基础 S】（匕首 1.45、锤 0.66…）✗ 词条在基础上乘 ✓
         #   ★ 顺手修个 bug：这里以前写的上下限是 0.55~1.8 ✗ 和 weapons.py 的 0.6~2.2 不一致 ✗✗
         _S_MIN = float(getattr(weapons, 'S_MIN', 0.6))
-        _S_MAX = float(getattr(weapons, 'S_MAX', 2.2))
+        _S_MAX = float(getattr(weapons, 'S_MAX', 4.4))
         _BASE_IV = float(getattr(weapons, 'BASE_INTERVAL', 0.62))
         _s_base = 1.0
         try:
@@ -6408,8 +6419,8 @@ class World(object):
         add('interval', '攻击间隔', round(_interval, 2),
             round(_BASE_IV / max(0.1, _s_base), 2), round(_interval - _BASE_IV / max(0.1, _s_base), 2),
             0.0, 0, '秒', '手感', bn='武器')
-        # ★ round471（用户："攻速上限 2.2 是一秒攻击 2.2 次吗？"）
-        #   不是 ✗ ×2.2 = 0.28 秒一刀 = 3.55 刀/秒 ✓
+        # ★ round471（用户："攻速上限是一秒攻击几次吗？"）
+        #   不是 ✗ ×4.4 = 0.141 秒一刀 = 7.1 刀/秒 ✓（2026-10-23 上限 2.2 → 4.4）
         #   → 直接把"每秒几刀"写出来 ✗ 看不混 ✓
         _iv_b = _BASE_IV / max(0.1, _s_base)
         add('aps', '每秒攻击', round(1.0 / _interval, 2),
@@ -10114,7 +10125,8 @@ class World(object):
             self._mob_evt(m, 'crit')
         # ★★★ round411（用户："剩下的天赋属性也做出来"）★★★
         #   ① 闪避：天赋闪避 > 0 就有概率完全不挨这一口 ✓
-        _dodge = max(0.0, min(80.0, self._tal(p, 'dodge') - float(getattr(m, 'hit_pt', 0.0) or 0.0)))
+        # ★ 2026-10-23（用户："闪避上限 50%"）：原来这里写死 80 宽松上限 ✗ 现在和天赋表一致 = 50
+        _dodge = max(0.0, min(50.0, self._tal(p, 'dodge') - float(getattr(m, 'hit_pt', 0.0) or 0.0)))
         if float((getattr(p, 'skTA', {}) or {}).get('gale', 0) or 0) > 0:
             _dodge += 30.0
         if _dodge > 0 and random.random() * 100.0 < _dodge:
@@ -10169,7 +10181,7 @@ class World(object):
         #   顺序：先扣固定的 → 再打百分比 → 再吃 10% 地板 ✓
         # ★ round474：百分比减伤 = 天赋 + 防具词条【减伤%】，合计上限 50% ✓
         _tdr = float((p.talEff or {}).get('dr') or 0.0) + self._aff(p, 'dr_pct')
-        _tdr = max(0.0, min(50.0, _tdr - float(getattr(m, 'pen_pt', 0.0) or 0.0)))
+        _tdr = max(0.0, min(80.0, _tdr - float(getattr(m, 'pen_pt', 0.0) or 0.0)))
         if _tdr > 0:
             dv = int(round(dv * (1.0 - _tdr / 100.0)))
         # ★★ 第 118 轮：全局地板（所有减伤算完之后统一过 ✓）★★
@@ -10327,7 +10339,7 @@ class World(object):
             dv = max(max(1, int(round(_dv0 * DMG_FLOOR))), int(round(dv - _st['dr'])))
         # ★ round411：天赋减伤 = 他的减伤 − 我的穿透（对抗相减 ✗ 战斗时才算 ✓）
         # ★ round474：两边都加上装备词条（减伤% / 穿透），合计上限 50% ✓
-        _tdr = max(0.0, min(50.0,
+        _tdr = max(0.0, min(80.0,
                             (self._tal(q, 'dr') + self._aff(q, 'dr_pct'))
                             - self._tal(p, 'pen')))
         if _tdr > 0:

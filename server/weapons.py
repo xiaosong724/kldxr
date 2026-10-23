@@ -44,7 +44,7 @@ CLAMP_HI = 1.20
 RANGED = ('bow',)
 
 # 攻速上下限（§5.1：防"一秒十刀" ✗）
-S_MIN, S_MAX = 0.6, 2.2
+S_MIN, S_MAX = 0.6, 4.4   # 2026-10-23: 攻速上限 2.2 -> 4.4
 BASE_INTERVAL = 0.62      # = 现在写死的 ATK_CD ✓
 BASE_WINDUP = 0.45        # 起手（§5.1）
 

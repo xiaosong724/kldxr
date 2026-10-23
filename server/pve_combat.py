@@ -4,7 +4,7 @@
 只放纯函数；世界层负责读玩家天赋/词条。
 """
 
-DMG_FLOOR = 0.30
+DMG_FLOOR = 0.20      # 2026-10-23: 减伤上限 80% → 地板 30% -> 20%（必须和 world.DMG_FLOOR 一致）
 
 
 def clamp(v, lo, hi):
@@ -36,7 +36,7 @@ def crit_chance(crit_pt, anticrit):
 def crit_mul(crit_dmg, anticritdmg):
     # 暴击基础 1.5 倍，额外暴伤按百分比加，抗爆先减
     extra = max(0.0, float(crit_dmg or 0.0) - float(anticritdmg or 0.0))
-    return min(2.5, 1.5 + extra / 100.0)
+    return min(5.0, 1.5 + extra / 100.0)   # 2026-10-23: cap 250% -> 500%
 
 
 def hit_mob(raw, m, hit_pt, pen_pt, crit_pt, crit_dmg):

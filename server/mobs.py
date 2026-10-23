@@ -96,7 +96,7 @@ ATK_CD = 0.62             # 玩家挥刀冷却
 ATK_RANGE = 2.4           # 够得着的距离
 ATK_ARC = 1.05            # 正前方扇形半角（弧度）≈ 60°，也就是正前方 120°
 CRIT_CHANCE = 0.2         # 暴击率（§5）
-CRIT_MUL = 1.5            # 爆伤 150%（§5：150% + 爆伤%，上限 250%，P3 再上装备）
+CRIT_MUL = 1.5            # 爆伤 150%（上限 500%，2026-10-23）
 
 # §3.3 职业表（P2 第 39 轮：这 8 个已经各自有【外观】了 —— 见方案 §3.3.1）
 #   ★★ 这 8 个名字必须和客户端 web/core/game.js 的 MOB_CLASSES 键【对得上】★★
@@ -417,9 +417,9 @@ def roll_damage(atk_power, rng=None, crit_pt=0.0, crit_dmg=0.0):
     r = rng or random
     base = max(1.0, float(atk_power))
     # ★ 第 60 轮：暴击率/爆伤可以被【词条】改 ✓
-    #   爆伤上限 250%（方案 §5：150% + 爆伤%，上限 250% ✓）
+    #   爆伤上限 500%（2026-10-23 由 250% 上调）
     crit = r.random() < (CRIT_CHANCE + float(crit_pt or 0.0) / 100.0)
-    mul = min(2.5, CRIT_MUL + float(crit_dmg or 0.0) / 100.0)
+    mul = min(5.0, CRIT_MUL + float(crit_dmg or 0.0) / 100.0)   # 2026-10-23: cap 250% -> 500%
     dv = base * (mul if crit else 1.0)
     floor = base * 0.05
     if dv < floor:
