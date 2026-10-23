@@ -3695,8 +3695,8 @@ function skRender() {
       '<img src="' + (window.SKI ? SKI.icon(d.k, d.kind, 34) : '') + '" ' +
       'style="width:28px;height:28px;border-radius:7px;flex:0 0 28px;pointer-events:none">' +
       '<div style="font-size:12.5px;color:' + (owned ? '#eaf2fb' : '#8b97a6') + ';font-weight:700">' +
-      d.n + ((owned && d.tmax > 1) ? '<span style="font-size:9.5px;color:#8ee0a8"> ·' + _lt + '品</span>'
-        : ((!owned && d.tmax > 1) ? '<span style="font-size:9.5px;color:#7f8fa0"> ·最高' + d.tmax + '品</span>' : '')) +
+      d.n + ((owned && d.tmax > 1) ? '<span style="font-size:9.5px;color:#8ee0a8"> ·' + _lt + '阶</span>'
+        : ((!owned && d.tmax > 1) ? '<span style="font-size:9.5px;color:#7f8fa0"> ·最高' + d.tmax + '阶</span>' : '')) +
       '</div></div>' +
       '<div style="font-size:10px;color:#7f8fa0;margin-top:3px;line-height:1.5">' +
       (d.qi ? ('灵气 ' + d.qi + ' · ') : '') + (d.cd ? ('CD ' + d.cd + 's') : '无CD') +

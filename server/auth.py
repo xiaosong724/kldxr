@@ -717,14 +717,24 @@ def sell_item(cfg, role_id, item_id):
             if it.get('locked_by'):
                 return False, '\u8fd9\u4ef6\u4e1c\u897f\u6b63\u5728\u4ea4\u6613\u6240\u4e0a\u67b6\uff0c\u4e0d\u80fd\u5356', ''
             n = max(1, int(row[1] or 1))
+            # 2026-10-23: 皮肤卡一堆=同款多张 -> 卖一次只卖 1 张（别的材料仍整堆卖）
+            _is_skin_sell = (str(it.get('kind') or '') == 'skin')
+            _sell_n = 1 if _is_skin_sell else n
             try:
                 import value as valuemod
-                price = int(valuemod.value_of(it, n))
+                price = int(valuemod.value_of(it, _sell_n))
             except Exception:
                 return False, '\u7b97\u4e0d\u51fa\u4ef7\u683c', ''
             if price <= 0:
                 return False, '\u8fd9\u4ef6\u4e1c\u897f\u5356\u4e0d\u4e86\u94b1', ''
             # \u2605 \u4e00\u6761 DELETE \u5c31\u591f\uff08\u91d1\u5e01\u4e0d\u5199\u5e93 \u2717 \u6240\u4ee5\u4e0d\u9700\u8981\u591a\u8bed\u53e5\u4e8b\u52a1\uff09
+            if _is_skin_sell and n > 1:
+                # 只卖一张：stack-1，不删行
+                c.execute('UPDATE items SET stack = stack - 1'
+                          ' WHERE id=? AND role_id=? AND in_storage=0 AND stack > 1',
+                          (iid, role_id))
+                c.commit()
+                return True, price, str(it.get('name') or '物品')
             cur = c.execute('DELETE FROM items WHERE id=? AND role_id=? AND in_storage=0',
                             (iid, role_id))
             if cur.rowcount != 1:

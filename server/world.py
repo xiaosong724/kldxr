@@ -11243,7 +11243,7 @@ class World(object):
                 if _skm.tier_max(_k2) > 1:
                     _tr = random.choices([1, 2, 3, 4, 5], weights=[45, 27, 15, 9, 4])[0]
                 _it2 = {'name': '技能书·' + _skm.NAME.get(_k2, _k2) +
-                        ('' if _skm.tier_max(_k2) <= 1 else '（%d 品）' % _tr),
+                        ('' if _skm.tier_max(_k2) <= 1 else '（%d 阶）' % _tr),
                         'tier': _tr, 'kind': 'skillbook', 'key': _k2}
                 self._drop_one(p, m, _it2)
         except Exception as _ske:
@@ -12249,7 +12249,21 @@ class World(object):
         if not isinstance(it, dict) or not it.get('name'):
             raise _MktRollback('物品数据坏了（%r）' % (tag,))
         n = max(1, int(stack or 1))
-        if not it.get('slot'):
+        # ★ 2026-10-23（用户："皮肤卡一样的皮肤要堆叠"）：皮肤卡按 key 合堆
+        if str(it.get('kind') or '') == 'skin':
+            cur = db.execute(
+                'UPDATE items SET stack = stack + ?'
+                ' WHERE role_id=? AND in_storage=0'
+                "   AND json_extract(item_json,'$.kind')='skin'"
+                "   AND json_extract(item_json,'$.key')=?",
+                (n, role_id, str(it.get('key') or '')))
+            try:
+                hit0 = int(cur.rowcount or 0)
+            except Exception:
+                hit0 = 0
+            if hit0:
+                return
+        elif not it.get('slot'):
             cur = db.execute(
                 'UPDATE items SET stack = stack + ?'
                 ' WHERE role_id=? AND in_storage=0'
@@ -12311,8 +12325,28 @@ class World(object):
         except Exception:
             return
         is_equip = bool(it.get('slot'))          # 武器/防具 → 不堆叠 ✓
-        is_card = it.get('kind') in ('skin', 'skillbook')   # ★ 卡片/书一张一个 ✓
-        if not is_equip and not is_card:
+        _kind = str(it.get('kind') or '')
+        # ★★★ 2026-10-23（用户："皮肤卡一样的皮肤要在背包内堆叠起来"）★★★
+        #   以前 skin / skillbook 也被排除在堆叠之外 ✗ 每张卡占一行 ✓
+        #   现在：皮肤卡按【key】堆叠（同一款皮肤 → stack+1）✓
+        #        技能书仍然一张一个（品阶不同的书是不同东西 ✓）
+        is_card = (_kind == 'skillbook')
+        _is_skin = (_kind == 'skin')
+        if _is_skin:
+            # 同一款皮肤卡 → 堆到已有的那一行上（按 key 判，不按名字 ✓ 名字里没品阶）
+            cur = db.execute(
+                "UPDATE items SET stack = stack + 1"
+                " WHERE role_id=? AND in_storage=0"
+                "   AND json_extract(item_json,'$.kind')='skin'"
+                "   AND json_extract(item_json,'$.key')=?",
+                (role_id, str(it.get('key') or '')))
+            try:
+                _n0 = cur.rowcount
+            except Exception:
+                _n0 = 0
+            if _n0:
+                return
+        if not is_equip and not is_card and not _is_skin:
             # 同名同阶的材料（且必须是【材料】：slot 为空 ✓）→ stack + 1
             cur = db.execute(
                 "UPDATE items SET stack = stack + 1"
