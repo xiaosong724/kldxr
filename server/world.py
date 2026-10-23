@@ -7774,10 +7774,22 @@ class World(object):
         ps = list(self.players.values())
 
         # ---- ① 刷怪（节流 + 上限）----
+        #   ★ 2026-10-23（用户）：每轮补几只 = 按"个人刷怪上限"分档（见 _spawn_batch_of）
+        #     1~20 → 1 只 / 21~40 → 2 只 / 41~60 → 3 只 …… 上限越高补得越多 ✓
         self._spawn_acc += dt
         if ps and self._spawn_acc >= self.spawn_interval:
             self._spawn_acc = 0.0
-            for _ in range(mobs.SPAWN_PER_TRY):
+            # 这轮补多少只：取当前在线玩家里【最大】的那一档（人多时整体加快 ✓）
+            _batch = 1
+            for _pq in ps:
+                try:
+                    _b = self._spawn_batch_of(_pq)
+                except Exception:
+                    _b = 1
+                if _b > _batch:
+                    _batch = _b
+            _batch = max(_batch, int(mobs.SPAWN_PER_TRY or 1))
+            for _ in range(_batch):
                 _normal_n = sum(1 for _mm in self.mobs.values()
                                 if int(getattr(_mm, 'rank', 0) or 0) == 0)
                 if _normal_n >= self.mob_cap and not self._evict_far():
@@ -8260,6 +8272,22 @@ class World(object):
         self.mobs[str(self.mob_seq)] = _m
         if _rank:
             self._special_spawn_send(_m)
+
+    def _spawn_batch_of(self, q):
+        """★ 2026-10-23（用户）：每轮补怪数量按【个人刷怪上限】分档
+             1~20   → 每次补 1 只
+             21~40  → 每次补 2 只
+             41~60  → 每次补 3 只
+             61~80  → 4 只 …… 以此类推（上限每多 20，多补 1 只）
+           ★ 为什么按上限分档：上限高的人需要的怪多 ✗ 一次补 1 只永远追不上 ✓
+        """
+        try:
+            cap = int(self._cap_of(q))
+        except Exception:
+            cap = 8
+        if cap <= 0:
+            return 1
+        return max(1, int((cap + 19) // 20))     # 20→1、21→2、40→2、41→3、60→3、61→4
 
     def _cap_of(self, q):
         """这个玩家的僵尸上限（第 133 轮）—— 单人覆盖优先，否则用全局值 ✓"""
@@ -8788,7 +8816,10 @@ class World(object):
         return max(v, _tk)
 
     # ================= round293: gold =================
-    GOLD_CAP = 1000000000
+    # ★ 2026-10-23（用户："金币上限改成无限"）
+    #   GOLD_CAP 置为 None = 不再封顶、也不再自动换黄金 ✓
+    #   ★ 保留 GOLD_PER_BULLION（历史黄金还在，兑换照旧 ✓）
+    GOLD_CAP = None
     GOLD_PER_BULLION = 100000000
 
     # ================= round304b: exchange (tick-side, memory-authoritative) =================
@@ -9522,7 +9553,8 @@ class World(object):
             q.gold = cur + n
             applied = n
             try:
-                if q.gold > self.GOLD_CAP:
+                # ★ 2026-10-23：GOLD_CAP = None → 金币无上限，不再自动换黄金
+                if self.GOLD_CAP is not None and q.gold > self.GOLD_CAP:
                     k = (q.gold - self.GOLD_CAP) // self.GOLD_PER_BULLION
                     if k > 0 and self._give_bullion(q, k):
                         q.gold -= k * self.GOLD_PER_BULLION
