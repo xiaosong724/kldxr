@@ -11195,6 +11195,22 @@ function sysMsgEl() {
 /* 位置：默认在屏幕上方中间 ✗ 键位模式拖过就按存的来 ✓ */
 function sysMsgApplyPos() {
   var b = SYSMSG.el; if (!b) { return; }
+  /* ★ 2026-10-23：先看 SETCFG 里那份（和尺寸同一个存档 ✓）*/
+  try {
+    var _p = (typeof SETCFG !== 'undefined' && SETCFG && SETCFG.sysMsgPos) || null;
+    if (_p && (typeof _p.rx === 'number' || typeof _p.l === 'number')) {
+      var _W = Math.max(1, innerWidth), _H = Math.max(1, innerHeight);
+      var _l = (typeof _p.rx === 'number') ? _p.rx * _W : _p.l;
+      var _t = (typeof _p.ry === 'number') ? _p.ry * _H : (_p.t || 0);
+      var _w = b.offsetWidth || SYSMSG.W, _h = b.offsetHeight || SYSMSG.H;
+      _l = Math.max(4, Math.min(Math.max(4, _W - _w - 4), _l));
+      _t = Math.max(4, Math.min(Math.max(4, _H - _h - 4), _t));
+      b.style.left = _l.toFixed(1) + 'px';
+      b.style.top = _t.toFixed(1) + 'px';
+      b.style.transform = 'none';
+      return;
+    }
+  } catch (e6) { }
   if (typeof uiApplySavedPos === 'function') {
     if (uiApplySavedPos(b, 'sysmsg')) { return; }
   }
@@ -11465,7 +11481,17 @@ function sysMsgBindDrag() {
     var moved = st.moved; st = null;
     try { b.releasePointerCapture(e.pointerId); } catch (e3) { }
     if (moved && typeof uiSavePos === 'function') {
-      uiSavePos('sysmsg', parseFloat(b.style.left) || 0, parseFloat(b.style.top) || 0);
+      var _L = parseFloat(b.style.left) || 0, _T = parseFloat(b.style.top) || 0;
+      uiSavePos('sysmsg', _L, _T);
+      /* ★ 2026-10-23：再写一份进 SETCFG ✓ 和尺寸一起走同一个存档 ✓ */
+      try {
+        if (typeof SETCFG !== 'undefined' && SETCFG) {
+          SETCFG.sysMsgPos = { l: Math.round(_L), t: Math.round(_T),
+                               rx: +( _L / Math.max(1, innerWidth)).toFixed(5),
+                               ry: +( _T / Math.max(1, innerHeight)).toFixed(5) };
+          if (typeof saveSet === 'function') { saveSet(); }
+        }
+      } catch (e5) { }
     }
   });
 }
