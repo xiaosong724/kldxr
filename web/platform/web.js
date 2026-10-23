@@ -941,7 +941,7 @@ function mkMobUI(name, hpMax, alpha) {   // ★ 第 112 轮：第三个参数 = 
      · 不用的改成 display:none ✓（比 remove 便宜得多 ✓ 层还在、下次直接用 ✓）
      · 满了就抢最老的 ✓（一屏也看不清更多 ✗）
 */
-var NUM_CAP = 16, _numPool = [], _numNext = 0, _numLive = 0;
+var NUM_CAP = 32, _numPool = [], _numNext = 0, _numLive = 0;   /* ★ 2026-10-23：16→32 ✗ 多段伤害不再互相抢位 ✓ */
 function _numSlot() {
   if (_numPool.length < NUM_CAP) {
     var el = document.createElement('div');
@@ -975,34 +975,41 @@ function _numSlot() {
   .dmgNum{font-weight:900;letter-spacing:.6px;font-style:italic;
     background-clip:text;-webkit-background-clip:text;color:transparent;
     -webkit-text-fill-color:transparent;transform-origin:50% 60%}
-  /* ① 普通攻击 白→金 */
-  .dmgNum.dAtk{background-image:linear-gradient(180deg,#fff 0%,#fff0c0 40%,#ffc65a 64%,#9a5b00 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.92)) drop-shadow(0 0 9px rgba(255,170,30,.62))}
+  /* ★★★ 2026-10-23（用户："太透明 / 颜色气雾减少"）★★★
+     ★ 两个改动：
+       ① 渐变不再往【深色】收尾 ✗ 尾巴换成同色系亮色 ✓
+          （原来 #9a5b00 / #0b3f6b 那种深色压在暗背景上 = 发黑发透 ✓）
+       ② 光晕半径和透明度都减半（.62~.95 → .38~.55）✗ 不再"糊成一团气"✓
+     ★ 保留：向下 2~3px 的黑色实心投影（这是"可读性"，不能去掉 ✓）
+  */
+  /* ① 普通攻击 白→金（尾巴不要太深）*/
+  .dmgNum.dAtk{background-image:linear-gradient(180deg,#fff 0%,#fff8dc 38%,#ffd75e 66%,#e8a020 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 4px rgba(255,180,40,.34))}
   /* ② 普攻暴击 白→亮金→橙 */
-  .dmgNum.dAtkC{background-image:linear-gradient(180deg,#fffdf0 0%,#ffe066 32%,#ff8f00 68%,#7d2400 100%);
-    filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 20px rgba(255,110,0,.95))}
+  .dmgNum.dAtkC{background-image:linear-gradient(180deg,#fff 0%,#fff0a0 32%,#ffb020 68%,#e05a00 100%);
+    filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 8px rgba(255,120,0,.48))}
   /* ③ 技能伤害 白→青→蓝 */
-  .dmgNum.dSk{background-image:linear-gradient(180deg,#fff 0%,#d8f4ff 36%,#4fc3ff 66%,#0b3f6b 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.92)) drop-shadow(0 0 12px rgba(60,190,255,.75))}
+  .dmgNum.dSk{background-image:linear-gradient(180deg,#fff 0%,#e8f8ff 36%,#66ccff 66%,#2a8cc8 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 5px rgba(70,190,255,.38))}
   /* ④ 技能暴击 白→品红→紫 */
-  .dmgNum.dSkC{background-image:linear-gradient(180deg,#fff 0%,#ffd0f6 30%,#ff37c8 64%,#5c0060 100%);
-    filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 24px rgba(255,60,200,.95))}
+  .dmgNum.dSkC{background-image:linear-gradient(180deg,#fff 0%,#ffe4fa 30%,#ff5ad0 64%,#c02a9a 100%);
+    filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 10px rgba(255,80,200,.5))}
   /* ⑤ 玩家受伤 白→红 */
-  .dmgNum.dHurt{background-image:linear-gradient(180deg,#fff2f2 0%,#ff8a80 34%,#e01a1a 66%,#5a0000 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 14px rgba(255,30,30,.8))}
+  .dmgNum.dHurt{background-image:linear-gradient(180deg,#fff 0%,#ffc4c4 34%,#f03030 66%,#c01010 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 6px rgba(255,40,40,.42))}
   /* ⑥ 治疗/吸血 白→薄荷绿 */
-  .dmgNum.dHeal{background-image:linear-gradient(180deg,#f4fff6 0%,#a8f5bd 36%,#2ecc71 66%,#0a4a24 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.9)) drop-shadow(0 0 12px rgba(60,220,120,.72))}
+  .dmgNum.dHeal{background-image:linear-gradient(180deg,#fff 0%,#ccffe0 36%,#4ade80 66%,#22a050 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.92)) drop-shadow(0 0 5px rgba(70,220,130,.38))}
   /* ⑦ 经验/突破 白→淡蓝 */
-  .dmgNum.dExp{background-image:linear-gradient(180deg,#fff 0%,#dbe9ff 36%,#7fb2ff 66%,#123a7a 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.9)) drop-shadow(0 0 12px rgba(110,160,255,.75))}
-  /* ⑧ 武器特效 白→青绿（不斜体，和数字区分）*/
-  .dmgNum.dFx{background-image:linear-gradient(180deg,#fff 0%,#d6fff2 36%,#3ddcb0 66%,#0a5644 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.88)) drop-shadow(0 0 9px rgba(60,220,180,.55));
+  .dmgNum.dExp{background-image:linear-gradient(180deg,#fff 0%,#e4f0ff 36%,#8cc0ff 66%,#4a7fd0 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.92)) drop-shadow(0 0 5px rgba(120,170,255,.38))}
+  /* ⑧ 武器特效 白→青绿（不斜体）*/
+  .dmgNum.dFx{background-image:linear-gradient(180deg,#fff 0%,#dcfff5 36%,#4fe0bc 66%,#1a9c80 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.9)) drop-shadow(0 0 4px rgba(70,220,180,.3));
     font-style:normal}
   /* ⑨ 击败/复活 纯白银灰 */
-  .dmgNum.dSys{background-image:linear-gradient(180deg,#fff 0%,#e9eef5 42%,#a9b6c6 70%,#2b3440 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.9)) drop-shadow(0 0 8px rgba(200,220,255,.45))}
+  .dmgNum.dSys{background-image:linear-gradient(180deg,#fff 0%,#f0f4fa 42%,#c0ccda 70%,#7a8898 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.92)) drop-shadow(0 0 4px rgba(200,220,255,.28))}
   `;
   document.head.appendChild(st);
 })();
@@ -1027,7 +1034,7 @@ var DMG_MOTION = {
 
 function _numFlyAt(txt, color, sx, sy, big, life, px, cls, crit) {
   var o = _numSlot();
-  o.busy = true; o.life = life; o.x0 = sx; o.y0 = sy;
+  o.busy = true; o.life = life; o.x0 = sx; o.y0 = sy; o.drift = undefined;
   o.el.textContent = txt;
   o.el.style.display = 'block';
   o.el.style.color = color;
@@ -1056,7 +1063,10 @@ function _numFlyAt(txt, color, sx, sy, big, life, px, cls, crit) {
         var _y = o.y0 + _dy - (o.el.className && o.el.className.indexOf('dmgNum') >= 0 ? 62 : 46) *
                  (o.el.className && o.el.className.indexOf('dmgNum') >= 0
                     ? (1 - Math.pow(1 - k, 1.9)) : k);
-        o.el.style.transform = 'translate3d(' + o.x0.toFixed(1) + 'px,' +
+        /* ★ 2026-10-23：上升时往自己那个方向再偏一点 ✗ 不会排成一条直线 ✓ */
+        if (o.drift === undefined) { o.drift = (Math.random() * 40 - 20); }
+        var _xx = o.x0 + o.drift * k;
+        o.el.style.transform = 'translate3d(' + _xx.toFixed(1) + 'px,' +
           _y.toFixed(1) + 'px,0)' + (_s !== 1 ? ' scale(' + _s.toFixed(3) + ')' : '');
         o.el.style.opacity = String(1 - k);
         requestAnimationFrame(loop);
@@ -1088,6 +1098,25 @@ function _numFlyAt(txt, color, sx, sy, big, life, px, cls, crit) {
 }
 /* 老接口保留 ✓ 内部全部走池 */
 function _numProject(x, y, z, txt, color, big, life, px, cls, crit) {
+  /* ★★★ 2026-10-23（用户："显示也过于集中"）★★★
+     ★ 病根：同一只怪的多段伤害（普攻+溅射+词条特效）坐标完全一样 ✗
+       y 都是 2.4 → 数字精确叠在一起，只能看到最后一个 ✓
+     ★ 修：每个飘字加【随机散布】
+       · 水平 ±0.9 米（屏幕上大约 ±40px）
+       · 垂直 ±0.55 米
+       · 再给一个【小延迟】（0~90ms）✗ 同时弹出的会错开一点点 ✓
+     ★ 为什么不用"错开位置表"：位置表治不了"同一帧来 5 条"✗
+       随机散布最省事、也不会有规律感 ✓ */
+  var _sx = (Math.random() * 1.8 - 0.9);
+  var _sy = (Math.random() * 1.1 - 0.55);
+  var _delay = Math.floor(Math.random() * 90);
+  if (_delay > 4) {
+    setTimeout(function () { _numProjectNow(x + _sx, y + _sy, z, txt, color, big, life, px, cls, crit); }, _delay);
+    return;
+  }
+  _numProjectNow(x + _sx, y + _sy, z, txt, color, big, life, px, cls, crit);
+}
+function _numProjectNow(x, y, z, txt, color, big, life, px, cls, crit) {
   if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
   var v = REUSE_V3.v.set(x, y, z).project(cam);
   if (v.z < -1 || v.z > 2) { return; }
