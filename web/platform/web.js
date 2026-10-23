@@ -652,7 +652,9 @@ var _actx = null, _aVoices = 0, _aGestured = false;
    之前我只在播放那一刻 resume ✗ 而那时可能已经错过了手势窗口 ✗
    → 现在监听【第一次】点击/触摸/按键 → 立即 resume ✓ 一次性 ✗不重复绑 ✗ */
 function _aGesture() {
-  if (_aGestured) { return; }
+  /* ★ 2026-10-24：不再"只做一次"✗ 每次手势都可以尝试恢复 ✓
+     （手机切后台/来电后 AudioContext 会重新变 suspended ✓ 需要再唤醒 ✓）
+     ★ 但只在【真的挂起时】才调用 resume ✗ 正在跑就不动它 ✓ 零开销 ✓ */
   _aGestured = true;
   try {
     var ac = audioCtx();
@@ -822,7 +824,16 @@ function sfx(name, volScale, ch) {
        → 僵尸打你 → 挨打音效 / 挥砍音效全都在响 ✓ 而你还停在登录界面 ✓
      修：没登录就一声都不出 ✓（一个判断管住所有音效 ✓ 最省事也最不容易漏 ✓）*/
   if (typeof WSC !== 'undefined' && !WSC.role) { return; }
-  if (!_audioUnlocked) { unlockAudio(); }
+  /* ★★★ 2026-10-24（用户贴的警告："The AudioContext was not allowed to start"）★★★
+     ★ 真 bug：这里原来调的是 _aGesture() ✗ 而这个函数【根本不存在】✓
+       项目里真实的函数叫 _aGesture() ✓ 名字对不上 → 每次进 sfx 都抛
+       ReferenceError（被外层 try 吞掉看不见）→ 手势解锁【从来没生效过】✓✓
+     ★ 顺带：挂起状态下【直接不播】✗ 不去碰 resume ✓
+       浏览器只允许在【用户手势】里 resume ✗ 这里不是手势 → 调了也白调，
+       还会刷一条警告 ✓ 现在挂起就静默返回 ✓ 等真正的点击/按键把它唤醒 ✓ */
+  _aGesture();
+  var _ac0 = audioCtx();
+  if (_ac0 && _ac0.state !== 'running') { return; }
   var bank = SFX_BANK[name];
   /* ★ round443：这个音效还在"待加载"里 → 当场拉它（不进排队 ✗ 避免开了一半才响 ✓）*/
   if ((!bank || !bank.length) && SFX_LAZY[name]) {
@@ -1487,7 +1498,7 @@ function bindInput() {
   var cv = document.getElementById('cv'), atk = document.getElementById('atk');
   // ★ 首次触摸解锁音频（浏览器要求 ✓）
   function firstTouch() {
-    unlockAudio();
+    _aGesture();
     document.removeEventListener('touchstart', firstTouch);
     document.removeEventListener('mousedown', firstTouch);
   }
@@ -5159,7 +5170,7 @@ function openSet(wantTab) {
     var sd = document.createElement('div');
     sd.className = 'opt' + (SFX_ON ? ' on' : '');
     sd.innerHTML = '音效 ' + (SFX_ON ? '开' : '关');
-    var st = function (e) { if (e) { e.preventDefault(); } SFX_ON = !SFX_ON; SETCFG.sfx = SFX_ON; if (SFX_ON) { unlockAudio(); sfx('hit'); } saveSet(); openSet(); };
+    var st = function (e) { if (e) { e.preventDefault(); } SFX_ON = !SFX_ON; SETCFG.sfx = SFX_ON; if (SFX_ON) { _aGesture(); sfx('hit'); } saveSet(); openSet(); };
     sd.addEventListener('touchstart', st, { passive: false }); sd.addEventListener('click', st);
     srow.appendChild(sd);
     /* ★ 音量：拖动进度条（0~100% ✓ 实时生效 ✓ 自动保存 ✓）*/
