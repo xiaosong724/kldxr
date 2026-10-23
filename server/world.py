@@ -4393,13 +4393,18 @@ class World(object):
             self._send_cid(p.cid, P.pack('notice', text='疾风步：移速 +80%%、闪避 +30%%（%d 秒）' % round(_gd)))
             return
         if key == 'plague':
-            p.plagueOn = not bool(getattr(p, 'plagueOn', False))
+            # ★★★ 2026-10-23（用户："这个技能是点一下就启动，不能点第二下"）★★★
+            #   ★ 原来是 toggle（点一下开、再点一下关）✗ 改成【单向开启】
+            #     已经开着 → 直接忽略（不重复提示、不重置计时）✓
+            #     关闭只在两种情况下发生：① 进安全区 ② 灵气耗尽 ③ 死亡 ✓
+            if bool(getattr(p, 'plagueOn', False)):
+                return                      # 已开启 → 点了没反应 ✓
+            p.plagueOn = 1
             p.plagueAcc = 0.0
             p.plagueMoveT = 0.0
             p.plagueX = p.x
             p.plagueZ = p.z
-            self._send_cid(p.cid, P.pack(
-                'notice', text='病毒扩散：已开启' if p.plagueOn else '病毒扩散：已关闭'))
+            self._send_cid(p.cid, P.pack('notice', text='病毒扩散：已开启'))
             return
         if key == 'shield':
             p.skShield = max(1.0, float(self._atk_of(p)) * 5.0)
@@ -5891,6 +5896,15 @@ class World(object):
         """每帧：CD 触发类 + 临时增益倒计时"""
         import skills as skm
         # ★ round577：任何原因倒下（岩浆/坠落/没走上面两条伤害路径）→ 兜底清坦克
+        # ★ 2026-10-23（用户："死亡了需要重新启动"病毒扩散）
+        #   任何时候倒地都要把病毒扩散关掉 ✗ 复活后必须重新点/自动战斗重开 ✓
+        if int(getattr(p, 'hp', 0) or 0) <= 0:
+            try:
+                if bool(getattr(p, 'plagueOn', False)):
+                    p.plagueOn = False
+                    self._send_cid(p.cid, P.pack('notice', text='病毒扩散：已随死亡关闭'))
+            except Exception:
+                pass
         if int(getattr(p, 'hp', 0) or 0) <= 0 and (
                 int(getattr(p, 'skTankHp', 0) or 0) > 0 or int(getattr(p, 'skTankN', 0) or 0) > 0):
             self._tank_reset(p)

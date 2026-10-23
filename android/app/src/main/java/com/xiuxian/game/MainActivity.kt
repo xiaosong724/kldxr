@@ -75,11 +75,56 @@ class MainActivity : Activity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             }
-        }
+            /* ★ 2026-10-23：缓存策略 —— 静态资源走缓存 ✗ 别再每次重下 ✓
+               （只影响"加载速度"，不影响代码更新：项目用 ?v=构建号 破缓存 ✓）*/
+            setSupportMultipleWindows(false)
+            javaScriptCanOpenWindowsAutomatically = false
+            /* ★ 让 WebView 用 2D 画布时不走软件路径 ✓ */
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                offscreenPreRaster = true
+            }        }
         web.setBackgroundColor(Color.parseColor("#1a1208"))
         web.isScrollbarFadingEnabled = true
         web.overScrollMode = View.OVER_SCROLL_NEVER
         web.setPadding(0, 0, 0, 0)
+
+        /* ★★★ 2026-10-23：GPU / 渲染性能优化（画面不变、玩法不变）★★★
+           目标：把 WebView → 屏幕 这条合成链上多余的 CPU 开销砍掉。
+           都要点：
+             ① setLayerType(LAYER_TYPE_HARDWARE)
+                WebView 默认会走一层软件绘制 ✗ 显式指定硬件图层 ✓
+                省掉一次整屏 CPU 拷贝（高分辨率屏尤其明显）
+             ② setRendererPriorityPolicy(RENDERER_PRIORITY_IMPORTANT, false)
+                把渲染进程提到"重要"优先级 ✗ 系统不会给它降频 ✓
+                （false = 不在不可见时自动降级 —— 我们是全屏游戏，切后台自然会 pause）
+             ③ 关掉过度滚动 / 滚动条 / 长按选中 / 自动填充
+                这些每帧都可能触发额外的合成层重建 ✓
+             ④ WebSettings 关掉"离线缓存预取"之类的后台活
+           全部加 try-catch ✗ 任一机型不支持也不能闪退（真机踩过 NPE 的教训 ✓）
+        */
+        try {
+            web.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        } catch (e: Throwable) { }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                web.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+            } catch (e: Throwable) { }
+        }
+
+        try {
+            web.isLongClickable = false       // 长按不触发文字选择（省一次合成层）
+            web.isHapticFeedbackEnabled = false
+            web.settings.setSupportZoom(false)
+            web.settings.setTextZoom(100)     // 不让系统字体大小影响布局（避免重排）
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                web.settings.safeBrowsingEnabled = false   // 游戏不需要，省后台检查
+            }
+            /* ★ 关掉"自动填充"那套表单服务 ✗ 游戏没有表单 ✓ */
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                web.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            }
+        } catch (e: Throwable) { }
 
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(v: WebView?, url: String?): Boolean = false

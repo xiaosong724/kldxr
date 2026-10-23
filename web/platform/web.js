@@ -1036,7 +1036,7 @@ var DMG_MOTION = {
 
 function _numFlyAt(txt, color, sx, sy, big, life, px, cls, crit) {
   var o = _numSlot();
-  o.busy = true; o.life = life; o.x0 = sx; o.y0 = sy; o.drift = undefined;
+  o.busy = true; o.life = life; o.x0 = sx; o.y0 = sy; o.drift = undefined; o.rise = undefined;
   o.el.textContent = txt;
   o.el.style.display = 'block';
   o.el.style.color = color;
@@ -1062,11 +1062,15 @@ function _numFlyAt(txt, color, sx, sy, big, life, px, cls, crit) {
           else if (o.crit && k < .20) { _s = 1 + .22 * Math.sin((k - .12) / .08 * Math.PI); }
           _dy = (k < .10 ? 6 * (k / .10) : 6);
         }
-        var _y = o.y0 + _dy - (o.el.className && o.el.className.indexOf('dmgNum') >= 0 ? 62 : 46) *
+        /* ★ 2026-10-23：每条的上升高度随机 40~96px ✗ 不会全部停在同一个高度 ✓ */
+        if (o.rise === undefined) { o.rise = 40 + Math.random() * 56; }
+        var _rise = (o.el.className && o.el.className.indexOf('dmgNum') >= 0) ? o.rise : 46;
+        var _y = o.y0 + _dy - _rise *
                  (o.el.className && o.el.className.indexOf('dmgNum') >= 0
                     ? (1 - Math.pow(1 - k, 1.9)) : k);
         /* ★ 2026-10-23：上升时往自己那个方向再偏一点 ✗ 不会排成一条直线 ✓ */
-        if (o.drift === undefined) { o.drift = (Math.random() * 40 - 20); }
+        /* ★ 2026-10-23：漂移幅度 40 → 110px ✗ 上升时彻底散开，不会又聚成一束 ✓ */
+        if (o.drift === undefined) { o.drift = (Math.random() * 170 - 85); }
         var _xx = o.x0 + o.drift * k;
         o.el.style.transform = 'translate3d(' + _xx.toFixed(1) + 'px,' +
           _y.toFixed(1) + 'px,0)' + (_s !== 1 ? ' scale(' + _s.toFixed(3) + ')' : '');
@@ -1100,24 +1104,34 @@ function _numFlyAt(txt, color, sx, sy, big, life, px, cls, crit) {
 }
 /* 老接口保留 ✓ 内部全部走池 */
 function _numProject(x, y, z, txt, color, big, life, px, cls, crit) {
-  /* ★★★ 2026-10-23（用户："显示也过于集中"）★★★
-     ★ 病根：同一只怪的多段伤害（普攻+溅射+词条特效）坐标完全一样 ✗
-       y 都是 2.4 → 数字精确叠在一起，只能看到最后一个 ✓
-     ★ 修：每个飘字加【随机散布】
-       · 水平 ±0.9 米（屏幕上大约 ±40px）
-       · 垂直 ±0.55 米
-       · 再给一个【小延迟】（0~90ms）✗ 同时弹出的会错开一点点 ✓
-     ★ 为什么不用"错开位置表"：位置表治不了"同一帧来 5 条"✗
-       随机散布最省事、也不会有规律感 ✓ */
-  var _sx = (Math.random() * 1.8 - 0.9);
-  var _sy = (Math.random() * 1.1 - 0.55);
-  var _delay = Math.floor(Math.random() * 90);
-  if (_delay > 4) {
-    setTimeout(function () { _numProjectNow(x + _sx, y + _sy, z, txt, color, big, life, px, cls, crit); }, _delay);
-    return;
-  }
-  _numProjectNow(x + _sx, y + _sy, z, txt, color, big, life, px, cls, crit);
+  /* ★★★ 2026-10-23（用户："伤害飘字堆叠，太密集了散开一点"）★★★
+     ★ 上一版的散布太窄（±0.9 米 / 0~90ms）✗ 短时间多段伤害照样叠成一坨 ✓
+     ★ 现在改成【环形均分 + 时间错开】✗ 比纯随机更均匀 ✓
+       ① 同一时刻来的飘字按【环形槽位】分配角度 ✗ 均匀铺开，不会有两三个撞在同一点
+       ② 半径随"当前在飞的条数"放大（2 条时小、8 条时大）✗ 越多越铺开
+       ③ 时间错开 0~260ms（原来 90ms 太短 ✗ 几乎同时出现 = 视觉上就是重叠）
+       ④ 再加一点随机抖动 ✗ 环形不至于太规律 ✓
+  */
+  var _cx = x, _cy = y, _cz = z;
+  /* 当前在飞的条数（池子本来就在维护 ✓ 直接数）*/
+  var _alive = 0;
+  for (var _i = 0; _i < _numPool.length; _i++) { if (_numPool[_i].busy) { _alive++; } }
+  /* ★ 2026-10-23 实测：半径 0.8~2.6 米投到屏幕上只有几十 px ✗ 12 段时重叠 17 组 ✓
+     → 半径放大到 1.6~5.2 米（屏幕上 90~300px）+ 时间错开 0~420ms ✓ */
+  _NUM_SLOT = (_NUM_SLOT + 1) % 12;
+  var _ang = (_NUM_SLOT / 12) * Math.PI * 2 + (Math.random() * 0.6 - 0.3);
+  /* 半径：2 条以内 1.6 米，之后每多一条 +0.36 米，最多 5.2 米 */
+  var _rad = 1.6 + Math.min(3.6, Math.max(0, _alive - 1) * 0.36);
+  var _sx = Math.cos(_ang) * _rad;
+  var _sz = Math.sin(_ang) * _rad * 0.75;     /* 前后也错开（透视下变成上下位移）*/
+  var _sy = (Math.random() * 2.6 - 1.0);      /* 高度也拉开 ✗ 原来只有 0.95 米 */
+  var _delay = Math.floor(Math.random() * 420);   /* ★ 0~420ms，错得更开 */
+  var _go = function () {
+    _numProjectNow(_cx + _sx, _cy + _sy, _cz + _sz, txt, color, big, life, px, cls, crit);
+  };
+  if (_delay > 6) { setTimeout(_go, _delay); } else { _go(); }
 }
+var _NUM_SLOT = 0;
 function _numProjectNow(x, y, z, txt, color, big, life, px, cls, crit) {
   if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
   var v = REUSE_V3.v.set(x, y, z).project(cam);
@@ -1199,6 +1213,7 @@ UI.fxIceStop = function (h) {
 };
 /* ★ 自动战斗：自动用已装配的主动技能（服务器仍做全部校验）*/
 var _autoSkAt = 0;
+var _autoTgAt = {};   /* ★ 2026-10-23：开关型技能的自动开启时间 ✗ 防抖用 ✓ */
 var SK_ACT = { n: '', m: 0, until: 0 };   /* 最近一次主动技能的持续时间 */
 UI.skCastStart = function (key) {
   try {
@@ -1337,7 +1352,29 @@ UI.autoSkill = function (tgt, now) {
       var k = list[i];
       if (!k) { continue; }
       var d = SK.byKey[k];
-      if (!d || d.tg2) { continue; }
+      /* ★★★ 2026-10-23（用户："病毒扩散要改成自动战斗时自动开启"）★★★
+         ★ 原来 tg2（开关型技能）一律跳过 ✗ 自动战斗里永远不开 ✓
+         ★ 现在：开关型技能【只在没开的时候开一次】✗ 不会反复开关 ✓
+           · 已开启（MY_PLAGUE === 1）→ 跳过 ✓
+           · 没开 → 发一次 skillcast ✓
+           · 死亡复活后服务端会把它关掉 → 自动战斗会重新开 ✓
+         ★ 其它开关型技能（如果有）同样适用 ✗ 逻辑是通用的 ✓ */
+      if (!d) { continue; }
+      if (d.tg2) {
+        /* 开关型：只处理"开启"这一个方向 */
+        var _on = 0;
+        if (k === 'plague') { _on = (typeof MY_PLAGUE !== 'undefined') ? MY_PLAGUE : 0; }
+        if (_on) { continue; }                       /* 已经开着 → 跳过 ✓ */
+        if ((MY_QI || 0) < (d.qi || 0)) { continue; } /* 灵气不够 → 跳过 ✓ */
+        if (typeof MY_JOB !== 'undefined' && MY_JOB) { continue; }
+        /* ★ 2026-10-23：给 1 秒防抖 ✗ 服务端有 0.3 秒冷却，
+           发太勤会收到"技能冷却中"的提示刷屏 ✓ */
+        if (now - (_autoTgAt[k] || 0) < 1000) { continue; }
+        _autoTgAt[k] = now;
+        _autoSkAt = now;
+        wsSend('skillcast', { key: k });
+        return;
+      }
       if ((SKCD[k] || 0) > 0) { continue; }
       if ((MY_QI || 0) < (d.qi || 0)) { continue; }
       var dist = tgt ? Math.hypot(tgt.x - P.x, tgt.z - P.z) : 0;
@@ -11171,7 +11208,7 @@ function sysMsgEl() {
      行少的时候框也保持这个高度（文字贴着底部往上排 ✓）*/
   b.style.cssText =
     /* ★ 2026-10-23（用户："位置默认调整到左边靠边"）*/
-    'position:fixed;left:16px;top:16%;transform:none;' +
+    'position:fixed;left:16px;top:' + Math.round(Math.max(240, (typeof innerHeight === 'number' ? innerHeight : 600)) * 0.16) + 'px;transform:none;' +
     'width:' + SYSMSG.W + 'px;height:' + SYSMSG.H + 'px;box-sizing:border-box;' +
     'padding:0;pointer-events:none;z-index:50;' +   /* ★ 2026-10-23：压到菜单(60)下面 ✗ 不挡菜单 ✓ */
     /* ★★★ 2026-10-23（用户选：版 1 · 无框文字条）★★★
@@ -11202,6 +11239,33 @@ function sysMsgEl() {
   sysMsgApplyPos();
   sysMsgApplySize();
   try { sysMsgBindSizeBtns(); } catch (eSB2) { }
+  /* ★★★ 2026-10-23（用户："重启服务器后还是跑到默认位置"）★★★
+     ★ 兜底：如果这一刻 SETCFG / 存档还没就绪 ✗ 稍后再套一次位置 ✓
+       ① 300ms 后重试（等 game.js 的 SETCFG 加载完 ✓）
+       ② 页面完全加载后（window.onload）再试一次 ✓
+       两次都是【幂等】的 ✗ 有存档就一定套上 ✓ 没存档就当默认值 ✓ */
+  setTimeout(function () {
+    try {
+      var _b = SYSMSG.el; if (!_b) { return; }
+      var _had = (typeof SETCFG !== 'undefined' && SETCFG && SETCFG.sysMsgPos) ||
+                 localStorage.getItem('uiPos_sysmsg_' + (document.body.classList.contains('landscape') ? 'L' : 'P')) ||
+                 localStorage.getItem('uiPos_sysmsg');
+      if (_had) { sysMsgApplyPos(); }
+      sysMsgApplySize();
+    } catch (eR) { }
+  }, 300);
+  try {
+    window.addEventListener('load', function () {
+      try {
+        var _b2 = SYSMSG.el; if (!_b2) { return; }
+        var _had2 = (typeof SETCFG !== 'undefined' && SETCFG && SETCFG.sysMsgPos) ||
+                    localStorage.getItem('uiPos_sysmsg_L') || localStorage.getItem('uiPos_sysmsg_P') ||
+                    localStorage.getItem('uiPos_sysmsg');
+        if (_had2) { sysMsgApplyPos(); }
+        sysMsgApplySize();
+      } catch (eL) { }
+    }, { once: true });
+  } catch (eL2) { }
   return b;
 }
 
@@ -11213,8 +11277,21 @@ function sysMsgApplyPos() {
     var _p = (typeof SETCFG !== 'undefined' && SETCFG && SETCFG.sysMsgPos) || null;
     if (_p && (typeof _p.rx === 'number' || typeof _p.l === 'number')) {
       var _W = Math.max(1, innerWidth), _H = Math.max(1, innerHeight);
-      var _l = (typeof _p.rx === 'number') ? _p.rx * _W : _p.l;
-      var _t = (typeof _p.ry === 'number') ? _p.ry * _H : (_p.t || 0);
+      /* ★ 2026-10-23（用户："战斗时提示框自己往上跑"）
+         ★ 优先用【固定像素 l/t】✗ 窗口只要没大变就不动 ✓
+         ★ 只有当屏幕尺寸变化超过 15% 时（换设备/转屏）才退回按比例换算 ✓
+           这样战斗中常见的 innerHeight 小幅抖动（地址栏收起）
+           就不会让框上下漂移 ✓✓ */
+      var _l, _t;
+      var _dw = (typeof _p.sw === 'number') ? Math.abs(_W - _p.sw) / Math.max(1, _p.sw) : 1;
+      var _dh = (typeof _p.sh === 'number') ? Math.abs(_H - _p.sh) / Math.max(1, _p.sh) : 1;
+      if (typeof _p.l === 'number' && _dw < 0.15 && _dh < 0.15) {
+        _l = _p.l; _t = (_p.t || 0);                    /* ★ 尺寸没变 → 用原像素 ✓ */
+      } else if (typeof _p.rx === 'number') {
+        _l = _p.rx * _W; _t = _p.ry * _H;               /* 换了屏幕 → 按比例 ✓ */
+      } else {
+        _l = _p.l; _t = (_p.t || 0);
+      }
       var _w = b.offsetWidth || SYSMSG.W, _h = b.offsetHeight || SYSMSG.H;
       _l = Math.max(4, Math.min(Math.max(4, _W - _w - 4), _l));
       _t = Math.max(4, Math.min(Math.max(4, _H - _h - 4), _t));
@@ -11227,8 +11304,17 @@ function sysMsgApplyPos() {
   if (typeof uiApplySavedPos === 'function') {
     if (uiApplySavedPos(b, 'sysmsg')) { return; }
   }
-  /* ★ 2026-10-23（用户："默认左边靠边"）*/
-  b.style.left = '16px'; b.style.top = '16%'; b.style.transform = 'none';
+  /* ★★★ 2026-10-23（用户："战斗的时候提示框会自己慢慢移动上去"）★★★
+     ★ 病根：【top 用了百分比 16%】✗
+       百分比是相对 innerHeight 算的 ✓ 而战斗中 innerHeight 会变：
+         · 手机横竖屏切换 / 地址栏收起展开 / 软键盘弹出
+       → 16% 对应的绝对像素就跟着变 → 框看起来"自己往上跑" ✓✓
+     ★ 修：默认位置改成【固定像素】✗ 窗口怎么变都不动 ✓
+       高度按当前 innerHeight 的 16% 算一次，存成 px ✓ */
+  var _H0 = Math.max(240, innerHeight || 600);
+  b.style.left = '16px';
+  b.style.top = Math.round(_H0 * 0.16) + 'px';
+  b.style.transform = 'none';
 }
 /* 字号：菜单里调的 ✓ */
 function sysMsgApplySize() {
@@ -11501,7 +11587,8 @@ function sysMsgBindDrag() {
         if (typeof SETCFG !== 'undefined' && SETCFG) {
           SETCFG.sysMsgPos = { l: Math.round(_L), t: Math.round(_T),
                                rx: +( _L / Math.max(1, innerWidth)).toFixed(5),
-                               ry: +( _T / Math.max(1, innerHeight)).toFixed(5) };
+                               ry: +( _T / Math.max(1, innerHeight)).toFixed(5),
+                               sw: innerWidth, sh: innerHeight };   /* ★ 记下当时的屏幕尺寸 ✓ */
           if (typeof saveSet === 'function') { saveSet(); }
         }
       } catch (e5) { }
@@ -13188,8 +13275,16 @@ function updAnnounce() {
       clearInterval(iv);
       UPD.done = true;
       setTimeout(function () {
-        try { location.replace(location.pathname + '?u=' + Date.now()); }
-        catch (e3) { location.reload(); }
+        /* ★★★ 2026-10-23（用户："系统提示框还是没有位置记忆，重启服务器后跑到默认位置"）★★★
+           ★ 病根：原来用 location.replace(pathname + '?u=...') ✗
+             · 原地址可能是 "/" ✗ 替换成 "/index.html?u=xxx" → 换了文档名 ✓
+             · 这种"换地址"的刷新在某些浏览器/Service Worker 下会
+               重新起一个存储上下文 → localStorage 里刚存的设置读不到 ✓
+           ★ 修：用最干净的 location.reload() ✓
+             · SW 本来就有 CACHE_VERSION + skipWaiting ✓ 不需要靠 URL 参数破缓存 ✓
+             · 同地址刷新 → localStorage / sessionStorage 完全不变 ✓ */
+        try { location.reload(); }
+        catch (e3) { location.href = location.href; }
       }, 800);
     }
   }, 2000);

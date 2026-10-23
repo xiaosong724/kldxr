@@ -3550,14 +3550,46 @@ function townNpcsRebuild() {
     });
   }
 }
-/* 每帧：玩家靠近时转头看你 + 轻微起伏（招呼动作） */
+/* 每帧：玩家靠近时转头看你 + 轻微起伏（招呼动作）
+   ★★★ 2026-10-23 性能优化（用户："帧率优化，实体多了掉帧"）★★★
+   ★ 病根：原来【无条件遍历全部 NPC】✗ 每个都改 rotation.y + position.y
+     改一次 → three.js 要重算这个对象的矩阵 → 还级联重算子节点 ✓
+     1319 个 Mesh 的 NPC 群，一帧光矩阵就几千次 ✗
+     而 99% 的 NPC 玩家压根看不见（视野外 / 几十米外）✓✓
+   ★ 修法（画面不变 ✗ 只是"远处的 NPC 不再每帧动"）：
+     ① 30 米外：完全跳过 ✗ 姿势复位一次后不再碰 ✓
+        （30 米外在屏幕上是一小点，起伏 3.5cm 根本看不见 ✓）
+     ② 玩家没动 且 不在 5 米内：跳过 ✗ 姿势早就稳定了 ✓
+     ③ 其余每 2 帧更新一次 ✗ 转头的平滑度肉眼看不出差别 ✓ */
 function townNpcTick(px, pz, dt) {
   if (!TOWN_NPC_LIST.length) { return; }
   var st = (dt > 0) ? dt : 0.016;
+
+  /* 玩家有没有明显移动（0.35 米以上才算 ✓）*/
+  var moved = (Math.abs(px - (townNpcTick._lx || 1e9)) > 0.35) ||
+              (Math.abs(pz - (townNpcTick._lz || 1e9)) > 0.35);
+  townNpcTick._lx = px; townNpcTick._lz = pz;
+
+  /* 每 2 帧才真正跑一次循环 ✗ 玩家静止时更省 ✓ */
+  townNpcTick._f = ((townNpcTick._f || 0) + 1) % 2;
+  if (townNpcTick._f !== 0 && !moved) { return; }
+
   for (var i = 0; i < TOWN_NPC_LIST.length; i++) {
     var n = TOWN_NPC_LIST[i];
     var dx = px - n.x, dz = pz - n.z;
-    var near = (dx * dx + dz * dz) < 25;          /* 5 米内 */
+    var d2 = dx * dx + dz * dz;
+    /* ★ 30 米外：一次性复位后彻底不管 ✓ */
+    if (d2 > 900) {
+      if (n._far !== 1) {
+        n._far = 1;
+        n.g.rotation.y = n.baseRy;
+        n.g.position.y = n.baseY;
+      }
+      continue;
+    }
+    n._far = 0;
+    var near = d2 < 25;              /* 5 米内才转头 / 起伏 */
+    if (!near && !moved) { continue; }   /* 不近且玩家没动 → 不用改 ✓ */
     var want = near ? Math.atan2(dx, dz) : n.baseRy;
     var cur = n.g.rotation.y;
     var diff = want - cur;
@@ -3568,6 +3600,107 @@ function townNpcTick(px, pz, dt) {
     n.g.position.y = n.baseY + (near ? Math.sin(n.t * 3.2) * 0.035 : 0);
   }
 }
+
+/* ★★★ 2026-10-23（用户："帧率优化，实体多了掉帧"）★★★
+   静态组整体按距离隐藏（整组一个 visible 开关 ✗ 不去动里面每个 Mesh ✓）
+
+   ★ 为什么有效（实测：视野外有 2178 个 Mesh）：
+     three.js 每帧都要【遍历所有可见对象】→ 算包围盒 → 判视锥 ✓
+     被剔除只是"不画"，但遍历和判定的开销照付 ✓
+     而且阴影 pass 还会再遍历一遍 ✓
+     → 整组 visible=false：three.js 直接跳过整棵子树 ✗ 一次都不遍历 ✓
+
+   ★ 为什么无损：
+     · 这些组（NPC / 摆放物件 / 屋顶 / 墙面）都是静态的 ✗ 永远不动 ✓
+     · 90 米外在屏幕上只有几个像素 ✗ 藏起来肉眼绝对看不出 ✓
+     · 靠近 90 米内自动恢复 ✓ 走进小镇完全正常 ✓
+
+   ★ 用"组中心到玩家距离"而不是"玩家到每个 Mesh"✗ 一次比较就够 ✓
+     （组内的物件分布在小镇范围（±250m）内，中心点够用了 ✓）*/
+var TOWN_STATIC_GROUPS = [];       /* 自动收集：按名字在场景里找 ✓ */
+var _tscAt = null;
+var _tscGroups = null;             /* 缓存住找到的组 ✗ 不用每次遍历场景 ✓ */
+/* ★ 2026-10-23（性能优化）：要按距离剔离的静态组名
+   · shopNpcs       —— 1319 个 Mesh（店员用玩家模型，每只 6~8 个网格）
+   · placedObjects  —— 311 个 Mesh（玩家摆放的物件）
+   · __roof / __walls —— 屋顶 / 墙面（静态 ✓ 只在小镇内可见）
+   四组合计约 2000 个 Mesh ✗ 整组藏掉 = three.js 连遍历都省 ✓
+   ★ 为什么按【名字】找而不是让 place.js 主动注册：
+     注册需要 place.js 调 core 的函数 ✗ 违反分层（platform → core 只能走 UI.*）
+     而这三组本来就在场景里、名字固定 ✗ 找一次缓存住最省事 ✓ */
+var TOWN_CULL_NAMES = ['shopNpcs', 'placedObjects', '__roof', '__walls'];
+function townStaticRegister(g) {
+  if (!g || g._cullOn) { return; }
+  g._cullOn = 1;
+  TOWN_STATIC_GROUPS.push(g);
+}
+function townStaticClear() { TOWN_STATIC_GROUPS = []; _tscGroups = null; }
+
+function townStaticCull(px, pz) {
+  /* ★ 第一次调用：按名字在场景里找那几组 ✗ 找到后缓存 ✓
+     ★★ 两个坑（都实测踩过）：
+        ① 这些组的 position 都是 (0,0) ✗ 内容散在小镇各处
+           → 必须用【包围盒中心】，不能用 position ✓
+        ② 第一次调用时小镇可能【还没建完】✗ 包围盒是空的 → 中心算成 0,0
+           → 中心=0,0 的那些组【下一帧重算】，直到算出真实中心才缓存 ✓ */
+  if (_tscGroups === null) { _tscGroups = []; }
+  var _need = TOWN_CULL_NAMES.length;
+  for (var _ni = 0; _ni < TOWN_CULL_NAMES.length; _ni++) {
+    var _nm = TOWN_CULL_NAMES[_ni];
+    /* 已经算对了就跳过 ✓ */
+    var _done = false;
+    for (var _di = 0; _di < _tscGroups.length; _di++) {
+      if (_tscGroups[_di].nm === _nm && _tscGroups[_di].ok) { _done = true; break; }
+    }
+    if (_done) { continue; }
+    var _hit = null;
+    try {
+      scene.traverse(function (o) {
+        if (!_hit && o.name === _nm && (o.isGroup || o.type === 'Group')) { _hit = o; }
+      });
+    } catch (eFind) { _hit = null; }
+    if (!_hit) { continue; }
+    /* 算包围盒中心 ✗ 空的话先记着，下一帧再算 ✓ */
+    var _cx = 0, _cz = 0, _ok = false;
+    try {
+      var _box = new THREE.Box3().setFromObject(_hit);
+      if (isFinite(_box.min.x) && isFinite(_box.max.x) &&
+          (_box.max.x - _box.min.x) > 1) {
+        _cx = (_box.min.x + _box.max.x) / 2;
+        _cz = (_box.min.z + _box.max.z) / 2;
+        _ok = true;
+      }
+    } catch (eBox) { }
+    /* 替换掉这个组之前的记录（可能是 ok=false 的占位 ✓）*/
+    var _rep = false;
+    for (var _ri = 0; _ri < _tscGroups.length; _ri++) {
+      if (_tscGroups[_ri].nm === _nm) {
+        _tscGroups[_ri] = { nm: _nm, g: _hit, cx: _cx, cz: _cz, ok: _ok };
+        _rep = true;
+        break;
+      }
+    }
+    if (!_rep) { _tscGroups.push({ nm: _nm, g: _hit, cx: _cx, cz: _cz, ok: _ok }); }
+  }
+  if (!_tscGroups.length) { return; }
+  /* 玩家没怎么动就不用重算 ✓（每 2 米算一次）*/
+  if (_tscAt && Math.abs(px - _tscAt[0]) < 2 && Math.abs(pz - _tscAt[1]) < 2) { return; }
+  _tscAt = [px, pz];
+  for (var i = 0; i < _tscGroups.length; i++) {
+    var e = _tscGroups[i];
+    if (!e || !e.g || !e.ok) { continue; }      /* ★ 中心还没算出来的先不动 ✓ */
+    var dx = px - e.cx, dz = pz - e.cz;
+    /* ★★ 2026-10-23 实测修正：阈值 120 → 260 ✓
+       ★ 为什么：用户站在 (-294,71)，NPC 组中心 (-148,125)，距离 150 米
+         结果 NPC 被隐藏了 ✗ 但小镇建筑还在 → 玩家看到"NPC 凭空消失"✓
+       ★ 小镇范围本身 ±250 ✗ 内容能铺到 250 米外 ✓
+         所以必须 >= 小镇半径 + 一点余量 = 260 ✓
+       ★ 260 米外：整个小镇都在远处了 ✗ 这时隐藏 NPC/物件完全看不出来 ✓
+         而且野外战斗时的收益仍然成立（玩家多在 300+ 米外打怪 ✓）*/
+    e.g.visible = (dx * dx + dz * dz) < (260 * 260);
+  }
+}
+
 
 /* ★★★ 2026-10-22（用户："传送阵的粒子动画怎么没有了"）★★★
    模型里有 `userData.animate(t)`（上升粒子、核心光晕呼吸），

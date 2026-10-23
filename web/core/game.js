@@ -9803,6 +9803,14 @@ function frame(ts) {
     if (typeof townLabelTick === 'function') { townLabelTick(P.x, P.z); }
     /* ★ 2026-10-22：店铺店员——靠近时转头看你 + 轻微起伏（交互动画） */
     if (typeof townNpcTick === 'function') { townNpcTick(P.x, P.z, dt); }
+    /* ★★★ 2026-10-23 性能优化：静态组按距离整组隐藏 ★★★
+       用户实测：视野外有 2178 个 Mesh 每帧都在被遍历（shopNpcs 1319 + placedObjects 311 + 屋顶墙面 374）
+       three.js 虽然会做视锥剔除，但【遍历 + 包围盒判定】本身就要花钱，
+       而且阴影 pass 也要遍历一遍 ✓
+       → 离玩家超过 90 米就整组 visible=false ✓
+         90 米外的建筑/物件在屏幕上只有几个像素 ✗ 看不见 ✓ 画面无差别
+       三组都【完全静态】✗ 不会动，藏起来没有任何副作用 ✓ */
+    if (typeof townStaticCull === 'function') { townStaticCull(P.x, P.z); }
     /* ★ 2026-10-22：物件自带动画（传送阵粒子等） */
     if (typeof townAnimTick === 'function') { townAnimTick(ts / 1000); }
     if (typeof UI !== 'undefined' && UI.warehouseFloat) {

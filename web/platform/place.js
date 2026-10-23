@@ -87,6 +87,9 @@
     if (!S) { return null; }
     P.group = new THREE.Group();
     P.group.name = 'placedObjects';
+    /* ★ 2026-10-23：这个组会被 core 的 townStaticCull 按【名字】找到
+       并做距离剔除（远处整组 visible=false ✗ 画面无差别 ✓）
+       所以这里不需要主动注册 ✗ 保持 name 不变就行 ✓ */
     S.add(P.group);
     return P.group;
   }
