@@ -11080,11 +11080,17 @@ var SYSMSG_SIZES = [10, 11, 12, 13.5];   /* 小 / 标准 / 大 / 特大（2026-1
   st.id = 'sysMsgCSS';
   st.textContent = `
   #sysMsgBox .row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-    padding:0 14px;line-height:1.85;color:#b9c6d2;
+    padding:0 14px;line-height:1.85;color:#b9c6d2;text-align:left;
     text-shadow:0 1px 2px rgba(0,0,0,.9);
     transition:opacity .3s ease,transform .3s ease}
   /* A 版彩色标签（和预览页一字不差 ✓）*/
   #sysMsgBox .row b{color:#ffd83d;font-weight:800}
+  /* ★ 2026-10-23：按类型分色（经验蓝 / 金币金 / 突破紫 / 皮肤粉 / 警告红）*/
+  #sysMsgBox .row b.c-exp{color:#6fb8ff}
+  #sysMsgBox .row b.c-gold{color:#ffd83d}
+  #sysMsgBox .row b.c-lv{color:#c79bff}
+  #sysMsgBox .row b.c-skin{color:#ff8ad8}
+  #sysMsgBox .row b.c-bad{color:#ff7a6a}
   #sysMsgBox .row i{color:#8ee0ff;font-style:normal;font-weight:700}
   #sysMsgBox .row.g b{color:#ffcf3a}
   #sysMsgBox .row.it b{color:#8ee0ff}
@@ -11203,30 +11209,62 @@ function sysMsgPush(msg) {
      ★★ 我上一版理解错了：用户说"字体用 C"只是要【字号/居中】✗ 不是要去掉颜色 ✓
      A 版的彩色就是它的一部分：金币金黄、物品浅蓝、正文浅灰 ✓
      → 恢复 <b>/<i> 标签 ✓ 并给每类配对应颜色 ✓ */
-  /* ★ 2026-10-23：消息里没有标签时，按内容自动上色（和预览页一样的效果 ✓）
-     · 金币 / 数字 → 金黄
-     · 物品名（捡到 xxx）→ 浅蓝
-     · 经验 → 嫩绿
-     已经有 <b> 的就别重复包（防嵌套）✓ */
+  /* ★★★ 2026-10-23（用户："颜色你有做分类吗，经验是蓝色，不同品阶物品颜色"）★★★
+     ★ 之前所有高亮都是同一个金色 ✗ 等于没分类 ✓
+     ★ 现在按【类型】分色（和飘字/品阶色同一套观感 ✓）：
+       · 经验       → 蓝   #6fb8ff
+       · 金币       → 金   #ffd83d
+       · 物品名     → 按【品阶】上色（tierHex，和地上掉落物一模一样 ✓）
+       · 突破/升级   → 紫   #c79bff
+       · 皮肤       → 粉   #ff8ad8
+       · 伤害/警告   → 红   #ff7a6a
+       · 其它        → 正文浅灰，不染色
+     ★ 实现：用 <b class="c-xxx"> + CSS 变量色 ✗ 不改原有 <b> 规则 ✓ */
   var _raw = String(msg == null ? '' : msg).replace(/&nbsp;/g, ' ');
   if (_raw.indexOf('<b>') < 0 && _raw.indexOf('<i>') < 0) {
-    if (/\+[\d,]+\s*金币|金币\s*\+[\d,]+|\+[\d,]+$/.test(_raw)) {
-      _raw = _raw.replace(/(\+?[\d,]+)(\s*金币)?/, '<b>$1</b>$2');
-    } else if (/^捡到\s*/.test(_raw) || /^获得\s*/.test(_raw)) {
-      _raw = _raw.replace(/^(捡到|获得)\s*([^\s（(]+)/, '$1 <b>$2</b>');
-    } else if (/经验/.test(_raw)) {
-      _raw = _raw.replace(/(\+?[\d,]+)/, '<b>$1</b>');
+    /* ① 经验 → 蓝 */
+    if (/(经验|精验|EXP)/i.test(_raw)) {
+      _raw = _raw.replace(/(\+?[\d,]+)/, '<b class="c-exp">$1</b>');
+    }
+    /* ② 金币 → 金 */
+    else if (/金币/.test(_raw)) {
+      _raw = _raw.replace(/(\+?[\d,]+)/, '<b class="c-gold">$1</b>');
+    }
+    /* ③ 突破 / 升级 → 紫 */
+    else if (/突破|升级|第\s*\d+\s*层/.test(_raw)) {
+      _raw = _raw.replace(/(\d+)/, '<b class="c-lv">$1</b>');
+    }
+    /* ④ 皮肤 → 粉 */
+    else if (/皮肤/.test(_raw)) {
+      _raw = _raw.replace(/皮肤[·:：]?\s*([^\s（(]+)/, '皮肤 <b class="c-skin">$1</b>');
+    }
+    /* ⑤ 物品（拾取/掉落/获得/购买）→ 按品阶上色 */
+    else if (/^(拾取|掉落|获得|买到|捡到)[:：\s]/.test(_raw)) {
+      _raw = _raw.replace(/^(拾取|掉落|获得|买到|捡到)[:：\s]*([^\s（(]+)(（(\d+)\s*阶）)?/,
+        function (all, verb, name, brk, tier) {
+          var n = tier ? Math.max(0, Math.min(11, (parseInt(tier, 10) || 1) - 1)) : -1;
+          var col = n >= 0 ? tierHex(n) : '#9fd0ff';
+          return verb + ' <b style="color:' + col + '">' + name + '</b>' + (brk || '');
+        });
+    }
+    /* ⑥ 伤害 / 警告 → 红 */
+    else if (/伤害|受伤|不足|失败|满了|不能/.test(_raw)) {
+      _raw = _raw.replace(/(\+?[\d,]+)/, '<b class="c-bad">$1</b>');
     }
   }
   el.innerHTML = _raw;
-  el.style.textAlign = 'center';
+  el.style.textAlign = 'left';     /* ★ 2026-10-23（用户：文字向左对齐）*/
   el.style.opacity = '0';
   el.style.transform = 'translateY(10px)';
   SYSMSG.rowsBox.appendChild(el);
   SYSMSG.live.push(el);
   requestAnimationFrame(function () { el.style.opacity = '1'; el.style.transform = 'translateY(0)'; });
-  /* ★ 2026-10-23（用户："滚动匀速"）
-     原来是一行一行"跳"上去 ✗ 现在整块容器【匀速平移】✗ 平滑连续 ✓ */
+  /* ★ 2026-10-23（用户："滚动要匀速，不能因为消息很多就特别快，只能快一点点"）
+     ★ 病根：原来每条消息都触发一次 .26s 平移 ✗
+       消息密集时前面的还没走完就被打断 → 视觉上"嗖嗖往上冲"✓
+     ★ 修：固定【每秒移动多少像素】✗ 位移多大就花多长时间 ✓
+       SPEED = SIZE*1.85 每秒（一行一个字高 ✓ 不随消息数量变）
+       消息再多也只是"持续滚动"，不会加速 ✓ */
   var _over = SYSMSG.live.length - SYSMSG.MAX;
   if (_over > 0) {
     var old = SYSMSG.live.shift();
@@ -11236,15 +11274,18 @@ function sysMsgPush(msg) {
         if (o.parentNode) { o.parentNode.removeChild(o); }
         o.innerHTML = '';
         SYSMSG.pool.push(o);
-        /* 删掉最老那行后，把容器瞬时回正（视觉上无感 ✓）*/
-        SYSMSG.rowsBox.style.transition = 'none';
-        SYSMSG.rowsBox.style.transform = 'translateY(0)';
-      }, 260);
+      }, 240);
     })(old);
-    /* 容器匀速上移一行的高度 ✓ */
     var _lh = Math.round(SYSMSG.SIZE * 1.85);
-    SYSMSG.rowsBox.style.transition = 'transform .26s linear';
+    /* 匀速：走完一行固定用 0.42 秒（≈ 每秒 2.4 行）✗ 和消息多少无关 ✓ */
+    SYSMSG.rowsBox.style.transition = 'transform .42s linear';
     SYSMSG.rowsBox.style.transform = 'translateY(-' + _lh + 'px)';
+    /* 走完立刻回正（不留累计位移 ✓ 否则越滚越偏）*/
+    clearTimeout(SYSMSG._rs);
+    SYSMSG._rs = setTimeout(function () {
+      SYSMSG.rowsBox.style.transition = 'none';
+      SYSMSG.rowsBox.style.transform = 'translateY(0)';
+    }, 430);
   }
   b.style.display = 'block';
   void b.offsetHeight;              /* 强制回流 ✗ 让 opacity 过渡生效 ✓ */

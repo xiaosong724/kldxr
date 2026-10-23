@@ -571,6 +571,13 @@ class World(object):
         self.mob_cap = int(mobs.MOB_CAP)
         self.spawn_interval = float(mobs.SPAWN_INTERVAL)
         self.mob_cap_of = {}      # {role_id: 该人的上限} ✓ 没记录就用全局值
+        # ★ 2026-10-23（用户："把金币显示也加上"）
+        #   金币进账要提示 ✗ 但打怪一秒钟掉好几次 ✗ 每条都弹就是刷屏 ✓
+        #   → 0.8 秒内的多笔合成一条（见 _gold_notice_flush）
+        self._gold_acc = {}       # {role_id: 待提示的金币数}
+        self._gold_at = {}        # {role_id: 下次允许刷新的时刻}
+        self._exp_acc = {}        # ★ 同理：待提示的经验
+        self._exp_at = {}
         self._tune_sig = None     # 第 216 轮：管理员设置的指纹（变了就存 ✓）
         self.pvp_pair = {}        # ★ 第 150 轮：{(killer,victim): 上次算数时刻} —— 同一对 10 分钟只算一次 ✓
         self.pvp_pair_steal = {}  # ★ 第 167 轮：夺取自己一张表（默认 1 分钟 ✓）
@@ -1229,9 +1236,15 @@ class World(object):
             self._party_acc = 0.0
             for pid in list(self.parties.keys()):
                 self._party_push(pid)        # ★ 每秒补推一次（血条要动 ✓）
+        # ★ 浮点秒（给提示节流用 ✗ now_s() 是整秒不够精确 ✓）
+        self._acc_now = float(getattr(self, '_acc_now', 0.0) or 0.0) + TICK_DT
         try:
             self._house_expire_tick()
             self._work_tick()
+            try:
+                self._gold_notice_flush()      # ★ 单独 try ✗ 前面挂了它也要跑 ✓
+            except Exception as _gnf:
+                print('[notice] flush failed: %r' % (_gnf,))
             self._qi_regen_tick()
             self._sleep_tick()
             self._table_tick()
@@ -2273,6 +2286,68 @@ class World(object):
         self._send_cid(p.cid, P.pack('worksettle', hours=round(sec / 3600.0, 2),
                                      sec=int(sec), exp=int(exp), pay=int(pay), msg=_msg))
         return int(exp)
+
+    def _gold_notice_flush(self):
+        """★ 2026-10-23：金币/经验提示合并（0.8 秒内的多笔合成一条 ✗ 防刷屏）
+
+        ★ 2026-10-23 修：原来用 now_s()（整秒精度）✗ 0.8 秒窗口判不准 ✓
+          → 改成用 tick 累计的【浮点秒】（30Hz 精度 ✓）
+        """
+        if not self._gold_acc and not self._exp_acc:
+            return
+        _now = float(getattr(self, '_acc_now', 0.0) or 0.0)
+        _done = []
+        for _rid, _amt in list(self._gold_acc.items()):
+            if _amt <= 0:
+                _done.append(_rid)
+                continue
+            if _now < float(self._gold_at.get(_rid, 0) or 0):
+                continue
+            _q = None
+            for _pp in self.players.values():
+                if getattr(_pp, 'role_id', None) == _rid:
+                    _q = _pp
+                    break
+            if _q is not None:
+                try:
+                    self._send_cid(_q.cid, P.pack('notice',
+                                                  text='金币 +%d' % int(_amt)))
+                except Exception:
+                    pass
+            self._gold_at[_rid] = _now + 0.8
+            _done.append(_rid)
+        for _r in _done:
+            self._gold_acc.pop(_r, None)
+            if _r not in self._gold_at:
+                self._gold_at[_r] = 0
+        # ★ 经验同理（和金币用同一个节流窗口 ✓）
+        if self._exp_acc:
+            _doneE = []
+            for _rid, _amt in list(self._exp_acc.items()):
+                if _amt <= 0:
+                    _doneE.append(_rid); continue
+                if _now < float(self._exp_at.get(_rid, 0) or 0):
+                    continue
+                _q2 = None
+                for _pp in self.players.values():
+                    if getattr(_pp, 'role_id', None) == _rid:
+                        _q2 = _pp; break
+                if _q2 is not None:
+                    try:
+                        self._send_cid(_q2.cid, P.pack('notice',
+                                                      text='经验 +%d' % int(_amt)))
+                    except Exception:
+                        pass
+                self._exp_at[_rid] = _now + 0.8
+                _doneE.append(_rid)
+            for _r in _doneE:
+                self._exp_acc.pop(_r, None)
+        # 清掉过期的时刻表（防越积越多 ✓）
+        if len(self._gold_at) > 200:
+            _cut = _now - 30
+            for _k in list(self._gold_at):
+                if float(self._gold_at.get(_k, 0) or 0) < _cut:
+                    self._gold_at.pop(_k, None)
 
     def _work_tick(self):
         _cap = float(workmod.OFFLINE_CAP_H) * 3600.0
@@ -9562,6 +9637,16 @@ class World(object):
                 rptmod.add_gold(q, applied)   # ★ round502
         except Exception:
             pass
+        # ★ 2026-10-23（用户："金币显示也加上"）
+        #   · 自动出售不提示（太频繁 ✗ 而且那条自己会单独弹"自动出售：xxx → +N 金币"）
+        #   · 其它来源累计起来，0.8 秒合并成一条 ✓
+        try:
+            if applied > 0 and str(why) != '自动出售':
+                _rid_g = getattr(q, 'role_id', None)
+                if _rid_g is not None:
+                    self._gold_acc[_rid_g] = int(self._gold_acc.get(_rid_g, 0)) + int(applied)
+        except Exception:
+            pass
         # ★★★ round305 修的真 bug：钱只在内存里 ✗ 会被一次"早排队的存档"盖掉 ★★★
         #   用户脚本踩到的现象："号里卖过东西 ✗ 余额却是 0"✓
         #   复现：离线卖东西（写 pending_gold）→ 【马上】登录 →
@@ -9653,6 +9738,13 @@ class World(object):
             return
         try:
             rptmod.add_exp(q, amount)      # ★ round502：战报统计（内存 ✓）
+        except Exception:
+            pass
+        # ★ 2026-10-23（用户："把经验显示也加上"）：0.8 秒合并一条（和金币同一套 ✓）
+        try:
+            _rid_e = getattr(q, 'role_id', None)
+            if _rid_e is not None and int(amount) > 0:
+                self._exp_acc[_rid_e] = int(self._exp_acc.get(_rid_e, 0)) + int(amount)
         except Exception:
             pass
         role = q.role
@@ -11657,8 +11749,10 @@ class World(object):
             pass
         self.post_save('PICK', (p.role_id, json.dumps(it, ensure_ascii=False),
                                 dbmod.now_ms()))
-        # ★ 2026-10-23（用户："把掉落自动去捡这个通知删除不需要了"）
-        #   → 捡东西不再弹"拾取：xxx"提示 ✓（东西照样进背包 ✓ 战报统计也照旧 ✓）
+        # ★ 2026-10-23（用户："删错的地方，例如捡起的东西通知加回来"）
+        #   → 掉落时【不提示】✗ 捡起来【要提示】✓（这才是用户要的）
+        self._send_cid(p.cid, P.pack('notice',
+                                     text='拾取：%s（%d 阶）' % (it['name'], tier_no(it.get('tier')))))
 
     def _add_pend(self, cid, key, item):
         """攒本 tick 要给某个玩家的反馈（hurts / mhits / me）"""
