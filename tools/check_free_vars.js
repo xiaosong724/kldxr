@@ -29,7 +29,7 @@ const FILES = [
 
 // 浏览器 / three.js 的内置全局（出现这些是正常的）
 const BUILTIN = new Set(('window document navigator location localStorage sessionStorage console performance ' +
-  'setTimeout clearTimeout setInterval clearInterval requestAnimationFrame queueMicrotask ' +
+  'setTimeout clearTimeout setInterval clearInterval requestAnimationFrame cancelAnimationFrame queueMicrotask ' +
   'Math JSON Object Array String Number Boolean Date RegExp Error TypeError RangeError Function Symbol Map Set WeakMap ' +
   'parseInt parseFloat isNaN isFinite NaN Infinity undefined null true false this ' +
   'innerWidth innerHeight devicePixelRatio screen history fetch WebSocket XMLHttpRequest Image Audio Blob File FileReader URL ' +

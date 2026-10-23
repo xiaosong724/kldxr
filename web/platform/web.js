@@ -11231,14 +11231,20 @@ function tkEl() {
   return e;
 }
 
-/* ★ 弹幕条高度变了 → 顺手把普通提示挪下去 ✗ 不让它们重叠 ✓ */
+/* ★ 弹幕条高度变了 → 顺手把普通提示挪下去 ✗ 不让它们重叠 ✓
+   ★★★ 2026-10-24（用户："系统提示框打着打着自己跑回去"）★★★
+   ★ 真凶就在这里：window._toastElRef 现在指向【系统提示框】✗
+     这个函数一跑就把它的 top 改掉 ✓ 而弹幕条经常更新（有人说话就变高）
+     → 玩家拖好的位置被打回"弹幕条下面"那个默认位置 ✓✓
+   ★ 修：这里【只管自己那个老 toast】✗ 绝不碰 sysMsgBox ✓
+     （系统提示框的位置由玩家自己拖 + SETCFG 存档管 ✓ 谁都不许改 ✓）*/
 function tkSyncToastTop() {
   var e = document.getElementById('ticker');
   var h = (e && !e.classList.contains('off')) ? e.offsetHeight : 0;
   var top = tkToastTop();                   /* ★ 现算（62 + 弹幕高 + 8 ✓）*/
   var te = document.getElementById('_toastEl');
-  if (window._toastElRef) { te = window._toastElRef; }
-  if (te) { te.style.top = top + 'px'; }
+  if (window._toastElRef && !window._sysMsgBoxRef) { te = window._toastElRef; }
+  if (te && te !== window._sysMsgBoxRef) { te.style.top = top + 'px'; }
   window._toastTop = top;                   /* 给 toast() 用 ✓ */
   return top;
 }
@@ -11429,7 +11435,9 @@ function sysMsgEl() {
   b.appendChild(rb);
   document.body.appendChild(b);
   SYSMSG.el = b; SYSMSG.rowsBox = rb;
-  window._toastElRef = b;            /* 兼容旧代码里对 _toastElRef 的引用 ✓ */
+  /* ★ 2026-10-24：别再用 _toastElRef 了 ✗ 那个名字会被弹幕逻辑改写 top ✓
+     单独用一个 _sysMsgBoxRef ✗ 弹幕那边认不出它就不会动 ✓ */
+  window._sysMsgBoxRef = b;
   sysMsgApplyPos();
   sysMsgApplySize();
   try { sysMsgBindSizeBtns(); } catch (eSB2) { }
@@ -11751,43 +11759,76 @@ function sysMsgBindDrag() {
   b.style.pointerEvents = 'auto';      /* 只有键位模式才吃事件 ✗ 平时穿透 ✓ */
   b._dragBound = true;
   var st = null;
+  var _raf = 0, _nx = 0, _ny = 0;
+
+  /* ★★★ 2026-10-24（用户："键位移动不流畅"）★★★
+     ★ 病根：pointermove 每来一次就写一次 style.left/top ✗
+       手机上一秒能来 120+ 次 ✓ 每次都触发【重排 + 重绘】✓ 直接卡 ✓
+     ★ 修：先记下最新坐标 ✗ requestAnimationFrame 里每帧只写一次 ✓
+       （一帧内来多少次都只应用最后一次 ✓ 视觉上更顺、还省 80% 的重排 ✓）*/
+  function flush() {
+    _raf = 0;
+    if (!st) { return; }
+    var W = innerWidth, H = innerHeight;
+    var l = Math.max(4, Math.min(W - (b.offsetWidth || 340) - 4, _nx));
+    var t = Math.max(4, Math.min(H - (b.offsetHeight || 60) - 4, _ny));
+    b.style.left = l + 'px';
+    b.style.top = t + 'px';
+  }
+
   b.addEventListener('pointerdown', function (e) {
     if (!UI_EDIT) { return; }              /* 非键位模式不许拖 ✓ */
+    /* ★★★ 2026-10-24（用户："它还是会自己恢复到默认位置"）★★★
+       ★ 真凶：框平时可能有 transform（比如 translateX(-50%)）✗
+         getBoundingClientRect() 返回的是【算上 transform 之后】的位置 ✓
+         然后我把 left 设成 r.left ✗ 又留着 transform
+         → 位置被【叠加了两次】✗ 拖起来发飘、松手后又"弹回"某个位置 ✓✓
+       ★ 修：取位置之前先把 transform 清掉 ✗ 让 left/top 成为唯一坐标来源 ✓ */
+    b.style.transform = 'none';
     var r = b.getBoundingClientRect();
     st = { dx: e.clientX - r.left, dy: e.clientY - r.top, moved: false };
-    b.style.transform = 'none';
     b.style.left = r.left + 'px';
     b.style.top = r.top + 'px';
+    _nx = r.left; _ny = r.top;
     try { b.setPointerCapture(e.pointerId); } catch (e2) { }
     e.preventDefault();
   });
+
   b.addEventListener('pointermove', function (e) {
     if (!st) { return; }
-    var W = innerWidth, H = innerHeight;
-    var l = Math.max(4, Math.min(W - (b.offsetWidth || 340) - 4, e.clientX - st.dx));
-    var t = Math.max(4, Math.min(H - (b.offsetHeight || 60) - 4, e.clientY - st.dy));
-    b.style.left = l + 'px'; b.style.top = t + 'px';
+    _nx = e.clientX - st.dx;
+    _ny = e.clientY - st.dy;
     st.moved = true;
+    if (!_raf) { _raf = requestAnimationFrame(flush); }
   });
-  b.addEventListener('pointerup', function (e) {
+
+  function _end(e) {
     if (!st) { return; }
-    var moved = st.moved; st = null;
+    var moved = st.moved;
+    /* ★★★ 2026-10-24：松手时**立刻**把最终位置落下去 ✗ 不等 rAF ✓
+       ★ 为什么：极快的点击/拖动，pointerup 可能在 rAF 回调之前就来了
+         → 那一帧的移动被 cancel 掉 ✗ 看起来"拖了没反应" ✓
+       ★ 现在：松手先 flush 一次（用记录的最后坐标 ✓）再存盘 ✓ */
+    if (_raf) { cancelAnimationFrame(_raf); _raf = 0; }
+    if (moved) { try { flush(); } catch (eF) { } }
+    st = null;
     try { b.releasePointerCapture(e.pointerId); } catch (e3) { }
-    if (moved && typeof uiSavePos === 'function') {
-      var _L = parseFloat(b.style.left) || 0, _T = parseFloat(b.style.top) || 0;
-      uiSavePos('sysmsg', _L, _T);
-      /* ★ 2026-10-23：再写一份进 SETCFG ✓ 和尺寸一起走同一个存档 ✓ */
-      try {
-        if (typeof SETCFG !== 'undefined' && SETCFG) {
-          SETCFG.sysMsgPos = { l: Math.round(_L), t: Math.round(_T),
-                               rx: +( _L / Math.max(1, innerWidth)).toFixed(5),
-                               ry: +( _T / Math.max(1, innerHeight)).toFixed(5),
-                               sw: innerWidth, sh: innerHeight };   /* ★ 记下当时的屏幕尺寸 ✓ */
-          if (typeof saveSet === 'function') { saveSet(); }
-        }
-      } catch (e5) { }
-    }
-  });
+    if (!moved) { return; }
+    /* ★ 松手时按【最终位置】再对一次齐 ✗ 保证存的和看到的完全一致 ✓ */
+    var _L = parseFloat(b.style.left) || 0, _T = parseFloat(b.style.top) || 0;
+    if (typeof uiSavePos === 'function') { uiSavePos('sysmsg', _L, _T); }
+    try {
+      if (typeof SETCFG !== 'undefined' && SETCFG) {
+        SETCFG.sysMsgPos = { l: Math.round(_L), t: Math.round(_T),
+                             rx: +(_L / Math.max(1, innerWidth)).toFixed(5),
+                             ry: +(_T / Math.max(1, innerHeight)).toFixed(5),
+                             sw: innerWidth, sh: innerHeight };
+        if (typeof saveSet === 'function') { saveSet(); }
+      }
+    } catch (e5) { }
+  }
+  b.addEventListener('pointerup', _end);
+  b.addEventListener('pointercancel', _end);   /* ★ 手机来电/切后台也会中断 ✗ 也要存 ✓ */
 }
 
 function toast(msg) {
