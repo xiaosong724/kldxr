@@ -1022,34 +1022,34 @@ function _numSlot() {
   */
   /* ① 普通攻击 白→金（尾巴不要太深）*/
   .dmgNum.dAtk{background-image:linear-gradient(180deg,#fff 0%,#fff8dc 38%,#ffd75e 66%,#e8a020 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 4px rgba(255,180,40,.34))}
+    text-shadow:0 2px 0 rgba(0,0,0,.95)}
   /* ② 普攻暴击 白→亮金→橙 */
   .dmgNum.dAtkC{background-image:linear-gradient(180deg,#fff 0%,#fff0a0 32%,#ffb020 68%,#e05a00 100%);
-    filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 8px rgba(255,120,0,.48))}
+    text-shadow:0 3px 0 rgba(0,0,0,.95)}
   /* ③ 技能伤害 —— ★ 2026-10-23（用户选 B）：白→中品红→#c8409e
      和技能暴击（深品红）同色系 ✗ 一眼看出是技能 ✓ 但明显更浅 ✓ */
   .dmgNum.dSk{background-image:linear-gradient(180deg,#fff 0%,#ffd8f2 32%,#ff7ad8 64%,#c8409e 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 6px rgba(255,110,210,.44))}
+    text-shadow:0 2px 0 rgba(0,0,0,.95)}
   /* ④ 技能暴击 —— ★ 2026-10-23（用户选 D）：加深
      起手 #fff0fb 直接进粉 ✗ 尾巴 #8a0060 更深 ✓ 和技能伤害的差距拉开 ✓ */
   .dmgNum.dSkC{background-image:linear-gradient(180deg,#fff0fb 0%,#ff9ee0 28%,#e832a8 62%,#8a0060 100%);
-    filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 10px rgba(235,60,175,.5))}
+    text-shadow:0 3px 0 rgba(0,0,0,.95)}
   /* ⑤ 玩家受伤 白→红 */
   .dmgNum.dHurt{background-image:linear-gradient(180deg,#fff 0%,#ffc4c4 34%,#f03030 66%,#c01010 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 6px rgba(255,40,40,.42))}
+    text-shadow:0 2px 0 rgba(0,0,0,.95)}
   /* ⑥ 治疗/吸血 白→薄荷绿 */
   .dmgNum.dHeal{background-image:linear-gradient(180deg,#fff 0%,#ccffe0 36%,#4ade80 66%,#22a050 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.92)) drop-shadow(0 0 5px rgba(70,220,130,.38))}
+    text-shadow:0 2px 0 rgba(0,0,0,.92)}
   /* ⑦ 经验/突破 白→淡蓝 */
   .dmgNum.dExp{background-image:linear-gradient(180deg,#fff 0%,#e4f0ff 36%,#8cc0ff 66%,#4a7fd0 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.92)) drop-shadow(0 0 5px rgba(120,170,255,.38))}
+    text-shadow:0 2px 0 rgba(0,0,0,.92)}
   /* ⑧ 武器特效 白→青绿（不斜体）*/
   .dmgNum.dFx{background-image:linear-gradient(180deg,#fff 0%,#dcfff5 36%,#4fe0bc 66%,#1a9c80 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.9)) drop-shadow(0 0 4px rgba(70,220,180,.3));
+    text-shadow:0 2px 0 rgba(0,0,0,.9);
     font-style:normal}
   /* ⑨ 击败/复活 纯白银灰 */
   .dmgNum.dSys{background-image:linear-gradient(180deg,#fff 0%,#f0f4fa 42%,#c0ccda 70%,#7a8898 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.92)) drop-shadow(0 0 4px rgba(200,220,255,.28))}
+    text-shadow:0 2px 0 rgba(0,0,0,.92)}
   `;
   document.head.appendChild(st);
 })();
@@ -1089,67 +1089,109 @@ function _numFlyAt(txt, color, sx, sy, big, life, px, cls, crit) {
   o.el.style.transform = 'translate3d(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px,0)';
   o.el.style.opacity = '1';
   o.t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-  if (!o.anim) {
-    o.anim = true;
-    (function loop() {
-      var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-      var k = (now - o.t0) / o.life;
-      if (!o.busy || k >= 1) {
-        o.busy = false; o.el.style.display = 'none';
-      } else {
-        /* ★ 重砸动效：前 12% 从 2.15 倍砸到 1 倍（暴击再多弹一下）*/
-        var _s = 1, _dy = 0;
-        if (o.el.className && o.el.className.indexOf('dmgNum') >= 0) {
-          if (k < .12) { _s = 2.15 - 9.6 * k; }
-          else if (o.crit && k < .20) { _s = 1 + .22 * Math.sin((k - .12) / .08 * Math.PI); }
-          _dy = (k < .10 ? 6 * (k / .10) : 6);
-        }
-        /* ★ 2026-10-23：每条的上升高度随机 40~96px ✗ 不会全部停在同一个高度 ✓ */
-        /* ★ 2026-10-23：自己的字上升高度【固定 46px】✗ 随机高度会让同一条竖线上的字
-           看着高低不齐 ✓ 其它的保持随机（避免排成一条线 ✓） */
-        if (o.rise === undefined) { o.rise = o.isSelf ? 46 : (40 + Math.random() * 56); }
-        var _rise = (o.el.className && o.el.className.indexOf('dmgNum') >= 0) ? o.rise : 46;
-        var _y = o.y0 + _dy - _rise *
-                 (o.el.className && o.el.className.indexOf('dmgNum') >= 0
-                    ? (1 - Math.pow(1 - k, 1.9)) : k);
-        /* ★ 2026-10-23：上升时往自己那个方向再偏一点 ✗ 不会排成一条直线 ✓ */
-        /* ★ 2026-10-23：漂移幅度 40 → 110px ✗ 上升时彻底散开，不会又聚成一束 ✓ */
-        /* ★ 2026-10-23：自己的字【完全不漂】✗ 死钉在头顶 ✓
-           其它的字照旧横向漂开 ✓ 多段伤害才散得开 ✓ */
-        if (o.drift === undefined) { o.drift = o.isSelf ? 0 : (Math.random() * 170 - 85); }
-        var _xx = o.x0 + o.drift * k;
-        o.el.style.transform = 'translate3d(' + _xx.toFixed(1) + 'px,' +
-          _y.toFixed(1) + 'px,0)' + (_s !== 1 ? ' scale(' + _s.toFixed(3) + ')' : '');
-        o.el.style.opacity = String(1 - k);
-        requestAnimationFrame(loop);
-      }
-    })();
+  /* ★★★ 2026-10-24（用户："C不做，其它的可以做"）
+     ★ 病根：原来【每条飘字自己一个 requestAnimationFrame 循环】
+       32 条 = 32 个 rAF 回调 ✗ 每帧 64 次 style 写 ✓✓
+       关掉飘字后帧率 30 → 50 ✗ 说明这块是真大头 ✓
+     ★ 修法：不再开独立循环 ✗ 只设置 busy 标记 + 起始状态 ✓
+       由【全局唯一的 _numFrame()】每帧统一遍历池子求值 ✓
+       → rAF 从 N 个变成 1 个 ✓ 调度开销归零 ✓✓
+     ★ 视觉完全不变：重砸、上浮、漂移、淡出全部保留 ✓ */
+  o.anim = true;
+  o.wake = true;
+  _numEnsureLoop();
+}
+
+/* ★ 2026-10-24：全局唯一的飘字更新循环 ✗ 所有飘字共用 ✓ */
+var _numLoopOn = false;
+function _numEnsureLoop() {
+  if (_numLoopOn) { return; }
+  _numLoopOn = true;
+  requestAnimationFrame(_numFrame);
+}
+
+/* ★★★ 2026-10-24（用户："方案 B：降低更新频率你先试试"）★★★
+   ★ 上一版：统一成一个 rAF，但每帧仍然对每个飘字写 2 次样式
+     32 个飘字 = 每帧 64 次样式变更 ✗ 浏览器每次都要重算样式 + 重提交合成层 ✓✓
+   ★ 这版：
+     ① 每 2 帧才更新一次（30Hz 的动画 ✗ 飘字是快速上浮的小字，看不出）
+     ② 只有算出来的值真的变了才写（避免 toFixed 抖动导致的重复写）
+     ③ 消失时只写一次 display:none
+   ★ 预期：样式变更 64 次/帧 → 约 16 次/帧（-75%）✓
+   ★ 视觉：飘字移动会略微粗一档 ✗ 但速度不变、轨迹不变 ✓ */
+var _numTickN = 0;
+function _numFrame() {
+  var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  var any = false;
+  /* ★ 降频：每 2 帧才真正更新位置 ✗ 但"结束判断"每帧都做 ✓
+     （不然飘字会多显示 1 帧，无伤大雅但没必要）*/
+  _numTickN = (_numTickN + 1) & 1;
+  var doPos = (_numTickN === 0);
+  for (var i = 0; i < _numPool.length; i++) {
+    var o = _numPool[i];
+    if (!o.busy) { continue; }
+    var k = (now - o.t0) / o.life;
+    if (k >= 1 || !o.anim) {
+      o.busy = false; o.anim = false; o.wake = false;
+      if (o.el.style.display !== 'none') { o.el.style.display = 'none'; }
+      continue;
+    }
+    any = true;
+    if (!doPos) { continue; }          /* ★ 本帧不更新位置 ✓ */
+    var isNum = !!(o.el.className && o.el.className.indexOf('dmgNum') >= 0);
+    /* 重砸动效：前 12% 从 2.15 倍砸到 1 倍（暴击再多弹一下）*/
+    var _s = 1, _dy = 0;
+    if (isNum) {
+      if (k < .12) { _s = 2.15 - 9.6 * k; }
+      else if (o.crit && k < .20) { _s = 1 + .22 * Math.sin((k - .12) / .08 * Math.PI); }
+      _dy = (k < .10 ? 6 * (k / .10) : 6);
+    }
+    /* 上升高度：自己的字固定 46px，其它随机 40~96px */
+    if (o.rise === undefined) { o.rise = o.isSelf ? 46 : (40 + Math.random() * 56); }
+    var _rise = isNum ? o.rise : 46;
+    var _y = o.y0 + _dy - _rise * (isNum ? (1 - Math.pow(1 - k, 1.9)) : k);
+    /* 漂移：自己的字不漂 ✗ 其它横向 0~85px */
+    if (o.drift === undefined) { o.drift = o.isSelf ? 0 : (Math.random() * 170 - 85); }
+    var _xx = o.x0 + o.drift * k;
+    /* ★ 只有值变了才写样式 ✗ 避免重复写同一个值（浏览器也会去重，但判断更省）*/
+    var _tx = (_xx.toFixed(1) | 0);
+    var _ty = (_y.toFixed(1) | 0);
+    var _op = Math.round((1 - k) * 20) / 20;         /* 透明度 5% 一档 */
+    if (o._ltx !== _tx || o._lty !== _ty || o._ls !== _s) {
+      o._ltx = _tx; o._lty = _ty; o._ls = _s;
+      o.el.style.transform = 'translate3d(' + _xx.toFixed(1) + 'px,' +
+        _y.toFixed(1) + 'px,0)' + (_s !== 1 ? ' scale(' + _s.toFixed(3) + ')' : '');
+    }
+    if (o._lop !== _op) {
+      o._lop = _op;
+      o.el.style.opacity = String(_op);
+    }
+  }
+  if (any) {
+    requestAnimationFrame(_numFrame);
   } else {
-    // 已经在跑循环 → 它自己会发现 t0 变了（重播 ✓）
-    // ★ 但那个循环只在自己那格空闲时退出 ✗ 所以这里补一次唤醒
-    requestAnimationFrame(function () { if (o.busy && !o.wake) { o.wake = true; (function lp() {
-      var now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-      var k = (now - o.t0) / o.life;
-      if (!o.busy || k >= 1) { o.busy = false; o.el.style.display = 'none'; o.wake = false; }
-      else {
-        var _s2 = 1, _dy2 = 0;
-        if (o.el.className && o.el.className.indexOf('dmgNum') >= 0) {
-          if (k < .12) { _s2 = 2.15 - 9.6 * k; }
-          else if (o.crit && k < .20) { _s2 = 1 + .22 * Math.sin((k - .12) / .08 * Math.PI); }
-          _dy2 = (k < .10 ? 6 * (k / .10) : 6);
-        }
-        var _y2 = o.y0 + _dy2 - (o.el.className && o.el.className.indexOf('dmgNum') >= 0 ? 62 : 46) *
-                  (o.el.className && o.el.className.indexOf('dmgNum') >= 0
-                     ? (1 - Math.pow(1 - k, 1.9)) : k);
-        o.el.style.transform = 'translate3d(' + o.x0.toFixed(1) + 'px,' +
-          _y2.toFixed(1) + 'px,0)' + (_s2 !== 1 ? ' scale(' + _s2.toFixed(3) + ')' : '');
-        o.el.style.opacity = String(1 - k);
-        requestAnimationFrame(lp); }
-    })(); } });
+    _numLoopOn = false;
   }
 }
+
 /* 老接口保留 ✓ 内部全部走池 */
+/* ★★★ 2026-10-24（用户："把伤害飘字加一个开关在设置里，我看看关了会不会好些"）★★★
+   ★ 为什么加这个开关：战斗时伤害飘字每个都要 project 投影 + 写 DOM style
+     打 30 只怪 = 一帧内 30 个飘字 ✗ 可能是掉帧的原因之一 ✓
+   ★ 关掉之后：飘字完全不生成 ✗ 但伤害数值照常计算 ✓
+     玩家想知道"打多少"就得靠血条 ✗ 所以只适合排查用 ✓ */
+var DMG_NUM_ON = true;
+/* ★ 2026-10-24：飘字距离剔除（太远的看不清 ✗ 白费）*/
+var DMG_NUM_FAR = 40;          // 40 米外的飘字不生成
 function _numProject(x, y, z, txt, color, big, life, px, cls, crit) {
+  if (!DMG_NUM_ON) { return; }
+  /* ★ 距离剔除：用玩家位置算 ✗ 远处的小字根本看不清 ✓ */
+  try {
+    if (typeof P !== 'undefined' && P && typeof P.x === 'number') {
+      var _ddx = (+x) - P.x, _ddz = (+z) - P.z;
+      if (_ddx * _ddx + _ddz * _ddz > DMG_NUM_FAR * DMG_NUM_FAR) { return; }
+    }
+  } catch (eFar) { }
   /* ★★★ 2026-10-23（用户："伤害飘字堆叠，太密集了散开一点"）★★★
      ★ 上一版的散布太窄（±0.9 米 / 0~90ms）✗ 短时间多段伤害照样叠成一坨 ✓
      ★ 现在改成【环形均分 + 时间错开】✗ 比纯随机更均匀 ✓
@@ -1217,6 +1259,7 @@ function _numProject(x, y, z, txt, color, big, life, px, cls, crit) {
 }
 var _NUM_SLOT = 0;
 function _numProjectNow(x, y, z, txt, color, big, life, px, cls, crit) {
+  if (!DMG_NUM_ON) { return; }
   if (!REUSE_V3.v) { REUSE_V3.v = new THREE.Vector3(); }
   var v = REUSE_V3.v.set(x, y, z).project(cam);
   if (v.z < -1 || v.z > 2) { return; }
@@ -1803,6 +1846,18 @@ function perfBar(st) {
 var DETAIL_RANGE = { low: 16, mid: 28, high: 40 };
 
 function applySet() {
+  /* ★ 2026-10-24：怪物闪白开关（启动时生效 ✓）*/
+  try {
+    if (typeof MOB_FLASH_ON !== 'undefined') {
+      MOB_FLASH_ON = (SETCFG && SETCFG.mobFlash !== false);
+    }
+  } catch (eMF) { }
+    /* ★ 2026-10-24：伤害飘字开关（启动时就要生效 ✓）*/
+  try {
+    if (typeof DMG_NUM_ON !== 'undefined') {
+      DMG_NUM_ON = (SETCFG && SETCFG.dmgNum !== false);
+    }
+  } catch (eDN) { }
   /* ★ 2026-10-25：着色器开关 + 强度（启动时就要生效 ✗ 不能等打开设置页 ✓）*/
   try {
     var _shv = 40;
@@ -2265,7 +2320,7 @@ function mqSvg(v) {
   var fs = (v >= 1000) ? 9.5 : (v >= 100) ? 11 : 13;    // 数字越长越小
   var dark = '#2a0505';
   return '<svg width="' + sz + '" height="' + sz + '" viewBox="0 0 40 40" '
-    + 'style="display:block;filter:drop-shadow(0 1px 2px rgba(0,0,0,.85))">'
+    + 'style="display:block;text-shadow:0 1px 2px rgba(0,0,0,.85)">'
     + '<path d="M9 14 L3 2 L16 9 Z" fill="' + col + '" stroke="' + dark + '" stroke-width="1.6"/>'
     + '<path d="M31 14 L37 2 L24 9 Z" fill="' + col + '" stroke="' + dark + '" stroke-width="1.6"/>'
     + '<path d="M20 6 C31 6 35 13 34 21 C33 30 27 37 20 37 C13 37 7 30 6 21 '
@@ -5255,6 +5310,47 @@ function openSet(wantTab) {
       try { if (typeof saveSet === 'function') { saveSet(); } } catch (eSh2) { }
       shaderApply(v);
     });
+  }
+  /* ★ 2026-10-24：伤害飘字开关（排查卡顿用 ✓）*/
+  var dnumRow = document.getElementById('rowDmgNum');
+  if (dnumRow) {
+    dnumRow.innerHTML = '';
+    DMG_NUM_ON = (SETCFG.dmgNum !== false);
+    var dn = document.createElement('div');
+    dn.className = 'opt' + (DMG_NUM_ON ? ' on' : '');
+    dn.innerHTML = '伤害飘字 ' + (DMG_NUM_ON ? '开' : '关');
+    var dnTap = function (e) {
+      if (e) { e.preventDefault(); }
+      DMG_NUM_ON = !DMG_NUM_ON;
+      SETCFG.dmgNum = DMG_NUM_ON;
+      try { saveSet(); } catch (e2) { }
+      try { openSet(); } catch (e3) { }
+    };
+    dn.addEventListener('touchstart', dnTap, { passive: false });
+    dn.addEventListener('click', dnTap);
+    dnumRow.appendChild(dn);
+  }
+  /* ★ 2026-10-24：怪物闪白开关（排查卡顿用 ✓）*/
+  var mfRow = document.getElementById('rowMobFlash');
+  if (mfRow) {
+    mfRow.innerHTML = '';
+    if (typeof MOB_FLASH_ON !== 'undefined') {
+      MOB_FLASH_ON = (SETCFG.mobFlash !== false);
+    }
+    var mfOn = (typeof MOB_FLASH_ON === 'undefined') ? true : MOB_FLASH_ON;
+    var mf = document.createElement('div');
+    mf.className = 'opt' + (mfOn ? ' on' : '');
+    mf.innerHTML = '怪物闪白 ' + (mfOn ? '开' : '关');
+    var mfTap = function (e) {
+      if (e) { e.preventDefault(); }
+      try { MOB_FLASH_ON = !MOB_FLASH_ON; } catch (eX) { }
+      SETCFG.mobFlash = MOB_FLASH_ON;
+      try { saveSet(); } catch (e2) { }
+      try { openSet(); } catch (e3) { }
+    };
+    mf.addEventListener('touchstart', mfTap, { passive: false });
+    mf.addEventListener('click', mfTap);
+    mfRow.appendChild(mf);
   }
   // ★ 音效开关 + 音量 ✓
   var srow = document.getElementById('rowSfx');

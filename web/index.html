@@ -91,11 +91,16 @@ body.safe-mode #skBar, body.safe-mode #auto { display:none !important; }
  #atk{position:fixed;right:18px;bottom:56px;width:var(--atk,84px);height:var(--atk,84px);
    box-sizing:border-box;border-radius:50%;display:flex;align-items:center;justify-content:center;
    overflow:hidden;
+   /* ★★★ 2026-10-24（用户："只做1" = 去掉攻击键的 backdrop-filter）★★★
+      ★ backdrop-filter 是【每帧都对背后的整个场景做高斯模糊】✗
+        它一直在屏幕上 ✗ 所以每帧都在花 ✓✓ 这是 CSS 里最贵的特性
+      ★ 去掉之后背景透明度不够 ✗ 把渐变色的 alpha 调高补偿 ✓
+        （原来 0x63/0x57/0x47/0x38 → 现在 0x9a/0x88/0x74/0x60 ✓ 大约 1.6 倍）
+      ★ 视觉：从"毛玻璃"变成"半透明磨砂色"✗ 按钮辨识度反而更清楚 ✓ */
    background:radial-gradient(circle at 36% 30%,
-     #7d685963 0%,#5b483f57 38%,#3a2c2547 76%,#241b1638 100%);
+     #7d68599a 0%,#5b483f88 38%,#3a2c2574 76%,#241b1660 100%);
    border:2px solid #8e7a6899;
    box-shadow:0 4px 12px #00000055,inset 0 1px 0 #ffffff22,inset 0 -9px 18px #0000002e;
-   backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);
    user-select:none;cursor:pointer;z-index:30;
    transition:transform .07s ease,box-shadow .15s ease;touch-action:none}
  /* ★★ 第 306 轮：跳跃键 ★★
@@ -1958,6 +1963,10 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
       <span id="shaderVal" style="width:56px;text-align:right;font-size:13px;color:#8fd6ff;
             font-variant-numeric:tabular-nums">标准</span>
     </div>
+   <div class="setLabel">伤害飘字 <small style="opacity:.6">（关了就不显示伤害数字，排查卡顿用）</small></div>
+   <div id="rowDmgNum" style="padding:6px 0"></div>
+   <div class="setLabel">怪物闪白 <small style="opacity:.6">（关了被打中就不变白，排查卡顿用）</small></div>
+   <div id="rowMobFlash" style="padding:6px 0"></div>
    <div class="setLabel">视角模式</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;padding:4px 0 8px">
       <button id="setCamFirst" class="bagB">第一人称</button>
@@ -2128,24 +2137,24 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
      那时 DOM 还没解析到它 → getElementById 全是 null →（有 null 保护）静默失败
      → 页面能跑，但登录浮层永远不出现，谁都进不去 ✗（第 26 轮发现）-->
 <script src="/ws-config.js"></script>
-<script src="/lib/three.min.js?v=20261025x"></script>
-<script src="/icons.js?v=20261025x"></script>
-<script src="/vfx.js?v=20261025x"></script>
-<script src="/lib/annrender.js?v=20261025x"></script>
-<script src="/platform/web.js?v=20261025x"></script>
-<script src="/core/town_data.js?v=20261025x"></script>
-<script src="/core/town.js?v=20261025x"></script>
-<script src="/core/game.js?v=20261025x"></script>
-<script src="/core/town_models.js?v=20261025x"></script>
-<script src="/core/town_villas.js?v=20261025x"></script>
-<script src="/core/town_hall.js?v=20261025x"></script>
-<script src="/core/town_shops2.js?v=20261025x"></script>
-<script src="/core/town_shops3.js?v=20261025x"></script>
-<script src="/core/town_shops4.js?v=20261025x"></script>
-<script src="/core/town_veg.js?v=20261025x"></script>
-<script src="/core/town_props.js?v=20261025x"></script>
-<script src="/platform/town_ui.js?v=20261025x"></script>
-<script src="/platform/place.js?v=20261025x"></script>
+<script src="/lib/three.min.js?v=20261026j"></script>
+<script src="/icons.js?v=20261026j"></script>
+<script src="/vfx.js?v=20261026j"></script>
+<script src="/lib/annrender.js?v=20261026j"></script>
+<script src="/platform/web.js?v=20261026j"></script>
+<script src="/core/town_data.js?v=20261026j"></script>
+<script src="/core/town.js?v=20261026j"></script>
+<script src="/core/game.js?v=20261026j"></script>
+<script src="/core/town_models.js?v=20261026j"></script>
+<script src="/core/town_villas.js?v=20261026j"></script>
+<script src="/core/town_hall.js?v=20261026j"></script>
+<script src="/core/town_shops2.js?v=20261026j"></script>
+<script src="/core/town_shops3.js?v=20261026j"></script>
+<script src="/core/town_shops4.js?v=20261026j"></script>
+<script src="/core/town_veg.js?v=20261026j"></script>
+<script src="/core/town_props.js?v=20261026j"></script>
+<script src="/platform/town_ui.js?v=20261026j"></script>
+<script src="/platform/place.js?v=20261026j"></script>
 
 
 

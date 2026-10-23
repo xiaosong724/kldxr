@@ -709,6 +709,11 @@ var _flashPool = [], _flash = [];
      · 僵尸 → 克隆那只僵尸
    ★ 为什么可以克隆：命中是低频操作（每秒几次 ✓）✗ 0.12 秒就回收 ✓ */
 var _flashClones = [];
+/* ★★★ 2026-10-24（用户："闪白你设置里加一个开关，我看看是不是这个问题"）★★★
+   ★ 为什么加这个开关：战斗时才有的操作里，闪白是最可疑的一个
+     关掉能立刻验证它是不是掉帧原因 ✓
+   ★ 关掉之后：怪物被打中不变白 ✗ 但伤害照常算 ✓ */
+var MOB_FLASH_ON = true;
 function flashCloneMesh(obj) {
   if (!obj) { return; }
   var wm = new THREE.MeshBasicMaterial({
@@ -1082,6 +1087,8 @@ function refreshPropSolids() {
   for (var k in _chunkSolid) { propSolids = propSolids.concat(_chunkSolid[k]); }
   PROP_MESHES = [];
   for (var k2 in _chunkMesh) { PROP_MESHES = PROP_MESHES.concat(_chunkMesh[k2]); }
+  /* ★ 2026-10-24：物件变了 → 静态网格索引要重建 ✓ */
+  solidMarkDirty();
 }
 function _dirtyCount(o) { for (var k in o) { return 1; } return 0; }
 
@@ -2357,22 +2364,113 @@ function fxTick(dt) {
 
 /* ★ 2026-10-22（用户连续报"看不见的墙"）：记录这次是被谁挡住的 */
 var BLOCK_TAG = null;
+/* ★★★ 2026-10-24（用户："打怪时会掉帧" / "每次遍历全部 599 个物件是什么意思"）★★★
+   ★ 病根：blocked() 每次调用都
+       1) concat 2~3 个数组（创建新数组 ✓ 复制几百个元素）
+       2) 遍历【全部 599 个物件】做矩形相交
+     100 只怪 × 8 次/帧 = 800 次调用 → 每帧 47.9 万次判断 ✗ 每秒 2875 万次 ✓✓
+     不打怪时怪站着不动 ✗ 根本不调 blocked ✓ 所以只有战斗时卡 ✓✓
+   ★ 修法：空间网格
+       · 把静态物件按 8 米一格登记（物件跨格就登记到每个覆盖的格）
+       · blocked() 只查【移动位置】所在格的 3×3 邻域
+       · 通常查到 0~10 个物件 ✗ 而不是 599 个 ✓✓
+   ★ 正确性：网格里查的和原来遍历的是【同一批物件】
+     唯一的区别是"先筛掉离得远的" ✗ 而离得远的本来就不可能相交 ✓
+     所以碰撞结果【完全一致】✓ 只是更快 ✓
+   ★ 什么时候重建：物件数组变了才重建（砍树、放家具、进小镇）
+     重建是 O(N) 的一次性操作 ✗ 不是每帧 ✓ */
+var SOLID_CELL = 8.0;                  // 每格 8 米
+var _solidGrid = {};                   // "gx,gz" -> [物件...]
+var _solidAll = [];                    // 合并后的全部物件（缓存 ✓）
+var _solidDirty = true;                // 需要重建
+var _solidSig = '';                    // 数组长度签名（快速判断变化 ✓）
+
+function solidMarkDirty() { _solidDirty = true; }
+
+function solidRebuild() {
+  _solidAll = [];
+  var i, n;
+  // 合并（用 push 循环 ✗ 不用 concat ✓ 少建中间数组）
+  for (i = 0, n = solids.length; i < n; i++) { _solidAll.push(solids[i]); }
+  for (i = 0, n = propSolids.length; i < n; i++) { _solidAll.push(propSolids[i]); }
+  if (typeof TOWN_SOLIDS !== 'undefined' && TOWN_SOLIDS) {
+    for (i = 0, n = TOWN_SOLIDS.length; i < n; i++) { _solidAll.push(TOWN_SOLIDS[i]); }
+  }
+  // 建网格
+  _solidGrid = {};
+  for (i = 0, n = _solidAll.length; i < n; i++) {
+    var s = _solidAll[i];
+    if (!s) { continue; }
+    var minx = s.x - s.hw - 0.6, maxx = s.x + s.hw + 0.6;
+    var minz = s.z - s.hd - 0.6, maxz = s.z + s.hd + 0.6;
+    var gx0 = Math.floor(minx / SOLID_CELL), gx1 = Math.floor(maxx / SOLID_CELL);
+    var gz0 = Math.floor(minz / SOLID_CELL), gz1 = Math.floor(maxz / SOLID_CELL);
+    // 超大物件（比如整圈围墙）最多登记 64 格 ✗ 防止它把整个网格铺满 ✓
+    if ((gx1 - gx0 + 1) * (gz1 - gz0 + 1) > 64) {
+      // 太大的物件直接放进"全局"桶 ✗ 每次都查 ✓（数量很少 ✓）
+      (_solidGrid['*'] || (_solidGrid['*'] = [])).push(s);
+      continue;
+    }
+    for (var gx = gx0; gx <= gx1; gx++) {
+      for (var gz = gz0; gz <= gz1; gz++) {
+        var k = gx + ',' + gz;
+        (_solidGrid[k] || (_solidGrid[k] = [])).push(s);
+      }
+    }
+  }
+  _solidDirty = false;
+  _solidSig = solids.length + '|' + propSolids.length +
+              '|' + ((typeof TOWN_SOLIDS !== 'undefined' && TOWN_SOLIDS) ? TOWN_SOLIDS.length : 0);
+}
+
+/* ★ 每帧开头检查一次 ✗ 数组长度变了就重建 ✓
+   （长度不变但有替换的情况极少 ✗ 而且调用方也会显式 solidMarkDirty ✓）*/
+function solidTick() {
+  var sig = solids.length + '|' + propSolids.length +
+            '|' + ((typeof TOWN_SOLIDS !== 'undefined' && TOWN_SOLIDS) ? TOWN_SOLIDS.length : 0);
+  if (_solidDirty || sig !== _solidSig) { solidRebuild(); }
+}
+
 function blocked(x, z, hw, hd, byMob, skipMob, fromX, fromZ) {
   var hasFrom = (fromX !== undefined && fromZ !== undefined);
-  // ① 静态物件
-  var all = solids.concat(propSolids);
-  if (typeof TOWN_SOLIDS !== 'undefined') { all = all.concat(TOWN_SOLIDS); }
-  for (var i = 0; i < all.length; i++) {
-    var s = all[i];
-    if (x + hw > s.x - s.hw && x - hw < s.x + s.hw && z + hd > s.z - s.hd && z - hd < s.z + s.hd) {
-      if (hasFrom && fromX + hw > s.x - s.hw && fromX - hw < s.x + s.hw &&
-          fromZ + hd > s.z - s.hd && fromZ - hd < s.z + s.hd) { continue; }   // 本来就在里面 → 放行让他出去 ✓
-      BLOCK_TAG = {
-        kind: (typeof TOWN_OBJ_SOLIDS !== 'undefined' && TOWN_OBJ_SOLIDS.indexOf(s) >= 0)
-          ? '物件碰撞' : '静态碰撞',
-        x: s.x, z: s.z, hw: s.hw, hd: s.hd
-      };
-      return true;
+  // ① 静态物件（★ 2026-10-24：改走空间网格 ✗ 只查附近 3×3 格 ✓）
+  if (_solidDirty) { solidRebuild(); }
+  {
+    var _gx0 = Math.floor((x - hw) / SOLID_CELL), _gx1 = Math.floor((x + hw) / SOLID_CELL);
+    var _gz0 = Math.floor((z - hd) / SOLID_CELL), _gz1 = Math.floor((z + hd) / SOLID_CELL);
+    /* 先查全局桶（超大物件，一般 0~2 个）*/
+    var _big = _solidGrid['*'];
+    /* 再查覆盖到的每一格（通常 1~4 格 ✗ 每格几个物件 ✓）*/
+    for (var _gx = _gx0; _gx <= _gx1; _gx++) {
+      for (var _gz = _gz0; _gz <= _gz1; _gz++) {
+        var _cellArr = _solidGrid[_gx + ',' + _gz];
+        if (!_cellArr) { continue; }
+        for (var _ci = 0; _ci < _cellArr.length; _ci++) {
+          var s = _cellArr[_ci];
+          if (x + hw > s.x - s.hw && x - hw < s.x + s.hw && z + hd > s.z - s.hd && z - hd < s.z + s.hd) {
+            if (hasFrom && fromX + hw > s.x - s.hw && fromX - hw < s.x + s.hw &&
+                fromZ + hd > s.z - s.hd && fromZ - hd < s.z + s.hd) { continue; }
+            BLOCK_TAG = {
+              kind: (typeof TOWN_OBJ_SOLIDS !== 'undefined' && TOWN_OBJ_SOLIDS.indexOf(s) >= 0)
+                ? '物件碰撞' : '静态碰撞',
+              x: s.x, z: s.z, hw: s.hw, hd: s.hd
+            };
+            return true;
+          }
+        }
+      }
+    }
+    /* 全局桶最后查（数量少但有重叠的可能 ✓）*/
+    if (_big && _big.length) {
+      for (var _bi = 0; _bi < _big.length; _bi++) {
+        var s2 = _big[_bi];
+        if (x + hw > s2.x - s2.hw && x - hw < s2.x + s2.hw && z + hd > s2.z - s2.hd && z - hd < s2.z + s2.hd) {
+          if (hasFrom && fromX + hw > s2.x - s2.hw && fromX - hw < s2.x + s2.hw &&
+              fromZ + hd > s2.z - s2.hd && fromZ - hd < s2.z + s2.hd) { continue; }
+          BLOCK_TAG = { kind: '静态碰撞', x: s2.x, z: s2.z, hw: s2.hw, hd: s2.hd };
+          return true;
+        }
+      }
     }
   }
   // ② 妖兽（★ 只查相邻 9 格 ✓ O(1) 均摊 ✓ 不再遍历全部 ✗）
@@ -4462,6 +4560,8 @@ function limbGeoOf(isArm, thick, col) {
    ★ 动画代码一行都不改：枢轴 Group 照旧存 rotation，只是不再挂到模型上 ✓
    ★ 容量 256 个实例（够用；超了就不画，不会崩）*/
 var LIMB_BUCKETS = {};
+/* ★ 2026-10-24：头顶 UI 的分帧计数器 ✗ 每帧 +1，3 帧轮一遍 ✓ */
+var _mobUiFrame = 0;
 var LIMB_CAP = 256;
 var _limbDummy = null;
 
@@ -5532,6 +5632,127 @@ function limbInstTick() {
   for (var k in dirty) { dirty[k].mesh.instanceMatrix.needsUpdate = true; }
 }
 
+
+/* ★★★ 2026-10-24（用户："全身 InstancedMesh也执行"）★★★
+   ★ 现状：四肢早就 Instanced 了（round434）✗ 只剩【身体 bodyMesh】还是独立 Mesh
+     60 只怪 = 60 次 draw call ✗ 这是怪物部分最大的一块 ✓
+   ★ 做法：按 kind 分桶 ✗ 同 kind 共用一个 InstancedMesh ✓
+     · 常态（活着、不倒地、不 LOD）= 走实例 ✓ 原 bodyMesh 隐藏 ✓
+     · 倒地 / 淡出 / LOD → 实例撤掉 ✗ 原 bodyMesh 显示 ✓
+       （这些状态要整体旋转/淡出，实例管不了 ✗ 而且数量很少 ✓）
+   ★ 受击闪白：原来改 material.color（全场共用一份 ✗）→ 现在改实例色 ✓
+   ★ 收益：60 只怪的身体从 60 次 draw call 降到【kind 种类数】次（约 10 次）✓ */
+var BODY_INST_CAP = 96;
+var BODY_BUCKETS = {};
+var _bodyM4 = null;
+
+function mobBodyBucketOf(kind) {
+  var key = kind || 'default';
+  var b = BODY_BUCKETS[key];
+  if (b) { return b; }
+  var geo = mobGeoOf(kind);
+  var mesh = new THREE.InstancedMesh(geo, vcMat(), BODY_INST_CAP);
+  mesh.count = 0;
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  mesh.castShadow = true;
+  mesh.receiveShadow = false;
+  /* ★ 实例分布很广 ✗ 用几何体包围盒剔除会误删 ✓ */
+  mesh.frustumCulled = false;
+  /* ★ 每个实例一个颜色（受击闪白用 ✓）*/
+  mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(BODY_INST_CAP * 3), 3);
+  for (var i = 0; i < BODY_INST_CAP; i++) { mesh.instanceColor.setXYZ(i, 1, 1, 1); }
+  if (scene) { scene.add(mesh); }
+  b = BODY_BUCKETS[key] = { mesh: mesh, free: [], owner: new Array(BODY_INST_CAP) };
+  return b;
+}
+
+function mobBodyAlloc(b) {
+  if (b.free.length) { return b.free.pop(); }
+  if (b.mesh.count < BODY_INST_CAP) { return b.mesh.count++; }
+  return -1;
+}
+
+function mobBodyRelease(b, idx) {
+  if (!b || idx == null || idx < 0) { return; }
+  b.owner[idx] = null;
+  b.free.push(idx);
+  if (!_bodyM4) { _bodyM4 = new THREE.Matrix4(); }
+  _bodyM4.makeScale(0, 0, 0);
+  b.mesh.setMatrixAt(idx, _bodyM4);
+  b.mesh.instanceMatrix.needsUpdate = true;
+}
+
+function mobBodyInstOne(m, dirty) {
+  if (!m || !m.hh) { return; }
+  var hh = m.hh;
+  /* ★ 活着 + 没倒地 + 没 LOD → 走实例 ✓；否则交回原 bodyMesh ✓ */
+  var useInst = m.alive && !(m.dying >= 0) && !m.faded && !m.lodOn;
+  if (!useInst) {
+    if (hh._bSlot != null) {
+      mobBodyRelease(BODY_BUCKETS[hh._bKind || 'default'], hh._bSlot);
+      hh._bSlot = null; hh._bKind = null;
+    }
+    /* ★ 用标记而不是直接写 visible ✗ 避免和 LOD / limbAttach 互相覆盖 ✓ */
+    hh._instHidden = false;
+    return;
+  }
+  /* ★ 走实例 → 标记"本帧身体由实例画" ✗ 稍后统一隐藏 bodyMesh ✓ */
+  hh._instHidden = true;
+  var kd = m.kind || 'default';
+  var b = mobBodyBucketOf(kd);
+  if (!b) { return; }
+  if (hh._bSlot == null || hh._bKind !== kd) {
+    if (hh._bSlot != null) {
+      mobBodyRelease(BODY_BUCKETS[hh._bKind || 'default'], hh._bSlot);
+    }
+    hh._bSlot = mobBodyAlloc(b);
+    hh._bKind = kd;
+    if (hh._bSlot < 0) { return; }
+    b.owner[hh._bSlot] = m;
+  }
+  var idx = hh._bSlot;
+  hh.g.updateWorldMatrix(true, false);
+  b.mesh.setMatrixAt(idx, hh.g.matrixWorld);
+  var lit = (m.flashT && m.flashT > 0) ? 2.6 : 1.0;
+  b.mesh.instanceColor.setXYZ(idx, lit, lit, lit);
+  b.mesh.instanceColor.needsUpdate = true;
+  dirty[b.mesh.uuid] = b;
+}
+
+/* ★ 每帧调一次 ✗ 把本地 + 远端怪的身体全部写进实例矩阵 ✓ */
+function mobBodyInstTick() {
+  if (!_bodyM4) { _bodyM4 = new THREE.Matrix4(); }
+  var dirty = {};
+  /* ★★ 2026-10-24：只做【本地怪】✗ 远端怪不动 ✓
+     ★ 为什么远端不做：
+       远端怪的施法动画直接写 rm.hh.body.rotation（前倾/侧摆，见 castT 那段）
+       实例模式下 bodyMesh 是 hidden 的 ✗ 写了也看不见 ✓✓
+     ★ 收益不受影响：本地刷的怪是大头 ✗ 远端怪一般只有几个 ✓
+     ★ 本地怪的动画全部写在 m2.g.rotation（组旋转 ✓）
+       g.matrixWorld 已经包含它 ✗ 实例化完全兼容 ✓✓ */
+  for (var i = 0; i < mobs.length; i++) { mobBodyInstOne(mobs[i], dirty); }
+  for (var u in dirty) { dirty[u].mesh.instanceMatrix.needsUpdate = true; }
+  /* ★★ 统一决定 bodyMesh 的可见性 ✗ 放在所有逻辑之后 ✓
+     ★ 为什么要放到最后：LOD 切换、limbAttach、死亡动画都会写 body.visible
+       如果我在循环中间写，会被它们覆盖 ✓✓
+     ★ 规则：实例在画 → bodyMesh 隐藏；否则恢复显示（由原有逻辑再管）✓ */
+  for (var j2 = 0; j2 < mobs.length; j2++) {
+    var mj2 = mobs[j2];
+    if (!mj2 || !mj2.hh || !mj2.hh.body) { continue; }
+    var wantHide = !!mj2.hh._instHidden;
+    if (mj2.hh.body.visible === wantHide && !wantHide) { continue; }
+    /* 只在状态确实需要变化时写（写 visible 会让 three 重建渲染列表 ✓）*/
+    if (wantHide) {
+      if (mj2.hh.body.visible) { mj2.hh.body.visible = false; }
+    } else {
+      /* 交回原有逻辑：LOD 时本来就该隐藏 ✗ 不能强行设 true ✓ */
+      if (!mj2.lodOn && (mj2.dying < 0) && !mj2.faded && !mj2.hh.body.visible) {
+        mj2.hh.body.visible = true;
+      }
+    }
+  }
+}
+
 /* ============ 伤害数字 ============ */
 var REUSE_V3 = { v: null };
 
@@ -6403,6 +6624,8 @@ function wsApplyWorld(d) {
      联机时伤害是【服务器算的】，所以数字也从服务器来 ✓
      本地只负责表现：弹数字 + 出一次音效/震动（砍到多只不叠音效 ✗） */
   var mh = d.mhits || [];
+  /* ★ 2026-10-24：这一批 mhits 里有没有怪死亡 ✗ 死亡音效只出一次 ✓ */
+  var _batchDied = false;
   for (var q2 = 0; q2 < mh.length; q2++) {
     var e2 = mh[q2];
     var edv = Math.round(+e2.dmg || 0);
@@ -6418,10 +6641,21 @@ function wsApplyWorld(d) {
     /* ★ round383（用户："暴击动画做成跳起来打"）
        ★ 只是动画 ✗ 不真的跳（不影响移动/命中 ✓）*/
     if (e2.crit) { _jumpAtkUntil = performance.now() + _jumpAtkDur; }
-    /* ★ round340：僵尸被打中闪白（用户要求 ✓）环境伤害不闪 ✓ */
-    if (!e2.env) {
+    /* ★★★ 2026-10-24（用户："回到战斗本身，是和怪战斗才会掉帧"）★★★
+       ★ 病根：这里每次命中都 flashCloneMesh ✗ 也就是【克隆一整只怪的模型】
+         · 一只怪 ≈ 10 个对象（身体 + LOD + 4 条肢体×2）
+         · 范围技能打 30 只 = 克隆 300 个对象 + 30 个新材质
+         · 每次都 scene.add ✗ 0.12 秒后 remove + dispose ✓✓
+         ★ 而且【闪白其实有两套】：
+           ① 实例色（limbInstTick 和 mobBodyInstTick 里的 lit）
+           ② flashCloneMesh 克隆副本
+           ① 早就写好了 ✗ 但一直没人设置 rm.flashT → 从来没生效 ✓
+         ★ 修：只设置 flashT ✗ 让已有的实例色机制负责显示 ✓
+           实例色 lit=2.6 就是亮 2.6 倍 ✗ 看起来就是发白 ✓
+           → 0 个新对象、0 个新材质、0 次 scene.add ✓✓ */
+    if (!e2.env && MOB_FLASH_ON) {
       var _rm2 = NET.rmobs && NET.rmobs[e2.mid];
-      if (_rm2 && _rm2.g) { flashCloneMesh(_rm2.g); }
+      if (_rm2) { _rm2.flashT = 0.12; }
     }
     /* ★ round324（用户："僵尸进岩浆受伤，为什么我的屏幕也会抖动"）
        env=1 = 环境伤害（岩浆烧僵尸）✗ 只是"别人在掉血"✓
@@ -6437,6 +6671,8 @@ function wsApplyWorld(d) {
     if (e2.heal > 0) {
       fxNum('+' + Math.round(e2.heal), '#6ee06e', P.x, 2.9 + 0.3, P.z);
     }
+    /* ★ 2026-10-24：这一批里有没有怪死了 ✗ 死亡音效每批只出一次 ✓ */
+    if (e2.die || e2.killed) { _batchDied = true; }
     if (q2 === 0) {
       sfx(e2.crit ? 'crit' : 'hit', 1.0);
       sfx('zhurt', 0.7);
@@ -6449,6 +6685,9 @@ function wsApplyWorld(d) {
       if (e2.crit) { hitStop = 0.11; }   /* ★ round431扁：镜头推近去掉了（用户：感觉没什么用）*/
     }
   }
+  /* ★ 2026-10-24：这一批里有怪死了 → 只响一次死亡音 ✓
+     （范围技能一次杀 20 只 ✗ 以前响 20 次 ✓✓ 现在 1 次 ✓）*/
+  if (_batchDied) { sfx('zdeath', 1.0); }
 
   /* ---- ★ 我的经验 / 等级（变了服务器才带）→ 直接刷左上角 HUD ✓ ---- */
   /* ★ 第 102 轮：升级/经验推送里也带了【有效生命上限】✓
@@ -8285,7 +8524,15 @@ function netUpdate(dt) {
     /* ★ 第 44 轮：只给 30 米内的僵尸投影 —— 更远的影子在地平线上只有几个像素，看不出来 ✓
        只要状态没变就不重复写 castShadow（写它会让 three.js 重建阴影列表 ✗）*/
     if (rm.hh.casters) {
-      var nsh = ((rx - P.x) * (rx - P.x) + (rz - P.z) * (rz - P.z)) < 900;
+      /* ★★★ 2026-10-24（用户："阴影距离限制"）★★★
+         ★ 原来 900 = 30 米 ✗ 60 只怪时可能有 20+ 只在投影 ✓
+         ★ 现在 400 = 20 米 ✗ 只剩最近的几只 ✓
+         ★ 为什么 20 米够：阴影相机本身只有 20~34 米范围（setDetail 决定）
+           影子超出相机范围的本来就投不出来 ✓ 设 30 米是白算 ✓✓
+         ★ 远处没影子会不会突兀：20 米外角色本身只有几十像素
+           而且有雾 ✗ 看不出差别 ✓ */
+      var _shd = (setDetail && setDetail() === 'low') ? 225 : 400;   /* 低画质 15m / 其它 20m */
+      var nsh = ((rx - P.x) * (rx - P.x) + (rz - P.z) * (rz - P.z)) < _shd;
       if (rm.shN !== nsh) {
         rm.shN = nsh;
         for (var csi = 0; csi < rm.hh.casters.length; csi++) { rm.hh.casters[csi].castShadow = nsh; }
@@ -8463,6 +8710,21 @@ function netUpdate(dt) {
       if (!_ov3) { _ov3 = new THREE.Vector3(); }
       _ov3.set(rx, (rm.g.position.y || 0) + (1.65 + MOB_FEET) * (rm.sk || 1), rz).project(cam);
       var vis2 = rm.alive && (_ov3.z > -1 && _ov3.z < 1 && Math.abs(_ov3.x) < 1.35 && Math.abs(_ov3.y) < 1.5);
+      /* ★★★ 2026-10-24（用户："名字牌/血条距离剔除"）★★★
+         ★ 原来只有【视锥剔除】✗ 屏幕内的怪哪怕 50 米外也全显示名字牌 ✓
+         ★ 怪物一多时 ✗ 每个名字牌都是一次 DOM 定位 + 可能的文字更新 ✓✓
+         ★ 现在加【距离】限制：
+           · 25 米内：正常显示 ✓
+           · 25 米外：不显示 ✓（那个距离名字只有几个像素，看不清 ✓）
+           · 例外：正在被打的怪 / 血量不满的怪 → 30 米内仍显示
+             （打架时要知道远处那只还剩多少血 ✓）*/
+      var _pdx = rx - P.x, _pdz = rz - P.z;
+      var _pm2 = _pdx * _pdx + _pdz * _pdz;
+      var _near = _pm2 < 625;                       /* 25 米 */
+      if (!_near && (_pm2 < 900) && (rm.hitT > 0 || (rm.hp < rm.hpMax))) {
+        _near = true;                                /* 30 米内、受伤中或不满血 → 也显示 */
+      }
+      vis2 = vis2 && _near;
       rm._offscreen = !vis2;      /* ★ round433：屏幕外就不算肢体动画了 ✓ */
       UI.plate.show(rm.ui, vis2);
       if (vis2) {
@@ -8540,7 +8802,10 @@ function hurtMob(m, dv, fromX, fromZ, crit, quiet) {
     // ★ 死亡动画：先倒地（0.55 秒 ✓）→ 停留 0.35 秒 → 淡出 0.4 秒 → 移除 ✓
     m.alive = false; m.dying = 0; m.dead = 0;
     UI.plate.show(m.ui, false);   // ★ 隐藏头顶 UI ✓
-    sfx('zdeath', 1.0);   // ★ MC 僵尸死亡声 ✓
+    /* ★ 2026-10-24（用户："范围技能一下打中几十个怪，会同时发出几十个声音吗"）
+       ★ 之前：死亡音效不受 quiet 控制 ✗ 一次杀 20 只就响 20 次 ✓✓
+       ★ 现在：多只同时死 → 只响一次 ✓（quiet=true 的那一路也是）*/
+    if (!quiet) { sfx('zdeath', 1.0); }
     dmg('击败', m.g.position.x, 3.0, m.g.position.z, true);
   }
 }
@@ -10336,8 +10601,19 @@ function frame(ts) {
   refreshGround();   // ★ 地面跟着玩家走（走出 160 单位才真重建，平时只是两次比较 ✓）
   refreshTerrain();  // ★ 第 306 轮：方块地形（分瓦片 ✗ 一帧最多建几片 ✓）
   rebuildGrid();   // ★ 每帧重建空间网格（O(N) ✓ 之后查询都是 O(1) ✓）
+  solidTick();     // ★ 2026-10-24：静态碰撞网格（物件变了才重建 ✓）
+  /* ★★★ 2026-10-24（用户："AI 分批 tick"）★★★
+     ★ 目标：60 只怪时每帧的头顶 UI 更新（project + 7 次 DOM 写）太贵
+     ★ 但不能整个循环跳过 ✗ 那样位置/伤害/碰撞都会卡 ✓
+     ★ 做法：把怪按 index 分成 3 组 ✗ 每帧只更新其中 1 组的头顶 UI
+        → 每只怪的 UI 每 3 帧（100ms）更新一次 ✓ 人眼看不出 ✓
+        → DOM 写从 60 次/帧 降到 20 次/帧 ✓✓
+     ★ 位置/碰撞/伤害/动画仍然每帧全算 ✓ 不影响手感 ✓ */
+  _mobUiFrame = (_mobUiFrame + 1) % 3;
   for (var mj = 0; mj < mobs.length; mj++) {
     var m2 = mobs[mj];
+    /* ★ 2026-10-24：这只怪本帧要不要更新头顶 UI（3 帧轮一遍 ✓）*/
+    var _uiTick = (mj % 3) === _mobUiFrame;
     /* ★ 击退更新（平滑衰减 ✓ 0.18 秒 ✓ 替代瞬间位移 ✗）*/
     if (m2.kbT > 0) {
       m2.kbT -= dt;
@@ -10419,8 +10695,9 @@ function frame(ts) {
     m2.g.rotation.y = Math.atan2(dx2, dz2);
     if (m2.shadow) { m2.shadow.position.set(m2.g.position.x, 0.09, m2.g.position.z); }
     if (m2.boxDbg) { m2.boxDbg.position.set(m2.g.position.x, 0.1, m2.g.position.z); }   // ★ 妖兽线框跟随 ✓
-    /* ★ 更新妖兽头顶 UI（投影到屏幕 ✓ 血条 + 名字 ✓）*/
-    if (m2.ui) {
+    /* ★ 更新妖兽头顶 UI（投影到屏幕 ✓ 血条 + 名字 ✓）
+       ★ 2026-10-24：只在自己的帧更新 ✗ 省 2/3 的 DOM 写 ✓ */
+    if (m2.ui && _uiTick) {
       if (!_mv3) { _mv3 = new THREE.Vector3(); }
       // ★ 高度 = 妖兽头顶（第 40 轮把模型抬高后，这里也要 +MOB_FEET，不然血条陷进头里 ✗）
       _mv3.set(m2.g.position.x, 1.35 + MOB_FEET, m2.g.position.z).project(cam);   // ★ round596：僵尸名牌再近 50%
@@ -10488,18 +10765,26 @@ function frame(ts) {
       /* ★ 妖兽分离（速度式 ✓ 用空间网格只查邻居 ✓ O(1) 均摊 ✓ 不直接改位置 ✗）
          排斥力累加到 sepX/sepZ ✓ 与移动向量合并 ✓ 物理自然 ✓ 不会卡死 ✓ */
       var sepX = 0, sepZ = 0;
-      var nbrs = nearMobs(m2.g.position.x, m2.g.position.z);
-      for (var oi = 0; oi < nbrs.length; oi++) {
-        var om = nbrs[oi];
-        if (om === m2 || !om.alive) { continue; }
-        var odx = m2.g.position.x - om.g.position.x, odz = m2.g.position.z - om.g.position.z;
-        var od = Math.hypot(odx, odz);
-        var mind = (G.MOB_W + G.MOB_D) / 4 + 0.05;
-        if (od < 0.0001) { odx = Math.random() - 0.5; odz = Math.random() - 0.5; od = Math.hypot(odx, odz) || 1; }
-        if (od < mind) {
-          var w = (mind - od) / mind;             // 越近推力越大 ✓
-          sepX += (odx / od) * w * G.MOB_SPEED * 1.6;
-          sepZ += (odz / od) * w * G.MOB_SPEED * 1.6;
+      /* ★★★ 2026-10-24（用户："AI 分批 tick"）★★★
+         ★ 分离计算是 O(邻居数) ✗ 60 只挤在一起时最贵 ✓✓
+         ★ 远处（30 米外）的怪：玩家根本看不清它们会不会重叠 ✗ 直接跳过 ✓
+         ★ 为什么安全：它们离开 30 米范围时会自动恢复分离 ✓ 不会永久重叠 ✓
+         ★ 注意：跳过的是【分离力】✗ 位置仍然每帧更新（追击路径不变 ✓）✓ */
+      var _sdx = m2.g.position.x - P.x, _sdz = m2.g.position.z - P.z;
+      if (_sdx * _sdx + _sdz * _sdz < 900) {      /* 30 米内才算分离 */
+        var nbrs = nearMobs(m2.g.position.x, m2.g.position.z);
+        for (var oi = 0; oi < nbrs.length; oi++) {
+          var om = nbrs[oi];
+          if (om === m2 || !om.alive) { continue; }
+          var odx = m2.g.position.x - om.g.position.x, odz = m2.g.position.z - om.g.position.z;
+          var od = Math.hypot(odx, odz);
+          var mind = (G.MOB_W + G.MOB_D) / 4 + 0.05;
+          if (od < 0.0001) { odx = Math.random() - 0.5; odz = Math.random() - 0.5; od = Math.hypot(odx, odz) || 1; }
+          if (od < mind) {
+            var w = (mind - od) / mind;             // 越近推力越大 ✓
+            sepX += (odx / od) * w * G.MOB_SPEED * 1.6;
+            sepZ += (odz / od) * w * G.MOB_SPEED * 1.6;
+          }
         }
       }
       // 分离速度并入移动（两轴分别检测 ✓ 可沿边滑 ✓）
@@ -10520,13 +10805,17 @@ function frame(ts) {
         if (!blocked(nx3, poz, mhw, mhd, false, null, pox, poz)) { m2.g.position.x = nx3; }
         if (!blocked(m2.g.position.x, nz3, mhw, mhd, false, null, m2.g.position.x, poz)) { m2.g.position.z = nz3; }
       }
+      /* ★ 2026-10-24：走路动画也分帧 ✗ walkT 用 dt*3 补偿 ✓
+         （相位照常累加，只是写入 rotation 的频率降低 ✓ 摆臂看不出差别）*/
       m2.walkT = (m2.walkT || 0) + dt * 5.4;                 // ★ 每只自己的相位（第 40 轮）
-      m2.legL.rotation.x = Math.sin(m2.walkT) * MOB_SWING;
-      m2.legR.rotation.x = -Math.sin(m2.walkT) * MOB_SWING;
-      // ★ 逼近时手臂微微张开 + 上下小幅晃动（有生命感 ✓ 不僵硬 ✓）
-      m2.armL.rotation.x = -1.35 + Math.sin(mobT * 5) * 0.12;
-      m2.armR.rotation.x = -1.35 - Math.sin(mobT * 5) * 0.12;
-      m2.g.rotation.z = Math.sin(mobT * 5) * 0.04;
+      if (_uiTick) {
+        m2.legL.rotation.x = Math.sin(m2.walkT) * MOB_SWING;
+        m2.legR.rotation.x = -Math.sin(m2.walkT) * MOB_SWING;
+        // ★ 逼近时手臂微微张开 + 上下小幅晃动（有生命感 ✓ 不僵硬 ✓）
+        m2.armL.rotation.x = -1.35 + Math.sin(mobT * 5) * 0.12;
+        m2.armR.rotation.x = -1.35 - Math.sin(mobT * 5) * 0.12;
+        m2.g.rotation.z = Math.sin(mobT * 5) * 0.04;
+      }
       /* 已由上方"真实阻挡"处理 ✓ */
     } else {
       /* ★ 已进入攻击距离 → 【蓄势】→ 攻击 → 冷却（全程有动作 ✓ 不呆站 ✗）*/
@@ -10766,6 +11055,8 @@ function frame(ts) {
 
   /* ★ round434：四肢实例矩阵（在所有姿势算完、渲染之前 ✓）*/
   try { limbInstTick(); } catch (e0) { }
+  /* ★ 2026-10-24：怪物身体也走 Instanced（60 次 draw call → 约 10 次）*/
+  try { mobBodyInstTick(); } catch (eBI) { }
   try { lvFxTick(dt); } catch (e1) { }
   /* ★ 2026-10-25：把玩家坐标告诉 VFX ✗ 让远处的特效自动剔除 ✓ */
   try { if (typeof VFX !== 'undefined' && VFX.setViewer) { VFX.setViewer(P.x, P.z); } } catch (eVw) { }

@@ -14,14 +14,44 @@ global.window = global;
 
 // 技能列表（key, kind）
 const SKILLS = [
-  ['blackhole', 'A'], ['swordrain', 'A'], ['earthsplit', 'A'], ['icefield', 'A'],
-  ['thunder', 'A'], ['bloodrage', 'A'], ['gale', 'A'], ['shield', 'A'],
-  ['timestop', 'A'], ['plague', 'A'], ['firestorm', 'A'], ['judgement', 'A'],
-  ['clone', 'B'], ['tank', 'B'], ['shadowstep', 'B'], ['thunderbolt', 'B'],
-  ['thorns', 'B'], ['splitarrow', 'B'], ['berserk', 'B'], ['undying', 'B'],
-  ['bloodthirst', 'B'], ['bloodslash', 'B'], ['arrowrain', 'B'], ['blink', 'B'],
-  ['cdcut', 'C'], ['skillcrit', 'C'], ['omnivamp', 'C'], ['skilldmg', 'C'],
-  ['qiflow', 'C'], ['skillten', 'C'], ['chain', 'C'], ['masterA', 'C'],
+  ['blackhole', 'A'],
+  ['swordrain', 'A'],
+  ['earthsplit', 'A'],
+  ['icefield', 'A'],
+  ['thunder', 'A'],
+  ['bloodrage', 'A'],
+  ['gale', 'A'],
+  ['shield', 'A'],
+  ['timestop', 'A'],
+  ['bloodslash', 'A'],
+  ['judgement', 'A'],
+  ['arrowrain', 'A'],
+  ['firestorm', 'A'],
+  ['blink', 'A'],
+  ['plague', 'A'],
+  ['clone', 'B'],
+  ['tank', 'B'],
+  ['shadowstep', 'B'],
+  ['thunderbolt', 'B'],
+  ['thorns', 'B'],
+  ['splitarrow', 'B'],
+  ['berserk', 'B'],
+  ['undying', 'B'],
+  ['bloodthirst', 'B'],
+  ['cdcut', 'C'],
+  ['skillcrit', 'C'],
+  ['omnivamp', 'C'],
+  ['skilldmg', 'C'],
+  ['qiflow', 'C'],
+  ['skillten', 'C'],
+  ['chain', 'C'],
+  ['masterA', 'C'],
+  ['masterB', 'C'],
+  ['thrifty', 'C'],
+  ['burn', 'B'],
+  ['skrange', 'C'],
+  ['skdur', 'C'],
+  ['extra_crit', 'C'],
 ];
 
 // ── 用 pureimage 造一个 canvas ──
@@ -57,6 +87,16 @@ if (!global.SKI || !global.SKI.drawTo) {
 
 // ── 给 ctx 补 roundRect ──
 function patchCtx(ctx) {
+  // ★ pureimage 的 ellipse() 是空实现（直接 throw）✗ 强制覆盖成 arc 近似 ✓
+  ctx.ellipse = function (cx, cy, rx, ry, rot, a0, a1, ccw) {
+    const r = (rx + ry) / 2;
+    this.arc(cx, cy, r, a0, a1, !!ccw);
+  };
+  // ★ setLineDash 不支持 ✗ 忽略即可（只是线型不同 ✓）
+  if (!ctx.setLineDash) {
+    ctx.setLineDash = function () { return; };
+    ctx.getLineDash = function () { return []; };
+  }
   if (!ctx.roundRect) {
     ctx.roundRect = function (x, y, w, h, r) {
       const rr = Math.min(r, w / 2, h / 2);
