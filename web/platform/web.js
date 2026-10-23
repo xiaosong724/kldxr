@@ -11066,9 +11066,32 @@ var SYSMSG = {
   pool: [],        /* 回收池 */
   t: null,         /* 自动隐藏计时器 */
   MAX: 5,          /* 最多同时显示几行 */
-  SIZE: 12.5       /* 字号（菜单可调）*/
+  SIZE: 11         /* 字号（菜单可调 ✗ 2026-10-23 默认调小）*/
 };
-var SYSMSG_SIZES = [11, 12.5, 14, 16];   /* 小 / 标准 / 大 / 特大 */
+var SYSMSG_SIZES = [10, 11, 12, 13.5];   /* 小 / 标准 / 大 / 特大（2026-10-23 整体缩小）*/
+
+/* ★★★ 2026-10-23（用户："为什么没有字体颜色，要跟网页版一样"）★★★
+   ★ 病根：预览页的颜色是 CSS 规则给的（.pA .row b{color:#ffd83d}）✗
+     游戏里我只写了内联 color ✓ 没有这条规则 → <b> 跟着继承父色 → 全是一个颜色 ✓
+   → 这里把预览页那套 CSS 真正注入进来 ✓（用 id 防重复）*/
+(function sysMsgStyles() {
+  if (document.getElementById('sysMsgCSS')) { return; }
+  var st = document.createElement('style');
+  st.id = 'sysMsgCSS';
+  st.textContent = `
+  #sysMsgBox .row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    padding:0 14px;line-height:1.85;color:#b9c6d2;
+    text-shadow:0 1px 2px rgba(0,0,0,.9);
+    transition:opacity .3s ease,transform .3s ease}
+  /* A 版彩色标签（和预览页一字不差 ✓）*/
+  #sysMsgBox .row b{color:#ffd83d;font-weight:800}
+  #sysMsgBox .row i{color:#8ee0ff;font-style:normal;font-weight:700}
+  #sysMsgBox .row.g b{color:#ffcf3a}
+  #sysMsgBox .row.it b{color:#8ee0ff}
+  #sysMsgBox .row.ex b{color:#b8ff8a}
+  `;
+  document.head.appendChild(st);
+})();
 
 function sysMsgEl() {
   if (SYSMSG.el) { return SYSMSG.el; }
@@ -11082,11 +11105,12 @@ function sysMsgEl() {
   /* ★ 2026-10-23（用户："不是让你固定大小吗"）
      高度按【最大行数】算死 ✗ 不随内容伸缩 ✓
      行少的时候框也保持这个高度（文字贴着底部往上排 ✓）*/
-  var _rowH = Math.round(SYSMSG.SIZE * 1.9);
-  var _h = Math.round(_rowH * SYSMSG.MAX + 18);
+  var _rowH = Math.round(SYSMSG.SIZE * 1.85);
+  var _h = Math.round(_rowH * SYSMSG.MAX + 14);
   b.style.cssText =
-    'position:fixed;left:50%;top:14%;transform:translateX(-50%);' +
-    'width:340px;height:' + _h + 'px;box-sizing:border-box;' +
+    /* ★ 2026-10-23（用户："位置默认调整到左边靠边"）*/
+    'position:fixed;left:16px;top:16%;transform:none;' +
+    'width:270px;height:' + _h + 'px;box-sizing:border-box;' +
     'padding:9px 0;border-radius:10px;pointer-events:none;z-index:69;' +
     'background:linear-gradient(180deg,rgba(12,16,20,.42),rgba(8,11,14,.58));' +
     'border:1px solid rgba(120,160,190,.20);' +
@@ -11113,7 +11137,8 @@ function sysMsgApplyPos() {
   if (typeof uiApplySavedPos === 'function') {
     if (uiApplySavedPos(b, 'sysmsg')) { return; }
   }
-  b.style.left = '50%'; b.style.top = '14%'; b.style.transform = 'translateX(-50%)';
+  /* ★ 2026-10-23（用户："默认左边靠边"）*/
+  b.style.left = '16px'; b.style.top = '16%'; b.style.transform = 'none';
 }
 /* 字号：菜单里调的 ✓ */
 function sysMsgApplySize() {
@@ -11121,11 +11146,11 @@ function sysMsgApplySize() {
   var s = SYSMSG.SIZE;
   for (var i = 0; i < SYSMSG.live.length; i++) {
     SYSMSG.live[i].style.fontSize = s + 'px';
-    SYSMSG.live[i].style.lineHeight = '1.9';
+    SYSMSG.live[i].style.lineHeight = '1.85';
   }
   /* ★ 字号一改，固定框的高度也要跟着重算（不然文字装不下）*/
-  var _rowH = Math.round(s * 1.9);
-  b.style.height = Math.round(_rowH * SYSMSG.MAX + 18) + 'px';
+  var _rowH = Math.round(s * 1.85);
+  b.style.height = Math.round(_rowH * SYSMSG.MAX + 14) + 'px';
 }
 /* 菜单里的字号按钮（点一下立刻生效 ✗ 并存到 localStorage ✓）*/
 function sysMsgBindSizeBtns() {
@@ -11164,13 +11189,9 @@ function sysMsgRow() {
   var el = SYSMSG.pool.pop();
   if (!el) {
     el = document.createElement('div');
-    el.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' +
-      'text-align:center;padding:0 16px;line-height:1.9;color:#aeb9c6;' +
-      'text-shadow:0 1px 3px rgba(0,0,0,.95);' +
-      'transition:opacity .3s ease,transform .3s ease';
+    el.className = 'row';          /* ★ 样式走 #sysMsgBox .row（彩色 b/i 才生效 ✓）*/
   }
   el.style.fontSize = SYSMSG.SIZE + 'px';
-  el.style.color = '#aeb9c6';        /* C 版统一浅灰 ✓ 不吃 <b> 的颜色 ✓ */
   return el;
 }
 
@@ -11178,31 +11199,52 @@ function sysMsgRow() {
 function sysMsgPush(msg) {
   var b = sysMsgEl();
   var el = sysMsgRow();
-  /* ★ 2026-10-23（用户："文字颜色也更网页不一样"）
-     C 版是【统一浅灰】✗ 不该有金币金黄/物品浅蓝那套彩色标签 ✓
-     → 把消息里的 <b> <i> <span> 标签全去掉，只留纯文本 ✓ */
-  var _plain = String(msg == null ? '' : msg)
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ');
-  el.textContent = _plain;
+  /* ★ 2026-10-23（用户："为什么没有字体颜色，要跟网页版一样"）
+     ★★ 我上一版理解错了：用户说"字体用 C"只是要【字号/居中】✗ 不是要去掉颜色 ✓
+     A 版的彩色就是它的一部分：金币金黄、物品浅蓝、正文浅灰 ✓
+     → 恢复 <b>/<i> 标签 ✓ 并给每类配对应颜色 ✓ */
+  /* ★ 2026-10-23：消息里没有标签时，按内容自动上色（和预览页一样的效果 ✓）
+     · 金币 / 数字 → 金黄
+     · 物品名（捡到 xxx）→ 浅蓝
+     · 经验 → 嫩绿
+     已经有 <b> 的就别重复包（防嵌套）✓ */
+  var _raw = String(msg == null ? '' : msg).replace(/&nbsp;/g, ' ');
+  if (_raw.indexOf('<b>') < 0 && _raw.indexOf('<i>') < 0) {
+    if (/\+[\d,]+\s*金币|金币\s*\+[\d,]+|\+[\d,]+$/.test(_raw)) {
+      _raw = _raw.replace(/(\+?[\d,]+)(\s*金币)?/, '<b>$1</b>$2');
+    } else if (/^捡到\s*/.test(_raw) || /^获得\s*/.test(_raw)) {
+      _raw = _raw.replace(/^(捡到|获得)\s*([^\s（(]+)/, '$1 <b>$2</b>');
+    } else if (/经验/.test(_raw)) {
+      _raw = _raw.replace(/(\+?[\d,]+)/, '<b>$1</b>');
+    }
+  }
+  el.innerHTML = _raw;
   el.style.textAlign = 'center';
   el.style.opacity = '0';
   el.style.transform = 'translateY(10px)';
   SYSMSG.rowsBox.appendChild(el);
   SYSMSG.live.push(el);
   requestAnimationFrame(function () { el.style.opacity = '1'; el.style.transform = 'translateY(0)'; });
-  /* 超出上限 → 最老那行淡出并回收（这就是"向上滚动"的观感 ✓）*/
-  while (SYSMSG.live.length > SYSMSG.MAX) {
+  /* ★ 2026-10-23（用户："滚动匀速"）
+     原来是一行一行"跳"上去 ✗ 现在整块容器【匀速平移】✗ 平滑连续 ✓ */
+  var _over = SYSMSG.live.length - SYSMSG.MAX;
+  if (_over > 0) {
     var old = SYSMSG.live.shift();
     (function (o) {
       o.style.opacity = '0';
-      o.style.transform = 'translateY(-14px)';
       setTimeout(function () {
         if (o.parentNode) { o.parentNode.removeChild(o); }
         o.innerHTML = '';
         SYSMSG.pool.push(o);
-      }, 320);
+        /* 删掉最老那行后，把容器瞬时回正（视觉上无感 ✓）*/
+        SYSMSG.rowsBox.style.transition = 'none';
+        SYSMSG.rowsBox.style.transform = 'translateY(0)';
+      }, 260);
     })(old);
+    /* 容器匀速上移一行的高度 ✓ */
+    var _lh = Math.round(SYSMSG.SIZE * 1.85);
+    SYSMSG.rowsBox.style.transition = 'transform .26s linear';
+    SYSMSG.rowsBox.style.transform = 'translateY(-' + _lh + 'px)';
   }
   b.style.display = 'block';
   void b.offsetHeight;              /* 强制回流 ✗ 让 opacity 过渡生效 ✓ */

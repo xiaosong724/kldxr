@@ -11660,8 +11660,8 @@ class World(object):
             pass
         self.post_save('PICK', (p.role_id, json.dumps(it, ensure_ascii=False),
                                 dbmod.now_ms()))
-        self._send_cid(p.cid, P.pack('notice',
-                                     text='拾取：%s（%d 阶）' % (it['name'], tier_no(it.get('tier')))))
+        # ★ 2026-10-23（用户："把掉落自动去捡这个通知删除不需要了"）
+        #   → 捡东西不再弹"拾取：xxx"提示 ✓（东西照样进背包 ✓ 战报统计也照旧 ✓）
 
     def _add_pend(self, cid, key, item):
         """攒本 tick 要给某个玩家的反馈（hurts / mhits / me）"""
