@@ -2428,9 +2428,72 @@ var _TOWN_GROUND_COLORS = {
   road:  { top: 0x50524c, side: 0x3b3d39, bot: 0x232522 },
   lane:  { top: 0xd8d2bc, side: 0x9a9482, bot: 0x5a564a }
 };
+/* ★★★ 2026-10-24（用户："野外的是什么样不能一样吗" → "按这个做吧"）★★★
+   ★ 野外靠【一张贴图】出格子：/assets/3d/ground_mix.png（512×512，4×4 格）
+     每格 128px，边缘画暗缝 ✗ UV 用世界坐标铺 → 自动连续 ✓
+     几何体只有每格 2 个三角 ✗ 缝隙是"画"出来的不是"切"出来的 ✓✓
+   ★ 小镇照搬同一套：
+     · 现画一张同规格的地砖贴图（512×512，4×4 格）✗ 不用外部文件 ✓
+     · 每格中间【白色】✗ 不是画死颜色（会被顶点色乘上去 ✓ 所以白色 = 保留顶点色 ✓）
+     · 每格边缘画一圈【暗灰】✗ 这就是砖缝 ✓
+     · UV 走世界坐标 ✗ 缝隙跟着世界走、不重复、不拉伸 ✓
+   ★ 为什么这样最划算：
+     三角面不变（还是每格 2 个）✗ 缝隙由贴图提供 ✓
+     缝宽在贴图里精确控制 ✗ 不受 3D 深度精度影响（不会再 Z-fighting）✓
+     缝的颜色是"暗"，不是野外的草地色 ✗ 对比柔和 ✓✓
+*/
+var _TOWN_TILE_TEX = null;
+function townTileTexture() {
+  if (_TOWN_TILE_TEX) { return _TOWN_TILE_TEX; }
+  var S = 512, N = 4, C = S / N;          /* 4×4 格，每格 128px（和野外一样）*/
+  var cv = UI.townCanvas(S, S);
+  var c = cv.getContext('2d');
+  /* ① 整张铺满【中性灰白】✗ 顶点色乘上来就是这个颜色 ✓
+     （用纯白 255 会过曝 ✗ 用 235 留一点余量 ✓）*/
+  c.fillStyle = '#ebebeb';
+  c.fillRect(0, 0, S, S);
+  /* ② 每格边缘画砖缝 ✗ 缝宽 6px（128px 的 4.7%）✓
+     颜色 #8a8a8a（暗一档）✗ 乘上顶点色就是"深一点的砖色" ✓ 不是黑的 ✓ */
+  var GAP = 6;
+  c.strokeStyle = '#8a8a8a';
+  c.lineWidth = GAP;
+  for (var gi = 0; gi <= N; gi++) {
+    var p1 = Math.round(gi * C);
+    c.beginPath(); c.moveTo(p1, 0); c.lineTo(p1, S); c.stroke();
+    c.beginPath(); c.moveTo(0, p1); c.lineTo(S, p1); c.stroke();
+  }
+  /* ③ 砖面加极淡的颗粒 ✗ 打破贴图的绝对均匀（但幅度比原来小得多 ✓）
+     ★ 原来的问题是"每格 7 个 3×2 硬点" → 变成砂粒噪点 ✗
+       现在改成"每格 20 个 1×1 的半透明点" → 只是极轻的质感 ✓ */
+  for (var i2 = 0; i2 < N; i2++) {
+    for (var j2 = 0; j2 < N; j2++) {
+      for (var k2 = 0; k2 < 20; k2++) {
+        var hx = (i2 * 73856093 ^ j2 * 19349663 ^ k2 * 83492791) >>> 0;
+        var px = i2 * C + GAP + (hx % (C - GAP * 2 - 2));
+        var pz = j2 * C + GAP + ((hx >> 9) % (C - GAP * 2 - 2));
+        c.fillStyle = (hx & 1) ? 'rgba(255,255,255,.16)' : 'rgba(120,120,120,.14)';
+        c.fillRect(px, pz, 1, 1);
+      }
+    }
+  }
+  var tex = new THREE.CanvasTexture(cv);
+  try { tex.colorSpace = THREE.SRGBColorSpace; } catch (e) { }
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.anisotropy = 4;
+  _TOWN_TILE_TEX = tex;
+  return tex;
+}
+
 function townGroundMat() {
   if (_TOWN_GROUND_MATS.m) { return _TOWN_GROUND_MATS.m; }
-  var mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  /* ★ 2026-10-24：加贴图 ✗ 和野外同一套（贴图给缝、顶点色给颜色）*/
+  var mat = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    map: townTileTexture()
+  });
   _TOWN_GROUND_MATS.m = mat;
   return mat;
 }
@@ -2509,19 +2572,70 @@ function townBlockGround(g) {
        但地砖是平铺的：侧面永远被邻居/地形挡住，只有顶面看得见。
        → 改成"只保留顶面"的合并几何：每块 2 个三角，三角数直接降到 1/6，
          颜色/明暗和原来完全一致（逐块随机明暗照旧），draw call 还是每类 1 次。 */
-    var V = [], C = [], NN = [], I = [];
+    var V = [], C = [], NN = [], I = [], UV = [];   /* ★ UV：贴图坐标（世界坐标铺 ✓）*/
     var CELL = _TOWN_TILE_CELL;
-    var y = -0.309 + 0.31;                 /* 原来立方体的顶面高度 */
+    /* ★★★ 2026-10-24（用户："俯视时小镇地面有闪烁/波纹，平视没有"）★★★
+       ★ 真凶：【Z-fighting 深度冲突】
+         · 野外地面 y = 0（game.js refreshGround）
+         · 小镇地面 y = -0.309 + 0.31 = 0.001  ← 只高 1 毫米！
+         · 平视时深度精度够 → 能分清谁在上面 ✓
+         · 俯视时视线几乎垂直地面 ✗ 深度值全挤在极小一段里
+           → 1 毫米的差距超出 24 位深度缓冲的精度
+           → 两层面片逐像素争夺前后 ✗ 画面就是【闪烁 / 波纹】✓✓
+       ★ 修：把小镇地面抬高到 0.06 米 ✗ 明显高于野外地面
+         · 0.06 = 6 厘米 ✗ 俯视时绝对分得清 ✓
+         · 又不会让地砖"浮起来"（6 厘米在 30 米高的俯视里看不出来 ✓）
+         · 地砖之间不重叠（同一层，只是整体抬高 ✓）不会有新的冲突 ✓
+       ★ 为什么不改野外地面的 y=0：那是整个世界的地基 ✗ 动它影响范围太大 ✓
+         抬高小镇（局部）更安全 ✓ */
+    var y = 0.06;                          /* 顶面高度（比野外的 0 高 6cm ✗ 避免 Z-fighting ✓）*/
     var bc = new THREE.Color((_TOWN_GROUND_COLORS[kind] || _TOWN_GROUND_COLORS.grass).top);
     for (var n = 0; n < list.length; n++) {
       var x = list[n].x, z = list[n].z;
       var b = V.length / 3;
-      V.push(x - CELL / 2, y, z - CELL / 2,
-             x + CELL / 2, y, z - CELL / 2,
-             x + CELL / 2, y, z + CELL / 2,
-             x - CELL / 2, y, z + CELL / 2);
+      /* ★★★ 2026-10-24（用户："怎么看不到小格子了"）★★★
+         ★ 为什么格子"消失"了：
+           原来每块瓦片【铺满整个 CELL ✗ 和邻居严丝合缝共边】，本身就没有缝 ✓
+           以前能看见格子 ✗ 是靠【Z-fighting 的明暗抖动】凑出来的假象 ✓✓
+           现在 Z-fighting 修好了 → 假象没了 → 格子也看不到了 ✓
+         ★ 修：真的留一道缝 ✗ 每块瓦片四周各缩 1.5 厘米
+           · 缝宽 = 3 厘米 ✗ 俯视时清晰可见 ✓
+           · 缩的是【几何】不是颜色 ✗ 不会影响明暗 ✓
+           · 缝下面露出的是野外地面的深色 ✗ 正好就是砖缝该有的样子 ✓✓
+           · 比例：0.62m 的砖留 3cm 缝 ✗ 大约 5% ✗ 看起来自然 ✓ */
+      /* ★★★ 2026-10-24（用户："野外的是什么样不能一样吗"）★★★
+         ★ 不再用【几何留缝】✗ 改回满格 ✓
+           缝由【贴图】提供（townTileTexture 里画的）✓ 三角面不增加 ✓
+           而且贴图的缝不受 3D 深度精度影响 ✗ 不会再 Z-fighting ✓
+         ★ UV 用【世界坐标】✗ 和野外一模一样：
+           u = x / (CELL * 4)  → 一张贴图正好覆盖 4×4 块砖 ✓
+           贴着世界走 ✗ 走到哪儿花纹都对得上、不重复、不拉伸 ✓ */
+      var _h = CELL / 2;
+      V.push(x - _h, y, z - _h,
+             x + _h, y, z - _h,
+             x + _h, y, z + _h,
+             x - _h, y, z + _h);
+      var _UVM = CELL * 4;                    /* 一张贴图 = 4×4 块砖 */
+      UV.push((x - _h) / _UVM, (z - _h) / _UVM,
+              (x + _h) / _UVM, (z - _h) / _UVM,
+              (x + _h) / _UVM, (z + _h) / _UVM,
+              (x - _h) / _UVM, (z + _h) / _UVM);
       for (var kk = 0; kk < 4; kk++) { NN.push(0, 1, 0); }
-      var shade = 0.93 + ((n * 37) % 11) * 0.012;
+      /* ★★★ 2026-10-24（用户："俯视看小镇地面有很多噪点，外面没有"）★★★
+         ★ 病根：原来是【伪随机跳变】
+             shade = 0.93 + ((n * 37) % 11) * 0.012
+           相邻两块瓦片的亮度差最多 13% ✗ 而且毫无规律 ✓
+           0.62 米的小瓦片铺满整个小镇 → 俯视就是满屏"砂粒噪点" ✓✓
+         ★ 为什么外面没有：野外的 tintAt() 用 sin/cos 连续函数 ✗
+           相邻块平滑过渡 → 成片色块 ✓ 没有噪点 ✓
+         ★ 修：照搬野外的思路 ✗ 用【世界坐标的 sin 叠加】做连续明暗
+           相邻瓦片只差 0.1~0.3% ✓ 肉眼完全平滑 ✓
+           但大范围（10 米周期）仍有自然的明暗起伏 ✓ 不至于死板 ✓ */
+      var _wsx = x * 0.10, _wsz = z * 0.10;
+      var _sh = 0.98
+              + Math.sin(_wsx * 1.3 + 0.7) * Math.cos(_wsz * 1.1 - 0.4) * 0.035
+              + Math.sin((_wsx + _wsz) * 0.63 + 2.1) * 0.025;
+      var shade = _sh;
       for (var kc = 0; kc < 4; kc++) {
         C.push(bc.r * shade, bc.g * shade, bc.b * shade);
       }
@@ -2531,6 +2645,9 @@ function townBlockGround(g) {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(V, 3));
     geo.setAttribute('normal', new THREE.Float32BufferAttribute(NN, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+    /* ★ 2026-10-24：UV 一定要加上 ✗ 否则材质带 map 时会报"缺 uv 属性"✓
+       （有 map 但几何体没有 uv → three.js 直接不画 ✗ 地面整个消失 ✓✓）*/
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));
     geo.setIndex(I);
     var mesh = new THREE.Mesh(geo, townGroundMat());
     mesh.frustumCulled = false;
