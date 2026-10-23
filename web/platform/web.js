@@ -847,16 +847,19 @@ function sfx(name, volScale, ch) {
        → 僵尸打你 → 挨打音效 / 挥砍音效全都在响 ✓ 而你还停在登录界面 ✓
      修：没登录就一声都不出 ✓（一个判断管住所有音效 ✓ 最省事也最不容易漏 ✓）*/
   if (typeof WSC !== 'undefined' && !WSC.role) { return; }
-  /* ★★★ 2026-10-24（用户贴的警告："The AudioContext was not allowed to start"）★★★
-     ★ 真 bug：这里原来调的是 _aGesture() ✗ 而这个函数【根本不存在】✓
-       项目里真实的函数叫 _aGesture() ✓ 名字对不上 → 每次进 sfx 都抛
-       ReferenceError（被外层 try 吞掉看不见）→ 手势解锁【从来没生效过】✓✓
-     ★ 顺带：挂起状态下【直接不播】✗ 不去碰 resume ✓
-       浏览器只允许在【用户手势】里 resume ✗ 这里不是手势 → 调了也白调，
-       还会刷一条警告 ✓ 现在挂起就静默返回 ✓ 等真正的点击/按键把它唤醒 ✓ */
-  _aGesture();
+  /* ★★★ 2026-10-24（用户贴的第二次警告："The AudioContext was not allowed to start"
+     调用栈：sfx → _aGesture → resume()）★★★
+     ★ 病根：我上一版在 sfx() 里调了 _aGesture() ✗
+       而 _aGesture() 里会调 resume() ✓
+       sfx() 的调用方是【WebSocket 消息】（wsOnMessage → sfxAt → sfx）✗
+       那根本不是用户手势 ✗ 于是 resume() 被浏览器拒绝 → 又报警告 ✓✓
+     ★ 修：sfx() 里【绝对不碰 resume】✗ 也不调 _aGesture ✓
+       只做一件事：看状态 ✗ 不是 running 就静默返回 ✓
+       解锁【只】由真实的 pointerdown / touchstart / keydown 触发（见上面的监听）✓
+     ★ 音效会丢吗：会丢前几百毫秒的 ✗ 但玩家进入游戏必然先点一下
+       （登录、点公告、点摇杆）→ 早就解锁了 ✓ 实际听不出来 ✓ */
   var _ac0 = audioCtx();
-  if (_ac0 && _ac0.state !== 'running') { return; }
+  if (!_ac0 || _ac0.state !== 'running') { return; }
   var bank = SFX_BANK[name];
   /* ★ round443：这个音效还在"待加载"里 → 当场拉它（不进排队 ✗ 避免开了一半才响 ✓）*/
   if ((!bank || !bank.length) && SFX_LAZY[name]) {
