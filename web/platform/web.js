@@ -11079,10 +11079,15 @@ function sysMsgEl() {
   } catch (e0) { }
   var b = document.createElement('div');
   b.id = 'sysMsgBox';
+  /* ★ 2026-10-23（用户："不是让你固定大小吗"）
+     高度按【最大行数】算死 ✗ 不随内容伸缩 ✓
+     行少的时候框也保持这个高度（文字贴着底部往上排 ✓）*/
+  var _rowH = Math.round(SYSMSG.SIZE * 1.9);
+  var _h = Math.round(_rowH * SYSMSG.MAX + 18);
   b.style.cssText =
     'position:fixed;left:50%;top:14%;transform:translateX(-50%);' +
-    'width:340px;height:auto;min-height:0;box-sizing:border-box;' +
-    'padding:8px 0;border-radius:10px;pointer-events:none;z-index:69;' +
+    'width:340px;height:' + _h + 'px;box-sizing:border-box;' +
+    'padding:9px 0;border-radius:10px;pointer-events:none;z-index:69;' +
     'background:linear-gradient(180deg,rgba(12,16,20,.42),rgba(8,11,14,.58));' +
     'border:1px solid rgba(120,160,190,.20);' +
     'box-shadow:inset 0 0 0 1px rgba(255,255,255,.03),0 3px 14px rgba(0,0,0,.35);' +
@@ -11091,7 +11096,8 @@ function sysMsgEl() {
     'mask-image:linear-gradient(180deg,transparent 0,#000 10%,#000 90%,transparent 100%);' +
     'overflow:hidden;opacity:0;display:none;transition:opacity .22s ease';
   var rb = document.createElement('div');
-  rb.style.cssText = 'display:flex;flex-direction:column;justify-content:flex-end';
+  rb.style.cssText = 'position:absolute;left:0;right:0;bottom:0;' +
+    'display:flex;flex-direction:column;justify-content:flex-end';
   b.appendChild(rb);
   document.body.appendChild(b);
   SYSMSG.el = b; SYSMSG.rowsBox = rb;
@@ -11115,7 +11121,11 @@ function sysMsgApplySize() {
   var s = SYSMSG.SIZE;
   for (var i = 0; i < SYSMSG.live.length; i++) {
     SYSMSG.live[i].style.fontSize = s + 'px';
+    SYSMSG.live[i].style.lineHeight = '1.9';
   }
+  /* ★ 字号一改，固定框的高度也要跟着重算（不然文字装不下）*/
+  var _rowH = Math.round(s * 1.9);
+  b.style.height = Math.round(_rowH * SYSMSG.MAX + 18) + 'px';
 }
 /* 菜单里的字号按钮（点一下立刻生效 ✗ 并存到 localStorage ✓）*/
 function sysMsgBindSizeBtns() {
@@ -11160,6 +11170,7 @@ function sysMsgRow() {
       'transition:opacity .3s ease,transform .3s ease';
   }
   el.style.fontSize = SYSMSG.SIZE + 'px';
+  el.style.color = '#aeb9c6';        /* C 版统一浅灰 ✓ 不吃 <b> 的颜色 ✓ */
   return el;
 }
 
@@ -11167,7 +11178,13 @@ function sysMsgRow() {
 function sysMsgPush(msg) {
   var b = sysMsgEl();
   var el = sysMsgRow();
-  el.innerHTML = String(msg == null ? '' : msg);
+  /* ★ 2026-10-23（用户："文字颜色也更网页不一样"）
+     C 版是【统一浅灰】✗ 不该有金币金黄/物品浅蓝那套彩色标签 ✓
+     → 把消息里的 <b> <i> <span> 标签全去掉，只留纯文本 ✓ */
+  var _plain = String(msg == null ? '' : msg)
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ');
+  el.textContent = _plain;
   el.style.textAlign = 'center';
   el.style.opacity = '0';
   el.style.transform = 'translateY(10px)';
