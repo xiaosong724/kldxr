@@ -3979,7 +3979,7 @@ function setTab(name) {
   if (name === 'bag') { bagFetch(bagRender); }
   /* ★ 2026-10-23 修：系统提示框的滑块必须在【切到设置页】时绑定 ✗
      原来只在键位模式里绑 → 普通打开菜单拖动没反应 ✓ */
-  try { sysMsgBindSizeBtns(); } catch (eSMb) { }   // ★ 切到背包页就拉一次（只读接口 ✓ 很便宜）
+  try { sysMsgBindSizeBtns(); sysMsgSetTop(name === 'ui'); } catch (eSMb) { }   // ★ 切到背包页就拉一次（只读接口 ✓ 很便宜）
   /* ★★ round467（用户："把装备栏和背包分开，装备栏单独设为导航栏"）★★
      装备页要渲染两个装备槽（bagRender 里那段）+ 属性详情（equipRender）✓ */
   if (name === 'equip') { bagRender(); equipRender(); }
@@ -4875,6 +4875,7 @@ function closeSet() {
   bagTipHide();
   var p = document.getElementById('setPanel');
   if (p) { p.style.display = 'none'; }
+  try { sysMsgSetTop(false); } catch (eCS) { }
 }
 
 /* ★ 登出（清 token → 通知服务器废掉 → 断开 → 弹登录）
@@ -11130,7 +11131,7 @@ function sysMsgEl() {
     /* ★ 2026-10-23（用户："位置默认调整到左边靠边"）*/
     'position:fixed;left:16px;top:16%;transform:none;' +
     'width:' + SYSMSG.W + 'px;height:' + SYSMSG.H + 'px;box-sizing:border-box;' +
-    'padding:0;pointer-events:none;z-index:69;' +
+    'padding:0;pointer-events:none;z-index:50;' +   /* ★ 2026-10-23：压到菜单(60)下面 ✗ 不挡菜单 ✓ */
     /* ★★★ 2026-10-23（用户选：版 1 · 无框文字条）★★★
        不要边框、不要圆角、不要投影 ✗ 只有一条【左右渐隐】的半透明底 ✓
        → 存在感最低、最不挡画面 ✓ */
@@ -11247,6 +11248,24 @@ function sysMsgBindSizeBtns() {
   paint();
   sysMsgBindSizeBtns._paint = paint;
 }
+/* ★★★ 2026-10-23（用户："开始设置它的时候再显示到最上面来"）★★★
+   · 平时 z-index 50（在菜单 60 下面）→ 打开菜单看不见它 ✓
+   · 只有【切到设置 UI 页并且系统提示框在设置项可见范围】时才抬到 95 ✓
+   · 退出设置页 / 关菜单 → 回到 50 ✓ */
+function sysMsgSetTop(on) {
+  try {
+    var b = sysMsgEl();
+    if (!b) { return; }
+    b.style.zIndex = on ? '95' : '50';
+    if (on) {
+      /* 抬上来时顺便演示一条 ✗ 让用户看到当前尺寸效果 ✓ */
+      if (!SYSMSG.live.length) {
+        sysMsgPush('宽度 ' + SYSMSG.W + ' · 高度 ' + SYSMSG.H + ' · 字号 ' + SYSMSG.SIZE);
+      }
+    }
+  } catch (e) { }
+}
+
 function sysMsgSetSize(px) {
   SYSMSG.SIZE = Math.max(9, Math.min(20, +px || 11));
   try { localStorage.setItem('sysMsgSize', String(SYSMSG.SIZE)); } catch (e) { }
