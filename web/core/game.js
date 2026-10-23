@@ -1459,16 +1459,11 @@ function init() {
      为什么必须换：同一个 canvas 一旦 context lost，浏览器【不会再给它新上下文】✓
      这也是"重试 3 次都没用、必须退出 APP 才好"的真正原因 ✓ */
   function _rebuildCanvas() {
+    /* ★ 2026-10-23：core 不许碰 DOM ✗ 交给 platform 层的 UI.rebuildMainCanvas ✓ */
     try {
-      var old = document.getElementById('cv');
-      if (!old || !old.parentNode) { return null; }
-      var cv = document.createElement('canvas');
-      cv.id = 'cv';
-      if (old.className) { cv.className = old.className; }
-      if (old.getAttribute('style')) { cv.setAttribute('style', old.getAttribute('style')); }
-      old.parentNode.replaceChild(cv, old);
-      return cv;
-    } catch (e) { return null; }
+      if (UI && UI.rebuildMainCanvas) { return UI.rebuildMainCanvas(); }
+    } catch (e) { }
+    return null;
   }
   function _makeMainRenderer() {
     var cv = UI.mainCanvas();
@@ -10591,22 +10586,19 @@ if (typeof THREE === 'undefined') {
          · 连续自动恢复 2 次还不行 → 才把提示交给玩家 ✓ */
     if (/webgl|context/i.test(_msg)) {
       var _tries = 0;
-      try { _tries = +(sessionStorage.getItem('glBootRetry') || 0); } catch (eR) { }
+      try { _tries = (UI && UI.glBootRetryGet) ? UI.glBootRetryGet() : 0; } catch (eR) { }
       if (_tries < 2) {
-        try { sessionStorage.setItem('glBootRetry', String(_tries + 1)); } catch (eS) { }
+        try { if (UI && UI.glBootRetrySet) { UI.glBootRetrySet(_tries + 1); } } catch (eS) { }
         E('显卡上下文没拿到，正在自动恢复（第 ' + (_tries + 1) + '/2 次）…');
         setTimeout(function () {
-          try {
-            if (typeof netHardReload === 'function') { netHardReload('WebGL 启动失败自动恢复'); }
-            else { location.reload(); }
-          } catch (eH) { location.reload(); }
+          try { if (UI && UI.hardReload) { UI.hardReload('WebGL 启动失败自动恢复'); } } catch (eH) { }
         }, 900);
       } else {
         E('启动失败：显卡上下文创建不出来（' + _msg + '）\n' +
           '· 已经自动恢复过 2 次都没成功\n' +
           '· 关掉别的游戏/3D 网页标签，再刷新\n' +
           '· 或者退出 APP 重进');
-        try { sessionStorage.removeItem('glBootRetry'); } catch (eC) { }
+        try { if (UI && UI.glBootRetryClear) { UI.glBootRetryClear(); } } catch (eC) { }
       }
     } else {
       E('启动失败：' + _msg);

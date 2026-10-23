@@ -33,6 +33,36 @@ var TOWN_KEEP_STATIC = (function () {
 var UI = {
   /* ---- 画布与窗口 ---- */
   mainCanvas: function () { return document.getElementById('cv'); },
+  /* ★ 2026-10-23：core 层不许碰 DOM ✗ 这几个给 game.js 用 ✓
+     （WebGL 上下文拿不到时的降级链要用：换画布 / 重试计数 / 硬刷新）*/
+  rebuildMainCanvas: function () {
+    try {
+      var old = document.getElementById('cv');
+      if (!old || !old.parentNode) { return null; }
+      var cv = document.createElement('canvas');
+      cv.id = 'cv';
+      if (old.className) { cv.className = old.className; }
+      var st = old.getAttribute('style');
+      if (st) { cv.setAttribute('style', st); }
+      old.parentNode.replaceChild(cv, old);
+      return cv;
+    } catch (e) { return null; }
+  },
+  glBootRetryGet: function () {
+    try { return +(sessionStorage.getItem('glBootRetry') || 0); } catch (e) { return 0; }
+  },
+  glBootRetrySet: function (n) {
+    try { sessionStorage.setItem('glBootRetry', String(n)); } catch (e) { }
+  },
+  glBootRetryClear: function () {
+    try { sessionStorage.removeItem('glBootRetry'); } catch (e) { }
+  },
+  hardReload: function (why) {
+    try {
+      if (typeof netHardReload === 'function') { netHardReload(why || 'reload'); return; }
+    } catch (e) { }
+    try { location.reload(); } catch (e2) { }
+  },
   win: function () { return window; },
   search: function () { return location.search; },
   onResize: function (fn) { addEventListener('resize', fn); },
