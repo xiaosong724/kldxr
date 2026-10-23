@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 下载的更新包放在 app 私有 Downloads 目录 ✓ -->
+    <external-files-path name="downloads" path="Download/" />
+    <external-files-path name="downloads2" path="Downloads/" />
+    <cache-path name="cache" path="." />
+</paths>

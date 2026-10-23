@@ -273,6 +273,13 @@ class Api(BaseHTTPRequestHandler):
         if path == '/api/skills':
             import skills as _skm
             return self._send(200, {'ok': True, 'defs': _skm.to_client()})
+        # ★★★ 2026-10-23（用户："APK 要做自动更新，本地放本地，云端放云端"）★★★
+        #   GET /api/apk        → 版本信息（APK 启动时对比 ✓）
+        #   GET /download/app.apk → 下载 APK 本体
+        #   ★ 下载地址是【相对路径】✗ APK 自己拼上服务器地址 ✓
+        #     这样本地服务器返回 local，云端返回 cloud，同一份 APK 都适用 ✓
+        if path == '/api/apk':
+            return self.api_apk_info()
         if path == '/api/announce/latest':
             return self.api_ann_latest()
         if path == '/api/admin/announce':
@@ -310,6 +317,9 @@ class Api(BaseHTTPRequestHandler):
             return self.ws_config()
         if path.startswith('/api/'):
             return self._send(404, {'ok': False, 'error': 'not found', 'path': path})
+        # ★ 2026-10-23：APK 下载（不走 static ✗ 要流式 + 正确的 MIME ✓）
+        if path in ('/download/app.apk', '/apk/app.apk'):
+            return self.download_apk()
         return self.static(path)
 
     def ws_config(self):
@@ -1713,6 +1723,100 @@ class Api(BaseHTTPRequestHandler):
             if rel in out and (rel + '?v=') not in out:
                 out = out.replace('"' + rel + '"', '"' + rel + '?v=' + v + '"')
         return out
+
+    # ============================================================ APK 分发
+    # ★ 2026-10-23（用户："APK 自动更新，本地放本地，云端放云端"）
+    #   服务器上放一个 apk/app.apk ✗ /api/apk 返回它的版本 + 下载地址 ✓
+    #   APK 启动时拿自己的 versionCode 跟这里比 ✗ 小了就提示更新 ✓
+    def _apk_dir(self):
+        try:
+            root = self.cfg.get('web_root') or '.'
+            return os.path.join(root, 'apk')
+        except Exception:
+            return 'apk'
+
+    def _apk_file(self):
+        return os.path.join(self._apk_dir(), 'app.apk')
+
+    def api_apk_info(self):
+        """APK 版本信息（公开 ✓ 不需要登录）
+
+        ★ 版本号从 APK 旁边的 version.txt 读 ✗ 不去解 APK 包（慢且要库）✓
+          version.txt 内容就一行：versionCode=3
+          （发布脚本写它，和 APK 一起上传 ✓）
+        ★ 没有 APK 文件时返回 ok:false ✗ APK 那边就当"没有更新" ✓ 不会报错 ✓
+        """
+        try:
+            fp = self._apk_file()
+            if not os.path.isfile(fp):
+                return self._send(200, {'ok': False, 'reason': '服务器上没有 APK'})
+            code = 0
+            vname = ''
+            try:
+                tf = os.path.join(self._apk_dir(), 'version.txt')
+                if os.path.isfile(tf):
+                    with open(tf, 'r', encoding='utf-8') as f:
+                        for ln in f:
+                            ln = ln.strip()
+                            if ln.lower().startswith('versioncode'):
+                                code = int(ln.split('=', 1)[1].strip())
+                            elif ln.lower().startswith('versionname'):
+                                vname = ln.split('=', 1)[1].strip()
+            except Exception:
+                pass
+            if code <= 0:
+                # ★ 没 version.txt → 用文件修改时间当版本（单调递增 ✓ 够用）
+                code = int(os.path.getmtime(fp))
+            return self._send(200, {
+                'ok': True,
+                'versionCode': code,
+                'versionName': vname or str(code),
+                'size': os.path.getsize(fp),
+                # ★ 相对路径 ✗ APK 拼上自己连的服务器地址 ✓
+                'url': '/download/app.apk',
+                'sha1': self._apk_sha1(fp),
+            })
+        except Exception as e:
+            return self._send(200, {'ok': False, 'reason': '读取失败：%r' % (e,)})
+
+    def _apk_sha1(self, fp):
+        try:
+            import hashlib
+            h = hashlib.sha1()
+            with open(fp, 'rb') as f:
+                while True:
+                    b = f.read(1 << 20)
+                    if not b:
+                        break
+                    h.update(b)
+            return h.hexdigest()
+        except Exception:
+            return ''
+
+    def download_apk(self):
+        """直接把 APK 发出去（流式 ✓ 几十 MB 也不吃内存 ✓）"""
+        try:
+            fp = self._apk_file()
+            if not os.path.isfile(fp):
+                return self._send(404, {'error': 'apk not found'})
+            size = os.path.getsize(fp)
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/vnd.android.package-archive')
+            self.send_header('Content-Length', str(size))
+            self.send_header('Content-Disposition', 'attachment; filename="xiuxian.apk"')
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+            with open(fp, 'rb') as f:
+                while True:
+                    b = f.read(1 << 20)
+                    if not b:
+                        break
+                    self.wfile.write(b)
+        except Exception as e:
+            try:
+                print('[apk] download failed: %r' % (e,))
+            except Exception:
+                pass
 
     def static(self, path):
         root = self.cfg['web_root']

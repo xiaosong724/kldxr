@@ -7861,6 +7861,75 @@ function camLandApply(on) {
   }
 }
 
+/* ★★★ 2026-10-23（用户："APK 要做自动更新，本地就放本地，云服务器就放云服务器"）★★★
+   ★ 机制：
+     ① APK 里通过 AndroidShell.versionCode() 拿到自己的 versionCode ✓
+     ② 请求 /api/apk ✗ 服务器返回那边放的 APK 版本 + 相对下载地址 ✓
+     ③ 服务端版本更大 → 弹提示 ✗ 玩家点"更新" → AndroidShell.downloadAndInstallApk(url) ✓
+     ④ 下载完系统自动弹"安装"界面（Android 8+ 不许静默装 ✓ 这是系统限制 ✓）
+   ★ 只在【APK 环境】里跑 ✗ 普通浏览器什么都不做 ✓
+   ★ 启动后 8 秒才检查 ✗ 别和加载抢带宽 ✓ 每 10 分钟一次 ✓
+   ★ 下载地址是相对路径 ✗ 原生那边拼上 GAME_URL ✓
+     所以同一份代码：连本地服务器就从本地下，连云端就从云端下 ✓✓
+*/
+var APK_UPD = { checked: false, timer: null };
+function apkUpdateCheck() {
+  try {
+    if (!window.AndroidShell || typeof window.AndroidShell.versionCode !== 'function') { return; }
+    var myCode = 0;
+    try { myCode = +window.AndroidShell.versionCode() || 0; } catch (e0) { }
+    if (!myCode) { return; }
+    fetch('/api/apk?_=' + Date.now(), { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d || !d.ok || !d.versionCode) { return; }
+        if (+d.versionCode <= myCode) { return; }
+        /* ★ 有新版本 → 记下来（同一个版本只提示一次 ✓）*/
+        var key = 'apkUpdFor_' + d.versionCode;
+        try { if (localStorage.getItem(key) === '1') { return; } } catch (e1) { }
+        try { localStorage.setItem(key, '1'); } catch (e2) { }
+        apkUpdatePrompt(d);
+      })
+      .catch(function () { });
+  } catch (e) { }
+}
+function apkUpdatePrompt(d) {
+  var ver = d.versionName || String(d.versionCode);
+  var mb = d.size ? (Math.round(d.size / 104857.6) / 10) + ' MB' : '';
+  /* ★ 2026-10-23：用项目自带的 askConfirm（不是 UI.confirmBox ✗ 那个不存在 ✓）
+     签名：askConfirm({title, lines, warn, ok}, cb)  ✓ */
+  try {
+    if (typeof askConfirm === 'function') {
+      askConfirm({
+        title: '发现新版本',
+        lines: [
+          '新版本：<b style="color:#8ee0ff">' + ver + '</b>' + (mb ? '（' + mb + '）' : ''),
+          '下载完成后会弹出系统安装界面，点“安装”即可。'
+        ],
+        warn: '更新过程中游戏会关闭，正在打的东西可能会丢',
+        ok: '立 即 更 新'
+      }, function (yes) {
+        if (yes) { apkUpdateDo(d); }
+      });
+      return;
+    }
+  } catch (e) { }
+  /* 兜底：没有弹窗就直接更新 ✓ 至少不会什么都不做 ✓ */
+  apkUpdateDo(d);
+}
+function apkUpdateDo(d) {
+  try {
+    if (window.AndroidShell && typeof window.AndroidShell.downloadAndInstallApk === 'function') {
+      window.AndroidShell.downloadAndInstallApk(d.url || '/download/app.apk');
+    }
+  } catch (e) { }
+}
+UI.apkUpdateCheck = apkUpdateCheck;
+try {
+  setTimeout(apkUpdateCheck, 8000);
+  APK_UPD.timer = setInterval(apkUpdateCheck, 600000);
+} catch (eA) { }
+
 /* ★★★ 2026-10-23（用户："显卡上下文创建不出来，玩家反复反馈"）★★★
    ABK 的 AndroidShell 提供了一个"真的能修好"的重启：
      销毁整个 WebView → 新渲染进程 → GL 上下文重新分配 ✓

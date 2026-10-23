@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 保持屏幕常亮（玩的时候不锁屏） -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- ★ 2026-10-23：APK 自更新要装新包 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <application
         android:allowBackup="false"
@@ -30,5 +34,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- ===== 关于 APK 自更新 =====
+     ★ 不需要 FileProvider ✓ 直接用 DownloadManager 给的 content:// URI
+       （系统自带读取授权 ✓）→ 项目保持【零第三方依赖】✓
+     ★ 需要的权限：REQUEST_INSTALL_PACKAGES（上面已声明 ✓）
+================================ -->
     </application>
 </manifest>

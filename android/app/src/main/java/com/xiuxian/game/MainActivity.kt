@@ -53,6 +53,10 @@ class MainActivity : Activity() {
     private var showingMaint = false
     private var glRebuildCount = 0
     private var root: FrameLayout? = null
+    /* ★ 2026-10-23：APK 自更新 —— 记住正在下载的任务 ✓ */
+    private var pendingApkId: Long = -1L
+    private var pendingApkPath: java.io.File? = null
+    private var dlReceiver: android.content.BroadcastReceiver? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -95,6 +99,7 @@ class MainActivity : Activity() {
         } catch (e: Throwable) { }
 
         initWebView()
+        registerApkDownloadReceiver()   // ★ APK 自更新：下载完成要接住 ✓
         r.addView(
             web,
             FrameLayout.LayoutParams(
@@ -202,6 +207,62 @@ class MainActivity : Activity() {
 
                 @android.webkit.JavascriptInterface
                 fun rebuildCount(): Int = glRebuildCount
+
+                /* ★★★ 2026-10-23（用户："APK 要做自动更新，本地放本地，云端放云端"）★★★
+                   ★ 下载地址 = 服务器地址 + /download/app.apk
+                     本地服务器返回本地 IP ✗ 云端返回云端 IP ✓ 同一份代码都适用 ✓
+                   ★ 下载完 → 弹系统安装界面（Android 8+ 不许静默安装 ✗ 必须用户点"安装" ✓）
+                   ★ 需要 REQUEST_INSTALL_PACKAGES 权限（Manifest 里已加 ✓）
+                   ★ 下载用 DownloadManager ✗ 系统自己管进度/断点/通知 ✓ 比手写稳 ✓ */
+                @android.webkit.JavascriptInterface
+                fun downloadAndInstallApk(url: String?) {
+                    if (url == null || url.isEmpty()) { return }
+                    try {
+                        val full = if (url.startsWith("http")) url
+                                   else GAME_URL.trimEnd('/') + url
+                        val ctx = applicationContext
+                        val dm = ctx.getSystemService(android.app.DownloadManager::class.java)
+                        val fn = "xiuxian-update-${System.currentTimeMillis()}.apk"
+                        val req = android.app.DownloadManager.Request(android.net.Uri.parse(full))
+                            .setTitle("块来修仙 更新包")
+                            .setDescription("正在下载新版本…")
+                            .setNotificationVisibility(
+                                android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                            .setDestinationInExternalFilesDir(ctx,
+                                android.os.Environment.DIRECTORY_DOWNLOADS, fn)
+                            .setMimeType("application/vnd.android.package-archive")
+                        val id = dm.enqueue(req)
+                        pendingApkId = id
+                        pendingApkPath = java.io.File(
+                            ctx.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS), fn)
+                        runOnUiThread {
+                            toastNative("正在下载新版本，完成后会自动提示安装")
+                        }
+                    } catch (e: Throwable) {
+                        runOnUiThread { toastNative("下载失败：" + (e.message ?: "未知")) }
+                    }
+                }
+
+                /** JS 想显示原生提示时用（Toaat 简单可靠 ✓）*/
+                @android.webkit.JavascriptInterface
+                fun toast(msg: String?) {
+                    if (msg.isNullOrEmpty()) { return }
+                    runOnUiThread { toastNative(msg) }
+                }
+
+                /** 当前 APK 的 versionCode ✗ JS 用来和服务端比 ✓ */
+                @android.webkit.JavascriptInterface
+                fun versionCode(): Int {
+                    return try {
+                        val pi = packageManager.getPackageInfo(packageName, 0)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            pi.longVersionCode.toInt()
+                        } else {
+                            @Suppress("DEPRECATION")
+                            pi.versionCode
+                        }
+                    } catch (e: Throwable) { 0 }
+                }
             }, "AndroidShell")
         } catch (e: Throwable) { }
 
@@ -241,6 +302,82 @@ class MainActivity : Activity() {
             }
         }
         web.webChromeClient = WebChromeClient()
+    }
+
+    /* ==================================================================
+       APK 自更新：下载完成后弹系统安装界面
+       ================================================================== */
+    private fun registerApkDownloadReceiver() {
+        try {
+            if (dlReceiver != null) { return }
+            dlReceiver = object : android.content.BroadcastReceiver() {
+                override fun onReceive(c: android.content.Context?, intent: android.content.Intent?) {
+                    try {
+                        if (intent?.action != android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE) { return }
+                        val id = intent.getLongExtra(android.app.DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+                        if (id != pendingApkId) { return }
+                        runOnUiThread { installPendingApk() }
+                    } catch (e: Throwable) { }
+                }
+            }
+            val flt = android.content.IntentFilter(android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(dlReceiver, flt, android.content.Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(dlReceiver, flt)
+            }
+        } catch (e: Throwable) { }
+    }
+
+    /** 弹系统安装界面（Android 8+ 不许静默装 ✗ 必须用户点"安装" ✓）*/
+    private fun installPendingApk() {
+        try {
+            val f = pendingApkPath
+            if (f == null || !f.exists()) {
+                toastNative("下载的文件找不到，请重新下载")
+                return
+            }
+            /* ★ Android 8+ 需要"允许安装未知应用"权限 ✗ 没给就引导去开 ✓ */
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (!packageManager.canRequestPackageInstalls()) {
+                    toastNative("请允许安装未知应用后再试")
+                    try {
+                        startActivity(android.content.Intent(
+                            android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            android.net.Uri.parse("package:$packageName")))
+                    } catch (e0: Throwable) { }
+                    return
+                }
+            }
+            /* ★ 2026-10-23：这个项目【零第三方依赖】✗ 不引 androidx.core ✓
+               所以不用 FileProvider ✗ 换个更稳的路子：
+               用 DownloadManager 自己提供的 content:// URI ✗
+               系统安装器能直接读 ✓（Android 7+ 也合法 ✓）
+               ★ 为什么这样最省事：
+                 DownloadManager 的 URI 本来就带临时读取授权 ✓
+                 不用配 provider、不用引依赖、不用管路径 ✓ */
+            val dm = getSystemService(android.app.DownloadManager::class.java)
+            val uri = dm.getUriForDownloadedFile(pendingApkId)
+            if (uri == null) {
+                toastNative("下载的安装包读取失败，请重试")
+                return
+            }
+            val it = android.content.Intent(android.content.Intent.ACTION_VIEW)
+            it.setDataAndType(uri, "application/vnd.android.package-archive")
+            it.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            it.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(it)
+        } catch (e: Throwable) {
+            toastNative("启动安装失败：" + (e.message ?: "未知"))
+        }
+    }
+
+    /** 原生 Toast（JS 那边也能通过 AndroidShell.toast 调 ✓）*/
+    private fun toastNative(msg: String) {
+        try {
+            android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+        } catch (e: Throwable) { }
     }
 
     /* ==================================================================
@@ -378,6 +515,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        try { dlReceiver?.let { unregisterReceiver(it) } } catch (e: Throwable) { }
+        dlReceiver = null
         try { web.destroy() } catch (e: Throwable) { }
         super.onDestroy()
     }
