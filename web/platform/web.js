@@ -11065,7 +11065,7 @@ var SYSMSG = {
   live: [],        /* 正在显示的行元素（newest 在末尾）*/
   pool: [],        /* 回收池 */
   t: null,         /* 自动隐藏计时器 */
-  MAX: 5,          /* 最多同时显示几行 */
+  MAX: 6,          /* 最多同时显示几行（★ 2026-10-23 5→6 ✗ 多留几条）*/
   SIZE: 11         /* 字号（菜单可调 ✗ 2026-10-23 默认调小）*/
 };
 var SYSMSG_SIZES = [10, 11, 12, 13.5];   /* 小 / 标准 / 大 / 特大（2026-10-23 整体缩小）*/
@@ -11294,12 +11294,18 @@ function sysMsgPush(msg) {
   void b.offsetHeight;              /* 强制回流 ✗ 让 opacity 过渡生效 ✓ */
   b.style.opacity = '1';
   if (SYSMSG.t) { clearTimeout(SYSMSG.t); }
-  SYSMSG.t = setTimeout(sysMsgHideAll, 2600);
+  SYSMSG.t = setTimeout(sysMsgHideAll, 4200);   /* ★ 2026-10-23 2600→4200：没新消息后多留一会 ✓ */
 }
 
-/* ★ 2026-10-23：连续滚动循环（每帧推进固定像素 ✗ 和消息数量无关 ✓）
-   速度：每秒 46px（≈ 每秒 2.2 行 11px 文本）✗ 视觉上是一条平滑的滚带 ✓ */
-var SYSMSG_SPEED = 46;      /* px / 秒 */
+/* ★★★ 2026-10-23（用户："滚动不对，快得都看不到消息了"）★★★
+   ★ 病根：46px/s ≈ 每秒 2.4 行 ✗ 框只有 5 行高 → 2 秒顶完一整屏 ✓
+     而且窄框里长消息会换 2~3 行，实际更快 ✓
+   ★ 现在：12px/s（≈ 每秒 0.6 行）✓
+     一条消息从出现到被顶出 ≈ 8 秒，足够看清 ✓
+   ★ 还要跟【消息密度】挂钩：短时间猛来很多条时稍微加速一点点，
+     但封顶 20px/s ✗ 不会出现"嗖一下全没了"✓ */
+var SYSMSG_SPEED = 7;       /* 基础速度 px / 秒（≈ 每秒 0.37 行 ✗ 一条能看 8 秒+）*/
+var SYSMSG_SPEED_MAX = 9;   /* 上限（密集时只快一点点 ✗ 用户明确要求）*/
 function sysMsgScrollTick() {
   var rb = SYSMSG.rowsBox;
   if (!rb || !SYSMSG.pend) {
@@ -11311,7 +11317,12 @@ function sysMsgScrollTick() {
   if (!SYSMSG._last) { SYSMSG._last = _now; }
   var dt = Math.min(0.05, (_now - SYSMSG._last) / 1000);
   SYSMSG._last = _now;
-  var step = SYSMSG_SPEED * dt;
+  /* ★ 积压越多，速度温和上升（最多 20px/s ✗ 防止"嗖一下全滚没了"）*/
+  var _back = SYSMSG.pend / Math.max(1, Math.round(SYSMSG.SIZE * 1.75));  /* 积压约几行 */
+  /* ★ 积压超过 3 行才开始加速 ✗ 而且每行只加 0.5px/s ✓ 最多到上限 9 */
+  var _spd = SYSMSG_SPEED + Math.min(2, Math.max(0, _back - 3) * 0.5);
+  if (_spd > SYSMSG_SPEED_MAX) { _spd = SYSMSG_SPEED_MAX; }
+  var step = _spd * dt;
   if (step > SYSMSG.pend) { step = SYSMSG.pend; }
   SYSMSG.pend -= step;
   var off = -SYSMSG.pend;
