@@ -11275,21 +11275,27 @@ function sysMsgPush(msg) {
        ② requestAnimationFrame 每帧按【固定速度】把位移推到 0
        ③ 顶出框的那一行在滚动过程中逐渐变淡、滚完才回收
        → 不论消息多密集，滚动速度恒定、没有跳变 ✓ */
-  if (SYSMSG.live.length > SYSMSG.MAX) {
-    var old = SYSMSG.live.shift();
+  /* ★★★ 2026-10-23（用户："还是不行，把滚动方式改回原来的吧"）★★★
+     ★ 连续滚动（rAF 推位移）在窄框 + 换行下不好看 ✗ 用户否掉了 ✓
+     ★ 改回原来那版：容器【一动不动】✗ 只有内容在动 ✓
+       · 新消息在底部淡入 + 轻微上浮
+       · 超出 MAX 行 → 最老的淡出 + 上移 14px → 删掉
+       → 视觉上一条条往上滚 ✗ 速度由消息节奏决定 ✓
+         没有额外计时器 ✓ 也不会"滚太快看不清"✓ */
+  while (SYSMSG.live.length > SYSMSG.MAX) {
+    var _old = SYSMSG.live.shift();
     (function (o) {
+      o.style.transition = 'opacity .32s ease, transform .32s ease';
       o.style.opacity = '0';
+      o.style.transform = 'translateY(-14px)';
       setTimeout(function () {
         if (o.parentNode) { o.parentNode.removeChild(o); }
         o.innerHTML = '';
+        o.style.transform = '';
         SYSMSG.pool.push(o);
-      }, 260);
-    })(old);
+      }, 330);
+    })(_old);
   }
-  /* 量一下新行占多高（可能是换行后的多行 ✓）*/
-  var _h = el.offsetHeight || Math.round(SYSMSG.SIZE * 1.75);
-  SYSMSG.pend = (SYSMSG.pend || 0) + _h;
-  if (!SYSMSG.raf) { SYSMSG.raf = true; sysMsgScrollTick(); }
   b.style.display = 'block';
   void b.offsetHeight;              /* 强制回流 ✗ 让 opacity 过渡生效 ✓ */
   b.style.opacity = '1';
@@ -11297,47 +11303,12 @@ function sysMsgPush(msg) {
   SYSMSG.t = setTimeout(sysMsgHideAll, 4200);   /* ★ 2026-10-23 2600→4200：没新消息后多留一会 ✓ */
 }
 
-/* ★★★ 2026-10-23（用户："滚动不对，快得都看不到消息了"）★★★
-   ★ 病根：46px/s ≈ 每秒 2.4 行 ✗ 框只有 5 行高 → 2 秒顶完一整屏 ✓
-     而且窄框里长消息会换 2~3 行，实际更快 ✓
-   ★ 现在：12px/s（≈ 每秒 0.6 行）✓
-     一条消息从出现到被顶出 ≈ 8 秒，足够看清 ✓
-   ★ 还要跟【消息密度】挂钩：短时间猛来很多条时稍微加速一点点，
-     但封顶 20px/s ✗ 不会出现"嗖一下全没了"✓ */
-var SYSMSG_SPEED = 7;       /* 基础速度 px / 秒（≈ 每秒 0.37 行 ✗ 一条能看 8 秒+）*/
-var SYSMSG_SPEED_MAX = 9;   /* 上限（密集时只快一点点 ✗ 用户明确要求）*/
-function sysMsgScrollTick() {
-  var rb = SYSMSG.rowsBox;
-  if (!rb || !SYSMSG.pend) {
-    SYSMSG.raf = false;
-    if (rb) { rb.style.transform = 'translateY(0)'; }
-    return;
-  }
-  var _now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-  if (!SYSMSG._last) { SYSMSG._last = _now; }
-  var dt = Math.min(0.05, (_now - SYSMSG._last) / 1000);
-  SYSMSG._last = _now;
-  /* ★ 积压越多，速度温和上升（最多 20px/s ✗ 防止"嗖一下全滚没了"）*/
-  var _back = SYSMSG.pend / Math.max(1, Math.round(SYSMSG.SIZE * 1.75));  /* 积压约几行 */
-  /* ★ 积压超过 3 行才开始加速 ✗ 而且每行只加 0.5px/s ✓ 最多到上限 9 */
-  var _spd = SYSMSG_SPEED + Math.min(2, Math.max(0, _back - 3) * 0.5);
-  if (_spd > SYSMSG_SPEED_MAX) { _spd = SYSMSG_SPEED_MAX; }
-  var step = _spd * dt;
-  if (step > SYSMSG.pend) { step = SYSMSG.pend; }
-  SYSMSG.pend -= step;
-  var off = -SYSMSG.pend;
-  rb.style.transform = 'translateY(' + off.toFixed(2) + 'px)';
-  requestAnimationFrame(sysMsgScrollTick);
-}
-
 /* 没通知 → 整个框（连底板）消失 ✓ */
 function sysMsgHideAll() {
   var b = SYSMSG.el;
   if (!b) { return; }
   /* ★ 2026-10-23：收起时把滚动状态清干净 ✗ 下次弹出不会错位 ✓ */
-  SYSMSG.pend = 0;
-  SYSMSG._last = 0;
-  if (SYSMSG.rowsBox) { SYSMSG.rowsBox.style.transform = 'translateY(0)'; }
+  if (SYSMSG.rowsBox) { SYSMSG.rowsBox.style.transform = ''; }
   b.style.opacity = '0';
   SYSMSG.t = setTimeout(function () {
     b.style.display = 'none';
