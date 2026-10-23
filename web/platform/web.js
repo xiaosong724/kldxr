@@ -3976,7 +3976,10 @@ function setTab(name) {
        谁自己设 MKT.open ✗ 迟早出现"面板在后台还在刷"或者"切过来是空的"✓ */
   MKT.open = (name === 'mkt');
   if (name === 'mkt') { mktBindOnce(); mktAsk(true); }
-  if (name === 'bag') { bagFetch(bagRender); }   // ★ 切到背包页就拉一次（只读接口 ✓ 很便宜）
+  if (name === 'bag') { bagFetch(bagRender); }
+  /* ★ 2026-10-23 修：系统提示框的滑块必须在【切到设置页】时绑定 ✗
+     原来只在键位模式里绑 → 普通打开菜单拖动没反应 ✓ */
+  try { sysMsgBindSizeBtns(); } catch (eSMb) { }   // ★ 切到背包页就拉一次（只读接口 ✓ 很便宜）
   /* ★★ round467（用户："把装备栏和背包分开，装备栏单独设为导航栏"）★★
      装备页要渲染两个装备槽（bagRender 里那段）+ 属性详情（equipRender）✓ */
   if (name === 'equip') { bagRender(); equipRender(); }
@@ -4929,6 +4932,7 @@ function uiThemeBind() {
 try { uiThemeApply(localStorage.getItem(UI_THEME_STORE) || 'gray'); } catch (eTh0) { }
 
 function openSet(wantTab) {
+  try { sysMsgBindSizeBtns(); } catch (eSO) { }
   var p = document.getElementById('setPanel');
   if (!p) { return; }
   try { if (typeof whClose === 'function') { whClose(); } } catch (eWhC) { }
@@ -11105,12 +11109,16 @@ var SYSMSG_SIZES = [10, 11, 12, 13.5];   /* 小 / 标准 / 大 / 特大（2026-1
 function sysMsgEl() {
   if (SYSMSG.el) { return SYSMSG.el; }
   /* 读回上次设的字号 ✓ */
+  /* ★ 2026-10-23：优先用 SETCFG 里那份（和其它设置一起存档 ✓）再退回 localStorage */
   try {
-    var _sz = parseFloat(localStorage.getItem('sysMsgSize') || '');
+    var _sm = (typeof SETCFG !== 'undefined' && SETCFG && SETCFG.sysMsg) || null;
+    var _sz, _w, _hh;
+    if (_sm) { _sz = +_sm.f; _w = +_sm.w; _hh = +_sm.h; }
+    if (!(_sz > 8 && _sz < 22)) { _sz = parseFloat(localStorage.getItem('sysMsgSize') || ''); }
+    if (!(_w >= 90 && _w <= 420)) { _w = parseInt(localStorage.getItem('sysMsgW') || '', 10); }
+    if (!(_hh >= 40 && _hh <= 360)) { _hh = parseInt(localStorage.getItem('sysMsgH') || '', 10); }
     if (_sz > 8 && _sz < 22) { SYSMSG.SIZE = _sz; }
-    var _w = parseInt(localStorage.getItem('sysMsgW') || '', 10);
     if (_w >= 90 && _w <= 420) { SYSMSG.W = _w; }
-    var _hh = parseInt(localStorage.getItem('sysMsgH') || '', 10);
     if (_hh >= 40 && _hh <= 360) { SYSMSG.H = _hh; }
   } catch (e0) { }
   var b = document.createElement('div');
@@ -11150,6 +11158,7 @@ function sysMsgEl() {
   window._toastElRef = b;            /* 兼容旧代码里对 _toastElRef 的引用 ✓ */
   sysMsgApplyPos();
   sysMsgApplySize();
+  try { sysMsgBindSizeBtns(); } catch (eSB2) { }
   return b;
 }
 
@@ -11205,6 +11214,15 @@ function sysMsgBindSizeBtns() {
         SYSMSG.SIZE = Math.max(9, Math.min(18, parseFloat(fEl.value) || 11));
         localStorage.setItem('sysMsgSize', String(SYSMSG.SIZE));
       }
+      /* ★ 2026-10-23（用户："设置需要保存，刷新重启服务器也不能失效"）
+         · localStorage 已经能扛住刷新 / 服务器重启 ✓（浏览器本地存储 ✓）
+         · 再写一份进 SETCFG（和其它设置项同一个存档 ✓）双保险 ✓ */
+      try {
+        if (typeof SETCFG !== 'undefined' && SETCFG) {
+          SETCFG.sysMsg = { w: SYSMSG.W, h: SYSMSG.H, f: SYSMSG.SIZE };
+          if (typeof saveSet === 'function') { saveSet(); }
+        }
+      } catch (e4) { }
       /* ★ 2026-10-23 修：框可能还没创建 ✗ 先建出来再套尺寸 ✓
          （原来只调 sysMsgEl() 不复用返回值 → 已有框时改动没应用 ✓）*/
       var _b = sysMsgEl();
