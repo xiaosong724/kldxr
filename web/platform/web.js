@@ -42,50 +42,65 @@ var UI = {
        以前每开一次皮肤页/自定义就多一个 ✗ 累计几次主画布就创建失败 ✓
      · 借用时要【存好并恢复】主渲染器的 尺寸/像素比/清屏设置 ✗ 不然主画面会被弄坏 ✓
      参数：scene / camera / 目标 2D canvas / 像素宽高 */
+  /* ★★★ 2026-10-23 重写（用户："看完皮肤页退出来，界面一直闪黑"）★★★
+     ★ 旧实现的致命缺陷：直接改主渲染器的尺寸来渲小图 ✗
+       ① setSize(420,170) 会把主画布的 drawing buffer 缩成 420×170 ✓
+       ② render() 又把主画布【清成黑底 + 画上皮肤模型】✓
+       → 主循环下一帧之前，玩家看到的就是"黑一下/闪一下" ✓
+       → 皮肤页反复开合 = 一直闪黑 ✓ 一字不差
+     ★ 现在：改用【离屏渲染目标 RenderTarget】✗ 主画布一个像素都不碰 ✓
+       · 主渲染器只负责"渲到离屏缓冲" ✓
+       · 尺寸/视口/清屏色/autoClear 全部不动 ✓
+       · 各预览各占一个 RT（很小 ✗ 不占 WebGL 上下文名额 ✓）*/
+  _rtCache: {},
+  _getRT: function (pw, ph) {
+    var k = pw + 'x' + ph;
+    var rt = this._rtCache[k];
+    if (rt) { return rt; }
+    rt = new THREE.WebGLRenderTarget(pw, ph, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      depthBuffer: true,
+      stencilBuffer: false
+    });
+    this._rtCache[k] = rt;
+    return rt;
+  },
   renderSceneTo2D: function (scene, cam, cv2d, pw, ph, bgColor) {
     try {
       if (typeof rd === 'undefined' || !rd || !scene || !cam || !cv2d) { return false; }
-      var gl = rd.getContext();
-      if (!gl) { return false; }
-      /* ① 存好主渲染器当前状态（渲染完必须原样恢复 ✗ 否则主画面会被缩小/变色 ✓）*/
-      var _pr = rd.getPixelRatio();
-      var _size = { w: 0, h: 0 };
-      try {
-        var sv = new THREE.Vector2();
-        rd.getSize(sv);
-        _size.w = sv.x; _size.h = sv.y;
-      } catch (eS) { }
-      var _clearA = rd.getClearAlpha();
-      var _clearColor = null;
-      try { _clearColor = rd.getClearColor(new THREE.Color()); } catch (eC) { }
+      var rt = this._getRT(pw, ph);
+      var _oldRT = rd.getRenderTarget();
       var _autoClear = rd.autoClear;
+      var _clearA = rd.getClearAlpha();
+      var _clearC = null;
+      try { _clearC = rd.getClearColor(new THREE.Color()); } catch (eC) { }
       var ok = false;
       try {
-        rd.setPixelRatio(1);
-        rd.setSize(pw, ph, false);
-        rd.setClearColor((bgColor == null ? 0x000000 : bgColor), 0);
+        /* ★ 只切"渲到哪"✗ 主画布的尺寸/视口一律不动 ✓ */
         rd.autoClear = true;
+        rd.setClearColor((bgColor == null ? 0x000000 : bgColor), 0);
+        rd.setRenderTarget(rt);
+        rd.clear();
         rd.render(scene, cam);
-        /* ② 当场把像素读出来（preserveDrawingBuffer 是 false ✗ 之后缓存随时会没 ✓）*/
         var buf = new Uint8Array(pw * ph * 4);
-        gl.readPixels(0, 0, pw, ph, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+        rd.readRenderTargetPixels(rt, 0, 0, pw, ph, buf);
         if (cv2d.width !== pw) { cv2d.width = pw; }
         if (cv2d.height !== ph) { cv2d.height = ph; }
         var ctx2 = cv2d.getContext('2d');
         var img = ctx2.createImageData(pw, ph);
         for (var y = 0; y < ph; y++) {
-          var src = (ph - 1 - y) * pw * 4;      /* WebGL 是上下颠倒的 ✓ 翻一下 */
+          var src = (ph - 1 - y) * pw * 4;      /* WebGL 上下颠倒 ✓ 翻过来 */
           var dst = y * pw * 4;
           img.data.set(buf.subarray(src, src + pw * 4), dst);
         }
         ctx2.putImageData(img, 0, 0);
         ok = true;
       } finally {
-        /* ③ 恢复主渲染器（哪怕上面抛错也要恢复 ✓）*/
         try {
-          rd.setPixelRatio(_pr);
-          if (_size.w > 0 && _size.h > 0) { rd.setSize(_size.w, _size.h, false); }
-          if (_clearColor) { rd.setClearColor(_clearColor, _clearA); }
+          rd.setRenderTarget(_oldRT || null);
+          if (_clearC) { rd.setClearColor(_clearC, _clearA); }
           else { rd.setClearAlpha(_clearA); }
           rd.autoClear = _autoClear;
         } catch (eR) { }
@@ -4716,10 +4731,17 @@ function skinBindDrag() {
 
 /* ★ 2026-10-23：皮肤预览出图（借主渲染器 ✗ 不再有自己的 WebGL 上下文 ✓）
    ★ 限频 ~20fps：readPixels 比普通 render 贵 ✗ 每帧读会拖慢主循环 ✓ */
-function skinPreviewDraw() {
+function skinPreviewDraw(force) {
   if (!SKIN.ready || !SKIN.hero || !SKIN.cv) { return; }
+  /* ★ 2026-10-23（闪黑）：页面没显示就【彻底不渲】✗ 别在后台/关掉之后还借主渲染器 ✓ */
+  if (!force) {
+    var _p = document.querySelector('.tabpane[data-pane="skin"]');
+    if (!_p || _p.className.indexOf('on') < 0) { return; }
+    var _set = document.getElementById('setPanel');
+    if (_set && _set.style.display === 'none') { return; }
+  }
   var now = (performance.now ? performance.now() : Date.now());
-  if (SKIN._lastDraw && (now - SKIN._lastDraw) < 45) { return; }
+  if (!force && SKIN._lastDraw && (now - SKIN._lastDraw) < 45) { return; }
   SKIN._lastDraw = now;
   try {
     UI.renderSceneTo2D(SKIN.scene, SKIN.cam, SKIN.cv, 420, 170);
