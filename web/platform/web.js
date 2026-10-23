@@ -11079,8 +11079,9 @@ var SYSMSG_SIZES = [10, 11, 12, 13.5];   /* 小 / 标准 / 大 / 特大（2026-1
   var st = document.createElement('style');
   st.id = 'sysMsgCSS';
   st.textContent = `
-  #sysMsgBox .row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-    padding:0 14px;line-height:1.85;color:#b9c6d2;text-align:left;
+  /* ★ 2026-10-23（用户："不够显示就换行"）nowrap → normal，去掉省略号 ✓ */
+  #sysMsgBox .row{white-space:normal;word-break:break-all;overflow-wrap:anywhere;
+    padding:0 10px;line-height:1.75;color:#b9c6d2;text-align:left;
     text-shadow:0 1px 2px rgba(0,0,0,.9);
     transition:opacity .3s ease,transform .3s ease}
   /* A 版彩色标签（和预览页一字不差 ✓）*/
@@ -11116,7 +11117,8 @@ function sysMsgEl() {
   b.style.cssText =
     /* ★ 2026-10-23（用户："位置默认调整到左边靠边"）*/
     'position:fixed;left:16px;top:16%;transform:none;' +
-    'width:270px;height:' + _h + 'px;box-sizing:border-box;' +
+    /* ★ 2026-10-23（用户："宽度减少一半，不够显示就换行"）270 → 136 */
+    'width:136px;height:' + _h + 'px;box-sizing:border-box;' +
     'padding:9px 0;border-radius:10px;pointer-events:none;z-index:69;' +
     'background:linear-gradient(180deg,rgba(12,16,20,.42),rgba(8,11,14,.58));' +
     'border:1px solid rgba(120,160,190,.20);' +
@@ -11265,8 +11267,15 @@ function sysMsgPush(msg) {
      ★ 修：固定【每秒移动多少像素】✗ 位移多大就花多长时间 ✓
        SPEED = SIZE*1.85 每秒（一行一个字高 ✓ 不随消息数量变）
        消息再多也只是"持续滚动"，不会加速 ✓ */
-  var _over = SYSMSG.live.length - SYSMSG.MAX;
-  if (_over > 0) {
+  /* ★★★ 2026-10-23（用户："滚动感不够，要流畅一点"）★★★
+     ★ 病根：原来每次加一行就【平移一行 → .42s → 立刻回正】✗
+       → 每来一条消息就"顿一下"再"弹回来"✗ 看着一格一格的 ✓
+     ★ 现在：真正的【连续滚动】✗
+       ① 新行插到底部，容器先垫一行的位移（视觉上不多出来）
+       ② requestAnimationFrame 每帧按【固定速度】把位移推到 0
+       ③ 顶出框的那一行在滚动过程中逐渐变淡、滚完才回收
+       → 不论消息多密集，滚动速度恒定、没有跳变 ✓ */
+  if (SYSMSG.live.length > SYSMSG.MAX) {
     var old = SYSMSG.live.shift();
     (function (o) {
       o.style.opacity = '0';
@@ -11274,19 +11283,13 @@ function sysMsgPush(msg) {
         if (o.parentNode) { o.parentNode.removeChild(o); }
         o.innerHTML = '';
         SYSMSG.pool.push(o);
-      }, 240);
+      }, 260);
     })(old);
-    var _lh = Math.round(SYSMSG.SIZE * 1.85);
-    /* 匀速：走完一行固定用 0.42 秒（≈ 每秒 2.4 行）✗ 和消息多少无关 ✓ */
-    SYSMSG.rowsBox.style.transition = 'transform .42s linear';
-    SYSMSG.rowsBox.style.transform = 'translateY(-' + _lh + 'px)';
-    /* 走完立刻回正（不留累计位移 ✓ 否则越滚越偏）*/
-    clearTimeout(SYSMSG._rs);
-    SYSMSG._rs = setTimeout(function () {
-      SYSMSG.rowsBox.style.transition = 'none';
-      SYSMSG.rowsBox.style.transform = 'translateY(0)';
-    }, 430);
   }
+  /* 量一下新行占多高（可能是换行后的多行 ✓）*/
+  var _h = el.offsetHeight || Math.round(SYSMSG.SIZE * 1.75);
+  SYSMSG.pend = (SYSMSG.pend || 0) + _h;
+  if (!SYSMSG.raf) { SYSMSG.raf = true; sysMsgScrollTick(); }
   b.style.display = 'block';
   void b.offsetHeight;              /* 强制回流 ✗ 让 opacity 过渡生效 ✓ */
   b.style.opacity = '1';
@@ -11294,10 +11297,36 @@ function sysMsgPush(msg) {
   SYSMSG.t = setTimeout(sysMsgHideAll, 2600);
 }
 
+/* ★ 2026-10-23：连续滚动循环（每帧推进固定像素 ✗ 和消息数量无关 ✓）
+   速度：每秒 46px（≈ 每秒 2.2 行 11px 文本）✗ 视觉上是一条平滑的滚带 ✓ */
+var SYSMSG_SPEED = 46;      /* px / 秒 */
+function sysMsgScrollTick() {
+  var rb = SYSMSG.rowsBox;
+  if (!rb || !SYSMSG.pend) {
+    SYSMSG.raf = false;
+    if (rb) { rb.style.transform = 'translateY(0)'; }
+    return;
+  }
+  var _now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  if (!SYSMSG._last) { SYSMSG._last = _now; }
+  var dt = Math.min(0.05, (_now - SYSMSG._last) / 1000);
+  SYSMSG._last = _now;
+  var step = SYSMSG_SPEED * dt;
+  if (step > SYSMSG.pend) { step = SYSMSG.pend; }
+  SYSMSG.pend -= step;
+  var off = -SYSMSG.pend;
+  rb.style.transform = 'translateY(' + off.toFixed(2) + 'px)';
+  requestAnimationFrame(sysMsgScrollTick);
+}
+
 /* 没通知 → 整个框（连底板）消失 ✓ */
 function sysMsgHideAll() {
   var b = SYSMSG.el;
   if (!b) { return; }
+  /* ★ 2026-10-23：收起时把滚动状态清干净 ✗ 下次弹出不会错位 ✓ */
+  SYSMSG.pend = 0;
+  SYSMSG._last = 0;
+  if (SYSMSG.rowsBox) { SYSMSG.rowsBox.style.transform = 'translateY(0)'; }
   b.style.opacity = '0';
   SYSMSG.t = setTimeout(function () {
     b.style.display = 'none';
