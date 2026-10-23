@@ -7851,18 +7851,21 @@ function camLandApply(on) {
       if (nativeShell && nativeShell.setOrientation) {
         nativeShell.setOrientation(on ? 'landscape' : 'portrait');
         finish(true);
-        /* ★★★ 2026-10-23（用户："我手机无法横屏，从 APK 层面解决"）★★★
-           ★ 系统那边已经开始转了 ✗ 但转完是异步的 ✓
-           ★ finish(true) 已经切了 CSS 类 ✗ 但这时视口还是旧尺寸
-             → 按钮位置会按旧尺寸算 ✗ 旋转完成后就对不上了 ✓
-           → 这里等 400ms（旋转动画通常 300ms 内）再【按真实尺寸重算一次】✓
-           ★ 这次重算的是【布局坐标】✗ 不是方向 ✗ 所以画面不会跳 ✓ */
-        setTimeout(function () {
-          try { camLandApply(on); } catch (eRL) { }
-        }, 420);
-        setTimeout(function () {
-          try { camLandApply(on); } catch (eRL2) { }
-        }, 900);
+        /* ★★★ 2026-10-24（用户："切换横竖屏后系统提示框会无限刷屏"）★★★
+           ★ 病根：这里原来是【再调两次 camLandApply(on)】✗
+             而 camLandApply 里每次都会 finish(true) → 弹一次 toast ✓
+             → 切一次屏弹三次提示 ✗ 而且第二个 setTimeout 里又调 camLandApply
+               又排两个 setTimeout ✗ → 【指数级增长】→ 无限刷屏 ✓✓
+           ★ 修：旋转完只需要【重算一次布局坐标】✗ 不需要重新走一遍方向流程 ✓
+             直接调 uiApplyAllSaved / uiApplyAtkScale / uiClampPositions ✓
+             这几个是幂等的 ✗ 只是按当前尺寸摆按钮 ✓ 不弹提示 ✓ */
+        function relayout() {
+          try { uiApplyAllSaved(); } catch (e1) { }
+          try { uiApplyAtkScale(); } catch (e2) { }
+          try { uiClampPositions(); } catch (e3) { }
+        }
+        setTimeout(relayout, 420);
+        setTimeout(relayout, 900);
         return;
       }
     } catch (eNative) { }
