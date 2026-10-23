@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>系统提示 · 背景框三版</title>
+<style>
+  html,body{margin:0;height:100%;background:#14171c;overflow:hidden;
+    font-family:system-ui,"Microsoft YaHei",sans-serif}
+  canvas{position:absolute;left:0;top:0;width:100%;height:100%}
+  .stage{position:absolute;left:0;top:0;width:100%;height:100%}
+  .tag{position:absolute;color:#6b7684;font-size:12px;font-weight:800;
+    letter-spacing:1px;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div class="stage" id="stage"></div>
+
+<script>
+(function(){
+  var cv=document.getElementById('bg'),g=cv.getContext('2d');
+  function draw(){
+    var W=cv.width=innerWidth,H=cv.height=innerHeight;
+    var sky=g.createLinearGradient(0,0,0,H);
+    sky.addColorStop(0,'#1b2028');sky.addColorStop(.5,'#232a31');sky.addColorStop(1,'#141a1f');
+    g.fillStyle=sky;g.fillRect(0,0,W,H);
+    var gy=H*.62;
+    var gr=g.createLinearGradient(0,gy,0,H);
+    gr.addColorStop(0,'#2b323a');gr.addColorStop(1,'#11151a');
+    g.fillStyle=gr;g.fillRect(0,gy,W,H-gy);
+    g.strokeStyle='rgba(255,255,255,.03)';
+    for(var i=0;i<12;i++){
+      var y=gy+Math.pow(i/11,1.7)*(H-gy);
+      g.beginPath();g.moveTo(0,y);g.lineTo(W,y);g.stroke();
+    }
+    for(var k=0;k<6;k++){
+      var cx=W*(.12+k*.16),cy=gy+38+k*16;
+      g.fillStyle='rgba(58,54,64,.6)';
+      g.beginPath();g.ellipse(cx,cy,18,30,0,0,7);g.fill();
+      g.beginPath();g.arc(cx,cy-32,14,0,7);g.fill();
+    }
+    var vg=g.createRadialGradient(W/2,H/2,H*.3,W/2,H/2,H*.9);
+    vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,.62)');
+    g.fillStyle=vg;g.fillRect(0,0,W,H);
+  }
+  draw();addEventListener('resize',draw);
+})();
+
+document.head.insertAdjacentHTML('beforeend', `
+<style>
+/* 三个版本共用结构：136 宽 · 6 行 · 左对齐 · 彩色标签 */
+.panel{position:absolute;width:136px;box-sizing:border-box;overflow:hidden;
+  pointer-events:none;
+  -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 12%,#000 88%,transparent 100%);
+  mask-image:linear-gradient(180deg,transparent 0,#000 12%,#000 88%,transparent 100%)}
+.panel .rows{position:absolute;left:0;right:0;bottom:0;
+  display:flex;flex-direction:column;justify-content:flex-end;
+  padding:8px 0}
+.row{padding:0 10px;line-height:1.75;font-size:11px;text-align:left;
+  color:#b9c6d2;text-shadow:0 1px 2px rgba(0,0,0,.9);
+  white-space:normal;word-break:break-all}
+.row b{font-weight:800}
+.row b.g{color:#ffd83d}
+.row b.e{color:#6fb8ff}
+.row b.t{color:#ffd83d}
+.row b.t2{color:#ff3b30}
+
+/* ========== 版本 1：无框（纯文字条）==========
+   完全不要底板 ✗ 只在文字后面垫一层极淡的横向渐变
+   → 存在感最低、最不挡画面 ✓ */
+.v1{background:linear-gradient(90deg,
+  rgba(8,11,14,.0) 0%,rgba(8,11,14,.52) 18%,
+  rgba(8,11,14,.52) 82%,rgba(8,11,14,.0) 100%);
+  border-radius:0}
+
+/* ========== 版本 2：细线卡（极简描边）==========
+   只有 1px 细边 + 很淡的底，四角小圆角
+   → 有"卡片感"但不厚重 ✓ */
+.v2{background:rgba(10,14,18,.42);border:1px solid rgba(140,170,200,.28);
+  border-radius:3px;
+  box-shadow:0 2px 10px rgba(0,0,0,.28)}
+
+/* ========== 版本 3：左竖条（进度感）==========
+   没有边框 ✗ 左侧一条 2px 金色竖条 + 淡底
+   → 像"事件日志"，和战斗 HUD 风格统一 ✓ */
+.v3{background:linear-gradient(90deg,rgba(10,14,18,.56),rgba(10,14,18,.34));
+  border-radius:0 4px 4px 0}
+.v3::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;
+  background:linear-gradient(180deg,rgba(255,216,61,.9),rgba(255,216,61,.15));
+  pointer-events:none}
+</style>`);
+
+var stage=document.getElementById('stage');
+var MSGS=[
+  ['经验 <b class="e">+620</b>',''],
+  ['金币 <b class="g">+1,280</b>',''],
+  ['拾取 铁剑（<b class="t">5 阶</b>）',''],
+  ['金币 <b class="g">+340</b>',''],
+  ['拾取 妖丹（<b class="t2">12 阶</b>）','']
+];
+
+function makePanel(cls, label, x, y){
+  var p=document.createElement('div');
+  p.className='panel '+cls;
+  p.style.left=x+'px'; p.style.top=y+'px';
+  var r=document.createElement('div'); r.className='rows';
+  p.appendChild(r); stage.appendChild(p);
+  var tg=document.createElement('div'); tg.className='tag'; tg.textContent=label;
+  tg.style.left=x+'px'; tg.style.top=(y-24)+'px'; tg.style.width='136px';
+  stage.appendChild(tg);
+  return p;
+}
+
+function push(p, html, MAX){
+  var rows=p.querySelector('.rows');
+  var d=document.createElement('div');
+  d.className='row'; d.innerHTML=html;
+  d.style.opacity='0'; d.style.transform='translateY(10px)';
+  rows.appendChild(d);
+  requestAnimationFrame(function(){ d.style.opacity='1'; d.style.transform='translateY(0)'; });
+  var all=rows.querySelectorAll('.row');
+  if(all.length>MAX){
+    var o=all[0];
+    o.style.opacity='0'; o.style.transform='translateY(-14px)';
+    setTimeout(function(){ if(o.parentNode) o.parentNode.removeChild(o); }, 330);
+  }
+}
+
+var W=innerWidth,H=innerHeight;
+var p1=makePanel('v1','版 1 · 无框文字条', W*0.10, H*0.20);
+var p2=makePanel('v2','版 2 · 细线卡', W*0.28, H*0.20);
+var p3=makePanel('v3','版 3 · 左竖条', W*0.46, H*0.20);
+
+var i=0;
+function tick(){
+  var m=MSGS[i%MSGS.length];
+  push(p1,m[0],6); push(p2,m[0],6); push(p3,m[0],6);
+  i++;
+  setTimeout(tick, 700);
+}
+tick();
+</script>
+</body>
+</html>

@@ -11065,8 +11065,10 @@ var SYSMSG = {
   live: [],        /* 正在显示的行元素（newest 在末尾）*/
   pool: [],        /* 回收池 */
   t: null,         /* 自动隐藏计时器 */
-  MAX: 6,          /* 最多同时显示几行（★ 2026-10-23 5→6 ✗ 多留几条）*/
-  SIZE: 11         /* 字号（菜单可调 ✗ 2026-10-23 默认调小）*/
+  MAX: 6,          /* 最多同时显示几行 */
+  SIZE: 11,        /* 字号（菜单可调）*/
+  W: 136,          /* ★ 2026-10-23（用户）：宽度可调 */
+  H: 134           /* ★ 高度可调 */
 };
 var SYSMSG_SIZES = [10, 11, 12, 13.5];   /* 小 / 标准 / 大 / 特大（2026-10-23 整体缩小）*/
 
@@ -11106,30 +11108,42 @@ function sysMsgEl() {
   try {
     var _sz = parseFloat(localStorage.getItem('sysMsgSize') || '');
     if (_sz > 8 && _sz < 22) { SYSMSG.SIZE = _sz; }
+    var _w = parseInt(localStorage.getItem('sysMsgW') || '', 10);
+    if (_w >= 90 && _w <= 420) { SYSMSG.W = _w; }
+    var _hh = parseInt(localStorage.getItem('sysMsgH') || '', 10);
+    if (_hh >= 40 && _hh <= 360) { SYSMSG.H = _hh; }
   } catch (e0) { }
   var b = document.createElement('div');
   b.id = 'sysMsgBox';
   /* ★ 2026-10-23（用户："不是让你固定大小吗"）
      高度按【最大行数】算死 ✗ 不随内容伸缩 ✓
      行少的时候框也保持这个高度（文字贴着底部往上排 ✓）*/
-  var _rowH = Math.round(SYSMSG.SIZE * 1.85);
-  var _h = Math.round(_rowH * SYSMSG.MAX + 14);
   b.style.cssText =
     /* ★ 2026-10-23（用户："位置默认调整到左边靠边"）*/
     'position:fixed;left:16px;top:16%;transform:none;' +
-    /* ★ 2026-10-23（用户："宽度减少一半，不够显示就换行"）270 → 136 */
-    'width:136px;height:' + _h + 'px;box-sizing:border-box;' +
-    'padding:9px 0;border-radius:10px;pointer-events:none;z-index:69;' +
-    'background:linear-gradient(180deg,rgba(12,16,20,.42),rgba(8,11,14,.58));' +
-    'border:1px solid rgba(120,160,190,.20);' +
-    'box-shadow:inset 0 0 0 1px rgba(255,255,255,.03),0 3px 14px rgba(0,0,0,.35);' +
+    'width:' + SYSMSG.W + 'px;height:' + SYSMSG.H + 'px;box-sizing:border-box;' +
+    'padding:0;pointer-events:none;z-index:69;' +
+    /* ★★★ 2026-10-23（用户选：版 1 · 无框文字条）★★★
+       不要边框、不要圆角、不要投影 ✗ 只有一条【左右渐隐】的半透明底 ✓
+       → 存在感最低、最不挡画面 ✓ */
+    'background:linear-gradient(90deg,' +
+    'rgba(8,11,14,0) 0%,rgba(8,11,14,.52) 18%,' +
+    'rgba(8,11,14,.52) 82%,rgba(8,11,14,0) 100%);' +
     /* 上下渐隐遮罩：文字从框边淡出 ✓ */
-    '-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 10%,#000 90%,transparent 100%);' +
-    'mask-image:linear-gradient(180deg,transparent 0,#000 10%,#000 90%,transparent 100%);' +
+    /* ★ 2026-10-23：遮罩收窄 ✗ 原来上下各 10% 会让第一/最后一行变淡甚至看不见 ✓ */
+    '-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 5%,#000 95%,transparent 100%);' +
+    'mask-image:linear-gradient(180deg,transparent 0,#000 5%,#000 95%,transparent 100%);' +
     'overflow:hidden;opacity:0;display:none;transition:opacity .22s ease';
+  /* ★★★ 2026-10-23（用户："滚动字也加上，我现在什么也看不到"）★★★
+     ★ 病根：行容器 absolute + bottom:0 ✗ 但没有【高度】和【上边】✗
+       → 内容从 bottom 往下长 ✗ 直接溢出到框外 → 被 overflow:hidden 裁掉 ✓
+       （实测：框 103~237，第一行文字 top=217 已经贴底，第二行就直接出框了 ✓）
+     ★ 修：容器铺满整个框（top:0;bottom:0）✗ 用 justify-content:flex-end
+       让行从底部往上堆 ✓ 无论几行都在框内 ✓ */
   var rb = document.createElement('div');
-  rb.style.cssText = 'position:absolute;left:0;right:0;bottom:0;' +
-    'display:flex;flex-direction:column;justify-content:flex-end';
+  rb.style.cssText = 'position:absolute;left:0;right:0;top:0;bottom:0;' +
+    'display:flex;flex-direction:column;justify-content:flex-end;' +
+    'padding:6px 0;box-sizing:border-box;overflow:hidden';
   b.appendChild(rb);
   document.body.appendChild(b);
   SYSMSG.el = b; SYSMSG.rowsBox = rb;
@@ -11154,43 +11168,75 @@ function sysMsgApplySize() {
   var s = SYSMSG.SIZE;
   for (var i = 0; i < SYSMSG.live.length; i++) {
     SYSMSG.live[i].style.fontSize = s + 'px';
-    SYSMSG.live[i].style.lineHeight = '1.85';
+    SYSMSG.live[i].style.lineHeight = '1.75';
   }
-  /* ★ 字号一改，固定框的高度也要跟着重算（不然文字装不下）*/
-  var _rowH = Math.round(s * 1.85);
-  b.style.height = Math.round(_rowH * SYSMSG.MAX + 14) + 'px';
+  /* ★ 2026-10-23（用户："可以设置宽度和长度"）宽高都由滑块决定 ✗ 不再自动算 ✓ */
+  b.style.width = SYSMSG.W + 'px';
+  b.style.height = SYSMSG.H + 'px';
 }
-/* 菜单里的字号按钮（点一下立刻生效 ✗ 并存到 localStorage ✓）*/
+/* ★★★ 2026-10-23（用户："改成可以设置宽度和长度，滑动设置"）★★★
+   三个滑块：宽度 / 高度 / 字号 ✗ 拖动即时生效 ✓ 存 localStorage ✓ */
 function sysMsgBindSizeBtns() {
-  var box = document.getElementById('sysMsgSizeBtns');
-  if (!box || box._b) { return; }
-  box._b = true;
+  var wEl = document.getElementById('sysMsgW');
+  var hEl = document.getElementById('sysMsgH');
+  var fEl = document.getElementById('sysMsgF');
+  var wv = document.getElementById('sysMsgWVal');
+  var hv = document.getElementById('sysMsgHVal');
+  var fv = document.getElementById('sysMsgFVal');
+  if (!wEl || wEl._b) { return; }
+  wEl._b = 1;
   function paint() {
-    var btns = box.querySelectorAll('button');
-    for (var i = 0; i < btns.length; i++) {
-      var v = parseFloat(btns[i].getAttribute('data-smsize')) || 12.5;
-      btns[i].style.borderColor = (Math.abs(v - SYSMSG.SIZE) < 0.01) ? '#ffd83d' : '';
-      btns[i].style.color = (Math.abs(v - SYSMSG.SIZE) < 0.01) ? '#ffd83d' : '';
-    }
+    if (wEl) { wEl.value = SYSMSG.W; }
+    if (hEl) { hEl.value = SYSMSG.H; }
+    if (fEl) { fEl.value = SYSMSG.SIZE; }
+    if (wv) { wv.textContent = SYSMSG.W + 'px'; }
+    if (hv) { hv.textContent = SYSMSG.H + 'px'; }
+    if (fv) { fv.textContent = SYSMSG.SIZE + 'px'; }
   }
-  box.addEventListener('click', function (e) {
-    var t = e.target;
-    if (!t || !t.getAttribute) { return; }
-    var v = t.getAttribute('data-smsize');
-    if (v === null) { return; }
-    sysMsgSetSize(parseFloat(v));
-    paint();
-    try { sysMsgPush('系统提示字号：' + t.textContent); } catch (e2) { }
-  });
+  function apply(which) {
+    try {
+      if (which === 'w') {
+        SYSMSG.W = Math.max(90, Math.min(420, parseInt(wEl.value, 10) || 136));
+        localStorage.setItem('sysMsgW', String(SYSMSG.W));
+      } else if (which === 'h') {
+        SYSMSG.H = Math.max(40, Math.min(360, parseInt(hEl.value, 10) || 134));
+        localStorage.setItem('sysMsgH', String(SYSMSG.H));
+      } else if (which === 'f') {
+        SYSMSG.SIZE = Math.max(9, Math.min(18, parseFloat(fEl.value) || 11));
+        localStorage.setItem('sysMsgSize', String(SYSMSG.SIZE));
+      }
+      /* ★ 2026-10-23 修：框可能还没创建 ✗ 先建出来再套尺寸 ✓
+         （原来只调 sysMsgEl() 不复用返回值 → 已有框时改动没应用 ✓）*/
+      var _b = sysMsgEl();
+      if (_b) {
+        _b.style.width = SYSMSG.W + 'px';
+        _b.style.height = SYSMSG.H + 'px';
+        for (var _i = 0; _i < SYSMSG.live.length; _i++) {
+          SYSMSG.live[_i].style.fontSize = SYSMSG.SIZE + 'px';
+        }
+        /* 菜单里预览一下效果：推一条示例消息 ✓ */
+        if (!SYSMSG.live.length) {
+          try { sysMsgPush('宽度 ' + SYSMSG.W + ' · 高度 ' + SYSMSG.H); } catch (e3) { }
+        }
+      }
+      paint();
+    } catch (e) { }
+  }
+  /* input 事件 = 拖动过程中就实时生效 ✓ */
+  if (wEl) { wEl.addEventListener('input', function () { apply('w'); }); }
+  if (hEl) { hEl.addEventListener('input', function () { apply('h'); }); }
+  if (fEl) { fEl.addEventListener('input', function () { apply('f'); }); }
   paint();
-  box._paint = paint;
+  sysMsgBindSizeBtns._paint = paint;
 }
-
 function sysMsgSetSize(px) {
-  SYSMSG.SIZE = Math.max(9, Math.min(20, +px || 12.5));
+  SYSMSG.SIZE = Math.max(9, Math.min(20, +px || 11));
   try { localStorage.setItem('sysMsgSize', String(SYSMSG.SIZE)); } catch (e) { }
   sysMsgApplySize();
+  try { if (sysMsgBindSizeBtns._paint) { sysMsgBindSizeBtns._paint(); } } catch (e2) { }
 }
+
+
 
 /* 一行元素（复用池） */
 function sysMsgRow() {
