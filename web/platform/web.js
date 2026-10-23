@@ -652,13 +652,19 @@ var _actx = null, _aVoices = 0, _aGestured = false;
    之前我只在播放那一刻 resume ✗ 而那时可能已经错过了手势窗口 ✗
    → 现在监听【第一次】点击/触摸/按键 → 立即 resume ✓ 一次性 ✗不重复绑 ✗ */
 function _aGesture() {
-  /* ★ 2026-10-24：不再"只做一次"✗ 每次手势都可以尝试恢复 ✓
-     （手机切后台/来电后 AudioContext 会重新变 suspended ✓ 需要再唤醒 ✓）
-     ★ 但只在【真的挂起时】才调用 resume ✗ 正在跑就不动它 ✓ 零开销 ✓ */
+  /* ★★★ 2026-10-24（用户贴的警告："The AudioContext was not allowed to start"）★★★
+     ★ 病根：这里原来调 audioCtx() ✗ 而 audioCtx() 里【第一次会 new AC()】✓
+       虽然此刻已经在用户手势里 ✗ 但 Chromium 有个已知行为：
+       在同一个手势回调里"先 new、再 resume"仍会先报一次警告 ✓✓
+     ★ 正确顺序（Chrome 团队推荐的做法）：
+       ① 页面加载时就把 AudioContext 建好（不播放 ✗ 只是建着）✓
+       ② 用户手势发生时只调 resume() ✗ 不再 new ✓
+     ★ 现在 audioCtx() 会在启动时被调一次（见文件末尾的预热）✗ 这里只 resume ✓ */
   _aGestured = true;
   try {
-    var ac = audioCtx();
-    if (ac && ac.state === 'suspended') { ac.resume(); }
+    if (_actx && _actx !== false && _actx.state === 'suspended') {
+      _actx.resume();
+    }
   } catch (e) { }
 }
 if (typeof document !== 'undefined' && document.addEventListener) {
@@ -666,6 +672,23 @@ if (typeof document !== 'undefined' && document.addEventListener) {
   document.addEventListener('touchstart', _aGesture, { passive: true });
   document.addEventListener('keydown', _aGesture, { passive: true });
 }
+/* ★★★ 2026-10-24：预热 AudioContext ★★★
+   ★ 为什么要预热：浏览器在【创建】上下文那一刻就检查"有没有用户手势"✗
+     如果创建发生在 sfx() 里（不是手势）→ 立刻报一条警告 ✓
+     提前建好（此时是 suspended ✗ 不出声 ✓ 不占资源 ✓）
+     之后手势里只调 resume() ✗ 就不会再警告 ✓✓
+   ★ 为什么延迟到 load 之后：太早建会抢启动带宽 ✗ 也可能被浏览器判成"自动播放"✓
+     放在 load + 300ms ✗ 页面已经稳定 ✓ 用户已经在看画面 ✓
+   ★ 用 try 包住 ✗ 老浏览器没有 AudioContext 时静默跳过 ✓ */
+try {
+  var _warmA = function () {
+    try { audioCtx(); } catch (e) { }     /* 只建不播 ✓ */
+  };
+  if (typeof window !== 'undefined') {
+    if (document.readyState === 'complete') { setTimeout(_warmA, 300); }
+    else { window.addEventListener('load', function () { setTimeout(_warmA, 300); }, { once: true }); }
+  }
+} catch (eWarm) { }
 var SFX_PITCH = 0.06;          // 音高随机幅度（±6% ✓）
 var SFX_MAX_VOICES = 6;        // 同时最多几个音
 function audioCtx() {
@@ -854,7 +877,8 @@ function sfx(name, volScale, ch) {
   if (a && a.buf) {
     var ac2 = audioCtx();
     if (!ac2) { return; }
-    if (ac2.state === 'suspended') { try { ac2.resume(); } catch (e3) { } }
+    /* 2026-10-24: 这里不再 resume - 这不是用户手势，在这里 resume 一样会报 not allowed to start */
+    if (ac2.state !== 'running') { return; }
     if (_aVoices >= SFX_MAX_VOICES) { return; }        // 并发上限 ✓ 超了丢
     try {
       var src = ac2.createBufferSource();
