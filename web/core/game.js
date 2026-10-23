@@ -1394,12 +1394,16 @@ function init() {
            ② 主渲染器重试 3 次
      注：辅助上下文释放函数挂在 platform 层（SKC / SKIN），这里只按 typeof 判空调用。 */
   function _freeAuxGl() {
+    /* ★ 2026-10-23（共用主渲染器）：辅助 WebGL 上下文已经全部取消了 ✗
+       全页面只剩 #cv 一个 WebGL 上下文 ✓ 这里只在两种情况下需要"兜底释放"：
+       ① 万一是老版本缓存的前端（SKC._tc.r / SKIN.r 还带渲染器）
+       ② 以后有人又加了一个辅助渲染器 */
     try {
       if (typeof SKC !== 'undefined' && SKC && SKC._tc && SKC._tc.r) {
         var _r1 = SKC._tc.r;
         try { _r1.dispose(); } catch (e1) { }
         try { _r1.forceContextLoss(); } catch (e2) { }
-        SKC._tc = null;
+        SKC._tc.r = null;
       }
     } catch (e3) { }
     try {
@@ -1412,13 +1416,6 @@ function init() {
       }
     } catch (e6) { }
   }
-  /* ★★★ 2026-10-23（用户："启动失败：WebGL 上下文创建不出来，重试 3 次也没用"）★★★
-     原来只是"释放辅助上下文 + 同参数重试 3 次" ✗
-       · 同参数重试 = 条件没变，失败还是失败 ✓
-       · 浏览器回收 GPU 上下文需要时间，连着重试等于白试 ✓
-       · 没试过降级（关 AA / 低功耗 / 不要 alpha）✓
-     → 现在：逐级降级 + 每级之间真的等一下 + 强制丢弃旧画布 ✓
-       第 5 级最狠：直接拿裸 WebGL1 上下文喂给 Three（跳过它自己的探测）✓ */
   function _sleep(ms) {
     return new Promise(function (res) { setTimeout(res, ms); });
   }

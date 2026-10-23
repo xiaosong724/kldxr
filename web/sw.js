@@ -11,7 +11,7 @@
    ★ 改了前端之后要不要更新缓存版本？
      代码类（js/html）走的是【network-first】→ 联网时永远拿最新，平时不用管；
      只有离线场景才读缓存副本。真想让离线副本也刷新，把 CACHE_VERSION +1 即可 ✓ */
-const CACHE_VERSION = 'xx2d-v123';
+const CACHE_VERSION = 'xx2d-v124';
 const ASSETS = [
   './',
   './index.html',

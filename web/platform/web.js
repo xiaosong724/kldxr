@@ -35,6 +35,66 @@ var UI = {
   mainCanvas: function () { return document.getElementById('cv'); },
   /* ★ 2026-10-23：core 层不许碰 DOM ✗ 这几个给 game.js 用 ✓
      （WebGL 上下文拿不到时的降级链要用：换画布 / 重试计数 / 硬刷新）*/
+  /* ★★★ 2026-10-23（用户："直接避免 WebGL 失败" / 选"共用主渲染器"）★★★
+     整个页面【只允许一个 WebGL 上下文】= 主画布 #cv ✓
+     皮肤预览 / 自定义小头像 都改成"借主渲染器渲染 → readPixels → 画到 2D canvas"
+     · 为什么：手机给一个页面的 WebGL 上下文有上限（常见 8~16 个）
+       以前每开一次皮肤页/自定义就多一个 ✗ 累计几次主画布就创建失败 ✓
+     · 借用时要【存好并恢复】主渲染器的 尺寸/像素比/清屏设置 ✗ 不然主画面会被弄坏 ✓
+     参数：scene / camera / 目标 2D canvas / 像素宽高 */
+  renderSceneTo2D: function (scene, cam, cv2d, pw, ph, bgColor) {
+    try {
+      if (typeof rd === 'undefined' || !rd || !scene || !cam || !cv2d) { return false; }
+      var gl = rd.getContext();
+      if (!gl) { return false; }
+      /* ① 存好主渲染器当前状态（渲染完必须原样恢复 ✗ 否则主画面会被缩小/变色 ✓）*/
+      var _pr = rd.getPixelRatio();
+      var _size = { w: 0, h: 0 };
+      try {
+        var sv = new THREE.Vector2();
+        rd.getSize(sv);
+        _size.w = sv.x; _size.h = sv.y;
+      } catch (eS) { }
+      var _clearA = rd.getClearAlpha();
+      var _clearColor = null;
+      try { _clearColor = rd.getClearColor(new THREE.Color()); } catch (eC) { }
+      var _autoClear = rd.autoClear;
+      var ok = false;
+      try {
+        rd.setPixelRatio(1);
+        rd.setSize(pw, ph, false);
+        rd.setClearColor((bgColor == null ? 0x000000 : bgColor), 0);
+        rd.autoClear = true;
+        rd.render(scene, cam);
+        /* ② 当场把像素读出来（preserveDrawingBuffer 是 false ✗ 之后缓存随时会没 ✓）*/
+        var buf = new Uint8Array(pw * ph * 4);
+        gl.readPixels(0, 0, pw, ph, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+        if (cv2d.width !== pw) { cv2d.width = pw; }
+        if (cv2d.height !== ph) { cv2d.height = ph; }
+        var ctx2 = cv2d.getContext('2d');
+        var img = ctx2.createImageData(pw, ph);
+        for (var y = 0; y < ph; y++) {
+          var src = (ph - 1 - y) * pw * 4;      /* WebGL 是上下颠倒的 ✓ 翻一下 */
+          var dst = y * pw * 4;
+          img.data.set(buf.subarray(src, src + pw * 4), dst);
+        }
+        ctx2.putImageData(img, 0, 0);
+        ok = true;
+      } finally {
+        /* ③ 恢复主渲染器（哪怕上面抛错也要恢复 ✓）*/
+        try {
+          rd.setPixelRatio(_pr);
+          if (_size.w > 0 && _size.h > 0) { rd.setSize(_size.w, _size.h, false); }
+          if (_clearColor) { rd.setClearColor(_clearColor, _clearA); }
+          else { rd.setClearAlpha(_clearA); }
+          rd.autoClear = _autoClear;
+        } catch (eR) { }
+      }
+      return ok;
+    } catch (e) {
+      return false;
+    }
+  },
   rebuildMainCanvas: function () {
     try {
       var old = document.getElementById('cv');
@@ -3881,7 +3941,7 @@ function skcPreview() {
     SKIN.scene.add(nh.g);
     SKIN.hero = nh;
     SKIN.rot = ry;
-    SKIN.r.render(SKIN.scene, SKIN.cam);      /* 立刻出一帧 ✗ 不等下一次 tick ✓ */
+    skinPreviewDraw();                        /* 立刻出一帧 ✗ 不等下一次 tick ✓ */
     return true;
   } catch (e) {
     console.log('[skin] 预览重建失败：' + e);
@@ -3894,17 +3954,17 @@ function skcPreview() {
 var SKC_TH = {};
 function skcThumbCtx() {
   if (SKC._tc) { return SKC._tc; }
+  /* ★★★ 2026-10-23（用户："直接避免 WebGL 失败" → 共用主渲染器）★★★
+     这里原来 new THREE.WebGLRenderer(...) → 每开一次自定义就多占一个 WebGL 上下文 ✗
+     手机上一个页面只有 8~16 个 ✗ 累计几次主画布就创建失败 ✓
+     → 现在只建【普通 2D canvas】✗ 真正渲染时借主渲染器 ✓ 全页面只有 1 个 WebGL 上下文 */
   var cv = document.createElement('canvas');
-  cv.width = 108; cv.height = 84;
-  var r = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
-  r.setPixelRatio(2);
-  r.setSize(108, 84, false);
-  r.shadowMap.enabled = false;
+  cv.width = 216; cv.height = 168;
   var sc = new THREE.Scene();
   sc.add(new THREE.HemisphereLight(0xd8e4f4, 0x3a3020, 1.05));
   var d1 = new THREE.DirectionalLight(0xfff3d8, 0.95); d1.position.set(2.2, 3.4, 3.6); sc.add(d1);
   var d2 = new THREE.DirectionalLight(0x8fb0ff, 0.38); d2.position.set(-2.6, 1.2, -1.6); sc.add(d2);
-  SKC._tc = { r: r, sc: sc, cv: cv };
+  SKC._tc = { sc: sc, cv: cv };
   return SKC._tc;
 }
 function skcThumb(skinKey, custom, field) {
@@ -3925,7 +3985,9 @@ function skcThumb(skinKey, custom, field) {
     var cam = new THREE.PerspectiveCamera(fov, 108 / 84, 0.1, 60);
     cam.position.set(0, midY, z);
     cam.lookAt(0, midY, 0);
-    c.r.render(c.sc, cam);
+    /* ★ 借主渲染器渲染 → readPixels → 画到 2D canvas（不再用自己的 WebGL 渲染器 ✓）*/
+    var _pw = 216, _ph = 168;
+    if (!UI.renderSceneTo2D(c.sc, cam, c.cv, _pw, _ph)) { return ''; }
     /* ★★ round521（用户："眼睛和嘴巴的预览还是看不到"）
        ★ 根因：WebGL 画布默认 preserveDrawingBuffer:false ✗
          render 之后浏览器随时可以清缓冲 ✗ 这时 toDataURL 出来的可能是一张【全透明】图 ✓
@@ -3934,22 +3996,7 @@ function skcThumb(skinKey, custom, field) {
          再翻一下 Y 画到 2D 画布上出 PNG ✓ 这条最稳 ✓ */
     var url = '';
     try {
-      var gl = c.r.getContext();
-      var pw = 108 * 2, ph = 84 * 2;
-      c.r.setSize(108, 84, false);
-      var buf = new Uint8Array(pw * ph * 4);
-      gl.readPixels(0, 0, pw, ph, gl.RGBA, gl.UNSIGNED_BYTE, buf);
-      var cv2 = document.createElement('canvas');
-      cv2.width = pw; cv2.height = ph;
-      var ctx2 = cv2.getContext('2d');
-      var img2 = ctx2.createImageData(pw, ph);
-      for (var yy = 0; yy < ph; yy++) {
-        var src = (ph - 1 - yy) * pw * 4, dst = yy * pw * 4;
-        img2.data.set(buf.subarray(src, src + pw * 4), dst);
-      }
-      /* 背景填成面板色 ✗ WebGL 的透明区域在网络里会变成纯黑 ✓ */
-      ctx2.putImageData(img2, 0, 0);
-      url = cv2.toDataURL('image/png');
+      url = c.cv.toDataURL('image/png');
     } catch (e2) {
       url = '';
     }
@@ -4163,7 +4210,7 @@ function skcOpen() {
       SKIN.camY = SKIN.hero.headY + (SKIN.hero.headH || 1) * 0.02;
       SKIN.zoom = 0.85;
       if (typeof skinApplyCam === 'function') { skinApplyCam(); }
-      SKIN.r.render(SKIN.scene, SKIN.cam);
+      skinPreviewDraw();
     }
   } catch (eZ) { }
   /* ★ round515（用户："点开自定义后模型头看不到了，表格变长把它挤上去"）
@@ -4544,9 +4591,12 @@ function skinPreviewBoot() {
   var cv = document.getElementById('skCv');
   if (!cv || typeof THREE === 'undefined') { return; }
   try {
-    SKIN.r = new THREE.WebGLRenderer({ canvas: cv, antialias: true, alpha: true });
-    SKIN.r.setPixelRatio(1);
-    SKIN.r.setSize(420, 170, false);
+    /* ★★★ 2026-10-23（用户："直接避免 WebGL 失败" → 共用主渲染器）★★★
+       skCv 现在是普通 2D 画布 ✗ 每次要出图时借主渲染器渲一帧 → readPixels → 画到这里 ✓
+       全页面 WebGL 上下文恒等于 1（只有 #cv）✓ */
+    var _w0 = 420, _h0 = 170;
+    cv.width = _w0; cv.height = _h0;
+    SKIN.cv = cv;
     SKIN.scene = new THREE.Scene();
     SKIN.cam = new THREE.OrthographicCamera(-1.75, 1.75, 1.12, -1.12, 0.1, 100);
     SKIN.cam.position.set(0, 0.98, 40);
@@ -4664,6 +4714,18 @@ function skinBindDrag() {
   cv.addEventListener('touchend', function () { pd0 = 0; });
 }
 
+/* ★ 2026-10-23：皮肤预览出图（借主渲染器 ✗ 不再有自己的 WebGL 上下文 ✓）
+   ★ 限频 ~20fps：readPixels 比普通 render 贵 ✗ 每帧读会拖慢主循环 ✓ */
+function skinPreviewDraw() {
+  if (!SKIN.ready || !SKIN.hero || !SKIN.cv) { return; }
+  var now = (performance.now ? performance.now() : Date.now());
+  if (SKIN._lastDraw && (now - SKIN._lastDraw) < 45) { return; }
+  SKIN._lastDraw = now;
+  try {
+    UI.renderSceneTo2D(SKIN.scene, SKIN.cam, SKIN.cv, 420, 170);
+  } catch (e) { }
+}
+
 function skinPreviewTick(ts) {
   if (!SKIN.ready || !SKIN.hero) { return; }
   /* ★★ round505（用户："皮肤页面展示的预览效果自转太快了"）
@@ -4676,7 +4738,7 @@ function skinPreviewTick(ts) {
   if (!(_dt > 0) || _dt > 0.2) { _dt = 0.016; }
   if (SKIN.autoRot !== false) { SKIN.rot += _dt * 0.30; }
   SKIN.hero.g.rotation.y = SKIN.rot;
-  try { SKIN.r.render(SKIN.scene, SKIN.cam); } catch (e) { }
+  skinPreviewDraw();
   var pane = document.querySelector('.tabpane[data-pane="skin"]');
   if (pane && pane.className.indexOf('on') >= 0) {
     requestAnimationFrame(skinPreviewTick);
