@@ -7201,12 +7201,8 @@ class World(object):
                 'item': {'name': drop,
                          'tier': (3 if random.random() < 0.10 else random.randint(0, 2)),
                          'kind': 'material'}}
-            for _p4 in self.players.values():
-                _dx4 = _wx - _p4.x
-                _dz4 = _wz - _p4.z
-                if _dx4 * _dx4 + _dz4 * _dz4 <= 900:
-                    self._add_pend(_p4.cid, 'notice',
-                                   {'text': '掉落：%s 走过去自动捡 ✓' % drop})
+            # ★ 2026-10-23（用户要求）：挖建材的"掉落：xxx 走过去自动捡"也一并去掉 ✓
+            #   （东西还是掉在地上 ✓ 走过去照样能捡 ✓）
         except Exception as _de:
             print('[prop] drop failed: %r' % (_de,))
 
@@ -11258,12 +11254,13 @@ class World(object):
         # ★ 装备的坐标稍微错开一点 —— 不然和材料叠在同一点，捡的时候看不出来哪件是哪件 ✗
         ox = 0.0 if it.get('slot') != 'weapon' else 0.7
         self.loot[lid] = {'x': m.x + ox, 'z': m.z, 'item': it, 'ttl': drops.DROP_TTL}
+        # ★ 2026-10-23（用户："掉落：铜线卷（3阶）走过去自动捡，这个提示删掉"）
+        #   → 怪物掉落【不再发"掉落：xxx 走过去自动捡"】✓
+        #     东西照样掉在地上、照样能捡 ✓ 只是不刷这条提示 ✓
+        #   ★ 皮肤卡保留一条（稀有事件，玩家需要知道）✓
         if it.get('kind') == 'skin':
             self._send_cid(p.cid, P.pack('notice', text='★ 掉落皮肤：%s（捡起来去背包用 ✓）'
                                          % it.get('name', '皮肤')))
-        else:
-            self._send_cid(p.cid, P.pack('notice', text='掉落：%s（%d 阶）走过去自动捡 ✓'
-                                         % (it['name'], tier_no(it.get('tier')))))
 
     def _loot_tick(self, dt):
         """地上物：倒计时 + 过期收掉（不清理的话服务器越积越多 ✗）"""
