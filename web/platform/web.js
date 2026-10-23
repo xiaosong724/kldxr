@@ -7933,10 +7933,18 @@ function apkUpdateCheck() {
       .then(function (d) {
         if (!d || !d.ok || !d.versionCode) { return; }
         if (+d.versionCode <= myCode) { return; }
-        /* ★ 有新版本 → 记下来（同一个版本只提示一次 ✓）*/
-        var key = 'apkUpdFor_' + d.versionCode;
-        try { if (localStorage.getItem(key) === '1') { return; } } catch (e1) { }
-        try { localStorage.setItem(key, '1'); } catch (e2) { }
+        /* ★★★ 2026-10-24（用户："如果玩家没有更新，每次重新上游戏都会提醒一次"）★★★
+           ★ 原来是【同一个版本只提醒一次】✗ 玩家点"以后再说"就再也不提了 ✓
+             → 结果就是一直用着旧版，体验不到新功能 ✓（真问题 ✓）
+           ★ 现在改成【每次进游戏都提醒】✗ 但【同一次会话内只提醒一次】✓
+             · 用 sessionStorage 记（关掉页面/APP 就清空 ✓ 下次启动又是新的 ✓）
+             · 不用 localStorage ✗ 那个是永久记忆 → 就不会再提醒了 ✓
+           ★ 只提醒一次的原因：check 每 10 分钟跑一次 ✓
+             如果每次都弹，玩家挂机时会被反复骚扰 ✓
+             所以：一次会话 = 一次提醒 ✓ 重新进游戏 = 又提醒一次 ✓ 正好是用户要的 ✓ */
+        var key = 'apkUpdShown_' + d.versionCode;
+        try { if (sessionStorage.getItem(key) === '1') { return; } } catch (e1) { }
+        try { sessionStorage.setItem(key, '1'); } catch (e2) { }
         apkUpdatePrompt(d);
       })
       .catch(function () { });
