@@ -5846,6 +5846,17 @@ var _dragSt = null;
 var UI_EDIT = false;
 function uiEditToggle() {
   UI_EDIT = !UI_EDIT;
+  /* ★ 2026-10-23：系统提示框也参与键位调整（能拖、能看见） */
+  try {
+    var _smb = sysMsgEl();
+    _smb.style.pointerEvents = UI_EDIT ? 'auto' : 'none';
+    if (UI_EDIT) {
+      _smb.style.display = 'block';
+      _smb.style.opacity = '1';
+      if (!SYSMSG.live.length) { sysMsgPush('拖动这里可以移动提示框'); }
+      sysMsgBindDrag();
+    }
+  } catch (eSm) { }
   var b = document.getElementById('uiEdit');
   if (b) {
     b.textContent = UI_EDIT ? '保存' : '键位';
@@ -10940,26 +10951,209 @@ function tkTick(first) {
 }
 
 
-function toast(msg) {
-  if (!_toastEl) {
-    _toastEl = document.createElement('div');
-    window._toastElRef = _toastEl;      /* 第 248 轮：弹幕挪动时要用它 ✓ */
-    _toastEl.style.cssText = /* ★ 第 248 轮：原来写死 top:64px ✗ 正好压在弹幕条上 ✗
-   现在跟着弹幕条的高度走 ✓（弹幕开两行时自动再往下挪 ✓）*/
-      /* ★ 第 248 轮修补：原来用 window._toastTop 缓存值 ✗
-         但弹幕条在单行/两行之间切换时那个值会过期 ✗
-         实测过：弹幕底边 118 ✗ toast 的 top 还是 100 → 仍然重叠 ✓
-         ★ 改成【每次显示时现算】✗ 永远不会过期 ✓ */
-      'position:fixed;left:50%;top:' + tkToastTop() + 'px;' +
-      'transform:translateX(-50%);z-index:70;' +
-      'background:#000000cc;color:#ffd83d;font-size:13px;padding:8px 14px;border-radius:9px;' +
-      'border:1px solid #ffd83d55;pointer-events:none;opacity:0;transition:opacity .2s;white-space:nowrap';
-    document.body.appendChild(_toastEl);
+/* ★★★ 2026-10-23（用户："系统通知改成固定的半透明框，文字向上滚动"）★★★
+   ★ 和弹幕 / 聊天滚屏【不是一回事】：这个只放"捡到什么 / 加了多少金币"这类即时反馈 ✓
+   ★ 三个要求：
+     ① 框固定不动 ✗ 只有里面的行往上滚 ✓
+     ② 没通知时完全隐藏（连底板一起 ✗ 不留半透明块 ✓）
+     ③ 键位模式下可以拖动改位置 ✗ 菜单里能调字号 ✓
+   ★ 性能：和飘字一样走【复用池】✗ 不 new div ✓
+       行元素预建 6 个循环用 ✓ 超出上限就把最老那行淡出收回池子 ✓
+*/
+var SYSMSG = {
+  el: null,        /* 外框 */
+  rowsBox: null,   /* 里面装行的容器 */
+  live: [],        /* 正在显示的行元素（newest 在末尾）*/
+  pool: [],        /* 回收池 */
+  t: null,         /* 自动隐藏计时器 */
+  MAX: 5,          /* 最多同时显示几行 */
+  SIZE: 12.5       /* 字号（菜单可调）*/
+};
+var SYSMSG_SIZES = [11, 12.5, 14, 16];   /* 小 / 标准 / 大 / 特大 */
+
+function sysMsgEl() {
+  if (SYSMSG.el) { return SYSMSG.el; }
+  /* 读回上次设的字号 ✓ */
+  try {
+    var _sz = parseFloat(localStorage.getItem('sysMsgSize') || '');
+    if (_sz > 8 && _sz < 22) { SYSMSG.SIZE = _sz; }
+  } catch (e0) { }
+  var b = document.createElement('div');
+  b.id = 'sysMsgBox';
+  b.style.cssText =
+    'position:fixed;left:50%;top:14%;transform:translateX(-50%);' +
+    'width:340px;height:auto;min-height:0;box-sizing:border-box;' +
+    'padding:8px 0;border-radius:10px;pointer-events:none;z-index:69;' +
+    'background:linear-gradient(180deg,rgba(12,16,20,.42),rgba(8,11,14,.58));' +
+    'border:1px solid rgba(120,160,190,.20);' +
+    'box-shadow:inset 0 0 0 1px rgba(255,255,255,.03),0 3px 14px rgba(0,0,0,.35);' +
+    /* 上下渐隐遮罩：文字从框边淡出 ✓ */
+    '-webkit-mask-image:linear-gradient(180deg,transparent 0,#000 10%,#000 90%,transparent 100%);' +
+    'mask-image:linear-gradient(180deg,transparent 0,#000 10%,#000 90%,transparent 100%);' +
+    'overflow:hidden;opacity:0;display:none;transition:opacity .22s ease';
+  var rb = document.createElement('div');
+  rb.style.cssText = 'display:flex;flex-direction:column;justify-content:flex-end';
+  b.appendChild(rb);
+  document.body.appendChild(b);
+  SYSMSG.el = b; SYSMSG.rowsBox = rb;
+  window._toastElRef = b;            /* 兼容旧代码里对 _toastElRef 的引用 ✓ */
+  sysMsgApplyPos();
+  sysMsgApplySize();
+  return b;
+}
+
+/* 位置：默认在屏幕上方中间 ✗ 键位模式拖过就按存的来 ✓ */
+function sysMsgApplyPos() {
+  var b = SYSMSG.el; if (!b) { return; }
+  if (typeof uiApplySavedPos === 'function') {
+    if (uiApplySavedPos(b, 'sysmsg')) { return; }
   }
-  _toastEl.textContent = msg;
-  _toastEl.style.opacity = '1';
-  if (_toastTimer) { clearTimeout(_toastTimer); }
-  _toastTimer = setTimeout(function () { _toastEl.style.opacity = '0'; }, 1600);
+  b.style.left = '50%'; b.style.top = '14%'; b.style.transform = 'translateX(-50%)';
+}
+/* 字号：菜单里调的 ✓ */
+function sysMsgApplySize() {
+  var b = SYSMSG.el; if (!b) { return; }
+  var s = SYSMSG.SIZE;
+  for (var i = 0; i < SYSMSG.live.length; i++) {
+    SYSMSG.live[i].style.fontSize = s + 'px';
+  }
+}
+/* 菜单里的字号按钮（点一下立刻生效 ✗ 并存到 localStorage ✓）*/
+function sysMsgBindSizeBtns() {
+  var box = document.getElementById('sysMsgSizeBtns');
+  if (!box || box._b) { return; }
+  box._b = true;
+  function paint() {
+    var btns = box.querySelectorAll('button');
+    for (var i = 0; i < btns.length; i++) {
+      var v = parseFloat(btns[i].getAttribute('data-smsize')) || 12.5;
+      btns[i].style.borderColor = (Math.abs(v - SYSMSG.SIZE) < 0.01) ? '#ffd83d' : '';
+      btns[i].style.color = (Math.abs(v - SYSMSG.SIZE) < 0.01) ? '#ffd83d' : '';
+    }
+  }
+  box.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || !t.getAttribute) { return; }
+    var v = t.getAttribute('data-smsize');
+    if (v === null) { return; }
+    sysMsgSetSize(parseFloat(v));
+    paint();
+    try { sysMsgPush('系统提示字号：' + t.textContent); } catch (e2) { }
+  });
+  paint();
+  box._paint = paint;
+}
+
+function sysMsgSetSize(px) {
+  SYSMSG.SIZE = Math.max(9, Math.min(20, +px || 12.5));
+  try { localStorage.setItem('sysMsgSize', String(SYSMSG.SIZE)); } catch (e) { }
+  sysMsgApplySize();
+}
+
+/* 一行元素（复用池） */
+function sysMsgRow() {
+  var el = SYSMSG.pool.pop();
+  if (!el) {
+    el = document.createElement('div');
+    el.style.cssText = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' +
+      'text-align:center;padding:0 16px;line-height:1.9;color:#aeb9c6;' +
+      'text-shadow:0 1px 3px rgba(0,0,0,.95);' +
+      'transition:opacity .3s ease,transform .3s ease';
+  }
+  el.style.fontSize = SYSMSG.SIZE + 'px';
+  return el;
+}
+
+/* 推一条（★ 对外只用 toast 就行 ✓ 这里内部用）*/
+function sysMsgPush(msg) {
+  var b = sysMsgEl();
+  var el = sysMsgRow();
+  el.innerHTML = String(msg == null ? '' : msg);
+  el.style.textAlign = 'center';
+  el.style.opacity = '0';
+  el.style.transform = 'translateY(10px)';
+  SYSMSG.rowsBox.appendChild(el);
+  SYSMSG.live.push(el);
+  requestAnimationFrame(function () { el.style.opacity = '1'; el.style.transform = 'translateY(0)'; });
+  /* 超出上限 → 最老那行淡出并回收（这就是"向上滚动"的观感 ✓）*/
+  while (SYSMSG.live.length > SYSMSG.MAX) {
+    var old = SYSMSG.live.shift();
+    (function (o) {
+      o.style.opacity = '0';
+      o.style.transform = 'translateY(-14px)';
+      setTimeout(function () {
+        if (o.parentNode) { o.parentNode.removeChild(o); }
+        o.innerHTML = '';
+        SYSMSG.pool.push(o);
+      }, 320);
+    })(old);
+  }
+  b.style.display = 'block';
+  void b.offsetHeight;              /* 强制回流 ✗ 让 opacity 过渡生效 ✓ */
+  b.style.opacity = '1';
+  if (SYSMSG.t) { clearTimeout(SYSMSG.t); }
+  SYSMSG.t = setTimeout(sysMsgHideAll, 2600);
+}
+
+/* 没通知 → 整个框（连底板）消失 ✓ */
+function sysMsgHideAll() {
+  var b = SYSMSG.el;
+  if (!b) { return; }
+  b.style.opacity = '0';
+  SYSMSG.t = setTimeout(function () {
+    b.style.display = 'none';
+    for (var i = 0; i < SYSMSG.live.length; i++) {
+      var o = SYSMSG.live[i];
+      if (o.parentNode) { o.parentNode.removeChild(o); }
+      o.innerHTML = '';
+      SYSMSG.pool.push(o);
+    }
+    SYSMSG.live = [];
+  }, 240);
+}
+
+/* ★ 键位模式：可以拖动这个框（和技能键/攻击键同一套 ✓）*/
+function sysMsgBindDrag() {
+  try { sysMsgBindSizeBtns(); } catch (eSB) { }
+  var b = sysMsgEl();
+  if (b._dragBound) { return; }
+  b.style.pointerEvents = 'auto';      /* 只有键位模式才吃事件 ✗ 平时穿透 ✓ */
+  b._dragBound = true;
+  var st = null;
+  b.addEventListener('pointerdown', function (e) {
+    if (!UI_EDIT) { return; }              /* 非键位模式不许拖 ✓ */
+    var r = b.getBoundingClientRect();
+    st = { dx: e.clientX - r.left, dy: e.clientY - r.top, moved: false };
+    b.style.transform = 'none';
+    b.style.left = r.left + 'px';
+    b.style.top = r.top + 'px';
+    try { b.setPointerCapture(e.pointerId); } catch (e2) { }
+    e.preventDefault();
+  });
+  b.addEventListener('pointermove', function (e) {
+    if (!st) { return; }
+    var W = innerWidth, H = innerHeight;
+    var l = Math.max(4, Math.min(W - (b.offsetWidth || 340) - 4, e.clientX - st.dx));
+    var t = Math.max(4, Math.min(H - (b.offsetHeight || 60) - 4, e.clientY - st.dy));
+    b.style.left = l + 'px'; b.style.top = t + 'px';
+    st.moved = true;
+  });
+  b.addEventListener('pointerup', function (e) {
+    if (!st) { return; }
+    var moved = st.moved; st = null;
+    try { b.releasePointerCapture(e.pointerId); } catch (e3) { }
+    if (moved && typeof uiSavePos === 'function') {
+      uiSavePos('sysmsg', parseFloat(b.style.left) || 0, parseFloat(b.style.top) || 0);
+    }
+  });
+}
+
+function toast(msg) {
+  /* ★ 2026-10-23（用户）：改走【固定系统提示框】
+     ① 框不动 ✗ 只有里面的行向上滚 ✓
+     ② 没通知 → 连底板一起隐藏 ✓
+     ③ 键位模式可拖动 / 菜单可调字号 ✓ */
+  try { sysMsgPush(msg); } catch (e) { }
 }
 
 /* ============================================================ 公告弹窗（round496）

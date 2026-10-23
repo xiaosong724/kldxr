@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>系统提示框 · 固定框三版</title>
+<style>
+  html,body{margin:0;height:100%;background:#14171c;overflow:hidden;
+    font-family:system-ui,"Microsoft YaHei",sans-serif}
+  canvas{position:absolute;left:0;top:0;width:100%;height:100%}
+  .stage{position:absolute;left:0;top:0;width:100%;height:100%}
+  .tag{position:absolute;color:#7a8797;font-size:12px;font-weight:800;
+    letter-spacing:2px;pointer-events:none;text-align:center}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div class="stage" id="stage"></div>
+
+<script>
+(function(){
+  var cv=document.getElementById('bg'),g=cv.getContext('2d');
+  function draw(){
+    var W=cv.width=innerWidth,H=cv.height=innerHeight;
+    var sky=g.createLinearGradient(0,0,0,H);
+    sky.addColorStop(0,'#1b2028');sky.addColorStop(.5,'#232a31');sky.addColorStop(1,'#141a1f');
+    g.fillStyle=sky;g.fillRect(0,0,W,H);
+    var gy=H*.62;
+    var gr=g.createLinearGradient(0,gy,0,H);
+    gr.addColorStop(0,'#2b323a');gr.addColorStop(1,'#11151a');
+    g.fillStyle=gr;g.fillRect(0,gy,W,H-gy);
+    g.strokeStyle='rgba(255,255,255,.03)';
+    for(var i=0;i<12;i++){
+      var y=gy+Math.pow(i/11,1.7)*(H-gy);
+      g.beginPath();g.moveTo(0,y);g.lineTo(W,y);g.stroke();
+    }
+    for(var k=0;k<5;k++){
+      var cx=W*(.15+k*.18),cy=gy+40+k*14;
+      g.fillStyle='rgba(60,56,66,.55)';
+      g.beginPath();g.ellipse(cx,cy,20,32,0,0,7);g.fill();
+      g.beginPath();g.arc(cx,cy-34,15,0,7);g.fill();
+    }
+    var vg=g.createRadialGradient(W/2,H/2,H*.3,W/2,H/2,H*.9);
+    vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,.6)');
+    g.fillStyle=vg;g.fillRect(0,0,W,H);
+  }
+  draw();addEventListener('resize',draw);
+})();
+
+document.head.insertAdjacentHTML('beforeend', `
+<style>
+/* =======================================================
+   固定框：外框永远不动，只有里面的行向上滚动
+   ======================================================= */
+.panel{position:absolute;width:340px;height:132px;overflow:hidden;
+  pointer-events:none;box-sizing:border-box;
+  /* 滚动遮罩：上下边缘渐隐，文字像从框里滑出来 */
+  -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 16%,#000 84%,transparent 100%);
+  mask-image:linear-gradient(180deg,transparent 0,#000 16%,#000 84%,transparent 100%)}
+.panel.dim{opacity:.22;transition:opacity .45s ease}
+.panel .rows{position:absolute;left:0;right:0;bottom:0;
+  display:flex;flex-direction:column;justify-content:flex-end}
+.row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  padding:0 12px;transition:opacity .3s ease, transform .3s ease}
+
+/* ---------- 版 A：墨玉描边（沉静） ---------- */
+.pA{background:linear-gradient(180deg,rgba(12,16,20,.42),rgba(8,11,14,.58));
+  border-radius:10px;border:1px solid rgba(120,160,190,.20);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.03), 0 3px 14px rgba(0,0,0,.35)}
+.pA .row{font-size:13px;line-height:1.95;color:#b9c6d2;
+  text-shadow:0 1px 2px rgba(0,0,0,.9)}
+.pA .row b{color:#ffd83d;font-weight:800}
+.pA .row i{color:#8ee0ff;font-style:normal;font-weight:700}
+.pA .row.g b{color:#ffcf3a} .pA .row.it b{color:#8ee0ff}
+.pA .row.ex b{color:#b8ff8a}
+
+/* ---------- 版 B：暗金光带（华丽） ---------- */
+.pB{background:linear-gradient(180deg,rgba(24,18,10,.50),rgba(12,9,6,.66));
+  border-radius:4px;
+  border:1px solid rgba(180,140,70,.34);
+  box-shadow:inset 0 0 26px rgba(180,140,70,.07), 0 3px 16px rgba(0,0,0,.42)}
+.pB::before{content:"";position:absolute;left:0;top:0;right:0;height:2px;
+  background:linear-gradient(90deg,transparent,rgba(210,170,90,.55),transparent);
+  pointer-events:none}
+.pB::after{content:"";position:absolute;left:0;bottom:0;right:0;height:2px;
+  background:linear-gradient(90deg,transparent,rgba(210,170,90,.40),transparent);
+  pointer-events:none}
+.pB .row{font-size:13px;line-height:1.92;color:#e3d7bf;
+  text-shadow:0 1px 2px #000, 0 0 7px rgba(0,0,0,.9)}
+.pB .row b{color:#ffcf5a;font-weight:800;
+  text-shadow:0 0 9px rgba(255,180,40,.55), 0 1px 2px #000}
+.pB .row i{color:#9fe8ff;font-style:normal;font-weight:700}
+.pB .row.g b{color:#ffd54f} .pB .row.it b{color:#9fe8ff}
+.pB .row.ex b{color:#c8ff9a}
+
+/* ---------- 版 C：极窄玻璃条（最淡） ---------- */
+.pC{background:linear-gradient(90deg,rgba(10,14,18,.10),rgba(10,14,18,.52) 14%,
+    rgba(10,14,18,.52) 86%,rgba(10,14,18,.10) 100%);
+  border-radius:0;border:none;box-shadow:none}
+.pC .row{font-size:12.5px;line-height:1.9;color:#aeb9c6;text-align:center;
+  padding:0 16px;text-shadow:0 1px 3px rgba(0,0,0,.95)}
+.pC .row b{color:#ffe066;font-weight:800}
+.pC .row i{color:#8ee0ff;font-style:normal}
+.pC .row.g b{color:#ffe066} .pC .row.it b{color:#8ee0ff}
+.pC .row.ex b{color:#c0ff9c}
+</style>`);
+
+var stage=document.getElementById('stage');
+var MSGS=[
+  ['捡到 <b>铁剑</b>（5 阶）','it'],
+  ['金币 <b>+1,280</b>','g'],
+  ['捡到 <b>灵草</b> ×3','it'],
+  ['经验 <b>+620</b>','ex'],
+  ['金币 <b>+340</b>','g'],
+  ['捡到 <b>护心镜</b>（7 阶）','it'],
+  ['<i>风步</i> 冷却好了',''],
+  ['金币 <b>+2,150</b>','g'],
+  ['捡到 <b>妖丹</b> ×1','it']
+];
+
+function makePanel(cls,label,x,y){
+  var p=document.createElement('div');
+  p.className='panel '+cls;
+  p.style.left=x+'px'; p.style.top=y+'px';
+  var rows=document.createElement('div');
+  rows.className='rows';
+  p.appendChild(rows);
+  stage.appendChild(p);
+  var tg=document.createElement('div');
+  tg.className='tag'; tg.textContent=label;
+  tg.style.left=x+'px'; tg.style.width='340px'; tg.style.top=(y-26)+'px';
+  stage.appendChild(tg);
+  return p;
+}
+
+/* 固定框里滚一条：新行从底部出现，整体向上顶 */
+function pushRow(panel, html, kind, MAX){
+  var rows=panel.querySelector('.rows');
+  var r=document.createElement('div');
+  r.className='row '+(kind||'');
+  r.innerHTML=html;
+  r.style.opacity='0';
+  r.style.transform='translateY(12px)';
+  rows.appendChild(r);
+  requestAnimationFrame(function(){ r.style.opacity='1'; r.style.transform='translateY(0)'; });
+  var all=rows.querySelectorAll('.row');
+  if(all.length>MAX){
+    var old=all[0];
+    old.style.opacity='0';
+    old.style.transform='translateY(-16px)';
+    setTimeout(function(){ if(old.parentNode) old.parentNode.removeChild(old); }, 320);
+  }
+  // 有消息时框亮起来；一段时间没消息就淡下去（但框还在，不消失位置）
+  panel.classList.remove('dim');
+  clearTimeout(panel._t);
+  panel._t=setTimeout(function(){ panel.classList.add('dim'); }, 3200);
+}
+
+/* ★ 最终版：A 的框 + C 的文字（居中 / 12.5px / 不加粗） */
+document.head.insertAdjacentHTML('beforeend', `
+<style>
+.pF{background:linear-gradient(180deg,rgba(12,16,20,.42),rgba(8,11,14,.58));
+  border-radius:10px;border:1px solid rgba(120,160,190,.20);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.03), 0 3px 14px rgba(0,0,0,.35)}
+.pF .row{font-size:12.5px;line-height:1.9;color:#aeb9c6;text-align:center;
+  padding:0 16px;text-shadow:0 1px 3px rgba(0,0,0,.95)}
+.pF .row b{color:#ffe066;font-weight:800}
+.pF .row i{color:#8ee0ff;font-style:normal}
+.pF .row.g b{color:#ffe066}
+.pF .row.it b{color:#8ee0ff}
+.pF .row.ex b{color:#c0ff9c}
+</style>`);
+
+var W=innerWidth,H=innerHeight;
+var CX=W*0.5-170;
+var pA=makePanel('pA','版 A · 墨玉描边', CX-380, H*0.16);
+var pC=makePanel('pC','版 C · 极窄玻璃条', CX+380, H*0.16);
+var pF=makePanel('pF','★ 最终版：A 框 + C 字', CX, H*0.40);
+
+var i=0;
+function tick(){
+  var m=MSGS[i%MSGS.length];
+  pushRow(pA,m[0],m[1],4);
+  pushRow(pC,m[0],m[1],4);
+  pushRow(pF,m[0],m[1],4);
+  i++;
+  setTimeout(tick, 700);
+}
+tick();
+</script>
+</body>
+</html>

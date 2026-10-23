@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>战斗飘字风格对比</title>
+<style>
+  html,body{margin:0;height:100%;background:#14171c;overflow:hidden;
+    font-family:system-ui,"Microsoft YaHei",sans-serif}
+  canvas{position:absolute;left:0;top:0;width:100%;height:100%}
+  .want{position:absolute;left:0;top:0;width:100%;height:100%}
+  .num{position:absolute;left:0;top:0;pointer-events:none;
+    will-change:transform,opacity;white-space:nowrap}
+  .label{position:absolute;color:#5b6472;font-size:13px;letter-spacing:1px;
+    font-weight:700;pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div class="want" id="want"></div>
+
+<script>
+/* 画一个简单的战斗背景（地面 + 两只怪 + 人物剪影），让飘字有对比参照 */
+(function () {
+  var cv = document.getElementById('bg'), g = cv.getContext('2d');
+  function draw() {
+    var W = cv.width = innerWidth, H = cv.height = innerHeight;
+    var sky = g.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, '#1b2028'); sky.addColorStop(.55, '#22282f');
+    sky.addColorStop(1, '#151a1f');
+    g.fillStyle = sky; g.fillRect(0, 0, W, H);
+    // 地面
+    var gy = H * .68;
+    var gr = g.createLinearGradient(0, gy, 0, H);
+    gr.addColorStop(0, '#2a3138'); gr.addColorStop(1, '#12161a');
+    g.fillStyle = gr; g.fillRect(0, gy, W, H - gy);
+    // 地砖线
+    g.strokeStyle = 'rgba(255,255,255,.035)'; g.lineWidth = 1;
+    for (var i = 0; i < 14; i++) {
+      var y = gy + Math.pow(i / 13, 1.7) * (H - gy);
+      g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+    }
+    // 三只怪（深色剪影）
+    function mob(cx, cy, s, col) {
+      g.fillStyle = col;
+      g.beginPath(); g.ellipse(cx, cy, 26 * s, 44 * s, 0, 0, 7); g.fill();
+      g.beginPath(); g.arc(cx, cy - 46 * s, 20 * s, 0, 7); g.fill();
+      g.fillStyle = 'rgba(255,90,74,.55)';
+      g.beginPath(); g.arc(cx - 7 * s, cy - 50 * s, 3.2 * s, 0, 7); g.fill();
+      g.beginPath(); g.arc(cx + 7 * s, cy - 50 * s, 3.2 * s, 0, 7); g.fill();
+    }
+    mob(W * .30, gy + 70, 1.15, '#2d2a30');
+    mob(W * .52, gy + 96, 1.35, '#33303a');
+    mob(W * .72, gy + 62, 1.0, '#2a272e');
+    // 自己（右侧剪影）
+    g.fillStyle = '#3a4550';
+    g.beginPath(); g.ellipse(W * .84, gy + 54, 24, 40, 0, 0, 7); g.fill();
+    g.beginPath(); g.arc(W * .84, gy + 8, 18, 0, 7); g.fill();
+    // 暗角
+    var vg = g.createRadialGradient(W / 2, H / 2, H * .25, W / 2, H / 2, H * .85);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.55)');
+    g.fillStyle = vg; g.fillRect(0, 0, W, H);
+  }
+  draw();
+  addEventListener('resize', draw);
+})();
+
+/* ============================================================
+   飘字动画核心（三套风格共用，只是"样式 + 运动曲线"不同）
+   ============================================================ */
+var want = document.getElementById('want');
+var pool = [], CAP = 60;
+
+function slot() {
+  for (var i = 0; i < pool.length; i++) {
+    if (!pool[i].busy) { return pool[i]; }
+  }
+  if (pool.length < CAP) {
+    var el = document.createElement('div');
+    el.className = 'num';
+    want.appendChild(el);
+    var o = { el: el, busy: false };
+    pool.push(o);
+    return o;
+  }
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+document.head.insertAdjacentHTML('beforeend', `
+<style>
+/* ---------- 风格 A：霓虹描边 · 冲击感 ---------- */
+.sA{
+  font-weight:900;letter-spacing:.5px;
+  color:#fff;
+  text-shadow:
+    0 0 6px #ff3b30, 0 0 14px #ff3b30,
+    0 0 26px #ff6a00, 0 2px 0 #7a0000,
+    0 4px 10px rgba(0,0,0,.85);
+  -webkit-text-stroke:1.2px #2a0000;
+}
+.sA.crit{
+  color:#fff8d0;
+  text-shadow:
+    0 0 8px #ffb300, 0 0 20px #ff8a00,
+    0 0 40px #ff5a00, 0 3px 0 #6b3a00,
+    0 6px 14px rgba(0,0,0,.9);
+  -webkit-text-stroke:1.6px #3a1a00;
+}
+
+/* ---------- 风格 B：金属切割 · 厚重 ---------- */
+.sB{
+  font-weight:900;letter-spacing:1px;font-style:italic;
+  background:linear-gradient(180deg,#fff 0%,#ffe9a8 42%,#ffb238 62%,#8a4a00 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 2px 0 rgba(0,0,0,.9)) drop-shadow(0 0 10px rgba(255,140,0,.75));
+}
+.sB.crit{
+  background:linear-gradient(180deg,#fffdf2 0%,#ffd84d 38%,#ff7a00 70%,#8f1b00 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 18px rgba(255,90,0,.9));
+}
+
+/* ---------- 风格 C：像素街机 · 硬阴影 ---------- */
+.sC{
+  font-weight:900;letter-spacing:2px;
+  color:#ffe14d;
+  text-shadow:
+    2px 0 0 #7a2b00, -2px 0 0 #7a2b00, 0 2px 0 #7a2b00, 0 -2px 0 #7a2b00,
+    2px 2px 0 #7a2b00, -2px -2px 0 #7a2b00, 2px -2px 0 #7a2b00, -2px 2px 0 #7a2b00,
+    4px 6px 0 rgba(0,0,0,.55);
+  font-family:"Courier New",monospace;
+}
+.sC.crit{
+  color:#fff;
+  text-shadow:
+    2px 0 0 #b00000, -2px 0 0 #b00000, 0 2px 0 #b00000, 0 -2px 0 #b00000,
+    2px 2px 0 #b00000, -2px -2px 0 #b00000, 2px -2px 0 #b00000, -2px 2px 0 #b00000,
+    4px 5px 0 #5a0000, 0 0 22px rgba(255,60,60,.85);
+}
+</style>`);
+
+var NOW = function () { return performance.now(); };
+
+/* 每套风格的"运动曲线 + 缩放弹跳" */
+function fly(style, txt, sx, sy, size, crit) {
+  var o = slot();
+  var el = o.el;
+  o.busy = true;
+  el.className = 'num ' + style + (crit ? ' crit' : '');
+  el.textContent = txt;
+  el.style.display = 'block';
+  el.style.fontSize = size + 'px';
+  el.style.opacity = '1';
+  var t0 = NOW();
+  var life = style === 'sC' ? 1050 : 1150;
+
+  if (style === 'sA') {
+    // 弹出 → 回落 → 上浮淡出
+    (function loop() {
+      var k = (NOW() - t0) / life;
+      if (k >= 1) { o.busy = false; el.style.display = 'none'; return; }
+      var pop = k < .16 ? 1.55 - 3.1 * k : .92 + .18 * Math.min(1, (k - .16) / .12);
+      var y = sy - (k < .16 ? 8 * (k / .16) : 8 + 52 * ((k - .16) / .84));
+      var op = k < .62 ? 1 : 1 - (k - .62) / .38;
+      el.style.transform = 'translate3d(' + sx + 'px,' + y + 'px,0) scale(' + pop.toFixed(3) + ')';
+      el.style.opacity = String(op);
+      requestAnimationFrame(loop);
+    })();
+  } else if (style === 'sB') {
+    // 先重砸下去（缩放 2.1 → 1），再横向轻微漂移上浮
+    var dx = (Math.random() * 22 - 11);
+    (function loop() {
+      var k = (NOW() - t0) / life;
+      if (k >= 1) { o.busy = false; el.style.display = 'none'; return; }
+      var s = k < .13 ? 2.1 - 8.4 * k : 1;
+      var y = sy - 60 * (1 - Math.pow(1 - k, 1.8));
+      var op = k < .7 ? 1 : 1 - (k - .7) / .3;
+      el.style.transform = 'translate3d(' + (sx + dx * k) + 'px,' + y + 'px,0) scale(' + s.toFixed(3) + ')';
+      el.style.opacity = String(op);
+      requestAnimationFrame(loop);
+    })();
+  } else {
+    // 像素风：一格一格跳上去（台阶式）
+    (function loop() {
+      var k = (NOW() - t0) / life;
+      if (k >= 1) { o.busy = false; el.style.display = 'none'; return; }
+      var stepY = Math.floor(k * 7) / 7;
+      var y = sy - 56 * stepY;
+      var s = k < .1 ? 1.4 : 1;
+      var op = k < .68 ? 1 : 1 - (k - .68) / .32;
+      el.style.transform = 'translate3d(' + sx + 'px,' + y + 'px,0) scale(' + s + ')';
+      el.style.opacity = String(op);
+      requestAnimationFrame(loop);
+    })();
+  }
+}
+
+/* 演示：三列各弹一批数字（普通 / 暴击交替） */
+function demo() {
+  var W = innerWidth, H = innerHeight;
+  var gy = H * .68;
+  var cols = [
+    { s: 'sA', x: W * .30, name: 'A · 霓虹描边' },
+    { s: 'sB', x: W * .52, name: 'B · 金属切割' },
+    { s: 'sC', x: W * .72, name: 'C · 像素街机' }
+  ];
+  // 标题
+  want.innerHTML = '';
+  pool.forEach(function (o) { o.busy = false; o.el.style.display = 'none'; });
+  cols.forEach(function (c) {
+    var d = document.createElement('div');
+    d.className = 'label';
+    d.textContent = c.name;
+    d.style.left = (c.x - 62) + 'px';
+    d.style.top = (gy - 150) + 'px';
+    want.appendChild(d);
+  });
+
+  var seq = [
+    // [延迟ms, 文本, 暴击?]
+    [0, '128', false], [140, '356', false], [280, '1,240', true],
+    [420, '87', false], [560, '2,058', true], [700, 'قل'.slice(0,0) + '642', false],
+    [840, '3,910', true], [980, '45', false]
+  ];
+  cols.forEach(function (c) {
+    seq.forEach(function (it) {
+      setTimeout(function () {
+        var size = c.s === 'sC' ? (it[2] ? 42 : 26) : (it[2] ? 40 : 24);
+        fly(c.s, it[1], c.x + (Math.random() * 30 - 15), gy - 20 + Math.random() * 26,
+            size, it[2]);
+      }, it[0]);
+    });
+  });
+  // 循环播放
+  setTimeout(demo, 2600);
+}
+demo();
+</script>
+</body>
+</html>
