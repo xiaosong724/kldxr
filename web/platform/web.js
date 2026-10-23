@@ -13056,8 +13056,8 @@ function bindLogin() {
      不影响游戏本身 ✓ 想要 PWA 就用 https（或走 APK 壳）✓
    ============================================================ */
 /* ★★★ 2026-10-23（用户："推送时可以让用户自动刷新，而不是还要手动刷新"）★★★
-   ★ 机制：/boot.js 里的 window.BUILD = 前端文件的最新 mtime ✗
-     → 每 60 秒重新拉一次 /boot.js（带 cache-busting）✓
+   ★ 机制：/ws-config.js 里的 window.BUILD = 前端文件的最新 mtime ✗
+     → 每 60 秒重新拉一次 /ws-config.js（带 cache-busting）✓
      → BUILD 变了 = 服务器更新过前端 → 自动刷新页面 ✓
    ★ 三个保护（不然会打断玩家 / 刷不停）：
      ① 只在【页面可见 + 不在战斗中】才刷 ✗ 战斗中推迟到脱战 ✓
@@ -13080,7 +13080,8 @@ function updSchedule() {
 }
 function updCheck() {
   if (UPD.done) { return; }
-  var url = '/boot.js?_=' + Date.now();
+  /* ★ 2026-10-23 修正：服务端生成 build 的接口是 /ws-config.js（不是 /boot.js ✗）*/
+  var url = '/ws-config.js?_=' + Date.now();
   fetch(url, { cache: 'no-store' })
     .then(function (r) { return r.text(); })
     .then(function (txt) {
