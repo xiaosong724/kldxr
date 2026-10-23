@@ -988,12 +988,14 @@ function _numSlot() {
   /* ② 普攻暴击 白→亮金→橙 */
   .dmgNum.dAtkC{background-image:linear-gradient(180deg,#fff 0%,#fff0a0 32%,#ffb020 68%,#e05a00 100%);
     filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 8px rgba(255,120,0,.48))}
-  /* ③ 技能伤害 白→青→蓝 */
-  .dmgNum.dSk{background-image:linear-gradient(180deg,#fff 0%,#e8f8ff 36%,#66ccff 66%,#2a8cc8 100%);
-    filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 5px rgba(70,190,255,.38))}
-  /* ④ 技能暴击 白→品红→紫 */
-  .dmgNum.dSkC{background-image:linear-gradient(180deg,#fff 0%,#ffe4fa 30%,#ff5ad0 64%,#c02a9a 100%);
-    filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 10px rgba(255,80,200,.5))}
+  /* ③ 技能伤害 —— ★ 2026-10-23（用户选 B）：白→中品红→#c8409e
+     和技能暴击（深品红）同色系 ✗ 一眼看出是技能 ✓ 但明显更浅 ✓ */
+  .dmgNum.dSk{background-image:linear-gradient(180deg,#fff 0%,#ffd8f2 32%,#ff7ad8 64%,#c8409e 100%);
+    filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 6px rgba(255,110,210,.44))}
+  /* ④ 技能暴击 —— ★ 2026-10-23（用户选 D）：加深
+     起手 #fff0fb 直接进粉 ✗ 尾巴 #8a0060 更深 ✓ 和技能伤害的差距拉开 ✓ */
+  .dmgNum.dSkC{background-image:linear-gradient(180deg,#fff0fb 0%,#ff9ee0 28%,#e832a8 62%,#8a0060 100%);
+    filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 10px rgba(235,60,175,.5))}
   /* ⑤ 玩家受伤 白→红 */
   .dmgNum.dHurt{background-image:linear-gradient(180deg,#fff 0%,#ffc4c4 34%,#f03030 66%,#c01010 100%);
     filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 6px rgba(255,40,40,.42))}
@@ -1790,15 +1792,26 @@ function talRow(k, nm, unit) {
         ? (raw.toFixed(1) + '% → <b style="color:#ffd83d">' + eff.toFixed(1) + '%</b>')
         : (eff.toFixed(1) + '%'))
     : (Math.round(eff) + ' 点');
-  return '<div class="ptLine" style="justify-content:space-between">' +
-    '<span style="min-width:74px">' + nm + (live ? '' :
-      ' <span class="bagTip" style="color:#9aa4b2">待PvP</span>') + '</span>' +
-    '<span style="min-width:96px;text-align:right;color:#8ee0ff">' + show + '</span>' +
-    '<span class="bagTip" style="min-width:52px;text-align:right">' + pts + ' 点投</span>' +
-    '<button class="bagB talB" data-k="' + k + '" data-n="-1"' +
-      (pts > 0 ? '' : ' disabled') + '>−</button>' +
-    '<button class="bagB talB" data-k="' + k + '" data-n="1"' +
-      (TAL.free > 0 ? '' : ' disabled') + '>+</button>' +
+  /* ★★★ 2026-10-23（用户："天赋加点页面手机上显示不够宽，+ 号点不到"）★★★
+     ★ 病根：一行 5 个元素 + 写死的 min-width（74+96+52=222px + 两个按钮）
+       手机窄屏时总宽超了 → + 号被挤出可视区 / 点不到 ✓
+     ★ 修法：
+       ① 名称用 flex:1 自动伸缩（不再 min-width:74 撑宽）
+       ② 数值不再 min-width:96，改成能换行、省略不撑破
+       ③ 两个按钮 flex:0 0 auto + 加宽加大点击区（44px 是移动端最小舒适尺寸）
+       ④ "N 点投" 缩成小字，放名称下面一行 → 一行只留 3 个横向块 ✓
+       ⑤ 整体允许换行（flex-wrap）✗ 实在窄就折行，绝不会挤出去 ✓ */
+  return '<div class="ptLine talRow2">' +
+    '<span class="talName">' + nm + (live ? '' :
+      ' <span class="bagTip" style="color:#9aa4b2">待PvP</span>') +
+      '<small class="talPts">已投 ' + pts + '</small></span>' +
+    '<span class="talVal">' + show + '</span>' +
+    '<span class="talBtns">' +
+      '<button class="bagB talB" data-k="' + k + '" data-n="-1"' +
+        (pts > 0 ? '' : ' disabled') + '>−</button>' +
+      '<button class="bagB talB" data-k="' + k + '" data-n="1"' +
+        (TAL.free > 0 ? '' : ' disabled') + '>+</button>' +
+    '</span>' +
     '</div>';
 }
 function talRender() {

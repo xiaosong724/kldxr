@@ -626,6 +626,27 @@ body.atLogin #cv{filter:brightness(1.02) saturate(1.04)}
 /* ★ 第 59 轮：耐久条（贴在格子底部 ✓ 绿→黄→红）*/
 /* ★ 第 83 轮：组队页的样式 */
 .ptLine{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px;font-size:13px}
+/* ★★★ 2026-10-23（用户："天赋页 + 号点不到"）
+   天赋行改成自适应：名称可压缩、数值可换行、按钮永不被挤掉 ✓ */
+.talRow2{flex-wrap:nowrap;gap:6px;padding:6px 4px}
+.talName{flex:1 1 auto;min-width:0;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px;
+  overflow:hidden;text-overflow:ellipsis}
+.talPts{font-size:10.5px;color:#7f8fa0;font-weight:400}
+.talVal{flex:0 1 auto;min-width:0;max-width:46%;text-align:right;color:#8ee0ff;
+  font-weight:700;font-size:12.5px;white-space:normal;word-break:break-word;line-height:1.25}
+.talBtns{flex:0 0 auto;display:flex;gap:4px}
+.talRow2 .talB{min-width:42px;height:34px;padding:0 6px;font-size:17px;line-height:1;
+  display:inline-flex;align-items:center;justify-content:center;
+  touch-action:manipulation}
+/* 窄屏（手机）再收一点：数值换行、按钮稍小但仍 >= 38px */
+@media (max-width:520px){
+  .talVal{max-width:40%;font-size:12px}
+  .talRow2 .talB{min-width:38px;height:32px;font-size:16px}
+}
+@media (max-width:380px){
+  .ptLine{font-size:12px}
+  .talRow2 .talB{min-width:36px;height:30px}
+}
 .ptLine:nth-child(odd){background:#ffffff08}
 .ptRow{display:flex;align-items:center;gap:8px;margin:6px 0}
 .ptInput{flex:1;min-width:80px;background:#1b2430;border:1px solid #ffffff33;color:#eee;
@@ -2092,24 +2113,24 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
      那时 DOM 还没解析到它 → getElementById 全是 null →（有 null 保护）静默失败
      → 页面能跑，但登录浮层永远不出现，谁都进不去 ✗（第 26 轮发现）-->
 <script src="/ws-config.js"></script>
-<script src="/lib/three.min.js?v=20261023q"></script>
-<script src="/icons.js?v=20261023q"></script>
-<script src="/vfx.js?v=20261023q"></script>
-<script src="/lib/annrender.js?v=20261023q"></script>
-<script src="/platform/web.js?v=20261023q"></script>
-<script src="/core/town_data.js?v=20261023q"></script>
-<script src="/core/town.js?v=20261023q"></script>
-<script src="/core/game.js?v=20261023q"></script>
-<script src="/core/town_models.js?v=20261023q"></script>
-<script src="/core/town_villas.js?v=20261023q"></script>
-<script src="/core/town_hall.js?v=20261023q"></script>
-<script src="/core/town_shops2.js?v=20261023q"></script>
-<script src="/core/town_shops3.js?v=20261023q"></script>
-<script src="/core/town_shops4.js?v=20261023q"></script>
-<script src="/core/town_veg.js?v=20261023q"></script>
-<script src="/core/town_props.js?v=20261023q"></script>
-<script src="/platform/town_ui.js?v=20261023q"></script>
-<script src="/platform/place.js?v=20261023q"></script>
+<script src="/lib/three.min.js?v=20261023r"></script>
+<script src="/icons.js?v=20261023r"></script>
+<script src="/vfx.js?v=20261023r"></script>
+<script src="/lib/annrender.js?v=20261023r"></script>
+<script src="/platform/web.js?v=20261023r"></script>
+<script src="/core/town_data.js?v=20261023r"></script>
+<script src="/core/town.js?v=20261023r"></script>
+<script src="/core/game.js?v=20261023r"></script>
+<script src="/core/town_models.js?v=20261023r"></script>
+<script src="/core/town_villas.js?v=20261023r"></script>
+<script src="/core/town_hall.js?v=20261023r"></script>
+<script src="/core/town_shops2.js?v=20261023r"></script>
+<script src="/core/town_shops3.js?v=20261023r"></script>
+<script src="/core/town_shops4.js?v=20261023r"></script>
+<script src="/core/town_veg.js?v=20261023r"></script>
+<script src="/core/town_props.js?v=20261023r"></script>
+<script src="/platform/town_ui.js?v=20261023r"></script>
+<script src="/platform/place.js?v=20261023r"></script>
 
 
 

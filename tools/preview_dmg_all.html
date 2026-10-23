@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>战斗飘字 · 全类型展示</title>
+<style>
+  html,body{margin:0;height:100%;background:#14171c;overflow:hidden;
+    font-family:system-ui,"Microsoft YaHei",sans-serif}
+  canvas{position:absolute;left:0;top:0;width:100%;height:100%}
+  .stage{position:absolute;left:0;top:0;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div class="stage" id="stage"></div>
+
+<script>
+(function(){
+  var cv=document.getElementById('bg'),g=cv.getContext('2d');
+  function draw(){
+    var W=cv.width=innerWidth,H=cv.height=innerHeight;
+    var sky=g.createLinearGradient(0,0,0,H);
+    sky.addColorStop(0,'#1b2028');sky.addColorStop(.5,'#232a31');sky.addColorStop(1,'#141a1f');
+    g.fillStyle=sky;g.fillRect(0,0,W,H);
+    var gy=H*.72;
+    var gr=g.createLinearGradient(0,gy,0,H);
+    gr.addColorStop(0,'#2b323a');gr.addColorStop(1,'#11151a');
+    g.fillStyle=gr;g.fillRect(0,gy,W,H-gy);
+    g.strokeStyle='rgba(255,255,255,.03)';
+    for(var i=0;i<10;i++){
+      var y=gy+Math.pow(i/9,1.7)*(H-gy);
+      g.beginPath();g.moveTo(0,y);g.lineTo(W,y);g.stroke();
+    }
+    var vg=g.createRadialGradient(W/2,H/2,H*.3,W/2,H/2,H*.9);
+    vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,.6)');
+    g.fillStyle=vg;g.fillRect(0,0,W,H);
+  }
+  draw();addEventListener('resize',draw);
+})();
+
+/* ★ 直接照抄 web/platform/web.js 里的 .dmgNum 样式（一字不差）*/
+document.head.insertAdjacentHTML('beforeend', `
+<style>
+.dmgNum{font-weight:900;letter-spacing:.6px;font-style:italic;
+  background-clip:text;-webkit-background-clip:text;color:transparent;
+  -webkit-text-fill-color:transparent;transform-origin:50% 60%;
+  position:absolute;left:0;top:0;white-space:nowrap;pointer-events:none}
+.dmgNum.dAtk{background-image:linear-gradient(180deg,#fff 0%,#fff8dc 38%,#ffd75e 66%,#e8a020 100%);
+  filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 4px rgba(255,180,40,.34))}
+.dmgNum.dAtkC{background-image:linear-gradient(180deg,#fff 0%,#fff0a0 32%,#ffb020 68%,#e05a00 100%);
+  filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 8px rgba(255,120,0,.48))}
+.dmgNum.dSk{background-image:linear-gradient(180deg,#fff 0%,#ffd8f2 32%,#ff7ad8 64%,#c8409e 100%);
+  filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 6px rgba(255,110,210,.44))}
+.dmgNum.dSkC{background-image:linear-gradient(180deg,#fff0fb 0%,#ff9ee0 28%,#e832a8 62%,#8a0060 100%);
+  filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 10px rgba(235,60,175,.5))}
+.dmgNum.dHurt{background-image:linear-gradient(180deg,#fff 0%,#ffc4c4 34%,#f03030 66%,#c01010 100%);
+  filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 6px rgba(255,40,40,.42))}
+.dmgNum.dHeal{background-image:linear-gradient(180deg,#fff 0%,#ccffe0 36%,#4ade80 66%,#22a050 100%);
+  filter:drop-shadow(0 2px 0 rgba(0,0,0,.92)) drop-shadow(0 0 5px rgba(70,220,130,.38))}
+.dmgNum.dExp{background-image:linear-gradient(180deg,#fff 0%,#e4f0ff 36%,#8cc0ff 66%,#4a7fd0 100%);
+  filter:drop-shadow(0 2px 0 rgba(0,0,0,.92)) drop-shadow(0 0 5px rgba(120,170,255,.38))}
+.dmgNum.dFx{background-image:linear-gradient(180deg,#fff 0%,#dcfff5 36%,#4fe0bc 66%,#1a9c80 100%);
+  filter:drop-shadow(0 2px 0 rgba(0,0,0,.9)) drop-shadow(0 0 4px rgba(70,220,180,.3));
+  font-style:normal}
+.dmgNum.dSys{background-image:linear-gradient(180deg,#fff 0%,#f0f4fa 42%,#c0ccda 70%,#7a8898 100%);
+  filter:drop-shadow(0 2px 0 rgba(0,0,0,.92)) drop-shadow(0 0 4px rgba(200,220,255,.28))}
+/* ===== 候选样式 ===== */
+/* A：淡品红（接近但更浅）*/
+.dmgNum.cSkA{background-image:linear-gradient(180deg,#fff 0%,#ffeaf8 34%,#ff9ee0 66%,#d860b8 100%);
+  filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 5px rgba(255,130,215,.4))}
+/* B：中品红（和暴击同色系、稍浅）*/
+.dmgNum.cSkB{background-image:linear-gradient(180deg,#fff 0%,#ffd8f2 32%,#ff7ad8 64%,#c8409e 100%);
+  filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 6px rgba(255,110,210,.44))}
+/* C：深品红（比暴击浅一点点）*/
+.dmgNum.cSkC{background-image:linear-gradient(180deg,#fff 0%,#ffc8ee 30%,#f05ac8 64%,#a82a86 100%);
+  filter:drop-shadow(0 2px 0 rgba(0,0,0,.95)) drop-shadow(0 0 7px rgba(255,95,200,.46))}
+/* D：技能暴击 加深 */
+.dmgNum.cSkCD{background-image:linear-gradient(180deg,#fff0fb 0%,#ff9ee0 28%,#e832a8 62%,#8a0060 100%);
+  filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 10px rgba(235,60,175,.5))}
+/* E：技能暴击 更深 */
+.dmgNum.cSkCD2{background-image:linear-gradient(180deg,#ffd8f4 0%,#f56ac8 26%,#b8108a 60%,#5c0040 100%);
+  filter:drop-shadow(0 3px 0 rgba(0,0,0,.95)) drop-shadow(0 0 12px rgba(190,30,140,.52))}
+.lbl{position:absolute;color:#7a8797;font-size:11.5px;font-weight:700;
+  letter-spacing:1px;pointer-events:none;transform:translateX(-50%);text-align:center;
+  font-style:normal;font-weight:800}
+</style>`);
+
+/* 9 类 × 2 变体 */
+var ITEMS = [
+  { cls:'dAtk',  txt:'128',        size:24, name:'① 普通攻击' },
+  { cls:'dAtkC', txt:'1,240 暴击', size:34, name:'② 普攻暴击' },
+  { cls:'dSk',   txt:'3,580',      size:32, name:'③ 技能伤害（B 中品红）' },
+  { cls:'dSkC',  txt:'9,860 暴击', size:42, name:'④ 技能暴击（D 加深）' },
+  { cls:'dHurt', txt:'-356',       size:28, name:'⑤ 玩家受伤' },
+  { cls:'dHeal', txt:'+488',       size:26, name:'⑥ 治疗/吸血' },
+  { cls:'dExp',  txt:'经验 +620',  size:22, name:'⑦ 经验/突破' },
+  { cls:'dFx',   txt:'横扫 18m',   size:22, name:'⑧ 武器特效' },
+  { cls:'dSys',  txt:'击败',       size:26, name:'⑨ 击败/复活' }
+];
+
+var stage=document.getElementById('stage');
+function build(){
+  stage.innerHTML='';
+  var W=innerWidth, H=innerHeight;
+  var cols=5, gapX=Math.floor(W/cols), rows=2;
+  var baseY = Math.round(H*0.30);
+  var rowH  = Math.round(H*0.30);
+
+  ITEMS.forEach(function(it, i){
+    var cx = Math.floor(gapX*(i%cols) + gapX/2);
+    var cy = baseY + rowH*Math.floor(i/cols);
+
+    /* 标签 */
+    var lb=document.createElement('div');
+    lb.className='lbl';
+    lb.textContent=it.name;
+    lb.style.left=cx+'px';
+    lb.style.top=(cy+62)+'px';
+    stage.appendChild(lb);
+
+    /* 飘字（静止展示）— 用 transform 居中，不依赖异步测量 ✓ */
+    var el=document.createElement('div');
+    el.className='dmgNum '+it.cls;
+    el.textContent=it.txt;
+    el.style.fontSize=it.size+'px';
+    el.style.left=cx+'px';
+    el.style.top=cy+'px';
+    el.style.transform='translate(-50%,-50%)';
+    stage.appendChild(el);
+  });
+}
+build();
+addEventListener('resize', build);
+</script>
+</body>
+</html>
