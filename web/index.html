@@ -1868,11 +1868,11 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
 
    <!-- ★ 2026-10-22（用户要求）：组队页下面加「自己刷怪上限」，1~100 滑动调整 -->
    <div class="setLabel" style="margin-top:16px">自己刷怪上限
-     <small style="opacity:.6">（只影响刷在你附近的怪 · 1~100 只）</small></div>
+     <small style="opacity:.6">（只影响刷在你附近的怪 · 1~40 只）</small></div>
    <div class="ptRow" style="align-items:center;gap:10px">
-     <input id="ptMobCap" type="range" min="1" max="100" step="1" value="8"
+     <input id="ptMobCap" type="range" min="1" max="40" step="1" value="20"
             style="flex:1;accent-color:#8ee0ff">
-     <b id="ptMobCapVal" style="min-width:56px;text-align:right;color:#8ee0ff">8 只</b>
+     <b id="ptMobCapVal" style="min-width:56px;text-align:right;color:#8ee0ff">20 只</b>
    </div>
   </div>
 
@@ -1971,6 +1971,10 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
    <div id="rowMobHpBar" style="padding:6px 0"></div>
    <div class="setLabel">震屏 <small style="opacity:.6">（关了打击时不抖镜头，排查卡顿用）</small></div>
    <div id="rowShake" style="padding:6px 0"></div>
+   <div class="setLabel" style="margin-top:8px;color:#8fd6ff">【排查用】隐藏后看帧率变化</div>
+   <div id="rowMobModel" style="padding:4px 0"></div>
+   <div id="rowMobAI" style="padding:4px 0"></div>
+   <div id="rowGround" style="padding:4px 0"></div>
 
    <div class="setLabel">视角模式</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;padding:4px 0 8px">
@@ -2142,24 +2146,24 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
      那时 DOM 还没解析到它 → getElementById 全是 null →（有 null 保护）静默失败
      → 页面能跑，但登录浮层永远不出现，谁都进不去 ✗（第 26 轮发现）-->
 <script src="/ws-config.js"></script>
-<script src="/lib/three.min.js?v=20261027c"></script>
-<script src="/icons.js?v=20261027c"></script>
-<script src="/vfx.js?v=20261027c"></script>
-<script src="/lib/annrender.js?v=20261027c"></script>
-<script src="/platform/web.js?v=20261027c"></script>
-<script src="/core/town_data.js?v=20261027c"></script>
-<script src="/core/town.js?v=20261027c"></script>
-<script src="/core/game.js?v=20261027c"></script>
-<script src="/core/town_models.js?v=20261027c"></script>
-<script src="/core/town_villas.js?v=20261027c"></script>
-<script src="/core/town_hall.js?v=20261027c"></script>
-<script src="/core/town_shops2.js?v=20261027c"></script>
-<script src="/core/town_shops3.js?v=20261027c"></script>
-<script src="/core/town_shops4.js?v=20261027c"></script>
-<script src="/core/town_veg.js?v=20261027c"></script>
-<script src="/core/town_props.js?v=20261027c"></script>
-<script src="/platform/town_ui.js?v=20261027c"></script>
-<script src="/platform/place.js?v=20261027c"></script>
+<script src="/lib/three.min.js?v=20261027f"></script>
+<script src="/icons.js?v=20261027f"></script>
+<script src="/vfx.js?v=20261027f"></script>
+<script src="/lib/annrender.js?v=20261027f"></script>
+<script src="/platform/web.js?v=20261027f"></script>
+<script src="/core/town_data.js?v=20261027f"></script>
+<script src="/core/town.js?v=20261027f"></script>
+<script src="/core/game.js?v=20261027f"></script>
+<script src="/core/town_models.js?v=20261027f"></script>
+<script src="/core/town_villas.js?v=20261027f"></script>
+<script src="/core/town_hall.js?v=20261027f"></script>
+<script src="/core/town_shops2.js?v=20261027f"></script>
+<script src="/core/town_shops3.js?v=20261027f"></script>
+<script src="/core/town_shops4.js?v=20261027f"></script>
+<script src="/core/town_veg.js?v=20261027f"></script>
+<script src="/core/town_props.js?v=20261027f"></script>
+<script src="/platform/town_ui.js?v=20261027f"></script>
+<script src="/platform/place.js?v=20261027f"></script>
 
 
 

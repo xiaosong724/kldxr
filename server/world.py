@@ -991,7 +991,7 @@ class World(object):
                 print('[skill] load 装配失败: %r' % (_sle,))
             # ★ 2026-10-22：把我自己的刷怪上限推给客户端（组队页滑块的初值）
             try:
-                self._send_cid(_np.cid, P.pack('mobcap', n=int(self._cap_of(_np)), max=100))
+                self._send_cid(_np.cid, P.pack('mobcap', n=int(self._cap_of(_np)), max=40))
             except Exception:
                 pass
             self._town_zones_send(_np)
@@ -1532,9 +1532,11 @@ class World(object):
         if n <= 0:
             self.mob_cap_of.pop(rid, None)
         else:
-            self.mob_cap_of[rid] = max(1, min(100, n))
+            # ★ 2026-10-27：上限 100 → 40（用户："只能到40"）
+            #   ★ 和客户端滑块 max 保持一致 ✗ 不然客户端能拖到 100 但服务端只认 40 ✓
+            self.mob_cap_of[rid] = max(1, min(40, n))
         cur = int(self._cap_of(p))
-        self._send_cid(p.cid, P.pack('mobcap', n=cur, max=100))
+        self._send_cid(p.cid, P.pack('mobcap', n=cur, max=40))
         self._send_cid(p.cid, P.pack(
             'notice', text='自己刷怪上限：%d 只' % cur))
 
@@ -8404,27 +8406,54 @@ class World(object):
         if _rank:
             self._special_spawn_send(_m)
 
+    # ★★★ 2026-10-27（用户指定的分档）★★★
+    #   上限 1~10   → 每次补 1 只
+    #   上限 11~20  → 每次补 4 只
+    #   上限 21~30  → 每次补 6 只
+    #   上限 31~40  → 每次补 10 只
+    #   ★ 为什么补得这么猛：上限越高越要快速填满 ✗
+    #     刷一堆怪打的时候，等 2 秒补 1 只根本跟不上杀的速度 ✓
+    SPAWN_BATCH_STEPS = ((10, 1), (20, 4), (30, 6), (40, 10))
+
     def _spawn_batch_of(self, q):
-        """★ 2026-10-23（用户）：每轮补怪数量按【个人刷怪上限】分档
-             1~20   → 每次补 1 只
-             21~40  → 每次补 2 只
-             41~60  → 每次补 3 只
-             61~80  → 4 只 …… 以此类推（上限每多 20，多补 1 只）
-           ★ 为什么按上限分档：上限高的人需要的怪多 ✗ 一次补 1 只永远追不上 ✓
+        """★ 每轮补怪数量按【个人刷怪上限】分档（用户指定的四档）
+
+           ≤10  → 1 只     （小上限，慢慢补 ✓）
+           11~20 → 4 只
+           21~30 → 6 只
+           31~40 → 10 只   （大上限，一波填满 ✓）
+           >40  → 沿用最高档 10 只（防管理员把上限调更高时一次爆太多 ✓）
         """
         try:
             cap = int(self._cap_of(q))
         except Exception:
-            cap = 8
+            cap = int(getattr(mobs, 'MOB_PER_PLAYER', 40) or 40)
         if cap <= 0:
             return 1
-        return max(1, int((cap + 19) // 20))     # 20→1、21→2、40→2、41→3、60→3、61→4
+        for _lim, _n in self.SPAWN_BATCH_STEPS:
+            if cap <= _lim:
+                return _n
+        return 10
+
+    # ★ 2026-10-27（用户："加载时也 clamp 一遍"）
+    #   上限统一 40 ✗ 老的 100/80/60 全部降到 40 ✓
+    #   ★ 为什么放在 _cap_of 里而不是加载时：
+    #     ① 所有读上限的地方都走这个函数 ✗ 一处管全 ✓
+    #     ② 加载时 clamp 只能管一次 ✗ 这里每读一次都保证 ≤40 ✓
+    #     ③ 数据库里还是老值 ✗ 但用出来一定是 40 ✓
+    MOB_CAP_MAX = 40
 
     def _cap_of(self, q):
-        """这个玩家的僵尸上限（第 133 轮）—— 单人覆盖优先，否则用全局值 ✓"""
+        """这个玩家的僵尸上限（第 133 轮）—— 单人覆盖优先，否则用全局值 ✓
+           ★ 2026-10-27：出口一律 clamp 到 MOB_CAP_MAX（40）✓"""
         rid = getattr(q, 'role_id', None)
         v = self.mob_cap_of.get(rid)
-        return int(v) if v is not None else int(self.mob_per_player)
+        n = int(v) if v is not None else int(self.mob_per_player)
+        if n > self.MOB_CAP_MAX:
+            n = self.MOB_CAP_MAX
+        if n < 1:
+            n = 1
+        return n
 
     def _pvp_on(self, q):
         """这个人现在能不能参与 PVP（第 134 轮）—— 单人覆盖优先 ✓"""

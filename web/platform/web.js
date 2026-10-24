@@ -1895,6 +1895,12 @@ function perfBar(st) {
 var DETAIL_RANGE = { low: 16, mid: 28, high: 40 };
 
 function applySet() {
+    /* ★ 2026-10-27：三个排查开关（启动时生效 ✓）*/
+  try {
+    if (typeof MOB_MODEL_ON !== 'undefined') { MOB_MODEL_ON = (SETCFG.mobModel !== false); }
+    if (typeof MOB_AI_ON !== 'undefined') { MOB_AI_ON = (SETCFG.mobAI !== false); }
+    if (typeof GROUND_ON !== 'undefined') { GROUND_ON = (SETCFG.groundOn !== false); }
+  } catch (ePT2) { }
     /* ★ 2026-10-24：震屏开关（启动时生效 ✓）*/
   try {
     if (typeof SHAKE_ON !== 'undefined') {
@@ -2564,7 +2570,7 @@ function ptWeapon(look, tier) {
    · 拖动 → 发包 mobcap{n}
    · 服务器回 mobcap{n,max} → 回写滑块和数字（以服务器为准，防越界）
    · 进世界时服务器也会推一条 → 初值就是真实的 */
-var PT_MOBCAP = 8;
+var PT_MOBCAP = 20;
 try {
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () { try { ptMobCapBind(); } catch (e0) { } });
@@ -2581,12 +2587,12 @@ function ptMobCapBind() {
     document.addEventListener('input', function (e) {
       var el = e.target;
       if (!el || el.id !== 'ptMobCap') { return; }
-      ptMobCapPaint(Math.max(1, Math.min(100, parseInt(el.value, 10) || 1)));
+      ptMobCapPaint(Math.max(1, Math.min(40, parseInt(el.value, 10) || 1)));
     }, true);
     document.addEventListener('change', function (e) {
       var el = e.target;
       if (!el || el.id !== 'ptMobCap') { return; }
-      var v = Math.max(1, Math.min(100, parseInt(el.value, 10) || 1));
+      var v = Math.max(1, Math.min(40, parseInt(el.value, 10) || 1));
       try { wsSend('mobcap', { n: v }); } catch (e2) { }
     }, true);
   }
@@ -2595,13 +2601,13 @@ function ptMobCapBind() {
 function ptMobCapPaint(v) {
   var sl = document.getElementById('ptMobCap');
   var tx = document.getElementById('ptMobCapVal');
-  var n = Math.max(1, Math.min(100, parseInt(v, 10) || 1));
+  var n = Math.max(1, Math.min(40, parseInt(v, 10) || 1));
   if (sl && String(sl.value) !== String(n)) { sl.value = n; }
   if (tx) { tx.textContent = n + ' 只'; }
 }
 function ptMobCapApply(d) {
   if (!d) { return; }
-  PT_MOBCAP = Math.max(1, Math.min(100, parseInt(d.n, 10) || 1));
+  PT_MOBCAP = Math.max(1, Math.min(40, parseInt(d.n, 10) || 1));
   if (+d.max) {
     var sl = document.getElementById('ptMobCap');
     if (sl) { sl.max = +d.max; }
@@ -5463,6 +5469,42 @@ function openSet(wantTab) {
     sk.addEventListener('click', skTap);
     skRow.appendChild(sk);
   }
+  /* ★ 2026-10-27：三个排查开关（怪物模型 / 怪物AI / 地形）*/
+  function _perfToggle(rowId, label, varName, cfgKey) {
+    var row = document.getElementById(rowId);
+    if (!row) { return; }
+    row.innerHTML = '';
+    var on = true;
+    try { on = (SETCFG && SETCFG[cfgKey] !== false); } catch (ePT0) { }
+    setPerfVar(varName, on);
+    var el = document.createElement('div');
+    el.className = 'opt' + (on ? ' on' : '');
+    el.style.marginRight = '6px';
+    el.style.display = 'inline-block';
+    el.textContent = label + ' ' + (on ? '显' : '隐');
+    var tap = function (e) {
+      if (e) { e.preventDefault(); }
+      var nv = !getPerfVar(varName);
+      setPerfVar(varName, nv);
+      SETCFG[cfgKey] = nv;
+      try { saveSet(); } catch (e2) { }
+      try { openSet(); } catch (e3) { }
+    };
+    el.addEventListener('touchstart', tap, { passive: false });
+    el.addEventListener('click', tap);
+    row.appendChild(el);
+  }
+  /* ★ 不用 eval ✗ 显式映射 ✓（core 层变量是全局的 ✓ platform 层可以直接访问）*/
+  var PERF_VARS = {
+    MOB_MODEL_ON: function (v) { if (v === undefined) { return (typeof MOB_MODEL_ON === 'undefined') ? true : MOB_MODEL_ON; } MOB_MODEL_ON = v; },
+    MOB_AI_ON: function (v) { if (v === undefined) { return (typeof MOB_AI_ON === 'undefined') ? true : MOB_AI_ON; } MOB_AI_ON = v; },
+    GROUND_ON: function (v) { if (v === undefined) { return (typeof GROUND_ON === 'undefined') ? true : GROUND_ON; } GROUND_ON = v; }
+  };
+  function getPerfVar(n) { try { return PERF_VARS[n](); } catch (e) { return true; } }
+  function setPerfVar(n, v) { try { PERF_VARS[n](v); } catch (e) { } }
+  _perfToggle('rowMobModel', '怪物模型', 'MOB_MODEL_ON', 'mobModel');
+  _perfToggle('rowMobAI', '怪物AI', 'MOB_AI_ON', 'mobAI');
+  _perfToggle('rowGround', '地形', 'GROUND_ON', 'groundOn');
   // ★ 音效开关 + 音量 ✓
   var srow = document.getElementById('rowSfx');
   if (srow) {

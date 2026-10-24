@@ -765,6 +765,17 @@ var _hitFxDone = 0;
    ★ 持续打怪时 shake 一直在衰减中（0.88 每帧）✗ 相机一直在抖 ✓
    ★ 关掉之后：不震屏 ✗ 但打击感和音效照常 ✓ */
 var SHAKE_ON = true;
+/* ★★★ 2026-10-27（用户："怪物模型、怪物 AI 更新、地形/地面 把这几个开关做一下"）★★★
+   ★ 这三个组合能【一刀切开】卡顿来源：
+     · 关【怪物模型】→ 不画怪 ✗ 但 AI 照跑 ✓
+       不卡 = 渲染问题（draw call / 三角数）
+     · 关【怪物 AI】→ 不更新位置/动画 ✗ 但照常画 ✓
+       不卡 = 逻辑问题（插值 / 位置计算 / 矩阵更新）
+     · 关【地形】→ 不画地面
+       不卡 = 地面渲染问题（overdraw / 大三角）*/
+var MOB_MODEL_ON = true;     // 怪物模型显示
+var MOB_AI_ON = true;        // 怪物 AI 与位置更新
+var GROUND_ON = true;        // 地形 / 地面显示
 function flashCloneMesh(obj) {
   if (!obj) { return; }
   var wm = new THREE.MeshBasicMaterial({
@@ -8632,7 +8643,14 @@ function netUpdate(dt) {
          - 采样 30Hz、渲染 60Hz 也顺 ✓
          - 偶尔丢一帧采样 ✗ 平滑追让画面看不出来 ✓
          - 新采样和当前差得远 ✗ 也是平滑追过去 ✗ 不会跳 ✓ */
-    if (!netSample(rm.buf, srvRender, rm.cur)) { continue; }
+    /* ★★★ 2026-10-27（用户："怪还是可以看到移动，只是没有走路和攻击动画"）★★★
+       ★ 我上一版只关了 _poseSkip（动画）✗ 位置插值照跑 ✓ → 怪还在动 ✓
+       ★ 修：关 AI 时【不采样新位置】✗ 怪停在最后的位置不动 ✓
+         （渲染照常 ✗ 模型还看得见 ✓ 这样才是真正的"关 AI"）
+       ★ 注意：rm.cur 保留上一次的值 ✗ 所以不会跳回原点 ✓ */
+    if (MOB_AI_ON) {
+      if (!netSample(rm.buf, srvRender, rm.cur)) { continue; }
+    }
     var rx = rm.cur.x, rz = rm.cur.z;
     if (rm.px !== undefined && dt > 0.0001) {
       var _dvx = (rx - rm.px) / dt, _dvz = (rz - rm.pz) / dt;
@@ -8753,6 +8771,14 @@ function netUpdate(dt) {
         rm.hh.lod.visible = _far3;
       }
     }
+    /* ★ 2026-10-27：怪物模型开关 ✗ 关掉就不画怪（AI 照跑 ✓）*/
+    if (!MOB_MODEL_ON) {
+      if (rm.g.visible) { rm.g.visible = false; }
+      if (rm.shadow && rm.shadow.visible) { rm.shadow.visible = false; }
+    } else {
+      if (!rm.g.visible) { rm.g.visible = true; }
+      if (rm.shadow && !rm.shadow.visible) { rm.shadow.visible = true; }
+    }
     if (rm.boxDbg) { rm.boxDbg.position.set(rx, 0.1, rz); }   // ★ 碰撞箱线框跟随 ✓
 
     /* ★★ round433（A3）：远处 / 屏幕外的怪不再每帧算肢体动画 ✗
@@ -8764,7 +8790,9 @@ function netUpdate(dt) {
     /* ★ 2026-10-24：撤回三档分区 ✗ 恢复原来的两档 ✓
        ★ 原因：10 米外每 3 帧 = 20fps 动画 ✗ 没有运动模糊，走路会一顿一顿 ✓
        ★ 保留：18 米外不动画（LOD）+ 8 米外隔帧（30fps，接近电影可接受 ✓）*/
-    var _poseSkip = (_dd2 > MOB_LOD_D * MOB_LOD_D) || (rm._offscreen === true)
+    /* ★ 2026-10-27：怪物 AI 开关 ✗ 关掉就不更新位置/动画（照常画 ✓）
+       ★ 注意：位置不更新 → 怪会停在原地（不动 ✗ 但模型还看得见）*/
+    var _poseSkip = (!MOB_AI_ON) || (_dd2 > MOB_LOD_D * MOB_LOD_D) || (rm._offscreen === true)
       || (_dd2 > 64 && (frameNo & 1) && !rm.atkT);
     if (rm.alive && !_poseSkip) {
       // 走路动画（按这一帧真的走了多远 ✓）
@@ -10817,6 +10845,30 @@ function frame(ts) {
   }
   refreshGround();   // ★ 地面跟着玩家走（走出 160 单位才真重建，平时只是两次比较 ✓）
   refreshTerrain();  // ★ 第 306 轮：方块地形（分瓦片 ✗ 一帧最多建几片 ✓）
+  /* ★ 2026-10-27：地形/地面开关 ✗ 关掉就不画地面 ✓
+     ★ 放在 refreshTerrain() 【之后】✗ 因为它每帧可能新建瓦片（默认 visible=true ✓）
+     ★ 这样新瓦片建完也会立刻被关掉 ✓ */
+  if (!GROUND_ON) {
+    try {
+      if (GROUNDMESH) { GROUNDMESH.visible = false; }
+      if (typeof _terTiles !== 'undefined' && _terTiles) {
+        for (var _ttk in _terTiles) {
+          var _tt = _terTiles[_ttk];
+          if (_tt && _tt.visible) { _tt.visible = false; }
+        }
+      }
+    } catch (eGR) { }
+  } else {
+    try {
+      if (GROUNDMESH && !GROUNDMESH.visible) { GROUNDMESH.visible = true; }
+      if (typeof _terTiles !== 'undefined' && _terTiles) {
+        for (var _ttk2 in _terTiles) {
+          var _tt2 = _terTiles[_ttk2];
+          if (_tt2 && !_tt2.visible) { _tt2.visible = true; }
+        }
+      }
+    } catch (eGR2) { }
+  }
   rebuildGrid();   // ★ 每帧重建空间网格（O(N) ✓ 之后查询都是 O(1) ✓）
   rebuildRmGrid(); // ★ 2026-10-24：联机妖兽也建网格（blocked 只查附近 ✓）
   /* ★ 2026-10-24：小镇距离剔除（200 米外整组隐藏 ✗ 省 12 万三角 ✓）*/
