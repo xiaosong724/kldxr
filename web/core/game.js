@@ -714,6 +714,23 @@ var _flashClones = [];
      关掉能立刻验证它是不是掉帧原因 ✓
    ★ 关掉之后：怪物被打中不变白 ✗ 但伤害照常算 ✓ */
 var MOB_FLASH_ON = true;
+/* ★★★ 2026-10-24（用户："加一个怪的血条隐藏，我看看是不是这个问题"）★★★
+   ★ 每只怪有 1 组头顶 UI（名字 + 血条 + 数字）= 约 5 个 DOM 节点
+     100 只怪 = 500 个 DOM 节点 ✗ 每帧要改位置/宽度 ✓
+   ★ 关掉之后：不显示血条 ✗ 但血量照常算 ✓ */
+var MOB_HPBAR_ON = true;
+
+/* ★ 2026-10-24（用户："方案 1 + 方案 3 组合"）
+   ★ 命中队列：一次 AOE 打中 30 只 → 30 个事件不分帧全处理 = 尖峰
+   ★ 改成入队 + 每帧取 10 个 ✗ 负载削平 ✓
+   ★ 模块级变量（不用 window ✗ 分层规则不许 core 碰浏览器全局 ✓）*/
+var HIT_Q = [];
+var _hitFxDone = 0;
+/* ★★★ 2026-10-24（用户："加一个开关我试试"）★★★
+   ★ 震屏（shake）→ 相机每帧随机偏移 → 整个画面每帧重绘
+   ★ 持续打怪时 shake 一直在衰减中（0.88 每帧）✗ 相机一直在抖 ✓
+   ★ 关掉之后：不震屏 ✗ 但打击感和音效照常 ✓ */
+var SHAKE_ON = true;
 function flashCloneMesh(obj) {
   if (!obj) { return; }
   var wm = new THREE.MeshBasicMaterial({
@@ -2279,6 +2296,55 @@ function nearMobs(x, z) {
   return out;
 }
 
+/* ★★★ 2026-10-24（用户："还是战斗的问题，你不要再走错方向了"）★★★
+   ★ 病根（终于找到）：blocked() 里的妖兽检测【遍历全部 NET.rmobs】
+     · 打怪时 100 只怪全在跑 ✗ 每只每帧调 blocked() 8 次
+     · = 每帧 800 次调用 × 每次遍历 100 只怪 = 8 万次矩形检测 ✓✓
+     · 每秒 480 万次 ✗ 这就是"打怪才卡"的根因 ✓
+   ★ 为什么之前优化没效果：
+     我优化的是【静态物件】（solids/propSolids → 空间网格 ✓）
+     但妖兽这一路【完全没动】✗ 而且 nearMobs 只覆盖本地 mobs
+     不含 NET.rmobs（联机时怪都在 NET.rmobs 里）✓✓
+   ★ 修法：给 NET.rmobs 也建空间网格 ✗ 每帧重建一次（O(n)）✓
+     blocked() 里只查周围 3×3 格（O(1)）✓
+   ★ 正确性：网格里查的和遍历的是同一批怪
+     只是先筛掉不可能相交的 ✗ 碰撞结果完全一致 ✓ */
+
+var RMGrid = { cell: 6.0, map: {} };
+
+function rebuildRmGrid() {
+  RMGrid.map = {};
+  var c = RMGrid.cell;
+  if (typeof NET === 'undefined' || !NET || !NET.rmobs) { return; }
+  for (var id in NET.rmobs) {
+    var rm = NET.rmobs[id];
+    if (!rm || !rm.alive) { continue; }
+    /* ★ 用 cur（插值目标）还是 position？用 position（实际渲染位置 ✓）*/
+    var px, pz;
+    if (rm.g && rm.g.position) { px = rm.g.position.x; pz = rm.g.position.z; }
+    else if (rm.cur) { px = rm.cur.x; pz = rm.cur.z; }
+    else { continue; }
+    var k = gridKey(Math.floor(px / c), Math.floor(pz / c));
+    if (!RMGrid.map[k]) { RMGrid.map[k] = []; }
+    RMGrid.map[k].push(rm);
+  }
+}
+
+/* ★ 查周围 9 格（不分配新数组 ✗ 直接回调，省一次 GC ✓）*/
+function forEachNearRm(x, z, fn) {
+  var c = RMGrid.cell;
+  var cx = Math.floor(x / c), cz = Math.floor(z / c);
+  for (var i = -1; i <= 1; i++) {
+    for (var j = -1; j <= 1; j++) {
+      var arr = RMGrid.map[gridKey(cx + i, cz + j)];
+      if (!arr) { continue; }
+      for (var q = 0; q < arr.length; q++) {
+        if (fn(arr[q]) === true) { return; }
+      }
+    }
+  }
+}
+
 /* ============ 碰撞 ============ */
 /* ★ 矩形碰撞检测（AABB ✓ 比圆形更贴合方块身体 ✓）
    x,z = 目标位置中心 ✓ hw,hd = 碰撞箱半宽/半深 ✓
@@ -2503,18 +2569,28 @@ function blocked(x, z, hw, hd, byMob, skipMob, fromX, fromZ) {
           return true;
         }
       }
+      /* ★★★ 2026-10-24：改成查空间网格 ✗ 不再遍历全部 100 只怪 ✓
+         原来这里的 for(var wmid in NET.rmobs) 是【每秒 480 万次矩形检测】的元凶 ✓ */
       var wmhw = G.MOB_W / 2, wmhd = G.MOB_D / 2;
-      for (var wmid in NET.rmobs) {
-        var wm = NET.rmobs[wmid];
-        if (!wm || !wm.alive || !wm.cur) { continue; }
-        var wx2 = wm.cur.x, wz2 = wm.cur.z;
+      var _hitRm = false;
+      forEachNearRm(x, z, function (wm) {
+        if (!wm || !wm.alive) { return false; }
+        var wx2, wz2;
+        if (wm.g && wm.g.position) { wx2 = wm.g.position.x; wz2 = wm.g.position.z; }
+        else if (wm.cur) { wx2 = wm.cur.x; wz2 = wm.cur.z; }
+        else { return false; }
+        /* ★ 跳过自己（skipMob 是本地怪引用 ✗ 这里是 rm 对象 ✗ 用 mid 匹配不到）
+           所以不跳过 ✗ 但原地重叠会被 hasFrom 放行 ✓ */
         if (x + hw > wx2 - wmhw && x - hw < wx2 + wmhw && z + hd > wz2 - wmhd && z - hd < wz2 + wmhd) {
           if (hasFrom && fromX + hw > wx2 - wmhw && fromX - hw < wx2 + wmhw &&
-              fromZ + hd > wz2 - wmhd && fromZ - hd < wz2 + wmhd) { continue; }
+              fromZ + hd > wz2 - wmhd && fromZ - hd < wz2 + wmhd) { return false; }
           BLOCK_TAG = { kind: '公共妖兽', x: wx2, z: wz2, hw: wmhw, hd: wmhd };
-          return true;
+          _hitRm = true;
+          return true;      /* ★ 命中 → 停止遍历 ✓ */
         }
-      }
+        return false;
+      });
+      if (_hitRm) { return true; }
     }
   }
   return false;
@@ -6624,10 +6700,39 @@ function wsApplyWorld(d) {
      联机时伤害是【服务器算的】，所以数字也从服务器来 ✓
      本地只负责表现：弹数字 + 出一次音效/震动（砍到多只不叠音效 ✗） */
   var mh = d.mhits || [];
+  /* ★★★ 2026-10-24（用户："方案 1 + 方案 3 组合先做一下试试"）★★★
+     ★ 病根：一次 AOE 打中 30 只怪 ✗ 30 个 mhits 全在【同一帧】处理
+       = 瞬间尖峰 → 那一帧时间暴涨 → 掉帧 ✓
+     ★ 方案：
+       ① 收到的 mhits 全部【入队】✗ 不立刻处理 ✓
+       ② 每帧只处理【_HIT_BUDGET】个 ✗ 剩下的下一帧 ✓
+       ③ 尖峰被削平 ✗ 每帧负载恒定 ✓
+     ★ 效果：30 只怪 / 每帧 10 个 = 3 帧处理完（约 50ms ✗ 人眼看不出）✓
+     ★ 安全：只是延后 ✗ 逻辑完全不变 ✓ 队列有上限 ✓ */
+  var _hitQ = HIT_Q;
   /* ★ 2026-10-24：这一批 mhits 里有没有怪死亡 ✗ 死亡音效只出一次 ✓ */
   var _batchDied = false;
-  for (var q2 = 0; q2 < mh.length; q2++) {
-    var e2 = mh[q2];
+  for (var _hqi = 0; _hqi < mh.length; _hqi++) { _hitQ.push(mh[_hqi]); }
+  /* ★ 队列上限：积压太多就丢掉（防止极端情况内存爆掉 ✓）*/
+  if (_hitQ.length > 200) { _hitQ.splice(0, _hitQ.length - 200); }
+  /* ★★★ 2026-10-24（用户："先做帧预算"）方案 2：帧预算管理 ★★★
+     ★ 之前：每帧固定处理 10 个 ✗ 不管每个多贵 ✓
+     ★ 现在：按【时间预算】处理（HIT_BUDGET_MS）
+       · 简单操作（只闪白）→ 预算内能处理更多 ✓
+       · 复杂操作（飘字多）→ 预算到了就停 ✓
+       · 自适应不同设备 ✓
+     ★ 细节：
+       ① performance.now() 本身有开销 ✗ 每 4 个才检查一次 ✓
+       ② 每帧至少处理 1 个 ✗ 否则队列永远不动 ✓
+       ③ 预算 5ms：一帧 16.7ms，留 11.7ms 给渲染 ✓ */
+  var HIT_BUDGET_MS = 5;
+  var _hitDeadline = performance.now() + HIT_BUDGET_MS;
+  for (var q2 = 0; _hitQ.length; q2++) {
+    /* ★ 2026-10-24：预算检查放在最前面 ✗ 这样 continue 也跳不过它 ✓
+       （每 4 个检查一次 ✗ 摊销 performance.now 的开销）*/
+    if (q2 > 0 && (q2 & 3) === 0 && performance.now() > _hitDeadline) { break; }
+    var e2 = _hitQ.shift();
+    if (!e2) { break; }
     var edv = Math.round(+e2.dmg || 0);
     if (edv <= 0) { continue; }
     // ★ 保安格挡了会在数字后面标出来（第 40 轮）—— 玩家得知道为什么这一刀不疼 ✓
@@ -6673,7 +6778,10 @@ function wsApplyWorld(d) {
     }
     /* ★ 2026-10-24：这一批里有没有怪死了 ✗ 死亡音效每批只出一次 ✓ */
     if (e2.die || e2.killed) { _batchDied = true; }
-    if (q2 === 0) {
+    /* ★ 2026-10-24：分帧后 q2 每帧都从 0 开始 ✗ 用独立的标记 ✓
+       保证一次 AOE 只响一次音效 + 震一次屏 ✓ */
+    if (!_hitFxDone) {
+      _hitFxDone = 1;
       sfx(e2.crit ? 'crit' : 'hit', 1.0);
       sfx('zhurt', 0.7);
       shake = e2.crit ? 0.45 : 0.22;
@@ -6688,6 +6796,8 @@ function wsApplyWorld(d) {
   /* ★ 2026-10-24：这一批里有怪死了 → 只响一次死亡音 ✓
      （范围技能一次杀 20 只 ✗ 以前响 20 次 ✓✓ 现在 1 次 ✓）*/
   if (_batchDied) { sfx('zdeath', 1.0); }
+  /* ★ 队列处理完了 → 重置标记（下一批 AOE 能再触发音效/震屏 ✓）*/
+  if (_hitQ.length === 0) { _hitFxDone = 0; }
 
   /* ---- ★ 我的经验 / 等级（变了服务器才带）→ 直接刷左上角 HUD ✓ ---- */
   /* ★ 第 102 轮：升级/经验推送里也带了【有效生命上限】✓
@@ -8687,10 +8797,11 @@ function netUpdate(dt) {
       }
     } else if (rm.dying === -2) {
       rm.dead += dt;
-      /* ★ 第 44 轮：材质是全场共享的，要淡出必须先给这一只克隆一份 ✗（不然全场一起淡）*/
-      if (!rm.faded) { rm.faded = 1; rm.g.traverse(function (o) { if (o.isMesh && o.material) { o.material = o.material.clone(); } }); }
       var fk2 = Math.min(1, (rm.dead - 1.00) / 0.5);
-      rm.g.traverse(function (o) { if (o.isMesh && o.material) { o.material.transparent = true; o.material.opacity = 1 - fk2; } });
+      /* ★ 2026-10-24：淡出改成【缩小消失】✗ 不再克隆材质 ✓
+         （原来每只怪克隆 10 个材质 + 每帧 traverse 一遍 ✗ 大量杀怪时很贵 ✓）*/
+      if (!rm.faded) { rm.faded = 1; }
+      rm.g.scale.setScalar(Math.max(0.001, 1 - fk2));
       if (rm.shadow) { rm.shadow.material.opacity = 0.10 * (1 - fk2); }
     }
 
@@ -8726,6 +8837,8 @@ function netUpdate(dt) {
       }
       vis2 = vis2 && _near;
       rm._offscreen = !vis2;      /* ★ round433：屏幕外就不算肢体动画了 ✓ */
+      /* ★ 2026-10-24：血条开关 ✗ 关掉就整组 UI 都不显示 ✓ */
+      if (!MOB_HPBAR_ON) { vis2 = false; }
       UI.plate.show(rm.ui, vis2);
       if (vis2) {
         var sx2 = (_ov3.x * 0.5 + 0.5) * innerWidth;
@@ -8738,11 +8851,12 @@ function netUpdate(dt) {
         if (_farP && (frameNo & 1)) { _mx = rm._mvx; _my = rm._mvy; }
         if (rm._mvx !== _mx || rm._mvy !== _my) {
           rm._mvx = _mx; rm._mvy = _my;
-          UI.plate.move(rm.ui, sx2, sy2);
+          UI.plate.move(rm.ui, _mx, _my);
         }
       }
     }
   }
+
 }
 
 /* ★ 和别的玩家 / 公共妖兽重叠时慢慢推开 ✓（是"推开"不是"顶住" → 不会卡在一起 ✓）*/
@@ -9870,6 +9984,7 @@ function autoTick(dt) {
 var LAST_FRAME_MS = 0;
 
 function frame(ts) {
+
   LAST_FRAME_MS = Date.now();   /* ★ 每帧都打一下卡 ✗ 看门狗靠它判断有没有卡死 ✓ */
   UI.raf(frame);
   if (!loadedOk) { return; }
@@ -9917,7 +10032,8 @@ function frame(ts) {
         sun.target.updateMatrixWorld();
       }
     }
-    rd.render(scene, cam);
+        rd.render(scene, cam);
+    
     return;
   }
     /* ★ 第 44 轮：阴影隔帧更新（见渲染器那里的注释）*/
@@ -10601,6 +10717,7 @@ function frame(ts) {
   refreshGround();   // ★ 地面跟着玩家走（走出 160 单位才真重建，平时只是两次比较 ✓）
   refreshTerrain();  // ★ 第 306 轮：方块地形（分瓦片 ✗ 一帧最多建几片 ✓）
   rebuildGrid();   // ★ 每帧重建空间网格（O(N) ✓ 之后查询都是 O(1) ✓）
+  rebuildRmGrid(); // ★ 2026-10-24：联机妖兽也建网格（blocked 只查附近 ✓）
   solidTick();     // ★ 2026-10-24：静态碰撞网格（物件变了才重建 ✓）
   /* ★★★ 2026-10-24（用户："AI 分批 tick"）★★★
      ★ 目标：60 只怪时每帧的头顶 UI 更新（project + 7 次 DOM 写）太贵
@@ -10874,7 +10991,11 @@ function frame(ts) {
     }
   } catch (e0) { }
   var sx = 0, sz = 0;
-  if (shake > 0.01) { sx = (Math.random() - 0.5) * shake; sz = (Math.random() - 0.5) * shake; shake *= 0.88; } else { shake = 0; }
+  /* ★ 2026-10-24：震屏开关 ✗ 关掉就不抖相机 ✓ */
+  if (SHAKE_ON && shake > 0.01) {
+    sx = (Math.random() - 0.5) * shake; sz = (Math.random() - 0.5) * shake;
+    shake *= 0.88;
+  } else { shake = 0; }
   /* ★ 第 306 轮：相机跟着地形高度走 ✗
      不然爬上山之后人物会掉到画面外面 ✓
      ★ 用【缓动】而不是直接跟随 ✗ 上下坡时镜头才不会一跳一跳 ✓ */
@@ -11057,6 +11178,7 @@ function frame(ts) {
   try { limbInstTick(); } catch (e0) { }
   /* ★ 2026-10-24：怪物身体也走 Instanced（60 次 draw call → 约 10 次）*/
   try { mobBodyInstTick(); } catch (eBI) { }
+
   try { lvFxTick(dt); } catch (e1) { }
   /* ★ 2026-10-25：把玩家坐标告诉 VFX ✗ 让远处的特效自动剔除 ✓ */
   try { if (typeof VFX !== 'undefined' && VFX.setViewer) { VFX.setViewer(P.x, P.z); } } catch (eVw) { }

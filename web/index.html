@@ -1967,6 +1967,11 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
    <div id="rowDmgNum" style="padding:6px 0"></div>
    <div class="setLabel">怪物闪白 <small style="opacity:.6">（关了被打中就不变白，排查卡顿用）</small></div>
    <div id="rowMobFlash" style="padding:6px 0"></div>
+   <div class="setLabel">怪物血条 <small style="opacity:.6">（关了不显示头顶血条，排查卡顿用）</small></div>
+   <div id="rowMobHpBar" style="padding:6px 0"></div>
+   <div class="setLabel">震屏 <small style="opacity:.6">（关了打击时不抖镜头，排查卡顿用）</small></div>
+   <div id="rowShake" style="padding:6px 0"></div>
+
    <div class="setLabel">视角模式</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;padding:4px 0 8px">
       <button id="setCamFirst" class="bagB">第一人称</button>
@@ -2137,24 +2142,24 @@ body[data-theme="glass"] #setBody .slot [style*="color:#fff"]{color:#ffffff!impo
      那时 DOM 还没解析到它 → getElementById 全是 null →（有 null 保护）静默失败
      → 页面能跑，但登录浮层永远不出现，谁都进不去 ✗（第 26 轮发现）-->
 <script src="/ws-config.js"></script>
-<script src="/lib/three.min.js?v=20261026j"></script>
-<script src="/icons.js?v=20261026j"></script>
-<script src="/vfx.js?v=20261026j"></script>
-<script src="/lib/annrender.js?v=20261026j"></script>
-<script src="/platform/web.js?v=20261026j"></script>
-<script src="/core/town_data.js?v=20261026j"></script>
-<script src="/core/town.js?v=20261026j"></script>
-<script src="/core/game.js?v=20261026j"></script>
-<script src="/core/town_models.js?v=20261026j"></script>
-<script src="/core/town_villas.js?v=20261026j"></script>
-<script src="/core/town_hall.js?v=20261026j"></script>
-<script src="/core/town_shops2.js?v=20261026j"></script>
-<script src="/core/town_shops3.js?v=20261026j"></script>
-<script src="/core/town_shops4.js?v=20261026j"></script>
-<script src="/core/town_veg.js?v=20261026j"></script>
-<script src="/core/town_props.js?v=20261026j"></script>
-<script src="/platform/town_ui.js?v=20261026j"></script>
-<script src="/platform/place.js?v=20261026j"></script>
+<script src="/lib/three.min.js?v=20261026u"></script>
+<script src="/icons.js?v=20261026u"></script>
+<script src="/vfx.js?v=20261026u"></script>
+<script src="/lib/annrender.js?v=20261026u"></script>
+<script src="/platform/web.js?v=20261026u"></script>
+<script src="/core/town_data.js?v=20261026u"></script>
+<script src="/core/town.js?v=20261026u"></script>
+<script src="/core/game.js?v=20261026u"></script>
+<script src="/core/town_models.js?v=20261026u"></script>
+<script src="/core/town_villas.js?v=20261026u"></script>
+<script src="/core/town_hall.js?v=20261026u"></script>
+<script src="/core/town_shops2.js?v=20261026u"></script>
+<script src="/core/town_shops3.js?v=20261026u"></script>
+<script src="/core/town_shops4.js?v=20261026u"></script>
+<script src="/core/town_veg.js?v=20261026u"></script>
+<script src="/core/town_props.js?v=20261026u"></script>
+<script src="/platform/town_ui.js?v=20261026u"></script>
+<script src="/platform/place.js?v=20261026u"></script>
 
 
 

@@ -373,12 +373,22 @@ UI.plate = {
     ui.wrap.style.display = on ? 'block' : 'none';
   } },
   move: function (ui, sx, sy) {
-    if (ui && ui.wrap) {
-      var _tr = 'translate(-50%,-100%) translate(' + sx.toFixed(1) + 'px,' + sy.toFixed(1) + 'px)';
-      if (ui._tr === _tr) { return; }
-      ui._tr = _tr;
-      ui.wrap.style.transform = _tr;
-    }
+    if (!ui || !ui.wrap) { return; }
+    /* ★★★ 2026-10-24（用户："B、C 做一下"）方案 B：字符串优化 ★★★
+       ★ 之前：每帧每只怪都要
+           sx.toFixed(1) → 数字转字符串（新建字符串对象）
+           sy.toFixed(1) → 又一次
+           'translate(...)' + 拼接 → 新建一个大字符串
+           比较 _tr === _tr → 字符串比较（逐字符）
+       ★ 现在：
+           ① 取整成 int（调用方已经取过整 ✗ 这里再保险一次）
+           ② 用 int 比较（数字比较比字符串快得多）
+           ③ 拼字符串只在【真的要写】时才做 ✓
+       ★ 视觉：位置取整到 1 像素 ✗ 肉眼看不出 ✓ */
+    var _ix = sx | 0, _iy = sy | 0;
+    if (ui._lx === _ix && ui._ly === _iy) { return; }   // 数字比较，比字符串快
+    ui._lx = _ix; ui._ly = _iy;
+    ui.wrap.style.transform = 'translate(-50%,-100%) translate3d(' + _ix + 'px,' + _iy + 'px,0)';
   },
   /* ★★ 第 155 轮（用户要求）：魔气【单独一行】，在名字那行上面 ★★
      · 格式：👿 500（红色，五档递增 ✓）
@@ -1522,7 +1532,7 @@ UI.mark = {
   /* sx/sy = 屏幕像素；deg = 屏幕角度（0 = 朝右，顺时针为正）；txt = 距离等文字 ✓ */
   at: function (m, sx, sy, deg, txt, col) {
     if (!m || !m.wrap) { return; }
-    m.wrap.style.transform = 'translate(-50%,-50%) translate(' + sx.toFixed(0) + 'px,' + sy.toFixed(0) + 'px)';
+    m.wrap.style.transform = 'translate(-50%,-50%) translate3d(' + sx.toFixed(0) + 'px,' + sy.toFixed(0) + 'px,0)';
     if (m.ar) {
       m.ar.style.transform = 'rotate(' + deg.toFixed(1) + 'deg)';
       if (col) { m.ar.style.color = col; }
@@ -1846,7 +1856,19 @@ function perfBar(st) {
 var DETAIL_RANGE = { low: 16, mid: 28, high: 40 };
 
 function applySet() {
-  /* ★ 2026-10-24：怪物闪白开关（启动时生效 ✓）*/
+    /* ★ 2026-10-24：震屏开关（启动时生效 ✓）*/
+  try {
+    if (typeof SHAKE_ON !== 'undefined') {
+      SHAKE_ON = (SETCFG && SETCFG.shake !== false);
+    }
+  } catch (eSKA) { }
+    /* ★ 2026-10-24：怪物血条开关（启动时生效 ✓）*/
+  try {
+    if (typeof MOB_HPBAR_ON !== 'undefined') {
+      MOB_HPBAR_ON = (SETCFG && SETCFG.mobHpBar !== false);
+    }
+  } catch (eHBA) { }
+    /* ★ 2026-10-24：怪物闪白开关（启动时生效 ✓）*/
   try {
     if (typeof MOB_FLASH_ON !== 'undefined') {
       MOB_FLASH_ON = (SETCFG && SETCFG.mobFlash !== false);
@@ -5351,6 +5373,56 @@ function openSet(wantTab) {
     mf.addEventListener('touchstart', mfTap, { passive: false });
     mf.addEventListener('click', mfTap);
     mfRow.appendChild(mf);
+  }
+  /* ★ 2026-10-24：怪物血条开关（排查战斗卡顿 ✓）*/
+  var hbRow = document.getElementById('rowMobHpBar');
+  if (hbRow) {
+    hbRow.innerHTML = '';
+    try {
+      if (typeof MOB_HPBAR_ON !== 'undefined') {
+        MOB_HPBAR_ON = (SETCFG.mobHpBar !== false);
+      }
+    } catch (eHB) { }
+    var hbOn = true;
+    try { hbOn = (typeof MOB_HPBAR_ON === 'undefined') ? true : MOB_HPBAR_ON; } catch (eHB2) { }
+    var hb = document.createElement('div');
+    hb.className = 'opt' + (hbOn ? ' on' : '');
+    hb.innerHTML = '怪物血条 ' + (hbOn ? '开' : '关');
+    var hbTap = function (e) {
+      if (e) { e.preventDefault(); }
+      try { MOB_HPBAR_ON = !MOB_HPBAR_ON; } catch (eX) { }
+      SETCFG.mobHpBar = MOB_HPBAR_ON;
+      try { saveSet(); } catch (e2) { }
+      try { openSet(); } catch (e3) { }
+    };
+    hb.addEventListener('touchstart', hbTap, { passive: false });
+    hb.addEventListener('click', hbTap);
+    hbRow.appendChild(hb);
+  }
+  /* ★ 2026-10-24：震屏开关（排查战斗卡顿 ✓）*/
+  var skRow = document.getElementById('rowShake');
+  if (skRow) {
+    skRow.innerHTML = '';
+    try {
+      if (typeof SHAKE_ON !== 'undefined') {
+        SHAKE_ON = (SETCFG.shake !== false);
+      }
+    } catch (eSK) { }
+    var skOn = true;
+    try { skOn = (typeof SHAKE_ON === 'undefined') ? true : SHAKE_ON; } catch (eSK2) { }
+    var sk = document.createElement('div');
+    sk.className = 'opt' + (skOn ? ' on' : '');
+    sk.innerHTML = '震屏 ' + (skOn ? '开' : '关');
+    var skTap = function (e) {
+      if (e) { e.preventDefault(); }
+      try { SHAKE_ON = !SHAKE_ON; } catch (eX) { }
+      SETCFG.shake = SHAKE_ON;
+      try { saveSet(); } catch (e2) { }
+      try { openSet(); } catch (e3) { }
+    };
+    sk.addEventListener('touchstart', skTap, { passive: false });
+    sk.addEventListener('click', skTap);
+    skRow.appendChild(sk);
   }
   // ★ 音效开关 + 音量 ✓
   var srow = document.getElementById('rowSfx');
