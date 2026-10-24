@@ -3302,7 +3302,19 @@
         if (o.material) {
           var ms = Array.isArray(o.material) ? o.material : [o.material];
           for (var mi = 0; mi < ms.length; mi++) {
-            if (ms[mi] && !ms[mi].__sharedBase) { ms[mi].dispose(); }
+            if (ms[mi] && !ms[mi].__sharedBase) {
+              /* ★★★ 2026-10-24（用户："我看贴图的数字也在增加"）★★★
+                 ★ 病根：material.dispose() 【不会】释放它的 map
+                   → floatText / 技能名的 CanvasTexture 永远留在 GPU 里 ✓✓
+                   → 打一波怪 30 个飘字 = 30 张 256×128 纹理 = 3.8MB ✗
+                 ★ 修：dispose 材质前先把 map 也 dispose 掉 ✓
+                   （__shared 的纹理是缓存复用的 ✗ 不能动 ✓）*/
+              try {
+                var _mp = ms[mi].map;
+                if (_mp && !_mp.__shared) { _mp.dispose(); }
+              } catch (eTex) { }
+              ms[mi].dispose();
+            }
           }
         }
       });

@@ -725,6 +725,40 @@ var MOB_HPBAR_ON = true;
    ★ 改成入队 + 每帧取 10 个 ✗ 负载削平 ✓
    ★ 模块级变量（不用 window ✗ 分层规则不许 core 碰浏览器全局 ✓）*/
 var HIT_Q = [];
+
+/* ★ 2026-10-24（用户："大范围打很多怪还有可以借鉴的方案吗"）
+   ★ 怪物攻击动画的关键帧表 ✗ 提到模块级（只建一次 ✓）
+   ★ 原来它在热循环里创建 ✗ 每帧每只攻击中的怪都要建 7 个数组 ✓✓
+   ★ 格式：[手臂 X, 手臂 Z, 身体 X, 腿 X] × 6 帧 */
+var MOB_ATK_KEYS = [
+  [-1.35, 0.00, 0.00, 0.00],
+  [-2.45, -0.18, -0.10, -0.10],
+  [-2.75, -0.30, -0.20, -0.18],
+  [-1.60, 0.25, 0.12, 0.10],
+  [-0.45, 0.45, 0.28, 0.26],
+  [-1.35, 0.00, 0.00, 0.00]
+];
+
+/* ★★★ 2026-10-24（用户："做吧，先改这两个"）方案 2：正弦查表 ★★★
+   ★ 病根：每帧每只怪要算 4~6 次 Math.sin ✗ 100 只怪 = 400~600 次/帧 ✓
+   ★ 改成：预建 1 张 256 项的表 ✗ 查表比算 sin 快 5~10 倍 ✓
+   ★ 精度：256 项覆盖 2π ✗ 每项间隔 1.4° ✓ 完全够（动画看不出）✓ */
+var SIN_TABLE = (function () {
+  var t = new Float32Array(256);
+  for (var i = 0; i < 256; i++) { t[i] = Math.sin(i / 256 * Math.PI * 2); }
+  return t;
+})();
+var SIN_MASK = 255;
+var SIN_SCALE = 256 / (Math.PI * 2);
+/* 快速正弦（输入任意弧度 ✗ 内部取模 ✓）*/
+function fastSin(a) {
+  return SIN_TABLE[((a * SIN_SCALE) | 0) & SIN_MASK];
+}
+/* 快速绝对值正弦（beast 抬身用）*/
+function fastAbsSin(a) {
+  var v = SIN_TABLE[((a * SIN_SCALE) | 0) & SIN_MASK];
+  return v < 0 ? -v : v;
+}
 var _hitFxDone = 0;
 /* ★★★ 2026-10-24（用户："加一个开关我试试"）★★★
    ★ 震屏（shake）→ 相机每帧随机偏移 → 整个画面每帧重绘
@@ -4216,8 +4250,7 @@ function buildWeaponMesh(look, tier, noHalo) {
   var glow = weaponGlowOf(tier);
   for (var i = 0; i < parts.length; i++) {
     var p = parts[i];
-    var geo = p[9] ? new THREE.CylinderGeometry(p[0] / 2, p[0] / 2, p[1], 14)
-                   : new THREE.BoxGeometry(p[0], p[1], p[2]);
+    var geo = wpnGeoOf(p[0], p[1], p[2], !!p[9]);
     var m;
     if (glow > 0) {
       m = new THREE.MeshLambertMaterial({ color: p[3] });
@@ -7495,8 +7528,8 @@ function addWorldMob(arr, t) {
     m.g.position.set(x, terYAt(x, z), z);
     m.g.rotation.y = yaw;
     scene.add(m.g);
-    var sh = new THREE.Mesh(new THREE.CircleGeometry(0.54 * _rankScal, 14),
-      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.24, depthWrite: false }));
+    /* ★ 2026-10-24：影子几何/材质改成缓存复用 ✗ 不再每只新建 ✓ */
+    var sh = new THREE.Mesh(shadowGeoOf(0.54 * _rankScal), shadowMatOf());
     sh.rotation.x = -Math.PI / 2;
     sh.position.set(x, terYAt(x, z) + 0.02, z);
     sh.scale.setScalar(mobScaleAt(mlv) * _rankScal / G.MOB_SCALE);   // ★ 影子跟着体型一起放大 ✓
@@ -7560,6 +7593,63 @@ function removeWorldMob(mid) {
 /* ============ 地上掉的（第 38 轮，P2 第二刀）============
    服务器给的格式：[id, x, z, name, tier]
    ★ 颜色按品阶分（方案 §6.3 那套 12 阶的配色思路）→ 玩家瞟一眼就知道值不值得绕路 ✓ */
+/* ★★★ 2026-10-24（用户："几何问题可以先修复"）★★★
+   ★ 病根：addWorldMob 里每只怪创建 1 个 CircleGeometry + 1 个材质
+     removeWorldMob 只 scene.remove ✗ 不 dispose ✓
+     → 打一局刷几百只怪 = 泄漏几百个几何体 + 材质 ✓✓
+     → 性能面板的"几何"只涨不降就是它 ✓
+   ★ 修：影子几何体按尺寸缓存 ✗ 同尺寸的怪共用 ✓
+     影子材质全场共用一个（黑色半透明，参数完全一样 ✓）
+     → 刷多少怪都只用 2~3 个几何体 + 1 个材质 ✓✓ */
+var _shadowGeoCache = {};
+function shadowGeoOf(r) {
+  var key = r.toFixed(2);
+  var g = _shadowGeoCache[key];
+  if (!g) {
+    g = new THREE.CircleGeometry(r, 14);
+    _shadowGeoCache[key] = g;
+  }
+  return g;
+}
+/* ★ 2026-10-24：掉落物的方块几何体也缓存 ✗ 每件掉落物原来新建 10 个 ✓
+   （尺寸固定只有这几种 ✗ 完全可复用 ✓）*/
+var _boxGeoCache = {};
+function boxGeoOf(w, h, d) {
+  var key = w + '_' + h + '_' + d;
+  var g = _boxGeoCache[key];
+  if (!g) {
+    g = new THREE.BoxGeometry(w, h, d);
+    _boxGeoCache[key] = g;
+  }
+  return g;
+}
+/* ★ 2026-10-24：武器零件几何体缓存
+   ★ 病根：buildWeaponMesh 每个零件都 new BoxGeometry/CylinderGeometry
+     → 每件掉落物 5~8 个新几何体 ✗ 移除时不 dispose ✓
+     → 打怪频繁掉落 → 几何数一直涨 ✓✓
+   ★ 修：按尺寸缓存 ✗ 同尺寸的零件共用 ✓ */
+var _wpnGeoCache = {};
+function wpnGeoOf(w, h, d, isCyl) {
+  var key = isCyl ? ('c' + w + '_' + h) : ('b' + w + '_' + h + '_' + d);
+  var g = _wpnGeoCache[key];
+  if (!g) {
+    g = isCyl ? new THREE.CylinderGeometry(w / 2, w / 2, h, 14)
+              : new THREE.BoxGeometry(w, h, d);
+    g.__shared = true;          /* ★ 标记共享 ✗ releaseGroup 不会 dispose ✓ */
+    _wpnGeoCache[key] = g;
+  }
+  return g;
+}
+var _shadowMat = null;
+function shadowMatOf() {
+  if (!_shadowMat) {
+    _shadowMat = new THREE.MeshBasicMaterial({
+      color: 0x000000, transparent: true, opacity: 0.24, depthWrite: false
+    });
+  }
+  return _shadowMat;
+}
+
 var LOOT_COL = [0xbfa88a, 0x8fd28a, 0x8fc4ff, 0xc08fff, 0xffd83d, 0xff9a5c,
                 0xff6a5c, 0xff5cf0, 0x5cf0ff, 0xffffff, 0xe0b830, 0xff3b30];
 var LOOT_PICK_R = 2.0;      // ★ 必须和服务器 drops.PICK_RANGE 一致 ✓
@@ -7747,34 +7837,34 @@ function addWorldLoot(arr) {
     /* ★ round557：技能书 = 一本【立着的书】（书脊朝外 + 书页 + 书签带）*/
     if (String(arr[6] || '') === 'skillbook') {
       g = new THREE.Group();
-      var bkCover = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.80, 0.11), matOf(0x8a4a2a));
+      var bkCover = new THREE.Mesh(boxGeoOf(0.62, 0.80, 0.11), matOf(0x8a4a2a));
       bkCover.castShadow = true; g.add(bkCover);
-      var bkPages = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.72, 0.09), matOf(0xf0e6cf));
+      var bkPages = new THREE.Mesh(boxGeoOf(0.56, 0.72, 0.09), matOf(0xf0e6cf));
       bkPages.position.set(0.03, 0, 0.02); g.add(bkPages);
-      var bkSpine = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.80, 0.12), matOf(0x6a3418));
+      var bkSpine = new THREE.Mesh(boxGeoOf(0.09, 0.80, 0.12), matOf(0x6a3418));
       bkSpine.position.x = -0.29; g.add(bkSpine);
-      var bkBand = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.10, 0.13), matOf(0xffd83d));
+      var bkBand = new THREE.Mesh(boxGeoOf(0.66, 0.10, 0.13), matOf(0xffd83d));
       bkBand.position.set(0, 0.16, 0); g.add(bkBand);
-      var bkMark = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.26, 0.02), matOf(0xffe98a));
+      var bkMark = new THREE.Mesh(boxGeoOf(0.05, 0.26, 0.02), matOf(0xffe98a));
       bkMark.position.set(0.20, -0.42, 0.07); g.add(bkMark);
       g.rotation.x = -0.22; g.rotation.y = 0.5;
       g.position.set(x, terYAt(x, z) + 0.55, z);
     } else if (String(arr[7] || '') === 'skin') {
       g = new THREE.Group();
-      var cardB = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.70, 0.05), matOf(0x2a3a5e));
+      var cardB = new THREE.Mesh(boxGeoOf(0.52, 0.70, 0.05), matOf(0x2a3a5e));
       cardB.castShadow = true;
       g.add(cardB);
-      var cardE = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.74, 0.035), matOf(0xe0bc60));
+      var cardE = new THREE.Mesh(boxGeoOf(0.56, 0.74, 0.035), matOf(0xe0bc60));
       cardE.position.z = -0.012;
       g.add(cardE);
-      var st1 = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 0.03), matOf(0xffd83d));
+      var st1 = new THREE.Mesh(boxGeoOf(0.14, 0.14, 0.03), matOf(0xffd83d));
       st1.position.set(0, 0.08, 0.035);
       st1.rotation.z = Math.PI / 4;
       g.add(st1);
-      var ln1 = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.045, 0.03), matOf(0x9fc4ff));
+      var ln1 = new THREE.Mesh(boxGeoOf(0.30, 0.045, 0.03), matOf(0x9fc4ff));
       ln1.position.set(0, -0.16, 0.035);
       g.add(ln1);
-      var ln2 = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.04, 0.03), matOf(0x7ea8e8));
+      var ln2 = new THREE.Mesh(boxGeoOf(0.22, 0.04, 0.03), matOf(0x7ea8e8));
       ln2.position.set(-0.04, -0.25, 0.035);
       g.add(ln2);
       g.rotation.x = -0.34;
@@ -8379,7 +8469,8 @@ function netUpdate(dt) {
     /* 疾风步残影由服务端广播 fx kind='ghost'（round590）*/
     if (spd > 0.35) {
       o.walkT += dt * (6.0 + Math.min(4.0, spd * 0.6));
-      var sw = Math.sin(o.walkT) * 0.72;
+      /* ★ 2026-10-24 方案 2：其他玩家的走路动画也查表 ✓ */
+      var sw = fastSin(o.walkT) * 0.72;
       o.hh.legL.rotation.x = sw; o.hh.legR.rotation.x = -sw;
       o.hh.armL.rotation.x = -sw * 0.75; o.hh.armR.rotation.x = sw * 0.45;
     } else {
@@ -8670,6 +8761,9 @@ function netUpdate(dt) {
        ③ 8~​18 米：隔一帧更新（摆臂相位差 33ms 看不出 ✓）
        ★ 位置插值、血条、名牌一律照常 ✗ 只省"肢体摆动”这一块 ✓ */
     var _dd2 = (rx - P.x) * (rx - P.x) + (rz - P.z) * (rz - P.z);
+    /* ★ 2026-10-24：撤回三档分区 ✗ 恢复原来的两档 ✓
+       ★ 原因：10 米外每 3 帧 = 20fps 动画 ✗ 没有运动模糊，走路会一顿一顿 ✓
+       ★ 保留：18 米外不动画（LOD）+ 8 米外隔帧（30fps，接近电影可接受 ✓）*/
     var _poseSkip = (_dd2 > MOB_LOD_D * MOB_LOD_D) || (rm._offscreen === true)
       || (_dd2 > 64 && (frameNo & 1) && !rm.atkT);
     if (rm.alive && !_poseSkip) {
@@ -8678,10 +8772,12 @@ function netUpdate(dt) {
       rm.last.x = rx; rm.last.z = rz;
       if (rspd > 0.35) {
         rm.walkT += dt * (5.0 + Math.min(4.0, rspd * 0.6));
-        rm.hh.legL.rotation.x = Math.sin(rm.walkT) * MOB_SWING;
-        rm.hh.legR.rotation.x = -Math.sin(rm.walkT) * MOB_SWING;
-        rm.hh.armL.rotation.x = -1.35 + Math.sin(rm.walkT) * 0.12;
-        rm.hh.armR.rotation.x = -1.35 - Math.sin(rm.walkT) * 0.12;
+        /* ★ 2026-10-24 方案 2：Math.sin → fastSin（查表）✗ 4 次变 1 次 ✓ */
+        var _ws = fastSin(rm.walkT);
+        rm.hh.legL.rotation.x = _ws * MOB_SWING;
+        rm.hh.legR.rotation.x = -_ws * MOB_SWING;
+        rm.hh.armL.rotation.x = -1.35 + _ws * 0.12;
+        rm.hh.armR.rotation.x = -1.35 - _ws * 0.12;
       } else {
         rm.hh.legL.rotation.x *= 0.9; rm.hh.legR.rotation.x *= 0.9;
         rm.hh.armL.rotation.x = -1.35; rm.hh.armR.rotation.x = -1.35;
@@ -8689,9 +8785,9 @@ function netUpdate(dt) {
       if (rm.hh.beast && rm.hh.body) {
         var _bby = rm.hh.body.userData.baseY;
         if (_bby === undefined) { _bby = rm.hh.body.position.y; rm.hh.body.userData.baseY = _bby; }
-        rm.hh.body.position.y = _bby + (rspd > 0.35 ? Math.abs(Math.sin(rm.walkT)) * 0.09 : 0);
+        rm.hh.body.position.y = _bby + (rspd > 0.35 ? fastAbsSin(rm.walkT) * 0.09 : 0);
         if (!(rm.castT > 0) && rm.atkT < 0) {
-          rm.hh.body.rotation.z = Math.sin(rm.walkT || performance.now() / 900) * 0.035;
+          rm.hh.body.rotation.z = fastSin(rm.walkT || performance.now() / 900) * 0.035;
         }
       }
       if (rm.hh.beastLegs && rm.hh.beastLegs.length) {
@@ -8756,25 +8852,30 @@ function netUpdate(dt) {
       }
       // ★ 攻击动画：直接照服务器给的 atkT 摆姿势 ✓（两边看到的动作一致 ✓）
       if (rm.atkT >= 0) {
+        /* ★★★ 2026-10-24（用户："大范围打很多怪还有可以借鉴的方案吗"）★★★
+           ★ 病根：这里【每次进入都创建 7 个数组 + 1 个闭包】
+             · MKF2 = [[...], [...], ...]  ← 1 + 6 = 7 个新数组
+             · ml2 = function(i) {...}     ← 1 个新闭包
+           ★ 打怪时身边 5~15 只怪同时攻击 ✗ 每帧产生 120 个临时对象 ✓
+             60 帧 → 每秒 7200 个 ✗ 触发频繁 GC → 卡顿 ✓✓
+           ★ 这正好解释"打怪才卡"：不打怪时没有怪在攻击 ✗ 0 分配 ✓
+           ★ 修：关键帧表提到模块级（只建一次）+ 完全内联（零分配）✓ */
         var MT2 = 0.75, MF2 = MT2 / 5;
         var mf2 = Math.min(5, Math.floor(rm.atkT / MF2));
         var mt2 = Math.min(1, (rm.atkT - mf2 * MF2) / MF2);
         var me2 = mt2 < 0.5 ? (2 * mt2 * mt2) : (1 - Math.pow(-2 * mt2 + 2, 2) / 2);
-        var MKF2 = [
-          [-1.35, 0.00, 0.00, 0.00],
-          [-2.45, -0.18, -0.10, -0.10],
-          [-2.75, -0.30, -0.20, -0.18],
-          [-1.60, 0.25, 0.12, 0.10],
-          [-0.45, 0.45, 0.28, 0.26],
-          [-1.35, 0.00, 0.00, 0.00]
-        ];
-        var MA2 = MKF2[mf2], MB2 = MKF2[Math.min(5, mf2 + 1)];
-        var ml2 = function (i) { return MA2[i] + (MB2[i] - MA2[i]) * me2; };
-        rm.hh.armL.rotation.x = ml2(0); rm.hh.armR.rotation.x = ml2(0);
-        rm.hh.armL.rotation.z = -ml2(1); rm.hh.armR.rotation.z = ml2(1);
-        rm.g.rotation.x = ml2(2);
-        rm.hh.legL.rotation.x = ml2(3) * 0.6; rm.hh.legR.rotation.x = -ml2(3) * 0.6;
-        if (rm.hh.beast && rm.hh.body && !rm.hh.dragon) { rm.hh.body.rotation.x = ml2(2) * 0.7; }
+        var MA2 = MOB_ATK_KEYS[mf2], MB2 = MOB_ATK_KEYS[Math.min(5, mf2 + 1)];
+        /* 直接算 ✗ 不再创建闭包和中间数组 ✓ */
+        var _a0 = MA2[0] + (MB2[0] - MA2[0]) * me2;
+        var _a1 = MA2[1] + (MB2[1] - MA2[1]) * me2;
+        var _a2 = MA2[2] + (MB2[2] - MA2[2]) * me2;
+        var _a3 = MA2[3] + (MB2[3] - MA2[3]) * me2;
+        rm.hh.armL.rotation.x = _a0; rm.hh.armR.rotation.x = _a0;
+        rm.hh.armL.rotation.z = -_a1; rm.hh.armR.rotation.z = _a1;
+        rm.g.rotation.x = _a2;
+        var _leg2 = _a3 * 0.6;
+        rm.hh.legL.rotation.x = _leg2; rm.hh.legR.rotation.x = -_leg2;
+        if (rm.hh.beast && rm.hh.body && !rm.hh.dragon) { rm.hh.body.rotation.x = _a2 * 0.7; }
       } else {
         rm.g.rotation.x = 0;
         rm.hh.armL.rotation.z = 0; rm.hh.armR.rotation.z = 0;
@@ -10718,6 +10819,8 @@ function frame(ts) {
   refreshTerrain();  // ★ 第 306 轮：方块地形（分瓦片 ✗ 一帧最多建几片 ✓）
   rebuildGrid();   // ★ 每帧重建空间网格（O(N) ✓ 之后查询都是 O(1) ✓）
   rebuildRmGrid(); // ★ 2026-10-24：联机妖兽也建网格（blocked 只查附近 ✓）
+  /* ★ 2026-10-24：小镇距离剔除（200 米外整组隐藏 ✗ 省 12 万三角 ✓）*/
+  try { if (typeof townCullTick === 'function') { townCullTick(P.x, P.z); } } catch (eTC) { }
   solidTick();     // ★ 2026-10-24：静态碰撞网格（物件变了才重建 ✓）
   /* ★★★ 2026-10-24（用户："AI 分批 tick"）★★★
      ★ 目标：60 只怪时每帧的头顶 UI 更新（project + 7 次 DOM 写）太贵

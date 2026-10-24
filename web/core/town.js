@@ -46,6 +46,36 @@ function townSetObjectSolids(boxes) {
 }
 var TOWN_ROOFS = [];
 var TOWN_GROUP = null;
+/* ★★★ 2026-10-24（用户："如果玩家在小镇外 200 米外就不渲染改成这个吧"）★★★
+   ★ 病根：小镇没有任何距离剔除 ✗ 一直留在场景里渲染 ✓
+     房子/家具约 12 万三角（占 350K 的 34%）✗
+     玩家在野外打怪时根本看不见 ✗ 白渲染 ✓✓
+   ★ 做法：离镇中心超过 200 米 → 整组隐藏 ✓ three.js 会跳过整棵子树 ✓
+   ★ 滞后区间：出去 200 米才隐藏 ✗ 进来 180 米才显示 ✓
+     避免在边界来回走时反复切换（每切一次要重建渲染列表 ✓）*/
+var TOWN_CULL_OUT = 200;      // 超过这个距离 → 隐藏
+var TOWN_CULL_IN = 180;       // 低于这个距离 → 显示
+var _townCulled = false;
+
+function townCullTick(px, pz) {
+  if (!TOWN_GROUP) { return; }
+  if (typeof TOWN_CX !== 'number' || typeof TOWN_CZ !== 'number') { return; }
+  var dx = px - TOWN_CX, dz = pz - TOWN_CZ;
+  var d2 = dx * dx + dz * dz;
+  if (_townCulled) {
+    /* 当前是隐藏状态 ✗ 走到 180 米内才恢复 ✓ */
+    if (d2 < TOWN_CULL_IN * TOWN_CULL_IN) {
+      _townCulled = false;
+      TOWN_GROUP.visible = true;
+    }
+  } else {
+    /* 当前是显示状态 ✗ 走出 200 米才隐藏 ✓ */
+    if (d2 > TOWN_CULL_OUT * TOWN_CULL_OUT) {
+      _townCulled = true;
+      TOWN_GROUP.visible = false;
+    }
+  }
+}
 var TOWN_SEATS = TOWN_DATA ? TOWN_DATA.seats : [];
 (function () {
   for (var _i = 0; _i < TOWN_SEATS.length; _i++) {

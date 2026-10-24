@@ -5433,7 +5433,8 @@ class World(object):
         # 二阶段
         if int(getattr(m, 'rank', 0) or 0) >= 2 and m.bossPhase == 1 and m.hp <= m.mhp * 0.5:
             m.bossPhase = 2
-            self._mob_evt(m, 'phase2')
+            # ★ 2026-10-24：删掉 phase2 广播 ✗ 客户端没实现处理 ✓
+            #   （以后要加 Boss 变身提示时再恢复 ✓）
         now = now_s()
         dist = math.hypot(near.x - m.x, near.z - m.z)
         for sk in boss_skills.skills_for(m.skin, m.bossPhase):
@@ -11324,7 +11325,8 @@ class World(object):
             for _smid, _sm in list(self.mobs.items()):
                 if getattr(_sm, 'summoner', None) == m.mid:
                     self.mobs.pop(_smid, None)
-            self._mob_evt(m, 'death', 1000.0)
+            # ★ 2026-10-24：删掉 death 广播 ✗ 客户端只处理 crit ✓
+            #   （死亡动画靠快照的 alive=0 ✓）
 
     def _roll_loot(self, p, m):
         """僵尸死了 roll 掉落（方案 §8：每次击杀【逐项独立】roll ✓）

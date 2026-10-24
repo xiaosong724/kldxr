@@ -1801,7 +1801,13 @@ function perfBarInit() {
   d.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:60;display:none;'
     + 'font:11px/1.45 ui-monospace,Consolas,monospace;color:#d9e6d4;'
     + 'background:rgba(10,14,10,.62);border:1px solid #ffffff22;border-radius:7px;'
-    + 'padding:5px 8px;pointer-events:none;white-space:pre;text-shadow:0 1px 2px #000';
+    /* ★ 2026-10-27（用户："内存看不到，超出屏幕了"）
+       ★ 原来是 white-space:pre ✗ 不换行 ✓ 内容变长就跑出屏幕 ✓
+       ★ 改成 pre-wrap：保留换行符 ✗ 同时允许自动换行 ✓
+       ★ 再限个 max-width ✗ 手机上也能完整显示 ✓ */
+    + 'padding:5px 8px;pointer-events:none;white-space:pre-wrap;'
+    + 'max-width:min(96vw, 420px);word-break:break-all;'
+    + 'text-shadow:0 1px 2px #000';
   document.body.appendChild(d);
   PERF.el = d;
   return d;
@@ -1839,6 +1845,37 @@ function perfBar(st) {
   var info = (rd && rd.info) ? rd.info : null;
   var r = info ? info.render : {};
   var mem = info ? info.memory : {};
+  /* ★★★ 2026-10-27（用户："性能面板还有没有可以加的一些显示，方便我们现在来找问题"）★★★
+     ★ 补的诊断字段都是【排查战斗卡顿】直接要用的：
+       ① 对象数 —— scene.children 数量，一直涨 = 泄漏
+       ② 视野怪 —— 屏幕内的怪 / 总怪数，比值小说明剔除生效
+       ③ 命中队列 —— HIT_Q 深度，持续 >0 = 分帧处理跟不上
+       ④ 内存 —— Chrome 的 performance.memory（别的浏览器没有 ✗ 显示 -）
+       ⑤ 景深/像素比这些原来就有 ✓ */
+  var _scN = 0;
+  try { _scN = (typeof scene !== 'undefined' && scene) ? scene.children.length : 0; } catch (e0) { }
+
+  var _mobN = 0, _mobVis = 0;
+  try {
+    if (typeof NET !== 'undefined' && NET && NET.rmobs) {
+      for (var _mk in NET.rmobs) {
+        _mobN++;
+        var _rm = NET.rmobs[_mk];
+        if (_rm && _rm.alive && _rm._offscreen !== true) { _mobVis++; }
+      }
+    }
+  } catch (e1) { }
+
+  var _qN = 0;
+  try { _qN = (typeof HIT_Q !== 'undefined' && HIT_Q) ? HIT_Q.length : 0; } catch (e2) { }
+
+  var _memTxt = '-';
+  try {
+    if (performance && performance.memory) {
+      _memTxt = Math.round(performance.memory.usedJSHeapSize / 1048576) + 'M';
+    }
+  } catch (e3) { }
+
   d.textContent =
     '帧 ' + ms.toFixed(1) + 'ms / 最差 ' + PERF.worst.toFixed(1) + 'ms'
     + '  (' + Math.round(1000 / Math.max(1, ms)) + 'fps)\n'
@@ -1846,11 +1883,13 @@ function perfBar(st) {
     + ' · 材质 ' + PERF.mats + ' · 几何 ' + (mem.geometries || 0)
     + ' · 贴图 ' + (mem.textures || 0)
     + ' · 程序 ' + ((info && info.programs) ? info.programs.length : 0) + '\n'
-    + '怪 ' + Object.keys((typeof NET !== 'undefined' && NET.rmobs) ? NET.rmobs : {}).length
+    + '怪 ' + _mobN + '(视' + _mobVis + ')'
     + ' · 玩家 ' + Object.keys((typeof NET !== 'undefined' && NET.others) ? NET.others : {}).length
-    + ' · 掉落 ' + Object.keys((typeof NET !== 'undefined' && NET.rloot) ? NET.rloot : {}).length
-    + ' · 像素比 ' + (rd ? rd.getPixelRatio() : 1).toFixed(2)
-    + ' · 阴影 ' + ((typeof setShadow === 'function') ? setShadow() : '?');
+    + ' · 掉落 ' + Object.keys((typeof NET !== 'undefined' && NET.rloot) ? NET.rloot : {}).length + '\n'
+    + '队列 ' + _qN + ' · 对象 ' + _scN + ' · 内存 ' + _memTxt + '\n'
+    + '像素比 ' + (rd ? rd.getPixelRatio() : 1).toFixed(2)
+    + ' · 阴影 ' + ((typeof setShadow === 'function') ? setShadow() : '?')
+    + ' · 坐标 ' + (typeof P !== 'undefined' && P ? (Math.round(P.x) + ',' + Math.round(P.z)) : '-');
 }
 
 var DETAIL_RANGE = { low: 16, mid: 28, high: 40 };
